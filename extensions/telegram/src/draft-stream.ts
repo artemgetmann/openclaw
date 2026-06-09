@@ -92,6 +92,13 @@ type SupersededTelegramPreview = {
   parseMode?: "HTML";
 };
 
+export type TelegramDraftDurableSendEvent = {
+  callsite: "preview-send" | "materialize-send";
+  previewTransport: "message" | "draft";
+  usedThreadParams: boolean;
+  threadFallback: boolean;
+};
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: number;
@@ -107,7 +114,7 @@ export function createTelegramDraftStream(params: {
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
   /** Called when the stream creates a real Telegram message, not a draft/edit. */
-  onMessageDelivered?: (messageId: number) => void;
+  onMessageDelivered?: (messageId: number, event: TelegramDraftDurableSendEvent) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -176,6 +183,7 @@ export function createTelegramDraftStream(params: {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
         usedThreadParams,
+        threadFallback: false,
       };
     } catch (err) {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
@@ -196,6 +204,7 @@ export function createTelegramDraftStream(params: {
           Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
         ),
         usedThreadParams: false,
+        threadFallback: true,
       };
     }
   };
@@ -215,14 +224,14 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     messageSendAttempted = true;
-    let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
+    let sendResult: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>;
     try {
-      ({ sent } = await sendRenderedMessageWithThreadFallback({
+      sendResult = await sendRenderedMessageWithThreadFallback({
         renderedText,
         renderedParseMode,
         fallbackWarnMessage:
           "telegram stream preview send failed with message_thread_id, retrying without thread",
-      }));
+      });
     } catch (err) {
       // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
       // guarantee the message was never delivered — clear the flag so
@@ -232,6 +241,7 @@ export function createTelegramDraftStream(params: {
       }
       throw err;
     }
+    const { sent } = sendResult;
     const sentMessageId = sent?.message_id;
     if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
       streamState.stopped = true;
@@ -239,7 +249,12 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     const normalizedMessageId = Math.trunc(sentMessageId);
-    params.onMessageDelivered?.(normalizedMessageId);
+    params.onMessageDelivered?.(normalizedMessageId, {
+      callsite: "preview-send",
+      previewTransport,
+      usedThreadParams: sendResult.usedThreadParams,
+      threadFallback: sendResult.threadFallback,
+    });
     if (sendGeneration !== generation) {
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
@@ -411,16 +426,22 @@ export function createTelegramDraftStream(params: {
     }
     const renderedParseMode = lastSentText ? lastSentParseMode : undefined;
     try {
-      const { sent, usedThreadParams } = await sendRenderedMessageWithThreadFallback({
-        renderedText,
-        renderedParseMode,
-        fallbackWarnMessage:
-          "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
-      });
+      const { sent, usedThreadParams, threadFallback } =
+        await sendRenderedMessageWithThreadFallback({
+          renderedText,
+          renderedParseMode,
+          fallbackWarnMessage:
+            "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
+        });
       const sentId = sent?.message_id;
       if (typeof sentId === "number" && Number.isFinite(sentId)) {
         streamMessageId = Math.trunc(sentId);
-        params.onMessageDelivered?.(streamMessageId);
+        params.onMessageDelivered?.(streamMessageId, {
+          callsite: "materialize-send",
+          previewTransport,
+          usedThreadParams,
+          threadFallback,
+        });
         // Clear the draft so Telegram's input area doesn't briefly show a
         // stale copy alongside the newly materialized real message.
         if (resolvedDraftApi != null && streamDraftId != null) {

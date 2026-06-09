@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -8,12 +8,25 @@ const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
 }));
 
-const ttsMocks = vi.hoisted(() => ({
-  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as { payload: unknown };
-    return params.payload;
-  }),
-}));
+const ttsMocks = vi.hoisted(() => {
+  const state = {
+    synthesizeFinalAudio: false,
+  };
+  return {
+    state,
+    maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind?: string; payload: Record<string, unknown> };
+      if (state.synthesizeFinalAudio && params.kind === "final") {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/final-tts.opus",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    }),
+  };
+});
 
 vi.mock("./route-reply.js", () => ({
   routeReply: (params: unknown) => routeMocks.routeReply(params),
@@ -65,8 +78,13 @@ function createCoordinator(params?: {
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
-  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
+  beforeEach(() => {
     routeMocks.routeReply.mockClear();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+  });
+
+  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
     const { coordinator, dispatcher } = createCoordinator({
       provider: "telegram",
       surface: "telegram",
@@ -86,7 +104,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("keeps non-Telegram originating ACP blocks on direct routeReply delivery", async () => {
-    routeMocks.routeReply.mockClear();
     const { coordinator, dispatcher } = createCoordinator({
       provider: "discord",
       surface: "discord",
@@ -156,5 +173,61 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("block", { text });
 
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text });
+  });
+
+  it("skips TTS for source-preview progress but keeps final TTS eligible", async () => {
+    const { coordinator, dispatcher } = createCoordinator();
+    const sourcePreview = {
+      openclaw: {
+        sourcePreview: true,
+      },
+    };
+
+    await coordinator.deliver("tool", {
+      text: "Checking example.com.",
+      channelData: sourcePreview,
+    });
+    await coordinator.deliver("block", {
+      text: "Reading IANA.",
+      channelData: sourcePreview,
+    });
+    await coordinator.deliver("final", { text: "Final answer." });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Final answer." },
+      }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({
+      text: "Checking example.com.",
+      channelData: sourcePreview,
+    });
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "Reading IANA.",
+      channelData: sourcePreview,
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
+  });
+
+  it("delivers synthesized final TTS as a media-only supplement", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const { coordinator, dispatcher } = createCoordinator();
+
+    await coordinator.deliverFinalTtsSupplement("Final answer already visible.");
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Final answer already visible." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: undefined,
+      mediaUrl: "https://example.com/final-tts.opus",
+      audioAsVoice: true,
+    });
   });
 });

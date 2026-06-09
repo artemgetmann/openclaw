@@ -24,7 +24,6 @@ type ToolMessageHandle = {
 
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
-  accumulatedBlockText: string;
   blockCount: number;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
@@ -32,6 +31,22 @@ type AcpDispatchDeliveryState = {
 
 const ACP_INTERNAL_TOOL_SUMMARY_LINE_RE =
   /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
+
+function isSourcePreviewToolPayload(payload: ReplyPayload): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+
+  // Source previews are transient progress/status payloads emitted through the
+  // tool lane. They should remain eligible for delivery filtering, but must not
+  // be upgraded into voice/audio replies by the TTS layer.
+  const openclaw = channelData.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  return (openclaw as { sourcePreview?: unknown }).sourcePreview === true;
+}
 
 function stripAcpInternalToolSummaryLines(text: string): string {
   const lines = text.split("\n");
@@ -65,8 +80,8 @@ export type AcpDispatchDeliveryCoordinator = {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ) => Promise<boolean>;
+  deliverFinalTtsSupplement: (text: string) => Promise<boolean>;
   getBlockCount: () => number;
-  getAccumulatedBlockText: () => string;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -86,7 +101,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
-    accumulatedBlockText: "",
     blockCount: 0,
     routedCounts: {
       tool: 0,
@@ -121,6 +135,55 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return params.dispatcher.sendBlockReply(payload);
     }
     return params.dispatcher.sendFinalReply(payload);
+  };
+
+  const deliverPreparedPayload = async (
+    kind: ReplyDispatchKind,
+    payload: ReplyPayload,
+    meta?: AcpDispatchDeliveryMeta,
+  ): Promise<boolean> => {
+    if (shouldUseSourceDispatcherForTelegram()) {
+      return deliverViaDispatcher(kind, payload);
+    }
+
+    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+      const toolCallId = meta?.toolCallId?.trim();
+      if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
+        const edited = await tryEditToolMessage(payload, toolCallId);
+        if (edited) {
+          return true;
+        }
+      }
+
+      const result = await routeReply({
+        payload,
+        channel: params.originatingChannel,
+        to: params.originatingTo,
+        sessionKey: params.ctx.SessionKey,
+        accountId: params.ctx.AccountId,
+        threadId: params.ctx.MessageThreadId,
+        cfg: params.cfg,
+      });
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
+        );
+        return false;
+      }
+      if (kind === "tool" && meta?.toolCallId && result.messageId) {
+        state.toolMessageByCallId.set(meta.toolCallId, {
+          channel: params.originatingChannel,
+          accountId: params.ctx.AccountId,
+          to: params.originatingTo,
+          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          messageId: result.messageId,
+        });
+      }
+      state.routedCounts[kind] += 1;
+      return true;
+    }
+
+    return deliverViaDispatcher(kind, payload);
   };
 
   const tryEditToolMessage = async (
@@ -175,10 +238,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       };
     }
     if (kind === "block" && payload.text?.trim()) {
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
-      }
-      state.accumulatedBlockText += payload.text;
       state.blockCount += 1;
     }
 
@@ -186,64 +245,51 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
+    const ttsPayload = isSourcePreviewToolPayload(payload)
+      ? payload
+      : await maybeApplyTtsToPayload({
+          payload,
+          cfg: params.cfg,
+          channel: params.ttsChannel,
+          kind,
+          inboundAudio: params.inboundAudio,
+          ttsAuto: params.sessionTtsAuto,
+        });
+
+    return deliverPreparedPayload(kind, ttsPayload, meta);
+  };
+
+  const deliverFinalTtsSupplement = async (text: string): Promise<boolean> => {
+    const finalText = text.trim();
+    if (!finalText) {
+      return false;
+    }
     const ttsPayload = await maybeApplyTtsToPayload({
-      payload,
+      payload: { text: finalText },
       cfg: params.cfg,
       channel: params.ttsChannel,
-      kind,
+      kind: "final",
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,
     });
-
-    if (shouldUseSourceDispatcherForTelegram()) {
-      return deliverViaDispatcher(kind, ttsPayload);
+    if (!ttsPayload.mediaUrl && !(ttsPayload.mediaUrls?.length ?? 0)) {
+      return false;
     }
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
-      const toolCallId = meta?.toolCallId?.trim();
-      if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
-        const edited = await tryEditToolMessage(ttsPayload, toolCallId);
-        if (edited) {
-          return true;
-        }
-      }
-
-      const result = await routeReply({
-        payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
-        cfg: params.cfg,
-      });
-      if (!result.ok) {
-        logVerbose(
-          `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
-        );
-        return false;
-      }
-      if (kind === "tool" && meta?.toolCallId && result.messageId) {
-        state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
-          to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
-          messageId: result.messageId,
-        });
-      }
-      state.routedCounts[kind] += 1;
-      return true;
-    }
-
-    return deliverViaDispatcher(kind, ttsPayload);
+    // The ACP block path has already made the final text visible. Send only
+    // the generated media here so TTS remains additive instead of duplicating
+    // the visible answer as a second final text/caption.
+    return deliverPreparedPayload("final", {
+      ...ttsPayload,
+      text: undefined,
+    });
   };
 
   return {
     startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
+    deliverFinalTtsSupplement,
     getBlockCount: () => state.blockCount,
-    getAccumulatedBlockText: () => state.accumulatedBlockText,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

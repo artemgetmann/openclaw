@@ -130,9 +130,9 @@ struct ConsumerTelegramSetupCardContent: View {
                 || (self.store.consumerTelegramLooksLive() && !self.readyForFirstTaskVerification)
             {
                 self.callout(
-                    title: self.store.consumerTelegramLooksLive() ? "One task left" : "Private Telegram bot",
+                    title: self.store.consumerTelegramLooksLive() ? "Telegram connected" : "Private Telegram bot",
                     body: self.store.consumerTelegramLooksLive()
-                        ? "The bot is ready for the final Telegram check."
+                        ? "One final check remains."
                         : "\(AppFlavor.current.appName) will open Telegram so you can approve the bot.")
             }
 

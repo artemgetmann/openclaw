@@ -9,6 +9,7 @@ struct PermissionsSettings: View {
     let showOnboarding: () -> Void
     @AppStorage(showAdvancedSettingsKey) private var showAdvancedSettings = false
     @State private var requestingRecommended = false
+    @State private var attemptedRecommendedGrant = false
     @State private var showOptionalPermissions = false
 
     static let consumerRecommendedCapabilities = ConsumerPermissionCatalog.settingsRecommendedCapabilities
@@ -60,7 +61,7 @@ struct PermissionsSettings: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Grant the permissions \(AppFlavor.current.appName) needs to help on this Mac.")
                         .font(.title3.weight(.semibold))
-                    Text("Click once to go through the recommended permissions. Accessibility and Screen Recording may open System Settings instead of showing a prompt.")
+                    Text("Accessibility, Screen Recording, and Location let \(AppFlavor.current.appName) see context and act when you ask.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -88,19 +89,21 @@ struct PermissionsSettings: View {
                     .disabled(self.requestingRecommended)
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("If Accessibility or Screen Recording still look pending after you enabled them in System Settings, quit and reopen \(AppFlavor.current.appName) once. macOS can keep those states stale until restart.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                if self.needsRestartRecovery {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("If Screen Recording is already enabled in System Settings, reopen \(AppFlavor.current.appName) once so macOS refreshes the status.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        DebugActions.restartApp()
-                    } label: {
-                        Label("Restart \(AppFlavor.current.appName)", systemImage: "arrow.counterclockwise")
+                        Button {
+                            DebugActions.restartApp()
+                        } label: {
+                            Label("Restart \(AppFlavor.current.appName)", systemImage: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(self.requestingRecommended)
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(self.requestingRecommended)
                 }
 
                 PermissionStatusList(
@@ -122,7 +125,7 @@ struct PermissionsSettings: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("More permissions (optional)")
                             .font(.body.weight(.semibold))
-                        Text("Needed only for camera capture or voice transcription features.")
+                        Text("Jarvis handles Automation when macOS asks. The rest are only needed for voice, camera, or alerts.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -135,9 +138,16 @@ struct PermissionsSettings: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    private var needsRestartRecovery: Bool {
+        self.attemptedRecommendedGrant &&
+            !self.requestingRecommended &&
+            self.status[.screenRecording] != true
+    }
+
     @MainActor
     private func grantRecommendedPermissions() async {
         guard !self.requestingRecommended else { return }
+        self.attemptedRecommendedGrant = true
         self.requestingRecommended = true
         defer { self.requestingRecommended = false }
 

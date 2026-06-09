@@ -21,6 +21,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { logTelegramProgressDebug } from "../../infra/telegram-progress-debug.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -634,8 +635,6 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const payloadArray = runResult.payloads ?? [];
-
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
@@ -649,6 +648,15 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const payloadArray = runResult.payloads ?? [];
+    logTelegramProgressDebug("finalization.raw-payloads", {
+      runId,
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      payloadCount: payloadArray.length,
+      provider: providerUsed,
+      model: modelUsed,
+    });
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const selectedProvider = followupRun.run.provider;
     const selectedModel = followupRun.run.model;
@@ -744,6 +752,8 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      preserveFinalPayloadsAfterBlockStreaming:
+        (sessionCtx.Surface ?? sessionCtx.Provider)?.trim().toLowerCase() === "telegram",
       originatingChannel: sessionCtx.OriginatingChannel,
       originatingTo: resolveOriginMessageTo({
         originatingTo: sessionCtx.OriginatingTo,
@@ -754,6 +764,14 @@ export async function runReplyAgent(params: {
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
+    logTelegramProgressDebug("finalization.reply-payloads", {
+      runId,
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      rawPayloadCount: payloadArray.length,
+      replyPayloadCount: replyPayloads.length,
+      blockStreamingEnabled,
+    });
 
     if (replyPayloads.length === 0) {
       if (
@@ -798,6 +816,16 @@ export async function runReplyAgent(params: {
         : replyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
+    logTelegramProgressDebug("finalization.before-delivery", {
+      runId,
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      payloadCount: guardedReplyPayloads.length,
+      mediaCount: guardedReplyPayloads.reduce(
+        (count, payload) => count + (payload.mediaUrl ? 1 : 0) + (payload.mediaUrls?.length ?? 0),
+        0,
+      ),
+    });
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
@@ -1009,6 +1037,12 @@ export async function runReplyAgent(params: {
     }
 
     completeDurableReplyTask(durableTask);
+    logTelegramProgressDebug("finalization.return", {
+      runId,
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      payloadCount: finalPayloads.length,
+    });
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,

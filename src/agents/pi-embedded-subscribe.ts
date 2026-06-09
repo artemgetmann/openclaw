@@ -64,6 +64,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
+    currentAssistantPhase: undefined,
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
@@ -110,11 +111,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
+    const deliver = () => params.onBlockReply?.(payload);
+    try {
+      // Start delivery synchronously so block-reply tests and tool-boundary
+      // flushes observe the enqueue immediately; still catch async rejection.
+      void Promise.resolve(deliver()).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -141,6 +147,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
+    state.currentAssistantPhase = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
   };
 
@@ -533,6 +540,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToId,
       replyToTag,
       replyToCurrent,
+      ...(state.currentAssistantPhase
+        ? {
+            channelData: {
+              openclaw: {
+                assistantPhase: state.currentAssistantPhase,
+              },
+            },
+          }
+        : {}),
     });
   };
 

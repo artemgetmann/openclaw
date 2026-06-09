@@ -223,9 +223,8 @@ enum ConsumerPermissionCatalog {
     ]
 
     static let settingsRecommendedCapabilities: [Capability] = [
-        .screenRecording,
         .accessibility,
-        .appleScript,
+        .screenRecording,
         .location,
     ]
 
@@ -253,6 +252,7 @@ enum ConsumerPermissionCatalog {
     ]
 
     static let optionalCapabilities: [Capability] = [
+        .appleScript,
         .notifications,
         .microphone,
         .camera,

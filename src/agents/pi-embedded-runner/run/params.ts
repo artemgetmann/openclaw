@@ -108,6 +108,8 @@ export type RunEmbeddedPiAgentParams = {
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;
+  /** Defer text-end block replies until assistant phase metadata is known. */
+  deferPhaseUnknownBlockReplies?: boolean;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;

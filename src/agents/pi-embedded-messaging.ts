@@ -6,6 +6,8 @@ export type MessagingToolSend = {
   accountId?: string;
   to?: string;
   threadId?: string;
+  hasMedia?: boolean;
+  hasText?: boolean;
 };
 
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);

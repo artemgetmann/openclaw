@@ -4,6 +4,11 @@ Use this only when Telegram behavior itself is under test, or after the isolated
 browser and agent smoke flow in `docs/agent-guides/browser-agent-e2e.md` has
 already passed and you still need Telegram transport proof.
 
+For Telegram UX bugs with visual acceptance criteria, use
+`docs/agent-guides/gui-verification.md` for screenshot/video capture. Pair GUI
+artifacts with transcript or log proof; screenshots alone do not prove Telegram
+delivery semantics.
+
 Do not use Telegram as the default first-pass E2E path for non-Telegram bugs.
 For most agent/tool/browser issues, local OpenClaw CLI validation is the faster
 and more reliable default.
@@ -67,6 +72,10 @@ and more reliable default.
     - Feature-specific proof for progress updates plus TTS final output.
   - Run baseline first to prove the lane is wired, then run the smallest
     feature-specific scenario that matches the code change.
+  - For progress/status/final/TTS behavior, use
+    `/agent-guides/telegram-progress-proof` after baseline. It defines the
+    message-ID and GUI proof bar for transient progress, durable media, final
+    text, and additive TTS.
   - Release the lane when done: `bash scripts/telegram-live-runtime.sh release`.
 - User E2E operator path:
   - Start broad triage with `pnpm openclaw:local telegram-user inbox --json`

@@ -607,6 +607,74 @@ describe("channel-health-monitor", () => {
       await expectRestartedChannel(manager, "telegram");
     });
 
+    it("requests a gateway restart instead of starting a duplicate channel when stop hangs", async () => {
+      const now = Date.now();
+      const requestGatewayRestart = vi.fn();
+      const manager = createSnapshotManager(
+        {
+          telegram: {
+            default: {
+              running: true,
+              connected: false,
+              enabled: true,
+              configured: true,
+              mode: "polling",
+              lastStartAt: now - 300_000,
+              lastPollOutcome: "unhealthy",
+              lastError: "Telegram polling unhealthy: repeated polling stop timeouts",
+            },
+          },
+          discord: {
+            default: {
+              running: false,
+              connected: false,
+              enabled: true,
+              configured: true,
+              lastError: "stopped after Telegram polling wedged",
+            },
+          },
+        },
+        {
+          stopChannel: vi.fn(() => new Promise<void>(() => undefined)),
+        },
+      );
+
+      const monitor = startDefaultMonitor(manager, {
+        requestGatewayRestart,
+        restartStopTimeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(manager.stopChannel).toHaveBeenCalledWith("telegram", "default");
+      expect(manager.startChannel).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(51);
+      expect(requestGatewayRestart).toHaveBeenCalledWith(
+        "telegram:default health-monitor stop timed out",
+      );
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      expect(manager.startChannel).not.toHaveBeenCalled();
+
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({
+          telegram: {
+            default: {
+              running: false,
+              connected: false,
+              enabled: true,
+              configured: true,
+              mode: "polling",
+              lastPollOutcome: "unhealthy",
+              lastError: "Telegram polling unhealthy: repeated polling stop timeouts",
+            },
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
     it("restarts polling Telegram accounts that report unhealthy transport state", async () => {
       const now = Date.now();
       const manager = createSnapshotManager({

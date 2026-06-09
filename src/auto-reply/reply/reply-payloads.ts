@@ -255,6 +255,9 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
+    if (target?.hasMedia === true && target.hasText !== true) {
+      return false;
+    }
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
       targetProvider: target?.provider,

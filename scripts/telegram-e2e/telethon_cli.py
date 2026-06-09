@@ -33,6 +33,11 @@ except Exception:  # pragma: no cover - POSIX fallback
 
 from telethon_compat import create_telegram_client
 
+try:
+  from telethon import functions
+except Exception:  # pragma: no cover - import failure is reported by command execution
+  functions = None
+
 
 DEFAULT_SESSION = Path(__file__).resolve().parent / "tmp" / "userbot.session"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15
@@ -293,6 +298,19 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     else None
   )
   resolved_chat = chat if chat is not None else getattr(message, "chat", None)
+  media_kind = None
+  # Keep readback lightweight, but expose enough media shape for live proof gates
+  # to distinguish a captionless voice/audio supplement from an empty text reply.
+  if getattr(message, "voice", None) is not None:
+    media_kind = "voice"
+  elif getattr(message, "audio", None) is not None:
+    media_kind = "audio"
+  elif getattr(message, "photo", None) is not None:
+    media_kind = "photo"
+  elif getattr(message, "video", None) is not None:
+    media_kind = "video"
+  elif getattr(message, "document", None) is not None:
+    media_kind = "document"
   return {
     "chat_id": int(getattr(message, "chat_id", 0) or 0) or None,
     "chat_title": getattr(resolved_chat, "title", None),
@@ -301,6 +319,7 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     "direct_messages_topic": {"topic_id": int(direct_topic_id)} if direct_topic_id is not None else None,
     "direct_messages_topic_id": int(direct_topic_id) if direct_topic_id is not None else None,
     "message_id": int(getattr(message, "id", 0) or 0),
+    "media_kind": media_kind,
     "out": bool(getattr(message, "out", False)),
     "reply_to_msg_id": int(getattr(reply_to, "reply_to_msg_id", 0)) if getattr(reply_to, "reply_to_msg_id", None) is not None else None,
     "reply_to_top_id": int(getattr(reply_to, "reply_to_top_id", 0)) if getattr(reply_to, "reply_to_top_id", None) is not None else None,
@@ -308,6 +327,48 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     "text": (getattr(message, "message", "") or "").strip(),
     "thread_anchor": int(thread_anchor) if thread_anchor is not None else None,
   }
+
+
+def coerce_single_message(sent):
+  # Telethon returns a single Message for normal uploads, but albums can return
+  # a list. This CLI intentionally sends one media item at a time, so normalize
+  # the occasional list result without widening the command contract.
+  if isinstance(sent, list):
+    return sent[0] if sent else None
+  return sent
+
+
+def build_topic_create_payload(
+  *,
+  chat_raw: str,
+  message,
+  title: str,
+) -> dict[str, object | None]:
+  chat_id = getattr(message, "chat_id", None)
+  if chat_id is None:
+    resolved_chat = resolve_chat(chat_raw)
+    chat_id = resolved_chat if isinstance(resolved_chat, int) else None
+  anchor = int(getattr(message, "id", 0) or 0)
+  if anchor <= 0:
+    raise RuntimeError(f"no topic anchor for {title}")
+  return {
+    "chat_id": int(chat_id) if chat_id is not None else None,
+    "message_id": anchor,
+    "topic_anchor": anchor,
+    "topic_title": title,
+  }
+
+
+def extract_created_topic_message(updates):
+  # Forum topic creation arrives as an Updates container with a service message.
+  # Match the structural Telegram action class so localized text never affects
+  # topic-anchor extraction.
+  for update in getattr(updates, "updates", []) or []:
+    message = getattr(update, "message", None)
+    action = getattr(message, "action", None)
+    if action and action.__class__.__name__ == "MessageActionTopicCreate":
+      return message
+  return None
 
 
 def dialog_has_unread(dialog) -> bool:
@@ -396,8 +457,21 @@ def build_parser() -> argparse.ArgumentParser:
 
   send = subparsers.add_parser("send", help = "Send a message as the Telegram user")
   send.add_argument("--chat", required = True, help = "Target chat username or id")
-  send.add_argument("--message", required = True, help = "Message text")
+  send.add_argument("--message", help = "Message text, or caption when --media is present")
+  send.add_argument("--media", help = "Media path or URL to upload")
+  send.add_argument("--caption", help = "Caption for --media; overrides --message")
   send.add_argument("--reply-to", type = int, default = 0, help = "Reply-to message id")
+  send.add_argument(
+    "--voice",
+    "--audio-as-voice",
+    action = "store_true",
+    dest = "voice",
+    help = "Send uploaded audio as a Telegram voice note",
+  )
+
+  topic_create = subparsers.add_parser("topic-create", help = "Create a forum topic")
+  topic_create.add_argument("--chat", required = True, help = "Target forum chat username or id")
+  topic_create.add_argument("--title", required = True, help = "Forum topic title")
 
   read = subparsers.add_parser("read", help = "Read recent messages and metadata")
   read.add_argument("--chat", required = True, help = "Target chat username or id")
@@ -652,16 +726,60 @@ async def run_login(args: argparse.Namespace) -> int:
 
 async def run_send(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
+  message_text = str(args.message or "").strip()
+  media = str(args.media or "").strip()
+  caption = str(args.caption or "").strip()
+  if not message_text and not media:
+    return fail("E_USAGE", "Telegram send requires --message or --media.")
   with acquire_session_lock(session_path):
     client, _ = await connect_client(session_path)
     try:
-      sent = await client.send_message(
-        entity = resolve_chat(args.chat),
-        message = args.message,
-        reply_to = args.reply_to or None,
-      )
+      if media:
+        sent = await client.send_file(
+          entity = resolve_chat(args.chat),
+          file = media,
+          caption = caption or message_text or None,
+          reply_to = args.reply_to or None,
+          voice_note = bool(args.voice),
+        )
+      else:
+        sent = await client.send_message(
+          entity = resolve_chat(args.chat),
+          message = message_text,
+          reply_to = args.reply_to or None,
+        )
+      sent = coerce_single_message(sent)
+      if sent is None:
+        return fail("E_TELEGRAM_USER_BACKEND", "Telegram send returned no message.")
       chat = await sent.get_chat()
       return emit({"message": build_message_payload(sent, chat = chat)})
+    finally:
+      await client.disconnect()
+
+
+async def run_topic_create(args: argparse.Namespace) -> int:
+  if functions is None:
+    return fail("E_TELETHON_IMPORT", "Telethon forum topic functions are unavailable.")
+  session_path = resolve_session_path(args.session)
+  title = str(args.title or "").strip()
+  if not title:
+    return fail("E_USAGE", "Telegram topic-create requires --title.")
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      updates = await client(
+        functions.messages.CreateForumTopicRequest(
+          peer = resolve_chat(args.chat),
+          title = title,
+        )
+      )
+      message = extract_created_topic_message(updates)
+      if message is None:
+        return fail(
+          "E_TOPIC_CREATE_NO_ANCHOR",
+          f"Telegram topic-create returned no topic anchor for {title}.",
+        )
+      return emit(build_topic_create_payload(chat_raw = args.chat, message = message, title = title))
     finally:
       await client.disconnect()
 
@@ -743,6 +861,8 @@ async def run() -> int:
       return await run_login(args)
     if args.command == "send":
       return await run_send(args)
+    if args.command == "topic-create":
+      return await run_topic_create(args)
     if args.command == "read":
       return await run_read(args)
     if args.command == "inbox":

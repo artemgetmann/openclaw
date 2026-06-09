@@ -2,7 +2,147 @@ import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
+function makeStaleJarvisConsumerConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    jarvis: {
+      managedServices: { mode: "managed" },
+      backend: { baseUrl: "https://jarvis.example.invalid" },
+    },
+    auth: {
+      profiles: {
+        "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+      },
+      order: {
+        "openai-codex": ["openai-codex:default"],
+      },
+    },
+    agents: {
+      defaults: {
+        model: { primary: "openai-codex/gpt-5.4" },
+        models: {
+          "anthropic/claude-haiku-4-5": {},
+          "anthropic/claude-opus-4-6": {},
+          "anthropic/claude-sonnet-4-6": {},
+          "openai-codex/gpt-5.3-codex": {},
+          "openai-codex/gpt-5.4": {},
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+describe("legacy migrate Jarvis consumer model defaults", () => {
+  it("adds GPT-5.5 and promotes the managed GPT-5.4 primary", () => {
+    const res = migrateLegacyConfig(makeStaleJarvisConsumerConfig());
+
+    expect(res.changes).toContain("Added openai-codex/gpt-5.5 to Jarvis consumer model allowlist.");
+    expect(res.changes).toContain(
+      "Updated Jarvis consumer primary model openai-codex/gpt-5.4 → openai-codex/gpt-5.5.",
+    );
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.5" });
+    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toEqual({});
+    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toEqual({});
+    expect(res.config?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toBeDefined();
+  });
+
+  it("preserves a custom primary while refreshing the stale allowlist", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
+    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toEqual({});
+  });
+
+  it("adds Claude Sonnet entries only when matching Claude auth exists", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+            "anthropic:claude-cli": { provider: "anthropic", mode: "oauth" },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default"],
+            anthropic: ["anthropic:claude-cli"],
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.models?.["claude-cli/sonnet"]).toEqual({});
+    expect(res.config?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toBeDefined();
+  });
+
+  it("does not rewrite non-Jarvis configs with similar model keys", () => {
+    const res = migrateLegacyConfig({
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4" },
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+});
+
 describe("legacy migrate audio transcription", () => {
+  it("removes legacy inline apiKey values from media understanding models", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-5-mini", apiKey: "global-key" }],
+          audio: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                apiKey: "audio-key",
+                timeoutSeconds: 30,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed tools.media.models[].apiKey (1).");
+    expect(res.changes).toContain("Removed tools.media.audio.models[].apiKey (1).");
+    expect(res.config?.tools?.media?.models).toEqual([{ provider: "openai", model: "gpt-5-mini" }]);
+    expect(res.config?.tools?.media?.audio?.models).toEqual([
+      { provider: "openai", model: "whisper-1", timeoutSeconds: 30 },
+    ]);
+  });
+
   it("moves routing.transcribeAudio into tools.media.audio.models", () => {
     const res = migrateLegacyConfig({
       routing: {

@@ -19,6 +19,7 @@ function addTelegramHarnessOptions(command: Command, { requireChat }: { requireC
     .option("--text <message>", "Override the smoke message text")
     .option("--timeout <seconds>", "Reply timeout in seconds", "120")
     .option("--topic-id <id>", "Optional topic/thread anchor")
+    .option("--deterministic", "Use deterministic product-path injection when supported", false)
     .option("--json", "Output JSON", false);
 }
 

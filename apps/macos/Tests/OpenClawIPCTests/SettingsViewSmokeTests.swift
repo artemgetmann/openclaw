@@ -219,6 +219,17 @@ struct SettingsViewSmokeTests {
             hasContentViewController: false))
     }
 
+    @Test func `settings window opener reveals normal opens only when no visible content window exists`() {
+        #expect(SettingsWindowOpener.shouldRevealContentWindow(hasVisibleContentWindow: false))
+        #expect(!SettingsWindowOpener.shouldRevealContentWindow(hasVisibleContentWindow: true))
+    }
+
+    @Test func `settings window opener can force reveal for dock reopen`() {
+        #expect(SettingsWindowOpener.shouldRevealContentWindow(
+            hasVisibleContentWindow: true,
+            forceReveal: true))
+    }
+
     @Test func `consumer app delegate schedules launch surface only when useful`() {
         #expect(AppDelegate.shouldScheduleInitialVisibleSurface(
             isConsumer: true,
@@ -238,11 +249,11 @@ struct SettingsViewSmokeTests {
             didLaunchFromFinder: true))
     }
 
-    @Test func `consumer app delegate requests surface on reopen without windows`() {
+    @Test func `consumer app delegate requests surface on every dock reopen`() {
         #expect(AppDelegate.shouldHandleConsumerReopen(
             isConsumer: true,
             hasVisibleWindows: false))
-        #expect(!AppDelegate.shouldHandleConsumerReopen(
+        #expect(AppDelegate.shouldHandleConsumerReopen(
             isConsumer: true,
             hasVisibleWindows: true))
         #expect(!AppDelegate.shouldHandleConsumerReopen(

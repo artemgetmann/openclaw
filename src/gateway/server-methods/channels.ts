@@ -3,6 +3,9 @@ import {
   resolveTelegramAccount,
 } from "../../../extensions/telegram/src/accounts.js";
 import { createTelegramBot } from "../../../extensions/telegram/src/bot.js";
+import { deliverReplies } from "../../../extensions/telegram/src/bot/delivery.js";
+import type { TelegramThreadSpec } from "../../../extensions/telegram/src/bot/helpers.js";
+import { createTelegramDraftStream } from "../../../extensions/telegram/src/draft-stream.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -18,6 +21,7 @@ import { createConfigIO, loadConfig, readConfigFileSnapshot } from "../../config
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import {
   ErrorCodes,
@@ -50,6 +54,15 @@ type TelegramSetupReplayPayload = {
   messageThreadId?: number;
 };
 
+type TelegramProgressTtsProofPayload = {
+  chatId: number;
+  finalText: string;
+  progressTexts: [string, string];
+  marker: string;
+  replyToMessageId?: number;
+  messageThreadId?: number;
+};
+
 function readFiniteNumber(value: unknown, label: string): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
@@ -63,6 +76,48 @@ function readOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseTelegramProgressTtsProofParams(params: Record<string, unknown>): {
+  payload: TelegramProgressTtsProofPayload;
+  timeoutMs: number;
+} {
+  const timeoutMsRaw = params.timeoutMs;
+  const timeoutMs =
+    typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
+      ? Math.max(1000, Math.trunc(timeoutMsRaw))
+      : 90_000;
+  const progressTextsRaw = params.progressTexts;
+  if (!Array.isArray(progressTextsRaw) || progressTextsRaw.length !== 2) {
+    throw new Error("progressTexts must contain exactly two strings");
+  }
+  const progressTexts = progressTextsRaw.map(readOptionalString);
+  if (!progressTexts[0] || !progressTexts[1]) {
+    throw new Error("progressTexts entries must be non-empty strings");
+  }
+  const finalText = readOptionalString(params.finalText);
+  const marker = readOptionalString(params.marker);
+  if (!finalText) {
+    throw new Error("finalText is required");
+  }
+  if (!marker || !finalText.includes(marker)) {
+    throw new Error("marker is required and must appear in finalText");
+  }
+  return {
+    timeoutMs,
+    payload: {
+      chatId: readFiniteNumber(params.chatId, "chatId"),
+      finalText,
+      marker,
+      progressTexts: [progressTexts[0], progressTexts[1]],
+      ...(typeof params.replyToMessageId === "number" && Number.isFinite(params.replyToMessageId)
+        ? { replyToMessageId: Math.trunc(params.replyToMessageId) }
+        : {}),
+      ...(typeof params.messageThreadId === "number" && Number.isFinite(params.messageThreadId)
+        ? { messageThreadId: Math.trunc(params.messageThreadId) }
+        : {}),
+    },
+  };
 }
 
 function parseTelegramSetupReplayParams(params: Record<string, unknown>): {
@@ -173,6 +228,180 @@ export async function logoutChannelAccount(params: {
 }
 
 export const channelsHandlers: GatewayRequestHandlers = {
+  "channels.telegram.progress-tts-proof": async ({ params, respond }) => {
+    let proofParams: ReturnType<typeof parseTelegramProgressTtsProofParams>;
+    try {
+      proofParams = parseTelegramProgressTtsProofParams(params);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.telegram.progress-tts-proof params: ${formatForLog(err)}`,
+        ),
+      );
+      return;
+    }
+
+    const cfg = createConfigIO().loadConfig();
+    const accountId = resolveDefaultTelegramAccountId(cfg);
+    const account = resolveTelegramAccount({ cfg, accountId });
+    const token = account.token.trim();
+    if (!token) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Telegram bot token is not configured."),
+      );
+      return;
+    }
+
+    const bot = createTelegramBot({
+      token,
+      accountId: account.accountId,
+      config: cfg,
+      runtime: defaultRuntime,
+    });
+    const sentMessages: Array<{
+      kind: "audio" | "text" | "voice";
+      messageId: number;
+      text: string;
+    }> = [];
+    const deletedMessageIds: number[] = [];
+    const api = bot.api;
+    const trackingApi = bot.api as unknown as {
+      sendAudio?: (...args: unknown[]) => Promise<{ message_id?: number }>;
+      sendVoice?: (...args: unknown[]) => Promise<{ message_id?: number }>;
+    };
+    const originalSendMessage = api.sendMessage.bind(api);
+    const originalDeleteMessage = api.deleteMessage.bind(api);
+    const originalSendAudio = trackingApi.sendAudio?.bind(api);
+    const originalSendVoice = trackingApi.sendVoice?.bind(api);
+    api.sendMessage = (async (...args: Parameters<typeof api.sendMessage>) => {
+      const result = await originalSendMessage(...args);
+      if (typeof result?.message_id === "number") {
+        sentMessages.push({
+          kind: "text",
+          messageId: result.message_id,
+          text: typeof args[1] === "string" ? args[1] : "",
+        });
+      }
+      return result;
+    }) as typeof api.sendMessage;
+    api.deleteMessage = (async (...args: Parameters<typeof api.deleteMessage>) => {
+      const result = await originalDeleteMessage(...args);
+      const messageId = typeof args[1] === "number" ? Math.trunc(args[1]) : null;
+      if (messageId != null) {
+        deletedMessageIds.push(messageId);
+      }
+      return result;
+    }) as typeof api.deleteMessage;
+    if (originalSendVoice) {
+      trackingApi.sendVoice = async (...args: unknown[]) => {
+        const result = await originalSendVoice(...args);
+        if (typeof result?.message_id === "number") {
+          sentMessages.push({ kind: "voice", messageId: result.message_id, text: "" });
+        }
+        return result;
+      };
+    }
+    if (originalSendAudio) {
+      trackingApi.sendAudio = async (...args: unknown[]) => {
+        const result = await originalSendAudio(...args);
+        if (typeof result?.message_id === "number") {
+          sentMessages.push({ kind: "audio", messageId: result.message_id, text: "" });
+        }
+        return result;
+      };
+    }
+
+    const thread: TelegramThreadSpec | null =
+      proofParams.payload.messageThreadId != null
+        ? { id: proofParams.payload.messageThreadId, scope: "dm" }
+        : null;
+    const draft = createTelegramDraftStream({
+      api: bot.api,
+      chatId: proofParams.payload.chatId,
+      thread,
+      previewTransport: "message",
+      minInitialChars: 1,
+      throttleMs: 250,
+      log: defaultRuntime.log,
+      warn: defaultRuntime.error,
+    });
+
+    try {
+      await withTimeout(
+        (async () => {
+          // Drive the same mutable progress controller used by real Telegram
+          // assistant previews: send first progress, edit it, then delete before final.
+          draft.update(proofParams.payload.progressTexts[0]);
+          await draft.flush();
+          const progressMessageId = draft.messageId() ?? null;
+          draft.update(proofParams.payload.progressTexts[1]);
+          await draft.flush();
+          await draft.clear();
+
+          const finalPayload = await maybeApplyTtsToPayload({
+            payload: { text: proofParams.payload.finalText },
+            cfg,
+            channel: "telegram",
+            kind: "final",
+            ttsAuto: "always",
+          });
+          await deliverReplies({
+            replies: [finalPayload],
+            chatId: String(proofParams.payload.chatId),
+            accountId: account.accountId,
+            token,
+            runtime: defaultRuntime,
+            bot,
+            replyToMode: "first",
+            textLimit: 4000,
+            thread,
+          });
+          const finalTextMessage = sentMessages.find(
+            (message) =>
+              message.kind === "text" &&
+              message.messageId !== progressMessageId &&
+              message.text.includes(proofParams.payload.marker),
+          );
+          const audioMessage = sentMessages.find(
+            (message) =>
+              (message.kind === "voice" || message.kind === "audio") &&
+              (finalTextMessage ? message.messageId > finalTextMessage.messageId : true),
+          );
+          respond(true, {
+            ok: Boolean(progressMessageId && finalTextMessage && audioMessage),
+            marker: proofParams.payload.marker,
+            progress_message_id: progressMessageId,
+            progress_texts: proofParams.payload.progressTexts,
+            deleted_message_ids: deletedMessageIds,
+            final_text_message_id: finalTextMessage?.messageId ?? null,
+            audio_message_id: audioMessage?.messageId ?? null,
+            audio_message_kind: audioMessage?.kind ?? null,
+            tts_media_generated: Boolean(finalPayload.mediaUrl || finalPayload.mediaUrls?.length),
+          });
+        })(),
+        proofParams.timeoutMs,
+      );
+    } catch (err) {
+      respond(true, {
+        ok: false,
+        marker: proofParams.payload.marker,
+        progress_message_id: draft.messageId() ?? null,
+        progress_texts: proofParams.payload.progressTexts,
+        deleted_message_ids: deletedMessageIds,
+        final_text_message_id: null,
+        audio_message_id: null,
+        audio_message_kind: null,
+        tts_media_generated: false,
+        error: formatForLog(err),
+      });
+    }
+  },
+
   "channels.telegram.setup-replay": async ({ params, respond }) => {
     // Consumer setup captures the first DM while polling is paused. Replay that
     // update through the normal Telegram bot middleware so verification proves

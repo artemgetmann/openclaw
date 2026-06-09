@@ -27,6 +27,19 @@ Finish Jarvis Consumer RC validation in strict gates without mixing failure laye
 4. Final notarized release.
 5. Sparkle `N` to `N+1` update proof.
 
+## Release Truth Refresh - 2026-06-09
+
+- Same-user RC onboarding is accepted. Telegram copy now says
+  `Return to the Jarvis app.`, the app copy restored `Wake up, my friend`, and
+  the first reply path is good enough for this lane.
+- Telegram UX issues from the same-user run are no longer release blockers. Do
+  not reopen them unless the clean-user Gate2 run proves a regression.
+- Sparkle implementation and release assets are merged on `main`, but update
+  proof is still pending.
+- Clean-user Gate2 proof is the next real blocker.
+- Final release still needs a notarized DMG/ZIP plus Gatekeeper proof from the
+  synced final head.
+
 ## Same-User RC Manual Run - 2026-06-09
 
 Purpose: catch product/onboarding bugs on the normal macOS user before spending
@@ -68,13 +81,13 @@ Live issues found during the run:
 - [x] Telegram verification: after `/start`, the bot replied with the approval
       message and RC config persisted `dmPolicy=allowlist` plus
       `allowFrom=["1336356696"]`, but the app stayed on `Approving Telegram
-    chat...` for more than a minute and the first-task marker remained
+  chat...` for more than a minute and the first-task marker remained
       missing. The verifier must complete once pending pairing/allowFrom proves
       the private chat is approved; it must not require another DM or leave the
       user in a spinner.
 - [x] Telegram instruction copy: onboarding must preserve the original first-task
       phrase: `Tap Start in Telegram, send "Wake up, my friend", then click
-    Verify Telegram.`
+  Verify Telegram.`
 - [x] Telegram first-message replay: after `/start`, the user's first real DM can
       arrive while the bot is still in pairing mode and before `allowFrom` is
       saved. `Verify Telegram` must approve the sender and replay that captured
@@ -95,7 +108,7 @@ Fix proof:
 - [x] `pnpm exec vitest run src/pairing/pairing-messages.test.ts` passed 8
       tests after the bot-side copy fix.
 - [x] `pnpm exec vitest run src/pairing/pairing-messages.test.ts
-    src/commands/models/consumer-auth.test.ts` passed 15 tests in the earlier
+  src/commands/models/consumer-auth.test.ts` passed 15 tests in the earlier
       ChatGPT fallback/copy batch.
 - [x] Rebuilt and installed `/Applications/Jarvis Consumer.app`; verifier passed
       for `dist/Jarvis Consumer.app` and `/Applications/Jarvis Consumer.app`.
@@ -106,7 +119,7 @@ Fix proof:
       showed `Telegram verified`, enabled `Next`, and onboarding finished.
 - [x] Installed binary proof: `/Applications/Jarvis Consumer.app` from build
       timestamp `2026-06-09T06:11:00Z` contains the original `Wake up, my
-    friend` instruction and the runtime JS was rebuilt with bot copy
+  friend` instruction and the runtime JS was rebuilt with bot copy
       `Return to the Jarvis app.`
 
 Iteration rule:
@@ -141,6 +154,10 @@ up, my friend`, and Telegram replies after verification. Minor first-message
 ## Recovery Checklist - 2026-06-07
 
 This checklist supersedes the Gate 2 notes below until a new isolated Gate2 run proves otherwise.
+
+Historical note: the open bullets below capture the 2026-06-07 pre-fix state.
+Use `Release Truth Refresh - 2026-06-09` and `Same-User RC Manual Run - 2026-06-09`
+as the current release truth.
 
 Status:
 

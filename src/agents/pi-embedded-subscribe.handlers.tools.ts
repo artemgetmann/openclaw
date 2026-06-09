@@ -5,6 +5,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import { logTelegramProgressDebug } from "../infra/telegram-progress-debug.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -399,6 +400,13 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
+  // If Telegram deferred phase-unknown text until this tool boundary, the text
+  // immediately before a tool call is structurally commentary. Stamp that before
+  // flushing so Telegram routes it through transient progress instead of durable
+  // final-message delivery. Other channels keep their legacy phase-less output.
+  if (ctx.params.deferPhaseUnknownBlockReplies === true) {
+    ctx.state.currentAssistantPhase ??= "commentary";
+  }
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
     await ctx.params.onBlockReplyFlush();
@@ -435,6 +443,14 @@ export async function handleToolExecutionStart(
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+  logTelegramProgressDebug("tool.execution.start", {
+    runId,
+    sessionKey: ctx.params.sessionKey,
+    sessionId: ctx.params.sessionId,
+    toolName,
+    toolCallId,
+    hasArgs: args != null,
+  });
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
   emitAgentEvent({
@@ -467,18 +483,22 @@ export async function handleToolExecutionStart(
     const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
     if (isMessagingSend) {
+      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
+      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
       const sendTarget = extractMessagingToolSend(toolName, argsRecord);
       if (sendTarget) {
-        ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
+        ctx.state.pendingMessagingTargets.set(toolCallId, {
+          ...sendTarget,
+          hasMedia: mediaUrls.length > 0,
+          hasText: typeof text === "string" && text.trim().length > 0,
+        });
       }
       // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
       if (text && typeof text === "string") {
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
         ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
       }
       // Track media URLs from messaging tool args (pending until tool_execution_end).
-      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
       if (mediaUrls.length > 0) {
         ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
       }
@@ -568,6 +588,12 @@ export async function handleToolExecutionEnd(
     }
   }
 
+  const sourcePreviewMessage =
+    !isToolError && toolName === "message"
+      ? isSourcePreviewMessageToolResult(sanitizedResult)
+      : undefined;
+  const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+
   // Commit messaging tool text on success, discard on error.
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
@@ -582,7 +608,10 @@ export async function handleToolExecutionEnd(
   }
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
+    if (!isToolError && !sourcePreviewMessage) {
+      // Same-source message sends can be converted into channel-local progress
+      // previews instead of durable outbound messages. Those previews must not
+      // make the final-answer payload look like a duplicate same-target send.
       ctx.state.messagingToolSentTargets.push(pendingTarget);
       ctx.trimMessagingToolSent();
     }
@@ -643,14 +672,31 @@ export async function handleToolExecutionEnd(
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+  logTelegramProgressDebug(isToolError ? "tool.execution.error" : "tool.execution.end", {
+    runId,
+    sessionKey: ctx.params.sessionKey,
+    sessionId: ctx.params.sessionId,
+    toolName,
+    toolCallId,
+    durationMs,
+    mediaCount: extractToolResultMediaPaths(result).length,
+    sourcePreview: Boolean(sourcePreviewMessage),
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+  });
 
-  const sourcePreviewMessage =
-    !isToolError && toolName === "message"
-      ? isSourcePreviewMessageToolResult(sanitizedResult)
-      : undefined;
   if (sourcePreviewMessage && ctx.params.onToolResult) {
     try {
-      await ctx.params.onToolResult({ text: sourcePreviewMessage });
+      await ctx.params.onToolResult({
+        text: sourcePreviewMessage,
+        channelData: {
+          openclaw: {
+            // Source previews are model-authored working-status text. Channels
+            // can render them as transient progress without mistaking them for
+            // durable message-tool output.
+            sourcePreview: true,
+          },
+        },
+      });
     } catch {
       // ignore delivery failures
     }
@@ -661,7 +707,6 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: afterToolCallArgs,

@@ -205,10 +205,11 @@ struct ConsumerPermissionRecoveryTests {
     @Test func `consumer settings keeps media permissions optional`() {
         #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.screenRecording))
         #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.accessibility))
-        #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.appleScript))
         #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.location))
+        #expect(!PermissionsSettings.consumerRecommendedCapabilities.contains(.appleScript))
         #expect(!PermissionsSettings.consumerRecommendedCapabilities.contains(.notifications))
         #expect(!PermissionsSettings.consumerRecommendedCapabilities.contains(.microphone))
+        #expect(ConsumerPermissionCatalog.optionalCapabilities.contains(.appleScript))
     }
 
     @Test func `core onboarding permissions include app control but keep location recommended`() {

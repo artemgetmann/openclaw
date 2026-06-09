@@ -33,6 +33,81 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+function parseAssistantTextSignaturePhase(
+  value: unknown,
+): "commentary" | "final_answer" | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as { phase?: unknown };
+    return parsed.phase === "commentary" || parsed.phase === "final_answer"
+      ? parsed.phase
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveAssistantPhase(msg: AgentMessage): "commentary" | "final_answer" | undefined {
+  const messagePhase = (msg as { phase?: unknown }).phase;
+  if (messagePhase === "commentary" || messagePhase === "final_answer") {
+    return messagePhase;
+  }
+  const maybeContent = (msg as { content?: unknown }).content;
+  const content = Array.isArray(maybeContent) ? maybeContent : [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const phase = parseAssistantTextSignaturePhase(
+      (block as { textSignature?: unknown }).textSignature,
+    );
+    if (phase) {
+      return phase;
+    }
+  }
+  return undefined;
+}
+
+function mergeOpenClawChannelData(
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const existingChannelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? (payload.channelData as Record<string, unknown>)
+      : {};
+  const existingOpenClaw =
+    existingChannelData.openclaw &&
+    typeof existingChannelData.openclaw === "object" &&
+    !Array.isArray(existingChannelData.openclaw)
+      ? (existingChannelData.openclaw as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...existingChannelData,
+      openclaw: {
+        ...existingOpenClaw,
+        ...data,
+      },
+    },
+  };
+}
+
+function withAssistantPhaseChannelData<T extends Record<string, unknown>>(
+  payload: T,
+  phase: "commentary" | "final_answer" | undefined,
+): T {
+  if (!phase) {
+    return payload;
+  }
+  return mergeOpenClawChannelData(payload, { assistantPhase: phase }) as T;
+}
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -71,6 +146,7 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  ctx.state.currentAssistantPhase = resolveAssistantPhase(msg);
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -85,6 +161,7 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
+  ctx.state.currentAssistantPhase = resolveAssistantPhase(msg) ?? ctx.state.currentAssistantPhase;
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -243,11 +320,27 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
+  // Phase often arrives on the signed message-end record, after text deltas.
+  // Telegram opts into deferral so it does not lose the structural route marker
+  // that keeps commentary transient and final answers durable. Generic channels
+  // keep legacy immediate text-end streaming because many tests/providers never
+  // emit phase metadata at all.
+  const canEmitPhaseAwareBlockReply =
+    ctx.params.deferPhaseUnknownBlockReplies !== true || Boolean(ctx.state.currentAssistantPhase);
+  if (
+    canEmitPhaseAwareBlockReply &&
+    ctx.params.onBlockReply &&
+    ctx.blockChunking &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
-  if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
+  if (
+    canEmitPhaseAwareBlockReply &&
+    evtType === "text_end" &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
     ctx.flushBlockReplyBuffer();
   }
 }
@@ -262,6 +355,8 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+  const assistantPhase = resolveAssistantPhase(assistantMessage) ?? ctx.state.currentAssistantPhase;
+  ctx.state.currentAssistantPhase = assistantPhase;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (ctx.state.deterministicApprovalPromptSent) {
@@ -336,11 +431,16 @@ export function handleMessageEnd(
     if (!onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
+    const deliver = () => onBlockReply(payload);
+    try {
+      // Start delivery synchronously so block reply ordering is observable, and
+      // catch both sync throws and async rejections from channel callbacks.
+      void Promise.resolve(deliver()).catch((err) => {
         ctx.log.warn(`block reply callback failed: ${String(err)}`);
       });
+    } catch (err) {
+      ctx.log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
@@ -355,7 +455,12 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    emitBlockReplySafely(
+      withAssistantPhaseChannelData(
+        { text: formattedReasoning, isReasoning: true },
+        assistantPhase,
+      ),
+    );
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -378,14 +483,19 @@ export function handleMessageEnd(
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
     if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-      emitBlockReplySafely({
-        text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-        audioAsVoice,
-        replyToId,
-        replyToTag,
-        replyToCurrent,
-      });
+      emitBlockReplySafely(
+        withAssistantPhaseChannelData(
+          {
+            text: cleanedText,
+            mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+            audioAsVoice,
+            replyToId,
+            replyToTag,
+            replyToCurrent,
+          },
+          assistantPhase,
+        ),
+      );
     }
   };
 

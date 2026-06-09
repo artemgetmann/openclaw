@@ -24,10 +24,15 @@
   - Do not run raw `pnpm build`, raw `node dist/index.js ...`, or any shell-default Node command from `/Users/user/Programming_Projects/openclaw`.
   - The shell may be on Node 25 while the shared runtime is pinned to Node `22.22.1`.
   - Use the guarded entrypoints instead:
+    - `bash scripts/deploy-shared-main-runtime.sh` after merged runtime code needs to be deployed from clean sacred `main`
     - `bash scripts/build-shared-runtime.sh`
     - `openclaw gateway restart`
     - `bash scripts/gateway-recover-main.sh`
     - `bash scripts/restart-mac.sh`
+- Main runtime deploy/proof:
+  - Use `bash scripts/deploy-shared-main-runtime.sh` from `/Users/user/Programming_Projects/openclaw` on clean `main` after PRs merge. It fast-forwards, stops only `ai.openclaw.gateway`, rebuilds via `scripts/build-shared-runtime.sh`, reinstalls/kickstarts the canonical LaunchAgent, and prints compact commit/PID/Node/RPC/listener proof.
+  - Use `bash scripts/gateway-recover-main.sh` for unhealthy runtime recovery. It can no-op when the gateway is already healthy; do not use it as the deploy-after-merge command.
+  - Use `bash scripts/prove-main-telegram-runtime.sh` for live Telegram proof. It resolves the active `[default]` Telegram bot from current gateway logs/config, not old `.artifacts/telegram-smoke/*` files, sends a nonce, waits for the exact nonce reply, then checks the watchdog window for polling stalls.
 - Restart:
   - `pkill -9 -f openclaw-gateway || true`
   - `nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
@@ -64,3 +69,35 @@
 - `scripts/restart-mac.sh` still has an explicit broad kill path via `--app-scope all`; do not use it as the default from linked worktrees.
 - Use `scripts/clawlog.sh` for macOS unified logs.
 - Temporary worktrees are the required implementation surface for development and pre-merge validation. The primary bot still must run from `main`, not from a worktree build. The `main` sacred home clone stays on `main`; shared-runtime restarts happen only after that clone is back on clean, fast-forwarded `main`.
+
+## Shared-Main Ship Lane
+
+For a PR that explicitly needs shared-main deploy proof after merge, use:
+
+```bash
+bash scripts/ship-main-gateway-fix.sh --pr <number> --live-telegram-restart
+```
+
+The wrapper refuses non-`main` PR targets, waits on the quiet `pr-required`
+helper, merges only after required checks pass, fast-forwards the sacred
+`~/Programming_Projects/openclaw` clone, rebuilds with
+`scripts/build-shared-runtime.sh`, recovers with
+`scripts/gateway-recover-main.sh`, and prints the standard closeout block.
+
+Use `--dry-run` before the first live rollout or whenever the PR/runtime state
+is not obvious. Use `--skip-live` only when the proof level is intentionally
+`L2`; shared runtime, LaunchAgent, bot restart, and Telegram transport changes
+should normally go to `L3`.
+
+The live restart smoke is:
+
+```bash
+OPENCLAW_MAIN_GATEWAY_SMOKE_CHAT=<chat-or-username> \
+  bash scripts/smoke-main-gateway-restart.sh
+```
+
+It proves branch, worktree, commit, PID/listener/RPC preflight, sends the
+Telegram restart request, confirms it, waits for a restart transition, verifies
+the recovered runtime is sacred `main`, and emits compact JSON proof. If the
+model-mediated confirmation path is too noisy for an incident, use
+`--direct-restart` to send `/restart` directly.

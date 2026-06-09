@@ -24,6 +24,13 @@ export type SubscribeEmbeddedPiSessionParams = {
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
   /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
   onBlockReplyFlush?: () => void | Promise<void>;
+  /**
+   * Hold text-end block replies until assistant phase metadata is known.
+   * Telegram needs this to route commentary through transient progress while
+   * keeping final-answer text durable; generic channels keep immediate legacy
+   * text-end streaming.
+   */
+  deferPhaseUnknownBlockReplies?: boolean;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;

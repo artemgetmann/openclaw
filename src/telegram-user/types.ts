@@ -9,6 +9,7 @@ export type TelegramUserMessage = {
   date: string | null;
   direct_messages_topic: TelegramUserDirectMessagesTopic | null;
   direct_messages_topic_id: number | null;
+  media_kind?: "audio" | "document" | "photo" | "video" | "voice" | null;
   message_id: number;
   out: boolean;
   reply_to_msg_id: number | null;
@@ -72,6 +73,14 @@ export type TelegramUserLogoutResult = {
 export type TelegramUserSendResult = {
   backend_meta?: TelegramUserBackendMeta;
   message: TelegramUserMessage;
+};
+
+export type TelegramUserTopicCreateResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat_id: number | null;
+  message_id: number;
+  topic_anchor: number;
+  topic_title: string;
 };
 
 export type TelegramUserReadResult = {

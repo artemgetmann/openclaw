@@ -175,7 +175,14 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(onMessageDelivered).toHaveBeenCalledTimes(1);
-    expect(onMessageDelivered).toHaveBeenCalledWith(17);
+    expect(onMessageDelivered).toHaveBeenCalledWith(
+      17,
+      expect.objectContaining({
+        callsite: "preview-send",
+        previewTransport: "message",
+        threadFallback: false,
+      }),
+    );
   });
 
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
