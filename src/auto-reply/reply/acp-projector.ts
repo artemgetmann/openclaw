@@ -225,6 +225,7 @@ function markAcpSourcePreviewPayload(payload: ReplyPayload): ReplyPayload {
 export type AcpReplyProjector = {
   onEvent: (event: AcpRuntimeEvent) => Promise<void>;
   flush: (force?: boolean) => Promise<void>;
+  getFinalOutputText: () => string;
 };
 
 export function createAcpReplyProjector(params: {
@@ -265,6 +266,7 @@ export function createAcpReplyProjector(params: {
   let lastVisibleOutputTail: string | undefined;
   let pendingHiddenBoundary = false;
   let liveBufferText = "";
+  let finalOutputText = "";
   let liveIdleTimer: NodeJS.Timeout | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
@@ -515,6 +517,10 @@ export function createAcpReplyProjector(params: {
       const remaining = settings.maxOutputChars - emittedOutputChars;
       const accepted = remaining < text.length ? text.slice(0, remaining) : text;
       if (accepted.length > 0) {
+        // Keep the accepted assistant output separate from transient delivery
+        // payloads. ACP block chunks are marked as source previews for Telegram
+        // progress semantics, but final TTS needs the terminal assistant text.
+        finalOutputText += accepted;
         emittedOutputChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
         if (settings.deliveryMode === "live") {
@@ -578,5 +584,6 @@ export function createAcpReplyProjector(params: {
   return {
     onEvent,
     flush,
+    getFinalOutputText: () => finalOutputText,
   };
 }

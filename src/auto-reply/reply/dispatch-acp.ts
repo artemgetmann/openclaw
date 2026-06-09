@@ -312,6 +312,14 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
+    const finalOutputText = projector.getFinalOutputText().trim();
+    if (finalOutputText) {
+      // ACP output chunks are delivered as source previews so progress never
+      // speaks early. Once the turn is complete, synthesize exactly one audio
+      // supplement from the accepted final assistant output.
+      const delivered = await delivery.deliverFinalTtsSupplement(finalOutputText);
+      queuedFinal = queuedFinal || delivered;
+    }
     if (shouldEmitResolvedIdentityNotice) {
       const currentMeta = readAcpSessionEntry({
         cfg: params.cfg,
