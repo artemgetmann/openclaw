@@ -24,6 +24,7 @@ vi.mock("../daemon/service-env.js", () => ({
 }));
 
 import {
+  buildConsumerGatewayLaunchdPath,
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
   resolveGatewayDevMode,
@@ -363,6 +364,105 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("prepends bundled consumer Node bin to macOS LaunchAgent PATH", async () => {
+    const stateDir = "/Users/me/Library/Application Support/OpenClaw/.openclaw";
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_STATE_DIR: stateDir,
+        PATH: "/opt/homebrew/bin:/usr/bin:/bin",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      port: 18789,
+      runtime: "node",
+      platform: "darwin",
+    });
+
+    expect(plan.environment.PATH).toBe(
+      [
+        `${stateDir}/tools/node/bin`,
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+      ].join(":"),
+    );
+  });
+});
+
+describe("buildConsumerGatewayLaunchdPath", () => {
+  it("preserves existing PATH entries and appends launchd-safe fallbacks", () => {
+    const result = buildConsumerGatewayLaunchdPath({
+      platform: "darwin",
+      environment: {
+        OPENCLAW_PROFILE: "consumer-alpha",
+        OPENCLAW_STATE_DIR:
+          "/Users/me/Library/Application Support/OpenClaw/instances/alpha/.openclaw",
+        PATH: "/custom/bin:/usr/bin:/bin",
+      },
+    });
+
+    expect(result?.split(":")).toEqual([
+      "/Users/me/Library/Application Support/OpenClaw/instances/alpha/.openclaw/tools/node/bin",
+      "/custom/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+  });
+
+  it("moves an existing bundled Node bin entry to the front without duplicating it", () => {
+    const stateDir = "/Users/me/Library/Application Support/OpenClaw/.openclaw";
+    const result = buildConsumerGatewayLaunchdPath({
+      platform: "darwin",
+      environment: {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_STATE_DIR: stateDir,
+        PATH: `/usr/local/bin:${stateDir}/tools/node/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+      },
+    });
+
+    expect(result?.split(":")).toEqual([
+      `${stateDir}/tools/node/bin`,
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+  });
+
+  it("does not alter non-consumer or non-macOS service PATH values", () => {
+    expect(
+      buildConsumerGatewayLaunchdPath({
+        platform: "darwin",
+        environment: {
+          OPENCLAW_PROFILE: "tester",
+          OPENCLAW_STATE_DIR: "/tmp/state",
+          PATH: "/custom/bin",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      buildConsumerGatewayLaunchdPath({
+        platform: "linux",
+        environment: {
+          OPENCLAW_PROFILE: "consumer",
+          OPENCLAW_STATE_DIR: "/tmp/state",
+          PATH: "/custom/bin",
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 

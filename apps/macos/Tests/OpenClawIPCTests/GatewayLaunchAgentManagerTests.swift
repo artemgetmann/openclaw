@@ -213,6 +213,7 @@ struct GatewayLaunchAgentManagerTests {
                     "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
                     "OPENCLAW_CONFIG_PATH": identity.configURL.path,
                     "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
                 ],
             ]
             try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -439,6 +440,7 @@ struct GatewayLaunchAgentManagerTests {
                     "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
                     "OPENCLAW_CONFIG_PATH": identity.configURL.path,
                     "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
                 ],
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -452,6 +454,83 @@ struct GatewayLaunchAgentManagerTests {
 
         #expect(error == nil)
         #expect(calls.isEmpty)
+    }
+
+    @Test func `enable reinstalls matching consumer launch agent missing bundled node path`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let installedRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-installed-\(UUID().uuidString)", isDirectory: true)
+        let plistURL = home
+            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: installedRoot)
+        }
+
+        try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        var calls: [[String]] = []
+        GatewayLaunchAgentManager._setTestingHooks(
+            launchAgentWriteDisabled: { false },
+            readDaemonLoaded: { true },
+            runDaemonCommand: { args, _, _ in
+                calls.append(args)
+                return nil
+            })
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let error = try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": installedRoot.path,
+            ])
+        {
+            let seededRoot = ConsumerBundledRuntime.installedProjectRoot()
+            _ = try self.makeRepoRoot(at: seededRoot)
+            let identity = RuntimeIdentity.current
+            let plist: [String: Any] = [
+                "ProgramArguments": [
+                    "/usr/bin/node",
+                    seededRoot.appendingPathComponent("dist/index.js").path,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                "EnvironmentVariables": [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": "/usr/bin:/bin",
+                ],
+            ]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: [.atomic])
+
+            return await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: identity.gatewayPort)
+        }
+
+        #expect(error == nil)
+        #expect(calls == [[
+            "install",
+            "--force",
+            "--allow-shared-service-takeover",
+            "--port",
+            "18789",
+            "--runtime",
+            "node",
+        ]])
     }
 
     @Test func `consumer stop preserves loaded matching shared gateway`() async throws {
@@ -509,6 +588,7 @@ struct GatewayLaunchAgentManagerTests {
                     "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
                     "OPENCLAW_CONFIG_PATH": identity.configURL.path,
                     "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
                 ],
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -742,6 +822,7 @@ struct GatewayLaunchAgentManagerTests {
                     "OPENCLAW_HOME": identity.runtimeRootURL.path,
                     "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
                     "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
                 ],
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -810,6 +891,7 @@ struct GatewayLaunchAgentManagerTests {
                     "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
                     "OPENCLAW_CONFIG_PATH": identity.configURL.path,
                     "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
                 ],
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -896,6 +978,7 @@ struct GatewayLaunchAgentManagerTests {
                     "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
                     "OPENCLAW_CONFIG_PATH": identity.configURL.path,
                     "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
                 ],
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -1104,6 +1187,16 @@ extension GatewayLaunchAgentManagerTests {
             .appendingPathComponent("telegram-smoke", isDirectory: true)
         _ = try self.makeRepoRoot(at: worktreeRoot)
         return (parentRoot: parentRoot, worktreeRoot: worktreeRoot)
+    }
+
+    private func consumerLaunchdPath(for identity: RuntimeIdentity) -> String {
+        [
+            identity.stateDirURL.appendingPathComponent("tools/node/bin", isDirectory: true).path,
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ].joined(separator: ":")
     }
 
     private func repoRoot(filePath: StaticString = #filePath) -> URL {

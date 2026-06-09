@@ -69,6 +69,10 @@ struct DeviceIdentityMigrationTests {
             #expect(DeviceIdentityStore.loadOrCreate().deviceId == "current-device")
             #expect(DeviceAuthStore.loadToken(deviceId: "current-device", role: "operator")?.token == "current-token")
         }
+
+        let legacyAuth = try self.readAuth(from: legacyIdentityDir.appendingPathComponent("device-auth.json"))
+        #expect(legacyAuth.deviceId == "current-device")
+        #expect(legacyAuth.tokens["operator"] == "current-token")
     }
 
     @Test func `load or create repairs mismatched canonical identity from legacy operator identity`() async throws {
@@ -101,6 +105,40 @@ struct DeviceIdentityMigrationTests {
             #expect(DeviceIdentityStore.loadOrCreate().deviceId == "legacy-device")
             #expect(DeviceAuthStore.loadToken(deviceId: "legacy-device", role: "operator")?.token == "legacy-token")
             #expect(DeviceAuthStore.loadToken(deviceId: "legacy-device", role: "node")?.token == "legacy-node-token")
+        }
+    }
+
+    @Test func `legacy operator repair preserves canonical node token`() async throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-identity-\(UUID().uuidString)", isDirectory: true)
+        let stateDir = root.appendingPathComponent(".openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        let legacyIdentityDir = root.appendingPathComponent("identity", isDirectory: true)
+        let stateIdentityDir = stateDir.appendingPathComponent("identity", isDirectory: true)
+        try FileManager().createDirectory(at: legacyIdentityDir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: stateIdentityDir, withIntermediateDirectories: true)
+
+        try self.writeIdentity(
+            deviceId: "current-device",
+            to: stateIdentityDir.appendingPathComponent("device.json"))
+        try self.writeAuth(
+            deviceId: "current-device",
+            roles: ["node": "canonical-node-token"],
+            to: stateIdentityDir.appendingPathComponent("device-auth.json"))
+        try self.writeIdentity(
+            deviceId: "current-device",
+            to: legacyIdentityDir.appendingPathComponent("device.json"))
+        try self.writeAuth(
+            deviceId: "current-device",
+            roles: ["operator": "legacy-operator-token"],
+            to: legacyIdentityDir.appendingPathComponent("device-auth.json"))
+
+        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            #expect(DeviceIdentityStore.migrateLegacyAppSupportIdentityIfNeeded())
+            #expect(DeviceIdentityStore.loadOrCreate().deviceId == "current-device")
+            #expect(DeviceAuthStore.loadToken(deviceId: "current-device", role: "operator")?.token == "legacy-operator-token")
+            #expect(DeviceAuthStore.loadToken(deviceId: "current-device", role: "node")?.token == "canonical-node-token")
         }
     }
 
@@ -158,6 +196,47 @@ struct DeviceIdentityMigrationTests {
         }
     }
 
+    @Test func `device auth store mirrors canonical auth and preserves node on operator rotation`() async throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-auth-\(UUID().uuidString)", isDirectory: true)
+        let stateDir = root.appendingPathComponent(".openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        let legacyIdentityDir = root.appendingPathComponent("identity", isDirectory: true)
+        let stateIdentityDir = stateDir.appendingPathComponent("identity", isDirectory: true)
+        try FileManager().createDirectory(at: legacyIdentityDir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: stateIdentityDir, withIntermediateDirectories: true)
+
+        try self.writeAuth(
+            deviceId: "current-device",
+            roles: ["operator": "old-operator", "node": "node-token"],
+            to: stateIdentityDir.appendingPathComponent("device-auth.json"))
+        try self.writeAuth(
+            deviceId: "legacy-device",
+            roles: ["operator": "stale-legacy"],
+            to: legacyIdentityDir.appendingPathComponent("device-auth.json"))
+
+        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            #expect(DeviceAuthStore.loadToken(deviceId: "current-device", role: "operator")?.token == "old-operator")
+            _ = DeviceAuthStore.storeToken(
+                deviceId: "current-device",
+                role: "operator",
+                token: "new-operator",
+                scopes: ["operator.admin"])
+            #expect(DeviceAuthStore.loadToken(deviceId: "current-device", role: "operator")?.token == "new-operator")
+            #expect(DeviceAuthStore.loadToken(deviceId: "current-device", role: "node")?.token == "node-token")
+        }
+
+        let canonicalAuth = try self.readAuth(from: stateIdentityDir.appendingPathComponent("device-auth.json"))
+        let legacyAuth = try self.readAuth(from: legacyIdentityDir.appendingPathComponent("device-auth.json"))
+        #expect(canonicalAuth.deviceId == "current-device")
+        #expect(canonicalAuth.tokens["operator"] == "new-operator")
+        #expect(canonicalAuth.tokens["node"] == "node-token")
+        #expect(legacyAuth.deviceId == "current-device")
+        #expect(legacyAuth.tokens["operator"] == "new-operator")
+        #expect(legacyAuth.tokens["node"] == "node-token")
+    }
+
     private func writeIdentity(deviceId: String, to url: URL) throws {
         let payload: [String: Any] = [
             "deviceId": deviceId,
@@ -186,5 +265,16 @@ struct DeviceIdentityMigrationTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: [.atomic])
+    }
+
+    private func readAuth(from url: URL) throws -> (deviceId: String, tokens: [String: String]) {
+        let data = try Data(contentsOf: url)
+        let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let deviceId = raw?["deviceId"] as? String ?? ""
+        let tokenPayloads = raw?["tokens"] as? [String: [String: Any]] ?? [:]
+        let tokens = tokenPayloads.reduce(into: [String: String]()) { result, item in
+            result[item.key] = item.value["token"] as? String ?? ""
+        }
+        return (deviceId, tokens)
     }
 }

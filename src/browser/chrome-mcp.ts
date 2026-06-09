@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -55,8 +55,13 @@ type ChromeMcpCallOptions = {
   userDataDir?: string;
   profileDirectory?: string;
 };
+type ChromeMcpCommandSource = "bundled" | "node-adjacent" | "path";
+type ChromeMcpCommandResolution = {
+  source: ChromeMcpCommandSource;
+  path: string;
+};
 
-const DEFAULT_CHROME_MCP_COMMAND = "npx";
+const FALLBACK_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_ARGS = [
   "-y",
   "chrome-devtools-mcp@latest",
@@ -90,6 +95,8 @@ let liveChromeLauncher: ChromeMcpLiveChromeLauncher | null = null;
 let devToolsWsEndpointProber: ((port: number, browserPath: string) => Promise<boolean>) | null =
   null;
 let screenshotFallbackForTest: ChromeMcpScreenshotFallback | null = null;
+let chromeMcpStateDirOverrideForTest: string | null | undefined;
+let chromeMcpExecPathOverrideForTest: string | null = null;
 const profileDirectoryOverrides = new Map<string, string>();
 
 function traceChromeMcpStage(stage: string): void {
@@ -118,6 +125,55 @@ function isFileNotFoundError(err: unknown): boolean {
     "code" in err &&
     (err as { code?: unknown }).code === "ENOENT"
   );
+}
+
+function isExecutableFile(filePath: string): boolean {
+  try {
+    if (!statSync(filePath).isFile()) {
+      return false;
+    }
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveChromeMcpStateDir(): string | null {
+  const raw =
+    chromeMcpStateDirOverrideForTest !== undefined
+      ? chromeMcpStateDirOverrideForTest
+      : process.env.OPENCLAW_STATE_DIR;
+  return raw?.trim() || null;
+}
+
+function resolveChromeMcpProcessExecPath(): string {
+  return chromeMcpExecPathOverrideForTest?.trim() || process.execPath;
+}
+
+function resolveChromeMcpCommand(): ChromeMcpCommandResolution {
+  // Packaged installs own their Node toolchain under OPENCLAW_STATE_DIR. Use
+  // that exact npx first so Chrome MCP keeps working even when the app process
+  // inherits a minimal LaunchAgent PATH.
+  const stateDir = resolveChromeMcpStateDir();
+  if (stateDir) {
+    const bundledNpx = path.join(stateDir, "tools/node/bin/npx");
+    if (isExecutableFile(bundledNpx)) {
+      return { source: "bundled", path: bundledNpx };
+    }
+  }
+
+  // Runtime-bundled Node installs commonly put npx beside the running node
+  // executable. This covers relocatable app/runtime layouts without depending
+  // on shell PATH.
+  const nodeAdjacentNpx = path.join(path.dirname(resolveChromeMcpProcessExecPath()), "npx");
+  if (isExecutableFile(nodeAdjacentNpx)) {
+    return { source: "node-adjacent", path: nodeAdjacentNpx };
+  }
+
+  // Development shells still get the normal PATH lookup. This is intentionally
+  // last so a user/global npx cannot shadow a known packaged runtime.
+  return { source: "path", path: FALLBACK_CHROME_MCP_COMMAND };
 }
 
 function parseAttachUrl(value: string | undefined): string | null {
@@ -1133,8 +1189,12 @@ async function createRealSession(
   profileDirectory?: string,
 ): Promise<ChromeMcpSession> {
   const args = await resolveChromeMcpArgs(profileName, userDataDir);
+  const command = resolveChromeMcpCommand();
+  traceChromeMcpStage(
+    `chrome-mcp-command source=${command.source} path=${JSON.stringify(command.path)}`,
+  );
   const transport = new StdioClientTransport({
-    command: DEFAULT_CHROME_MCP_COMMAND,
+    command: command.path,
     args,
     stderr: "pipe",
   });
@@ -1567,6 +1627,18 @@ export async function resolveChromeMcpArgsForTest(
   userDataDir?: string,
 ): Promise<string[]> {
   return await resolveChromeMcpArgs(profileName, userDataDir);
+}
+
+export function resolveChromeMcpCommandForTest(): ChromeMcpCommandResolution {
+  return resolveChromeMcpCommand();
+}
+
+export function setChromeMcpNpxResolverInputsForTest(params: {
+  stateDir?: string | null;
+  execPath?: string | null;
+}): void {
+  chromeMcpStateDirOverrideForTest = params.stateDir;
+  chromeMcpExecPathOverrideForTest = params.execPath ?? null;
 }
 
 export function setChromeMcpProcessCommandsForTest(reader: (() => string[]) | null): void {
@@ -2132,6 +2204,8 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
   liveChromeLauncher = null;
   devToolsWsEndpointProber = null;
   defaultChromeUserDataDir = INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
+  chromeMcpStateDirOverrideForTest = undefined;
+  chromeMcpExecPathOverrideForTest = null;
   profileDirectoryOverrides.clear();
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
