@@ -26,6 +26,10 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
+import {
+  markControlCommandReplyPayload,
+  markControlCommandReplyPayloads,
+} from "./control-command-reply.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -270,7 +274,12 @@ export async function handleInlineActions(params: {
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
+        return {
+          kind: "reply",
+          reply: markControlCommandReplyPayload({
+            text: `❌ Tool not available: ${dispatch.toolName}`,
+          }),
+        };
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
@@ -283,11 +292,14 @@ export async function handleInlineActions(params: {
         } as any);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
-        return { kind: "reply", reply: { text } };
+        return { kind: "reply", reply: markControlCommandReplyPayload({ text }) };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ ${message}` } };
+        return {
+          kind: "reply",
+          reply: markControlCommandReplyPayload({ text: `❌ ${message}` }),
+        };
       }
     }
 
@@ -390,7 +402,9 @@ export async function handleInlineActions(params: {
       defaultGroupActivation: defaultActivation,
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
-    await sendInlineReply(inlineStatusReply);
+    await sendInlineReply(
+      inlineStatusReply ? markControlCommandReplyPayload(inlineStatusReply) : inlineStatusReply,
+    );
     directives = { ...directives, hasStatusDirective: false };
   }
 
@@ -442,11 +456,12 @@ export async function handleInlineActions(params: {
     };
     const inlineResult = await runCommands(inlineCommandContext);
     if (inlineResult.reply) {
+      const markedInlineReply = markControlCommandReplyPayload(inlineResult.reply);
       if (!inlineCommand.cleaned) {
         typing.cleanup();
-        return { kind: "reply", reply: inlineResult.reply };
+        return { kind: "reply", reply: markedInlineReply };
       }
-      await sendInlineReply(inlineResult.reply);
+      await sendInlineReply(markedInlineReply);
     }
   }
 
@@ -477,7 +492,10 @@ export async function handleInlineActions(params: {
   const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
-    return { kind: "reply", reply: commandResult.reply };
+    return {
+      kind: "reply",
+      reply: markControlCommandReplyPayloads(commandResult.reply),
+    };
   }
 
   return {
