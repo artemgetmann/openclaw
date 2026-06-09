@@ -18,6 +18,8 @@ visible message sequence matches the product contract.
 - Final answer text is durable and should appear exactly once.
 - With `/tts on`, TTS is an additive final supplement. It must voice only the
   final answer once.
+- When the user sends voice/audio, the current turn should get an additive
+  final voice supplement without permanently enabling `/tts on`.
 - No voice or audio payload may be sent before the final answer.
 
 Do not solve this with English keyword checks such as "if the text says
@@ -104,6 +106,8 @@ Pass criteria:
 - Final text appears exactly once.
 - Exactly one voice/audio appears after final text.
 - The voice/audio input is the final answer only.
+- A voice/audio prompt produces a voice/audio final supplement for that turn
+  even when typed-message TTS is off.
 - Progress text is not present as durable final text.
 
 Failure examples:
