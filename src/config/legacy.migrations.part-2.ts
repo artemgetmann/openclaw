@@ -1,4 +1,15 @@
 import {
+  getJarvisConsumerPrimaryModel,
+  hasJarvisConsumerAnthropicAuth,
+  hasJarvisConsumerClaudeCliAuth,
+  hasJarvisConsumerModel,
+  JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL,
+  JARVIS_CONSUMER_CLAUDE_CLI_MODEL,
+  JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
+  JARVIS_CONSUMER_LEGACY_CODEX_MODEL,
+  shouldMigrateJarvisConsumerModelDefaults,
+} from "./jarvis-consumer-model-migration.js";
+import {
   ensureAgentEntry,
   ensureRecord,
   getAgentsList,
@@ -63,6 +74,54 @@ function removeLegacyMediaModelApiKeys(params: {
   }
 }
 
+function addJarvisConsumerModel(
+  models: Record<string, unknown>,
+  modelId: string,
+  changes: string[],
+) {
+  if (Object.prototype.hasOwnProperty.call(models, modelId)) {
+    return;
+  }
+  models[modelId] = {};
+  changes.push(`Added ${modelId} to Jarvis consumer model allowlist.`);
+}
+
+function migrateJarvisConsumerModelDefaults(raw: Record<string, unknown>, changes: string[]) {
+  if (!shouldMigrateJarvisConsumerModelDefaults(raw)) {
+    return;
+  }
+
+  const agents = ensureRecord(raw, "agents");
+  const defaults = ensureRecord(agents, "defaults");
+  const models = ensureRecord(defaults, "models");
+  const primary = getJarvisConsumerPrimaryModel(raw);
+  const hasLegacyCodex =
+    primary === JARVIS_CONSUMER_LEGACY_CODEX_MODEL ||
+    hasJarvisConsumerModel(raw, JARVIS_CONSUMER_LEGACY_CODEX_MODEL);
+
+  if (hasLegacyCodex) {
+    addJarvisConsumerModel(models, JARVIS_CONSUMER_CURRENT_CODEX_MODEL, changes);
+  }
+
+  if (primary === JARVIS_CONSUMER_LEGACY_CODEX_MODEL) {
+    const model = getRecord(defaults.model);
+    defaults.model = model
+      ? { ...model, primary: JARVIS_CONSUMER_CURRENT_CODEX_MODEL }
+      : { primary: JARVIS_CONSUMER_CURRENT_CODEX_MODEL };
+    changes.push(
+      `Updated Jarvis consumer primary model ${JARVIS_CONSUMER_LEGACY_CODEX_MODEL} → ${JARVIS_CONSUMER_CURRENT_CODEX_MODEL}.`,
+    );
+  }
+
+  if (hasJarvisConsumerClaudeCliAuth(raw)) {
+    addJarvisConsumerModel(models, JARVIS_CONSUMER_CLAUDE_CLI_MODEL, changes);
+  }
+
+  if (hasJarvisConsumerAnthropicAuth(raw)) {
+    addJarvisConsumerModel(models, JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL, changes);
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
   {
     id: "tools.media.model-api-key-v2",
@@ -76,6 +135,13 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
       ]) {
         removeLegacyMediaModelApiKeys({ root: raw, path, changes });
       }
+    },
+  },
+  {
+    id: "jarvis.consumer-model-defaults-v2",
+    describe: "Refresh persisted Jarvis consumer model defaults to include GPT-5.5 and Sonnet",
+    apply: (raw, changes) => {
+      migrateJarvisConsumerModelDefaults(raw, changes);
     },
   },
   {
