@@ -11,17 +11,20 @@ BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
 PUBLISH_RELEASE_ASSETS=0
 GITHUB_RELEASE_TAG=""
 PACKAGE_PHASE="full"
+RELEASE_RUN_ROOT=""
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
 JARVIS_LATEST_RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_RELEASE_REPO}/releases/latest/download"
 JARVIS_DMG_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
 JARVIS_ZIP_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.zip"
 JARVIS_APPCAST_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/jarvis-appcast.xml"
+RELEASE_MANIFEST_PATH="${OPENCLAW_JARVIS_RELEASE_MANIFEST:-$ROOT_DIR/dist/jarvis-release-manifest.env}"
 
 usage() {
   cat <<'EOF'
@@ -39,12 +42,17 @@ Options:
                       Required with --publish-release-assets. Must match the
                       repo's latest release because Sparkle checks the public
                       releases/latest/download appcast feed.
-  --phase <full|post-app-build>
+  --phase <full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|publish-assets-only|verify-public-assets-only|trusted-ring-fast>
                       full is the default one-shot lane. post-app-build resumes
-                      from an existing dist/Jarvis.app and runs the release tail:
-                      app notarization, DMG, ZIP, appcast, optional publish.
+                      from an existing dist/Jarvis.app and runs the release tail.
+                      Narrow phases resume failed tails from saved artifacts,
+                      receipts, and dist/jarvis-release-manifest.env.
   --resume-after-app-build
                       Alias for --phase post-app-build.
+  --trusted-ring-fast
+                      Alias for --phase trusted-ring-fast. Builds local trusted
+                      tester artifacts and skips notarization, dSYM, publishing,
+                      and public release verification.
 
 Env:
   SKIP_NOTARIZE=1     Build release zip + DMG without notarization/stapling
@@ -78,6 +86,13 @@ Env:
 OpenClaw release packaging is intentionally default-instance only.
 Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
 EOF
+}
+
+release_run_root() {
+  if [[ -z "$RELEASE_RUN_ROOT" ]]; then
+    RELEASE_RUN_ROOT="${OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT:-$(openclaw_build_run_root "jarvis-release")}"
+  fi
+  printf '%s\n' "$RELEASE_RUN_ROOT"
 }
 
 notary_auth_configured() {
@@ -161,7 +176,7 @@ require_release_publish_prereqs() {
     return 0
   fi
 
-  if [[ "$NOTARIZE" != "1" ]]; then
+  if [[ "$NOTARIZE" != "1" && "$PACKAGE_PHASE" != "publish-assets-only" ]]; then
     echo "ERROR: --publish-release-assets requires notarization." >&2
     echo "SKIP_NOTARIZE=1 is local smoke/dev packaging and must not publish." >&2
     exit 1
@@ -183,7 +198,9 @@ require_release_publish_prereqs() {
   fi
 
   require_latest_release_tag
-  require_sparkle_private_key_file
+  if [[ "$PACKAGE_PHASE" != "publish-assets-only" ]]; then
+    require_sparkle_private_key_file
+  fi
 }
 
 consumer_sparkle_release_gate() {
@@ -322,6 +339,18 @@ publish_release_assets() {
     --repo "$GITHUB_RELEASE_REPO" \
     --clobber
 
+  verify_public_release_assets
+}
+
+verify_public_release_assets() {
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  for artifact in "$APP_PATH" "$ZIP" "$DMG" "$appcast"; do
+    if [[ ! -e "$artifact" ]]; then
+      echo "ERROR: release artifact missing before public verification: $artifact" >&2
+      exit 1
+    fi
+  done
+
   "$ROOT_DIR/scripts/verify-jarvis-release-assets.mjs" \
     --app-path "$APP_PATH" \
     --zip-path "$ZIP" \
@@ -408,11 +437,164 @@ app_build_receipt_path() {
   printf '%s\n' "${OPENCLAW_CONSUMER_APP_BUILD_RECEIPT:-$ROOT_DIR/dist/${APP_NAME}.app.release.env}"
 }
 
+app_notary_receipt_path() {
+  printf '%s\n' "$ROOT_DIR/dist/${APP_NAME}.app.notary.env"
+}
+
+dmg_notary_receipt_path() {
+  printf '%s\n' "${DMG}.notary.env"
+}
+
 receipt_value() {
   local receipt_path="$1"
   local key="$2"
 
   /usr/bin/sed -n "s/^${key}=//p" "$receipt_path" | /usr/bin/head -n 1
+}
+
+artifact_size_bytes() {
+  local artifact="$1"
+  if [[ ! -e "$artifact" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  /usr/bin/stat -f%z "$artifact" 2>/dev/null || /usr/bin/stat -c%s "$artifact" 2>/dev/null || printf '%s\n' ""
+}
+
+artifact_sha256() {
+  local artifact="$1"
+  if [[ ! -f "$artifact" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  /usr/bin/shasum -a 256 "$artifact" | /usr/bin/awk '{ print $1 }'
+}
+
+manifest_value() {
+  local key="$1"
+  if [[ ! -f "$RELEASE_MANIFEST_PATH" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  receipt_value "$RELEASE_MANIFEST_PATH" "$key"
+}
+
+notary_receipt_status() {
+  local receipt_path="$1"
+  if [[ ! -f "$receipt_path" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  receipt_value "$receipt_path" "NOTARY_STATUS"
+}
+
+notary_receipt_submission_id() {
+  local receipt_path="$1"
+  if [[ ! -f "$receipt_path" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID"
+}
+
+write_release_manifest() {
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  local build="unknown"
+  local git_commit="unknown"
+  local app_notary_receipt
+  local dmg_notary_receipt
+  local app_notary_id=""
+  local dmg_notary_id=""
+  local app_notary_status=""
+  local dmg_notary_status=""
+
+  if [[ -d "$APP_PATH" ]]; then
+    build="$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "unknown")"
+    git_commit="$(/usr/libexec/PlistBuddy -c "Print OpenClawGitCommit" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "unknown")"
+  fi
+  if [[ "$git_commit" == "unknown" ]]; then
+    git_commit="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")"
+  fi
+
+  app_notary_receipt="$(app_notary_receipt_path)"
+  dmg_notary_receipt="$(dmg_notary_receipt_path)"
+  app_notary_id="$(notary_receipt_submission_id "$app_notary_receipt")"
+  dmg_notary_id="$(notary_receipt_submission_id "$dmg_notary_receipt")"
+  app_notary_status="$(notary_receipt_status "$app_notary_receipt")"
+  dmg_notary_status="$(notary_receipt_status "$dmg_notary_receipt")"
+
+  mkdir -p "$(dirname "$RELEASE_MANIFEST_PATH")"
+  {
+    printf 'JARVIS_RELEASE_MANIFEST_VERSION=%q\n' "1"
+    printf 'JARVIS_PACKAGE_PHASE=%q\n' "$PACKAGE_PHASE"
+    printf 'JARVIS_APP_PATH=%q\n' "$APP_PATH"
+    printf 'JARVIS_DMG_PATH=%q\n' "$DMG"
+    printf 'JARVIS_ZIP_PATH=%q\n' "$ZIP"
+    printf 'JARVIS_APPCAST_PATH=%q\n' "$appcast"
+    printf 'JARVIS_APP_VERSION=%q\n' "$VERSION"
+    printf 'JARVIS_APP_BUILD=%q\n' "$build"
+    printf 'JARVIS_GIT_COMMIT=%q\n' "$git_commit"
+    printf 'JARVIS_APP_NOTARY_RECEIPT=%q\n' "$app_notary_receipt"
+    printf 'JARVIS_DMG_NOTARY_RECEIPT=%q\n' "$dmg_notary_receipt"
+    printf 'JARVIS_APP_NOTARY_SUBMISSION_ID=%q\n' "$app_notary_id"
+    printf 'JARVIS_DMG_NOTARY_SUBMISSION_ID=%q\n' "$dmg_notary_id"
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "$app_notary_status"
+    printf 'JARVIS_DMG_NOTARY_STATUS=%q\n' "$dmg_notary_status"
+    printf 'JARVIS_DMG_PUBLIC_URL=%q\n' "$JARVIS_DMG_PUBLIC_URL"
+    printf 'JARVIS_ZIP_PUBLIC_URL=%q\n' "$(jarvis_appcast_zip_public_url)"
+    printf 'JARVIS_APPCAST_PUBLIC_URL=%q\n' "$JARVIS_APPCAST_PUBLIC_URL"
+    printf 'JARVIS_DMG_SHA256=%q\n' "$(artifact_sha256 "$DMG")"
+    printf 'JARVIS_DMG_SIZE_BYTES=%q\n' "$(artifact_size_bytes "$DMG")"
+    printf 'JARVIS_ZIP_SHA256=%q\n' "$(artifact_sha256 "$ZIP")"
+    printf 'JARVIS_ZIP_SIZE_BYTES=%q\n' "$(artifact_size_bytes "$ZIP")"
+    printf 'JARVIS_APPCAST_SHA256=%q\n' "$(artifact_sha256 "$appcast")"
+    printf 'JARVIS_APPCAST_SIZE_BYTES=%q\n' "$(artifact_size_bytes "$appcast")"
+    printf 'JARVIS_MANIFEST_UPDATED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } >"$RELEASE_MANIFEST_PATH"
+
+  echo "🧾 Release manifest: $RELEASE_MANIFEST_PATH"
+}
+
+require_clean_git_for_release_build() {
+  local dirty
+  dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no)"
+  if [[ -n "$dirty" ]]; then
+    echo "ERROR: release packaging requires a clean tracked worktree." >&2
+    echo "$dirty" >&2
+    echo "Commit or revert tracked changes before building a release artifact." >&2
+    exit 1
+  fi
+}
+
+require_notarized_manifest_before_publish() {
+  local app_status
+  local dmg_status
+  app_status="$(manifest_value "JARVIS_APP_NOTARY_STATUS")"
+  dmg_status="$(manifest_value "JARVIS_DMG_NOTARY_STATUS")"
+
+  if [[ "$app_status" != "Accepted" || "$dmg_status" != "Accepted" ]]; then
+    echo "ERROR: publish-only requires accepted app and DMG notarization in $RELEASE_MANIFEST_PATH." >&2
+    echo "app_notary_status=${app_status:-missing}" >&2
+    echo "dmg_notary_status=${dmg_status:-missing}" >&2
+    echo "Poll the saved submissions before uploading public assets." >&2
+    exit 1
+  fi
+}
+
+require_app_notarized_manifest() {
+  local app_status
+  app_status="$(manifest_value "JARVIS_APP_NOTARY_STATUS")"
+  if [[ "$app_status" != "Accepted" ]]; then
+    echo "ERROR: DMG notarization resume requires accepted app notarization in $RELEASE_MANIFEST_PATH." >&2
+    echo "app_notary_status=${app_status:-missing}" >&2
+    echo "Poll the app notarization receipt before creating/submitting the DMG." >&2
+    exit 1
+  fi
 }
 
 read_app_build_receipt() {
@@ -453,7 +635,7 @@ write_app_build_receipt() {
 
 verify_resume_app_bundle() {
   if [[ ! -d "$APP_PATH" ]]; then
-    echo "ERROR: --phase post-app-build requires an existing app bundle: $APP_PATH" >&2
+    echo "ERROR: --phase $PACKAGE_PHASE requires an existing app bundle: $APP_PATH" >&2
     echo "Run the default package lane once, or point APP_NAME/APP_BUNDLE_NAME at the already-built Jarvis app." >&2
     exit 1
   fi
@@ -463,6 +645,128 @@ verify_resume_app_bundle() {
   BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
   APP_NAME="$APP_NAME" \
     "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+}
+
+submit_app_notarization_only() {
+  local notary_zip="$NOTARY_ZIP"
+  local receipt_path
+
+  receipt_path="$(app_notary_receipt_path)"
+  echo "📦 Notary zip: $notary_zip"
+  rm -f "$notary_zip"
+  ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$notary_zip"
+  STAPLE_APP_PATH="$APP_PATH" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+    --submit-only \
+    --receipt "$receipt_path" \
+    "$notary_zip"
+  write_release_manifest
+}
+
+poll_app_notarization_only() {
+  local receipt_path
+  local submission_id
+  local artifact
+  local staple_app
+  local status
+
+  receipt_path="$(app_notary_receipt_path)"
+  if [[ ! -f "$receipt_path" ]]; then
+    echo "ERROR: app notarization receipt missing: $receipt_path" >&2
+    echo "Run --phase submit-app-notarization first." >&2
+    exit 1
+  fi
+
+  submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+  artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
+  staple_app="$(receipt_value "$receipt_path" "NOTARY_STAPLE_APP_PATH")"
+  if [[ -z "$submission_id" ]]; then
+    echo "ERROR: app notarization receipt lacks NOTARY_SUBMISSION_ID: $receipt_path" >&2
+    exit 1
+  fi
+  if [[ -z "$artifact" ]]; then
+    artifact="$NOTARY_ZIP"
+  fi
+  if [[ -z "$staple_app" ]]; then
+    staple_app="$APP_PATH"
+  fi
+
+  set +e
+  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+    --poll "$submission_id" \
+    --artifact "$artifact" \
+    --receipt "$receipt_path" \
+    --staple-app "$staple_app"
+  status=$?
+  set -e
+  write_release_manifest
+  if [[ $status -ne 0 ]]; then
+    exit "$status"
+  fi
+
+  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+  APP_NAME="$APP_NAME" \
+  OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
+  SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
+    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+}
+
+create_signed_dmg() {
+  echo "💿 DMG: $DMG"
+  rm -f "$DMG" "${DMG%.dmg}-rw.dmg"
+  "$ROOT_DIR/scripts/create-dmg.sh" "$APP_PATH" "$DMG"
+  sign_dmg_if_possible "$DMG" "$SIGNING_AUTHORITY"
+}
+
+submit_dmg_notarization_only() {
+  local receipt_path
+
+  receipt_path="$(dmg_notary_receipt_path)"
+  require_app_notarized_manifest
+  create_signed_dmg
+  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+    --submit-only \
+    --receipt "$receipt_path" \
+    "$DMG"
+  write_release_manifest
+}
+
+poll_dmg_notarization_only() {
+  local receipt_path
+  local submission_id
+  local artifact
+  local status
+
+  receipt_path="$(dmg_notary_receipt_path)"
+  if [[ ! -f "$receipt_path" ]]; then
+    echo "ERROR: DMG notarization receipt missing: $receipt_path" >&2
+    echo "Run --phase submit-dmg-notarization first." >&2
+    exit 1
+  fi
+
+  submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+  artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
+  if [[ -z "$submission_id" ]]; then
+    echo "ERROR: DMG notarization receipt lacks NOTARY_SUBMISSION_ID: $receipt_path" >&2
+    exit 1
+  fi
+  if [[ -z "$artifact" ]]; then
+    artifact="$DMG"
+  fi
+
+  set +e
+  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+    --poll "$submission_id" \
+    --artifact "$artifact" \
+    --receipt "$receipt_path"
+  status=$?
+  set -e
+  if [[ $status -eq 0 ]]; then
+    verify_dmg_gatekeeper "$DMG"
+  fi
+  write_release_manifest
+  if [[ $status -ne 0 ]]; then
+    exit "$status"
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -491,6 +795,10 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_PHASE="post-app-build"
       shift
       ;;
+    --trusted-ring-fast)
+      PACKAGE_PHASE="trusted-ring-fast"
+      shift
+      ;;
     --instance)
       if [[ $# -lt 2 ]]; then
         echo "ERROR: --instance requires a value" >&2
@@ -513,14 +821,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PACKAGE_PHASE" in
-  full|post-app-build)
+  full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|publish-assets-only|verify-public-assets-only|trusted-ring-fast)
     ;;
   *)
     echo "ERROR: unknown --phase value: $PACKAGE_PHASE" >&2
-    echo "Use --phase full or --phase post-app-build." >&2
+    echo "Use --phase full, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, publish-assets-only, verify-public-assets-only, or trusted-ring-fast." >&2
     exit 1
     ;;
 esac
+
+if [[ "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
+  SKIP_NOTARIZE=1
+  SKIP_DSYM="${SKIP_DSYM:-1}"
+  PUBLISH_RELEASE_ASSETS=0
+  ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE="${ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE:-1}"
+fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
 # Release/demo artifacts must stay on the default consumer identity. Named
@@ -559,17 +874,44 @@ if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
 fi
 
-consumer_sparkle_release_gate
-require_release_publish_prereqs
-if [[ "$NOTARIZE" == "1" ]]; then
-  require_sparkle_private_key_file
-fi
+case "$PACKAGE_PHASE" in
+  full|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization)
+    consumer_sparkle_release_gate
+    ;;
+esac
+
+case "$PACKAGE_PHASE" in
+  full|post-app-build)
+    require_release_publish_prereqs
+    if [[ "$NOTARIZE" == "1" ]]; then
+      require_sparkle_private_key_file
+    fi
+    ;;
+  publish-assets-only)
+    if [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]]; then
+      echo "ERROR: --phase publish-assets-only requires --publish-release-assets." >&2
+      exit 1
+    fi
+    require_release_publish_prereqs
+    ;;
+  verify-public-assets-only)
+    if [[ -n "$GITHUB_RELEASE_TAG" ]]; then
+      require_latest_release_tag
+    fi
+    ;;
+esac
+
+case "$PACKAGE_PHASE" in
+  full|build-app-only|trusted-ring-fast)
+    require_clean_git_for_release_build
+    ;;
+esac
 
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
-if [[ "$PACKAGE_PHASE" == "full" ]]; then
+if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
   # Stale release artifacts under dist/ can get copied into the bundled runtime
   # before the fresh app is assembled. Remove only mac release outputs here; JS
   # build outputs under dist/ are still needed by the packaged CLI/runtime.
@@ -607,15 +949,57 @@ fi
 
 ZIP="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.zip"
 DMG="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.dmg"
-NOTARY_ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.notary.zip"
+NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
 DSYM_ZIP="$ROOT_DIR/dist/${PRODUCT}-${VERSION}.dSYM.zip"
 SIGNING_AUTHORITY="$(bundle_signing_authority "$APP_PATH")"
 write_app_build_receipt
+write_release_manifest
 
-# Remove stale artifacts before building new ones. DMG assembly temporarily
-# needs a copied app bundle plus a writable image; keeping an old zip beside it
-# is enough to trip low-disk developer machines.
-rm -f "$ZIP" "$DMG" "${DMG%.dmg}-rw.dmg"
+case "$PACKAGE_PHASE" in
+  build-app-only)
+    echo "OpenClaw app bundle ready:"
+    echo "  phase=$PACKAGE_PHASE"
+    echo "  app=$APP_PATH"
+    echo "  manifest=$RELEASE_MANIFEST_PATH"
+    echo "  app_version=$VERSION"
+    echo "  signing_authority=${SIGNING_AUTHORITY:-unknown}"
+    echo "release_sendable=false"
+    echo "reason=build-app-only stops before notarization, DMG, ZIP, appcast, and publish"
+    exit 0
+    ;;
+  submit-app-notarization)
+    ;;
+  poll-app-notarization)
+    ;;
+  submit-dmg-notarization)
+    ;;
+  poll-dmg-notarization)
+    ;;
+  publish-assets-only)
+    require_notarized_manifest_before_publish
+    publish_release_assets
+    write_release_manifest
+    echo "release_sendable=true"
+    echo "sparkle_update_live=true"
+    exit 0
+    ;;
+  verify-public-assets-only)
+    verify_public_release_assets
+    write_release_manifest
+    echo "release_sendable=true"
+    echo "sparkle_update_live=true"
+    exit 0
+    ;;
+esac
+
+case "$PACKAGE_PHASE" in
+  full|post-app-build|trusted-ring-fast)
+    # Remove stale final artifacts only when this run is about to recreate them.
+    # Narrow resume phases must preserve the artifacts they are explicitly
+    # resuming from.
+    rm -f "$ZIP" "$DMG" "${DMG%.dmg}-rw.dmg"
+    ;;
+esac
 
 if [[ "$NOTARIZE" == "1" ]]; then
   if [[ "$SIGNING_AUTHORITY" != Developer\ ID\ Application:* ]]; then
@@ -630,12 +1014,42 @@ if [[ "$NOTARIZE" == "1" ]]; then
   fi
 fi
 
+case "$PACKAGE_PHASE" in
+  submit-app-notarization)
+    submit_app_notarization_only
+    echo "release_sendable=false"
+    echo "reason=app notarization was submitted; poll the saved receipt before continuing"
+    exit 0
+    ;;
+  poll-app-notarization)
+    poll_app_notarization_only
+    echo "release_sendable=false"
+    echo "reason=app notarization accepted; continue with --phase submit-dmg-notarization"
+    exit 0
+    ;;
+  submit-dmg-notarization)
+    submit_dmg_notarization_only
+    echo "release_sendable=false"
+    echo "reason=DMG notarization was submitted; poll the saved receipt before continuing"
+    exit 0
+    ;;
+  poll-dmg-notarization)
+    poll_dmg_notarization_only
+    echo "release_sendable=false"
+    echo "reason=DMG notarization accepted; continue with --phase post-app-build or create zip/appcast manually if already generated"
+    exit 0
+    ;;
+esac
+
 if [[ "$NOTARIZE" == "1" ]]; then
   echo "📦 Notary zip: $NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
-  STAPLE_APP_PATH="$APP_PATH" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"
+  STAPLE_APP_PATH="$APP_PATH" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+    --receipt "$(app_notary_receipt_path)" \
+    "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  write_release_manifest
   BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
   APP_NAME="$APP_NAME" \
   OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
@@ -643,13 +1057,14 @@ if [[ "$NOTARIZE" == "1" ]]; then
     "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
 fi
 
-echo "💿 DMG: $DMG"
-"$ROOT_DIR/scripts/create-dmg.sh" "$APP_PATH" "$DMG"
-sign_dmg_if_possible "$DMG" "$SIGNING_AUTHORITY"
+create_signed_dmg
 
 if [[ "$NOTARIZE" == "1" ]]; then
-  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$DMG"
+  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+    --receipt "$(dmg_notary_receipt_path)" \
+    "$DMG"
   verify_dmg_gatekeeper "$DMG"
+  write_release_manifest
 fi
 
 echo "📦 Zip: $ZIP"
@@ -659,6 +1074,7 @@ echo "📦 Zip: $ZIP"
 ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP"
 assert_sparkle_zip_has_no_macos_metadata "$ZIP"
 generate_jarvis_appcast
+write_release_manifest
 
 if [[ "$SKIP_DSYM" != "1" ]]; then
   DSYM_ARM64="$(find "$BUILD_ROOT/arm64" -type d -path "*/$BUILD_CONFIG/$PRODUCT.dSYM" -print -quit)"
@@ -689,13 +1105,18 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
 fi
 
 copy_handoff_artifacts
+if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
+  require_notarized_manifest_before_publish
+fi
 publish_release_assets
+write_release_manifest
 
 echo "OpenClaw distribution package ready:"
 echo "  phase=$PACKAGE_PHASE"
 echo "  app=$APP_PATH"
 echo "  zip=$ZIP"
 echo "  dmg=$DMG"
+echo "  manifest=$RELEASE_MANIFEST_PATH"
 if [[ -f "$ROOT_DIR/dist/jarvis-appcast.xml" ]]; then
   echo "  appcast=$ROOT_DIR/dist/jarvis-appcast.xml"
 fi

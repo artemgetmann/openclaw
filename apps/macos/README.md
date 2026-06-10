@@ -210,10 +210,10 @@ bash scripts/package-openclaw-mac-dist.sh \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
-`--phase <full|post-app-build>` controls where packaging starts. The default is
-`full`: build, sign, verify, notarize, package, publish, and verify in one
-pass. Use the narrower recovery phase only after the app build/sign/verify
-steps already succeeded and `dist/Jarvis.app` is still present:
+`--phase` controls where packaging starts. The default is `full`: build, sign,
+verify, notarize, package, publish, and verify in one pass. Use the broad
+recovery phase only after the app build/sign/verify steps already succeeded and
+`dist/Jarvis.app` is still present:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
@@ -228,6 +228,72 @@ notarizes and staples the app, creates/signs/notarizes `Jarvis.dmg`, creates
 assets when `--publish-release-assets` is present. Do not use it after changing
 source, dependencies, signing inputs, app version/build, Sparkle keys, or bundle
 metadata; run the default full phase instead.
+
+For faster failure recovery, prefer the narrow phases once a durable artifact or
+notary receipt exists. The script records release state in
+`dist/jarvis-release-manifest.env`, app notarization in
+`dist/Jarvis.app.notary.env`, and DMG notarization in
+`dist/Jarvis.dmg.notary.env`. The manifest is operator metadata only; do not
+store credentials there.
+
+Build/package the app once and stop before notarization:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase build-app-only
+```
+
+Submit app notarization only from the existing app bundle:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase submit-app-notarization
+```
+
+Resume app notary polling from the saved submission:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase poll-app-notarization
+```
+
+Submit DMG notarization only after the app poll phase records
+`JARVIS_APP_NOTARY_STATUS=Accepted`:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase submit-dmg-notarization
+```
+
+Resume DMG notary polling from the saved submission:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase poll-dmg-notarization
+```
+
+Publish only from existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
+`dist/jarvis-appcast.xml` after the manifest records accepted app and DMG
+notarization:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase publish-assets-only \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Verify only against the public GitHub release URLs without uploading:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase verify-public-assets-only \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+For trusted-ring drops where Apple notarization and public GitHub release work
+are intentional overkill, use the fast lane. It still builds signed local
+artifacts under `dist/`, but forces notarization, dSYM, publish, and public URL
+verification off:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --trusted-ring-fast
+```
 
 Required successful ending:
 
