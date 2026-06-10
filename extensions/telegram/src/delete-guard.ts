@@ -7,11 +7,14 @@ export const TELEGRAM_DELETE_ENABLE_ENV = "OPENCLAW_TELEGRAM_ENABLE_DELETES";
 
 type TelegramDeleteApi = Pick<Bot["api"], "deleteMessage">;
 
+export type TelegramDeleteSafetyMode = "operator_opt_in" | "deterministic_cleanup";
+
 export type TelegramDeleteAuditMetadata = {
   callsite: string;
   reason: string;
   chatId: string | number;
   messageId: number;
+  safetyMode?: TelegramDeleteSafetyMode;
   accountId?: string | null;
   lane?: string;
   classification?: string;
@@ -37,9 +40,9 @@ export type GuardedTelegramDeleteResult =
 
 const deleteAuditLogger = createSubsystemLogger("telegram/delete-audit");
 
-// Deletes are destructive and customer-visible. Keep the opt-in outside normal
-// Telegram action config so consumer/runtime cleanup cannot re-enable it by
-// accident when an operator merely exposes the delete tool.
+// Deletes are destructive and customer-visible. Arbitrary operator/model/tool
+// deletes need a hard env opt-in that is separate from normal Telegram action
+// exposure, so merely enabling an action surface cannot silently erase history.
 function normalizeOptIn(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
@@ -47,6 +50,24 @@ function normalizeOptIn(value: string | undefined): boolean {
 
 export function areTelegramDeletesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return normalizeOptIn(env[TELEGRAM_DELETE_ENABLE_ENV]);
+}
+
+function resolveSafetyMode(value: TelegramDeleteSafetyMode | undefined): TelegramDeleteSafetyMode {
+  return value ?? "operator_opt_in";
+}
+
+function isDeleteAllowed(params: {
+  safetyMode: TelegramDeleteSafetyMode;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  // Deterministic cleanup is restricted to code-owned transient message ids
+  // captured from the current preview/progress lifecycle. It preserves the
+  // desired UX without letting model-authored delete tools erase arbitrary
+  // Telegram messages.
+  if (params.safetyMode === "deterministic_cleanup") {
+    return true;
+  }
+  return areTelegramDeletesEnabled(params.env);
 }
 
 function hashIdentifier(value: string | number | null | undefined): string | undefined {
@@ -73,11 +94,13 @@ export function buildTelegramDeleteAuditFields(
   metadata: TelegramDeleteAuditMetadata,
   error?: unknown,
 ): Record<string, unknown> {
+  const safetyMode = resolveSafetyMode(metadata.safetyMode);
   const threadId = metadata.thread?.id ?? metadata.topicId;
   const fields: Record<string, unknown> = {
     event,
     callsite: metadata.callsite,
     reason: metadata.reason,
+    safetyMode,
     chatIdHash: hashIdentifier(metadata.chatId),
     messageId: sanitizeMessageId(metadata.messageId),
   };
@@ -134,8 +157,9 @@ export async function guardedTelegramDeleteMessage(params: {
     chatId: params.chatId,
     messageId: sanitizeMessageId(params.messageId),
   };
+  const safetyMode = resolveSafetyMode(metadata.safetyMode);
   const logger = params.logger ?? deleteAuditLogger;
-  if (!areTelegramDeletesEnabled(params.env)) {
+  if (!isDeleteAllowed({ safetyMode, env: params.env })) {
     logTelegramDeleteAuditEvent({
       logger,
       event: "delete_suppressed",

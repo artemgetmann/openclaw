@@ -657,6 +657,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         audit: expect.objectContaining({
           callsite: "telegram-archived-reasoning-preview-cleanup",
           reason: "archived_reasoning_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
           accountId: "default",
           lane: "reasoning",
         }),

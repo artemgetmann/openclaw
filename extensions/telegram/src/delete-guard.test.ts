@@ -18,7 +18,7 @@ describe("guardedTelegramDeleteMessage", () => {
     vi.unstubAllEnvs();
   });
 
-  it("suppresses deletes by default and logs redacted audit metadata", async () => {
+  it("suppresses operator deletes by default and logs redacted audit metadata", async () => {
     const api = { deleteMessage: vi.fn().mockResolvedValue(true) };
     const logger = createLogger();
 
@@ -29,6 +29,7 @@ describe("guardedTelegramDeleteMessage", () => {
       audit: {
         callsite: "test-cleanup",
         reason: "preview_cleanup",
+        safetyMode: "operator_opt_in",
         accountId: "personal",
         lane: "answer",
         classification: "preview",
@@ -46,6 +47,7 @@ describe("guardedTelegramDeleteMessage", () => {
         event: "delete_suppressed",
         callsite: "test-cleanup",
         reason: "preview_cleanup",
+        safetyMode: "operator_opt_in",
         chatIdHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
         accountIdHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
         messageId: 42,
@@ -59,6 +61,44 @@ describe("guardedTelegramDeleteMessage", () => {
     expect(JSON.stringify(meta)).not.toContain("-1001234567890");
     expect(JSON.stringify(meta)).not.toContain("personal");
     expect(JSON.stringify(meta)).not.toContain("agent:main:telegram");
+  });
+
+  it("allows deterministic cleanup deletes by default and logs attempt/success", async () => {
+    const api = { deleteMessage: vi.fn().mockResolvedValue(true) };
+    const logger = createLogger();
+
+    const result = await guardedTelegramDeleteMessage({
+      api,
+      chatId: 123,
+      messageId: 456,
+      audit: {
+        callsite: "progress-clear",
+        reason: "progress_cleanup",
+        safetyMode: "deterministic_cleanup",
+        lane: "answer",
+        classification: "progress",
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, deleted: true });
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 456);
+    expect(logger.info).toHaveBeenCalledWith(
+      "telegram delete audit: delete_attempt",
+      expect.objectContaining({
+        event: "delete_attempt",
+        callsite: "progress-clear",
+        safetyMode: "deterministic_cleanup",
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "telegram delete audit: delete_success",
+      expect.objectContaining({
+        event: "delete_success",
+        callsite: "progress-clear",
+        safetyMode: "deterministic_cleanup",
+      }),
+    );
   });
 
   it("allows deletes only after explicit env opt-in and logs attempt/success", async () => {

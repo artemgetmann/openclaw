@@ -1,6 +1,5 @@
 import type { Bot } from "grammy";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { TELEGRAM_DELETE_ENABLE_ENV } from "./delete-guard.js";
+import { describe, expect, it, vi } from "vitest";
 import { createTelegramProgressController } from "./progress-controller.js";
 
 function createProgressControllerHarness() {
@@ -24,11 +23,7 @@ function createProgressControllerHarness() {
 }
 
 describe("createTelegramProgressController", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("serializes pending first send, edits cumulative progress, then suppresses cleanup delete by default", async () => {
+  it("serializes pending first send, edits cumulative progress, then deletes the same message", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
     controller.update("Opening example.com");
@@ -48,7 +43,7 @@ describe("createTelegramProgressController", () => {
       77,
       "Opening example.com\n\nReading IANA example domains",
     );
-    expect(api.deleteMessage).not.toHaveBeenCalled();
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
   it("dedupes repeated progress entries while preserving first-seen order", async () => {
@@ -68,7 +63,7 @@ describe("createTelegramProgressController", () => {
       77,
       "Opening example.com\n\nReading IANA example domains",
     );
-    expect(api.deleteMessage).not.toHaveBeenCalled();
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
   it("caps cumulative progress by dropping oldest entries before Telegram rejects edits", async () => {
@@ -124,7 +119,6 @@ describe("createTelegramProgressController", () => {
   });
 
   it("does not throw when progress deletion fails", async () => {
-    vi.stubEnv(TELEGRAM_DELETE_ENABLE_ENV, "1");
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
       editMessageText: vi.fn().mockResolvedValue(true),

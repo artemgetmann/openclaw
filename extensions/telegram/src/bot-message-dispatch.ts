@@ -1113,6 +1113,7 @@ export const dispatchTelegramMessage = async ({
         audit: {
           callsite: "telegram-lane-preview-delete",
           reason: "lane_delivery_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
           accountId: route.accountId,
           lane: "answer",
           classification: "preview",
@@ -1645,6 +1646,7 @@ export const dispatchTelegramMessage = async ({
           audit: {
             callsite: "telegram-archived-answer-preview-cleanup",
             reason: "archived_answer_preview_cleanup",
+            safetyMode: "deterministic_cleanup",
             accountId: route.accountId,
             lane: "answer",
             classification: "preview",
@@ -1671,6 +1673,7 @@ export const dispatchTelegramMessage = async ({
           audit: {
             callsite: "telegram-archived-reasoning-preview-cleanup",
             reason: "archived_reasoning_preview_cleanup",
+            safetyMode: "deterministic_cleanup",
             accountId: route.accountId,
             lane: "reasoning",
             classification: "progress",

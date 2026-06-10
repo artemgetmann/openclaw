@@ -399,6 +399,7 @@ export function createTelegramDraftStream(params: {
         audit: {
           callsite: params.deleteAudit?.callsite ?? "telegram-draft-stream-clear",
           reason: params.deleteAudit?.reason ?? "stream_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
           accountId: params.deleteAudit?.accountId,
           lane: params.deleteAudit?.lane,
           classification: params.deleteAudit?.classification,

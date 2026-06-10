@@ -1,9 +1,8 @@
 import type { Bot } from "grammy";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GetReplyOptions, ReplyPayload } from "../../../src/auto-reply/types.js";
 import type { OpenClawConfig } from "../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
-import { TELEGRAM_DELETE_ENABLE_ENV } from "./delete-guard.js";
 
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const logVerbose = vi.hoisted(() => vi.fn());
@@ -223,7 +222,6 @@ function sendMessageCalls(calls: readonly TelegramApiCall[]) {
 
 describe("dispatchTelegramMessage high-route progress API sequence", () => {
   beforeEach(() => {
-    vi.stubEnv(TELEGRAM_DELETE_ENABLE_ENV, "1");
     getReplyFromConfig.mockReset();
     loadSessionStore.mockReset();
     logVerbose.mockReset();
@@ -231,10 +229,6 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     resolveStorePath.mockReset();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
   });
 
   it("keeps generic block-streaming commentary transient before the final answer", async () => {
