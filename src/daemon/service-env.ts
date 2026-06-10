@@ -44,6 +44,16 @@ type SharedServiceEnvironmentFields = {
   nodeUseSystemCa: string | undefined;
 };
 
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 function resolveConsumerGatewayIdentityInput(
   env: Record<string, string | undefined>,
 ): string | null | undefined {
@@ -318,6 +328,7 @@ export function buildServiceEnvironment(params: {
     env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
     (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
+  const serviceVersion = firstNonEmpty(env.OPENCLAW_VERSION, env.OPENCLAW_SERVICE_VERSION, VERSION);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_CONSUMER_INSTANCE_ID: env.OPENCLAW_CONSUMER_INSTANCE_ID,
@@ -331,7 +342,7 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
+    OPENCLAW_SERVICE_VERSION: serviceVersion,
   };
 }
 

@@ -125,6 +125,7 @@ enum ConsumerAIAccessFailureKind: Equatable {
     case gatewayUnreachable
     case providerAuthFailed
     case readinessFailed
+    case runtimeUpdateBlocked
 }
 
 extension ConsumerAIAccessFailureKind {
@@ -136,6 +137,8 @@ extension ConsumerAIAccessFailureKind {
             return "AI model needs attention"
         case .readinessFailed:
             return "AI access needs a quick reset"
+        case .runtimeUpdateBlocked:
+            return "AI access needs attention"
         }
     }
 }
@@ -324,7 +327,13 @@ final class ConsumerModelSetupModel {
     }
 
     var isAuthChoiceInteractionBlocked: Bool {
-        self.failureKind == .gatewayUnreachable
+        self.failureKind == .gatewayUnreachable || self.failureKind == .runtimeUpdateBlocked
+    }
+
+    var canChooseAnotherAccessMethod: Bool {
+        guard !self.isRestartingOperator, !self.isAuthChoiceInteractionBlocked else { return false }
+        guard self.authOptionsLoaded else { return false }
+        return self.hasAPIKeySupport
     }
 
     var canShowChatGPTSignInHelp: Bool {
@@ -472,6 +481,13 @@ final class ConsumerModelSetupModel {
         self.selectOption(option.id)
     }
 
+    func chooseAnotherAccessMethod() {
+        guard self.canChooseAnotherAccessMethod else { return }
+        self.selectAPIKeySetup()
+        self.alternateMethodExpanded = true
+        self.authSectionExpanded = true
+    }
+
     func selectAPIKeyProvider(_ providerId: String) {
         guard let option = self.apiKeyOptions.first(where: { $0.providerId == providerId }) else { return }
         self.selectOption(option.id)
@@ -578,7 +594,7 @@ final class ConsumerModelSetupModel {
             let detail = Self.consumerFriendlyRuntimeOwnershipBlockerStatusLine()
             self.phase = .failed(detail)
             self.statusLine = detail
-            self.failureKind = nil
+            self.failureKind = .runtimeUpdateBlocked
             self.authSectionExpanded = true
             return
         }
@@ -1351,6 +1367,8 @@ struct ConsumerModelsReadinessPayload: Decodable {
             return "\(AppFlavor.current.appName) needs a fresh AI sign-in."
         case .readinessFailed:
             return "\(AppFlavor.current.appName) could not finish an AI test message. Restart \(AppFlavor.current.appName), then try again."
+        case .runtimeUpdateBlocked:
+            return "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
         }
     }
 
@@ -1838,20 +1856,11 @@ struct ConsumerModelSetupCardContent: View {
                     .disabled(self.model.isRestartingOperator)
                 }
 
-                if self.model.canRestartOperator {
+                if self.model.canChooseAnotherAccessMethod {
                     Button("Choose Another Access Method") {
-                        self.model.alternateMethodExpanded = true
-                        self.model.authSectionExpanded = true
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.model.isRestartingOperator)
-                } else {
-                    Button("Choose Another Access Method") {
-                        self.model.alternateMethodExpanded = true
-                        self.model.authSectionExpanded = true
+                        self.model.chooseAnotherAccessMethod()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(self.model.isRestartingOperator)
                 }
             }
         }

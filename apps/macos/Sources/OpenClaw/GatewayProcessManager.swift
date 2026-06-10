@@ -254,6 +254,7 @@ final class GatewayProcessManager {
         // points at a source checkout, attaching would strand the packaged app
         // on stale code and skip the only automatic repair chance.
         guard GatewayLaunchAgentManager.currentEntrypointOwnership().matchesCurrentEntrypoint else { return false }
+        guard !self.launchAgentNeedsOwnershipRepair() else { return false }
         switch self.status {
         case .attachedExisting, .running:
             return true
@@ -281,14 +282,19 @@ final class GatewayProcessManager {
         }
     }
 
-    private func launchAgentNeedsEntrypointRepair() -> Bool {
+    private func launchAgentNeedsOwnershipRepair() -> Bool {
         guard let snapshot = GatewayLaunchAgentManager.launchdConfigSnapshot() else { return false }
         let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
-        // Entrypoint ownership is independent from runtime-state ownership. A stale
-        // source LaunchAgent can fail the runtime check and still be the canonical
-        // label that this app must repair before it attaches to a healthy port.
-        guard ownership.expectedEntrypoint != nil else { return false }
-        return !ownership.matchesCurrentEntrypoint
+        // Runtime-state, entrypoint, and service-version ownership are all part
+        // of the packaged Jarvis contract. A healthy port is not enough after
+        // Sparkle because launchd can keep booting old code with old env.
+        if !GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime(snapshot: snapshot) {
+            return true
+        }
+        if ownership.expectedEntrypoint != nil, !ownership.matchesCurrentEntrypoint {
+            return true
+        }
+        return !GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: snapshot)
     }
 
     /// Attempt to connect to an already-running gateway on the configured port.
@@ -297,7 +303,7 @@ final class GatewayProcessManager {
         // Replacement installs need the first active app launch to repair the
         // canonical LaunchAgent. Attaching to a healthy stale service here would
         // strand the packaged app on the source-checkout entrypoint.
-        guard !self.launchAgentNeedsEntrypointRepair() else { return false }
+        guard !self.launchAgentNeedsOwnershipRepair() else { return false }
 
         let port = GatewayEnvironment.gatewayPort()
         let instance = await PortGuardian.shared.describe(port: port)
@@ -541,8 +547,8 @@ extension GatewayProcessManager {
         self.status = status
     }
 
-    func testingLaunchAgentNeedsEntrypointRepair() -> Bool {
-        self.launchAgentNeedsEntrypointRepair()
+    func testingLaunchAgentNeedsOwnershipRepair() -> Bool {
+        self.launchAgentNeedsOwnershipRepair()
     }
 }
 #endif

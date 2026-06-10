@@ -292,6 +292,10 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine?.contains("Telegram") == false)
         #expect(model.statusLine?.contains("DM") == false)
         #expect(model.statusLine?.contains("/Users/") == false)
+        #expect(model.failureKind == .runtimeUpdateBlocked)
+        #expect(model.canRestartOperator)
+        #expect(model.isAuthChoiceInteractionBlocked)
+        #expect(!model.canChooseAnotherAccessMethod)
     }
 
     @Test func `consumer model readiness surfaces missing auth as provider auth failure`() async {
@@ -311,6 +315,32 @@ struct ConsumerSetupReadinessTests {
         #expect(model.failureKind == .providerAuthFailed)
         #expect(model.phase == .failed("Jarvis-managed AI is selected, but the canonical shared auth profile is missing from this consumer runtime."))
         #expect(!model.canRestartOperator)
+    }
+
+    @Test func `consumer model choose another access method reveals api key editor when available`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                blockedReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: "openai-codex-oauth")
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+
+        #expect(model.failureKind == .providerAuthFailed)
+        #expect(model.canChooseAnotherAccessMethod)
+
+        model.chooseAnotherAccessMethod()
+
+        #expect(model.selectedOptionId == "openai-api-key")
+        #expect(model.isAPIKeySelected)
+        #expect(model.alternateMethodExpanded)
     }
 
     @Test func `consumer model readiness surfaces readiness failures as restartable`() async {
