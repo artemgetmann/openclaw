@@ -35,6 +35,7 @@ import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
+import { guardedTelegramDeleteMessage } from "./delete-guard.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -429,6 +430,18 @@ export const dispatchTelegramMessage = async ({
           previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
+          deleteAudit: {
+            callsite: `telegram-${laneName}-preview-clear`,
+            reason: "lane_preview_cleanup",
+            accountId: route.accountId,
+            lane: laneName,
+            classification: draftDurableSendClassificationByLane[laneName].reason,
+            sessionId:
+              typeof context.ctxPayload?.SessionKey === "string"
+                ? context.ctxPayload.SessionKey
+                : undefined,
+            topicId: threadSpec?.id,
+          },
           renderText: renderDraftPreview,
           onMessageDelivered: (messageId, event) => {
             const classification = draftDurableSendClassificationByLane[laneName];
@@ -550,6 +563,18 @@ export const dispatchTelegramMessage = async ({
         thread: threadSpec,
         replyToMessageId: draftReplyToMessageId,
         minInitialChars: draftMinInitialChars,
+        deleteAudit: {
+          callsite: "telegram-progress-controller-clear",
+          reason: "progress_cleanup",
+          accountId: route.accountId,
+          lane: "answer",
+          classification: "progress",
+          sessionId:
+            typeof context.ctxPayload?.SessionKey === "string"
+              ? context.ctxPayload.SessionKey
+              : undefined,
+          topicId: threadSpec?.id,
+        },
         renderText: renderDraftPreview,
         onMessageDelivered: (messageId, event) => {
           logTelegramDurableSendClassification({
@@ -1081,7 +1106,24 @@ export const dispatchTelegramMessage = async ({
       });
     },
     deletePreviewMessage: async (messageId) => {
-      await bot.api.deleteMessage(chatId, messageId);
+      await guardedTelegramDeleteMessage({
+        api: bot.api,
+        chatId,
+        messageId,
+        audit: {
+          callsite: "telegram-lane-preview-delete",
+          reason: "lane_delivery_preview_cleanup",
+          accountId: route.accountId,
+          lane: "answer",
+          classification: "preview",
+          sessionId:
+            typeof context.ctxPayload?.SessionKey === "string"
+              ? context.ctxPayload.SessionKey
+              : undefined,
+          topicId: threadSpec?.id,
+          thread: threadSpec,
+        },
+      });
     },
     log: logVerbose,
     markDelivered: () => {
@@ -1596,7 +1638,24 @@ export const dispatchTelegramMessage = async ({
         continue;
       }
       try {
-        await bot.api.deleteMessage(chatId, archivedPreview.messageId);
+        await guardedTelegramDeleteMessage({
+          api: bot.api,
+          chatId,
+          messageId: archivedPreview.messageId,
+          audit: {
+            callsite: "telegram-archived-answer-preview-cleanup",
+            reason: "archived_answer_preview_cleanup",
+            accountId: route.accountId,
+            lane: "answer",
+            classification: "preview",
+            sessionId:
+              typeof context.ctxPayload?.SessionKey === "string"
+                ? context.ctxPayload.SessionKey
+                : undefined,
+            topicId: threadSpec?.id,
+            thread: threadSpec,
+          },
+        });
       } catch (err) {
         logVerbose(
           `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
@@ -1605,7 +1664,24 @@ export const dispatchTelegramMessage = async ({
     }
     for (const messageId of archivedReasoningPreviewIds) {
       try {
-        await bot.api.deleteMessage(chatId, messageId);
+        await guardedTelegramDeleteMessage({
+          api: bot.api,
+          chatId,
+          messageId,
+          audit: {
+            callsite: "telegram-archived-reasoning-preview-cleanup",
+            reason: "archived_reasoning_preview_cleanup",
+            accountId: route.accountId,
+            lane: "reasoning",
+            classification: "progress",
+            sessionId:
+              typeof context.ctxPayload?.SessionKey === "string"
+                ? context.ctxPayload.SessionKey
+                : undefined,
+            topicId: threadSpec?.id,
+            thread: threadSpec,
+          },
+        });
       } catch (err) {
         logVerbose(
           `telegram: archived reasoning preview cleanup failed (${messageId}): ${String(err)}`,

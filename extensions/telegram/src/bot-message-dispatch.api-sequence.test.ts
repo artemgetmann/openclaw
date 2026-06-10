@@ -1,7 +1,8 @@
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { TELEGRAM_DELETE_ENABLE_ENV } from "./delete-guard.js";
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
@@ -230,6 +231,7 @@ function deleteMessageCalls(calls: readonly TelegramApiCall[]) {
 
 describe("dispatchTelegramMessage progress API sequence", () => {
   beforeEach(() => {
+    vi.stubEnv(TELEGRAM_DELETE_ENABLE_ENV, "1");
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     loadSessionStore.mockReset();
     logVerbose.mockReset();
@@ -237,6 +239,10 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     resolveStorePath.mockReset();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("uses one mutable progress message, clears it, and sends final text once", async () => {
