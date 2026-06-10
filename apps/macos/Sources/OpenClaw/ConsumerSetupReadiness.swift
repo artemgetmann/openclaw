@@ -1126,16 +1126,16 @@ final class ConsumerModelSetupModel {
 
     private static func consumerFriendlyReadinessError(_ error: Error) -> String {
         if error is CancellationError {
-            return "\(AppFlavor.current.appName) is still starting. Try again in a moment, or restart \(AppFlavor.current.appName) if this keeps happening."
+            return "\(AppFlavor.current.appName) is still starting. Restart \(AppFlavor.current.appName) if this keeps happening."
         }
 
         if error is ReadinessProbeTimeoutError {
-            return "\(AppFlavor.current.appName) is still checking AI access. Try again in a moment, or restart \(AppFlavor.current.appName) if this keeps happening."
+            return "\(AppFlavor.current.appName) is still checking AI access. Restart \(AppFlavor.current.appName) if this keeps happening."
         }
 
         let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !detail.isEmpty else {
-            return "\(AppFlavor.current.appName) could not check AI access yet. Try again in a moment."
+            return "\(AppFlavor.current.appName) could not check AI access yet. Restart \(AppFlavor.current.appName) if this keeps happening."
         }
 
         if Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable
@@ -1147,7 +1147,7 @@ final class ConsumerModelSetupModel {
     }
 
     private static func gatewayRestartFailureStatusLine() -> String {
-        "\(AppFlavor.current.appName) is still starting. Wait a moment, then try again."
+        "\(AppFlavor.current.appName) is still starting. Restart \(AppFlavor.current.appName) if it does not reconnect."
     }
 
     private static func signInURL(from notes: [String]) -> URL? {
@@ -1168,7 +1168,7 @@ final class ConsumerModelSetupModel {
     }
 
     private static func consumerFriendlyRuntimeOwnershipBlockerStatusLine() -> String {
-        "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
+        "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName) to finish."
     }
 
     private static func consumerAccessFailureKind(for error: Error) -> ConsumerAIAccessFailureKind {
@@ -1371,13 +1371,13 @@ struct ConsumerModelsReadinessPayload: Decodable {
         }
         switch self.consumerFailureKind {
         case .gatewayUnreachable:
-            return "\(AppFlavor.current.appName) is still starting. Wait a moment, then try again."
+            return "\(AppFlavor.current.appName) is still starting. Restart \(AppFlavor.current.appName) if it does not reconnect."
         case .providerAuthFailed:
             return "\(AppFlavor.current.appName) needs a fresh AI sign-in."
         case .readinessFailed:
-            return "\(AppFlavor.current.appName) could not finish an AI test message. Restart \(AppFlavor.current.appName), then try again."
+            return "\(AppFlavor.current.appName) could not finish an AI test message. Restart \(AppFlavor.current.appName) to reconnect AI access."
         case .runtimeUpdateBlocked:
-            return "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
+            return "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName) to finish."
         }
     }
 
@@ -1856,12 +1856,6 @@ struct ConsumerModelSetupCardContent: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(self.model.isRestartingOperator)
-
-                    Button("Try Again") {
-                        Task { await self.model.refresh() }
-                    }
-                    .buttonStyle(.bordered)
                     .disabled(self.model.isRestartingOperator)
                 }
 

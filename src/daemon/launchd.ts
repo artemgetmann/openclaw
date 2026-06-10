@@ -70,7 +70,10 @@ function isRepoOwnedWorktreePath(canonicalMainRepo: string, candidate: string): 
   return isPathInside(worktreesRoot, candidate);
 }
 
-function isPackagedConsumerRuntimePath(candidate: string | null): boolean {
+function isPackagedConsumerRuntimePath(
+  candidate: string | null,
+  env?: Record<string, string | undefined>,
+): boolean {
   if (!candidate) {
     return false;
   }
@@ -80,21 +83,44 @@ function isPackagedConsumerRuntimePath(candidate: string | null): boolean {
   // manage ai.openclaw.gateway from outside the canonical main checkout.
   const expectedSuffix = path.join("Contents", "Resources", "OpenClawRuntime", "openclaw");
   const packagedAppNames = ["OpenClaw.app", "Jarvis.app"];
-  return (
+  const appBundleRuntime =
     packagedAppNames.some((appName) => candidate.includes(`${path.sep}${appName}${path.sep}`)) &&
-    candidate.includes(expectedSuffix)
+    candidate.includes(expectedSuffix);
+  if (appBundleRuntime) {
+    return true;
+  }
+
+  // Sparkle seeds the signed runtime into Application Support before launchd
+  // executes it. That installed runtime must be able to replace an older source
+  // checkout service, but only from the current user's app-support root.
+  const home = normalizePathForComparison(resolveHomeDir(env ?? {}));
+  if (!home) {
+    return false;
+  }
+  const appSupportRuntime = normalizePathForComparison(
+    path.join(
+      home,
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      ".openclaw",
+      "lib",
+      "openclaw-bundled",
+    ),
   );
+  return Boolean(appSupportRuntime && isPathInside(appSupportRuntime, candidate));
 }
 
 function commandUsesPackagedConsumerRuntime(args: {
+  env?: Record<string, string | undefined>;
   programArguments?: string[];
   workingDirectory?: string;
 }): boolean {
-  if (isPackagedConsumerRuntimePath(normalizePathForComparison(args.workingDirectory))) {
+  if (isPackagedConsumerRuntimePath(normalizePathForComparison(args.workingDirectory), args.env)) {
     return true;
   }
   return (args.programArguments ?? []).some((arg) =>
-    isPackagedConsumerRuntimePath(normalizePathForComparison(arg)),
+    isPackagedConsumerRuntimePath(normalizePathForComparison(arg), args.env),
   );
 }
 
@@ -119,6 +145,7 @@ function assertCanonicalSharedLaunchAgentContext(args: {
   // command itself is the authority for whether this is the signed app runtime.
   if (
     commandUsesPackagedConsumerRuntime({
+      env: args.env,
       programArguments: args.programArguments,
       ...(normalizedCwd ? { workingDirectory: normalizedCwd } : {}),
     })
