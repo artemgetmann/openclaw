@@ -166,7 +166,30 @@ describe("consumer Sparkle release gates", () => {
     expect(script).toContain('SKIP_DSYM="${SKIP_DSYM:-1}"');
     expect(script).toContain("PUBLISH_RELEASE_ASSETS=0");
     expect(script).toContain("ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE");
+    expect(script).toContain("OPENCLAW_CONSUMER_FAST_PACKAGING=1");
+    expect(script).toContain("OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE=1");
+    expect(script).toContain(
+      'OPENCLAW_CONSUMER_FAST_PACKAGING="$OPENCLAW_CONSUMER_FAST_PACKAGING"',
+    );
+    expect(script).toContain(
+      'OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="$OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE"',
+    );
     expect(script).toContain("full|build-app-only|post-app-build|trusted-ring-fast");
+  });
+
+  it("keeps trusted-ring runtime cache keys stable across equivalent rebuilds", () => {
+    const script = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
+
+    expect(script).toContain("consumer_clean_git_runtime_input_key");
+    expect(script).toContain("clean-git-runtime-cache-v1");
+    expect(script).toContain("clean tracked worktree");
+    expect(script).toContain("hash_consumer_build_info_stable_fields");
+    expect(script).toContain("builtAt, which changes on every JS build");
+    expect(script).toContain("-o -name '*.release.env'");
+    expect(script).toContain("-o -name 'jarvis-release-manifest.env'");
+    expect(script).toContain("-o -path 'dist/build-info.json'");
+    expect(script).toContain("refresh_bundled_runtime_build_info");
+    expect(script).toContain('cache_key="$runtime_input_key"');
   });
 
   it("keeps notarization retry guidance focused on polling or retrying artifacts", () => {
