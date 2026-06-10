@@ -73,17 +73,17 @@ lockstep.
 
 ## Evaluation Matrix
 
-| Candidate            | Fit                                               | Strength                                                                                                                            | Main Risk                                                                                                                  |
-| -------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| MacosUseSDK          | Best Swift-native control primitive to test first | MIT Swift library; traverses macOS Accessibility trees and simulates input                                                          | Low-level API still uses coordinates for some actions; SDK polish and packaging need proof                                 |
-| mcp-server-macos-use | Useful wrapper/reference for MacosUseSDK          | Swift MCP server over stdio; opens apps and traverses AX trees                                                                      | License conflict: package metadata says MIT, but `LICENSE` is Business Source License; treat as BSL until clarified        |
-| agent-desktop        | Best low-level runtime candidate to test first    | Rust CLI, Apache-2.0, deterministic refs, structured JSON, AX-first actions, FFI artifacts                                          | Young project; macOS permission behavior and background/focus guarantees need live proof                                   |
-| Ghost OS             | Best turnkey loop candidate if recipes matter     | MIT Swift, AX-first, MCP tools, recipes, local vision fallback, `ghost doctor` diagnostics                                          | Heavier product surface; macOS 14+/Swift 6.2, Python vision sidecar, and multi-GB model path may be more than Jarvis needs |
-| screenpipe           | Observation and memory layer only                 | MIT main repo, with an enterprise-licensed `ee/` area; records screen/audio/app context locally; captures AX tree with OCR fallback | Not a primary click/type engine; high privacy and storage burden for consumer default                                      |
-| Appium Mac2 Driver   | QA harness only                                   | Apache-2.0; XCTest/WebDriver; deterministic app-under-test model                                                                    | Xcode/Appium setup friction; designed for tests, not user desktop operation                                                |
-| browser-use          | Web-only adjacent option                          | MIT Python; browser automation agent and cloud/browser harness                                                                      | Does not solve native macOS app control                                                                                    |
-| Skyvern              | Web-only adjacent option                          | Browser workflows with Playwright plus LLM/vision; useful for hosted web tasks                                                      | AGPL-3.0 for OSS repo and browser-only scope make it a poor native Jarvis foundation                                       |
-| Peekaboo             | Short-term bridge and fallback host               | MIT Swift; already installed path; strong capture/control surface; MCP optional                                                     | Too low-level unless wrapped by strict planner/executor discipline                                                         |
+| Candidate            | Fit                                                               | Strength                                                                                                                            | Main Risk                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MacosUseSDK          | Swift-native control primitive to revisit after reliability fixes | MIT Swift library; traverses macOS Accessibility trees and simulates input                                                          | Live bakeoff failed before semantic input: app open returned PID `-1`, traversal rejected the real TextEdit PID, and `ActionTool --help` launched Messages |
+| mcp-server-macos-use | Useful wrapper/reference for MacosUseSDK                          | Swift MCP server over stdio; opens apps and traverses AX trees                                                                      | License conflict: package metadata says MIT, but `LICENSE` is Business Source License; treat as BSL until clarified                                        |
+| agent-desktop        | Current leading low-level runtime candidate                       | Rust CLI, Apache-2.0, deterministic refs, structured JSON, AX-first actions, FFI artifacts                                          | Young project; still needs a broader app matrix and packaged-Jarvis integration proof                                                                      |
+| Ghost OS             | Best turnkey loop candidate if recipes matter                     | MIT Swift, AX-first, MCP tools, recipes, local vision fallback, `ghost doctor` diagnostics                                          | Heavier product surface; macOS 14+/Swift 6.2, Python vision sidecar, and multi-GB model path may be more than Jarvis needs                                 |
+| screenpipe           | Observation and memory layer only                                 | MIT main repo, with an enterprise-licensed `ee/` area; records screen/audio/app context locally; captures AX tree with OCR fallback | Not a primary click/type engine; high privacy and storage burden for consumer default                                                                      |
+| Appium Mac2 Driver   | QA harness only                                                   | Apache-2.0; XCTest/WebDriver; deterministic app-under-test model                                                                    | Xcode/Appium setup friction; designed for tests, not user desktop operation                                                                                |
+| browser-use          | Web-only adjacent option                                          | MIT Python; browser automation agent and cloud/browser harness                                                                      | Does not solve native macOS app control                                                                                                                    |
+| Skyvern              | Web-only adjacent option                                          | Browser workflows with Playwright plus LLM/vision; useful for hosted web tasks                                                      | AGPL-3.0 for OSS repo and browser-only scope make it a poor native Jarvis foundation                                                                       |
+| Peekaboo             | Short-term bridge and fallback host                               | MIT Swift; already installed path; strong capture/control surface; MCP optional                                                     | Too low-level unless wrapped by strict planner/executor discipline                                                                                         |
 
 ## Scoring Criteria
 
@@ -157,14 +157,72 @@ ghost setup
 ghost doctor
 ```
 
+## Live Bakeoff Results: 2026-06-10
+
+Environment:
+
+- macOS with Accessibility and Screen Recording already granted to the terminal
+  process path used by the tools
+- `agent-desktop` 0.2.3 via `npx --yes agent-desktop`
+- MacosUseSDK cloned from `mediar-ai/MacosUseSDK` and built from source with
+  Swift 6.2.4
+- TextEdit temp file target:
+  `/tmp/jarvis-agent-desktop-bakeoff.txt`
+
+MacosUseSDK result: fail for Jarvis runtime use today.
+
+- `swift build` succeeded.
+- `swift run AppOpenerTool TextEdit` launched TextEdit but returned PID `-1`.
+- `swift run TraversalTool --visible-only 49498` rejected the real TextEdit PID
+  from `pgrep` with `No running application found with PID 49498`.
+- `swift run ActionTool --help` was unsafe: instead of printing help only, it
+  ran a hardcoded example that launched Messages and attempted global text
+  input.
+- Verdict: useful research code, but not an immediate Jarvis control foundation
+  without a wrapper and fixes. The current CLI behavior fails the fail-closed
+  requirement.
+
+agent-desktop result: pass for the narrow TextEdit workflow.
+
+- `npx --yes agent-desktop permissions` reported Accessibility and Screen
+  Recording as `granted`.
+- `npx --yes agent-desktop launch TextEdit` returned structured window data.
+- When TextEdit opened an `Open` dialog while Safari/Terminal remained
+  frontmost, `agent-desktop snapshot --app TextEdit -i --compact` still
+  returned a TextEdit snapshot with stable refs.
+- `agent-desktop click @e66 --snapshot s4zmrng7sof8k` clicked the `Cancel`
+  button by ref, not coordinates.
+- A temp file opened in TextEdit exposed its editor as `@e1` with value
+  `initial\n` and actions `SetValue`/`SetFocus`.
+- `agent-desktop set-value` updated `@e1` to
+  `JARVIS_GUI_BAKEOFF_20260610155950` through snapshot `svh6oxight3ob` while
+  Terminal stayed frontmost.
+- Explicit focus-mismatch proof: after bringing Safari front,
+  `agent-desktop set-value` updated `@e1` to
+  `JARVIS_GUI_BAKEOFF_FOCUS_20260610160100` through snapshot `s2b8mntx6foour`
+  while Safari stayed frontmost.
+- Final snapshot `s1q8la5sktljfw` matched
+  `JARVIS_GUI_BAKEOFF_FOCUS_20260610160100` in TextEdit.
+- Backing file remained `initial`, as expected, because the test did not save.
+
+Immediate conclusion:
+
+- Promote agent-desktop to the next integration spike.
+- Do not use MacosUseSDK directly in Jarvis until its CLI/runtime path can
+  return reliable PIDs, traverse known running app PIDs, and make help/read-only
+  commands side-effect-free.
+- Keep Peekaboo as the bridge/fallback while agent-desktop gets a broader app
+  matrix and packaged-Jarvis proof.
+
 ## Recommendation
 
 Default path:
 
 1. Keep Peekaboo as the immediate fallback/bridge host, with strict scoped
    actions and no default `--analyze`.
-2. Evaluate MacosUseSDK for the embeddable Swift foundation.
-3. Evaluate agent-desktop for the agent-facing CLI/runtime foundation.
+2. Use agent-desktop for the next Jarvis GUI-control integration spike.
+3. Revisit MacosUseSDK only after its direct CLI path is fail-closed and
+   reliable on known running app PIDs.
 4. Evaluate Ghost OS only if Jarvis wants a prebuilt MCP loop, recipes, and
    local vision fallback.
 5. Treat screenpipe as optional observation/memory, not a click/type engine.
