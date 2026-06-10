@@ -108,7 +108,7 @@ struct GatewayProcessManagerTests {
             try data.write(to: plistURL, options: [.atomic])
 
             #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime())
-            #expect(GatewayProcessManager.shared.testingLaunchAgentNeedsEntrypointRepair())
+            #expect(GatewayProcessManager.shared.testingLaunchAgentNeedsOwnershipRepair())
         }
     }
 

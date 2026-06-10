@@ -11,6 +11,7 @@ enum GatewayLaunchAgentManager {
         _ args: [String],
         _ timeout: Double,
         _ quiet: Bool) async -> String?)?
+    private nonisolated(unsafe) static var testCurrentServiceVersionHook: (() -> String?)?
     #endif
 
     struct EntrypointOwnership: Equatable {
@@ -199,14 +200,17 @@ enum GatewayLaunchAgentManager {
 
     static func runtimeOwnershipBlockerMessage(snapshot: LaunchAgentPlistSnapshot? = nil) -> String? {
         let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
-        guard let expectedEntrypoint = ownership.expectedEntrypoint else { return nil }
-        guard let actualEntrypoint = ownership.actualEntrypoint else { return nil }
-        guard ownership.matchesCurrentEntrypoint == false else { return nil }
-        return """
-        Telegram live testing is blocked because this app expects \(
-            expectedEntrypoint), but the consumer gateway is pinned to \(
-            actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
-        """
+        if let expectedEntrypoint = ownership.expectedEntrypoint,
+           let actualEntrypoint = ownership.actualEntrypoint,
+           ownership.matchesCurrentEntrypoint == false
+        {
+            return """
+            Telegram live testing is blocked because this app expects \(
+                expectedEntrypoint), but the consumer gateway is pinned to \(
+                actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
+            """
+        }
+        return self.serviceVersionBlockerMessage(snapshot: snapshot)
     }
 
     static func launchAgentMatchesCurrentRuntime(snapshot: LaunchAgentPlistSnapshot? = nil) -> Bool {
@@ -274,6 +278,11 @@ extension GatewayLaunchAgentManager {
         self.testLaunchAgentWriteDisabledHook = nil
         self.testReadDaemonLoadedHook = nil
         self.testRunDaemonCommandHook = nil
+        self.testCurrentServiceVersionHook = nil
+    }
+
+    static func _setTestingCurrentServiceVersion(_ version: String?) {
+        self.testCurrentServiceVersionHook = { version }
     }
     #endif
 
@@ -331,11 +340,16 @@ extension GatewayLaunchAgentManager {
     private static func restartOrStartLoadedGateway(port: Int) async -> String? {
         let loaded = await self.readDaemonLoaded()
         let snapshot = self.launchdConfigSnapshot()
+        let launchAgentMatchesCurrentRuntime = self.launchAgentMatchesCurrentRuntime(snapshot: snapshot)
         let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
+        let launchAgentMatchesCurrentServiceVersion = self.launchAgentMatchesCurrentServiceVersion(
+            snapshot: snapshot)
         let action = self.computeDesiredRestartAction(
             loaded: loaded,
             hasPlist: snapshot != nil,
-            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint,
+            launchAgentMatchesCurrentServiceVersion: launchAgentMatchesCurrentServiceVersion)
         self.logger
             .info("launchd restart requested action=\(String(describing: action), privacy: .public) port=\(port)")
         switch action {
@@ -380,7 +394,7 @@ extension GatewayLaunchAgentManager {
         CommandResolver.gatewayEntrypoint(in: CommandResolver.gatewayLaunchProjectRoot())
     }
 
-    private static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+    static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
         guard let expected = self.currentServiceVersionString() else { return true }
         guard let actual = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -391,7 +405,28 @@ extension GatewayLaunchAgentManager {
         return self.normalizedVersionString(actual) == self.normalizedVersionString(expected)
     }
 
+    private static func serviceVersionBlockerMessage(snapshot: LaunchAgentPlistSnapshot?) -> String? {
+        guard let expected = self.currentServiceVersionString() else { return nil }
+        guard let actual = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        else {
+            return nil
+        }
+        guard self.normalizedVersionString(actual) != self.normalizedVersionString(expected) else { return nil }
+        return """
+        Telegram live testing is blocked because this app expects service version \(
+            expected), but the consumer gateway is still registered as \(
+            actual). Restart the consumer gateway from this build before capturing the first DM.
+        """
+    }
+
     static func currentServiceVersionString() -> String? {
+        #if DEBUG
+        if let hook = self.testCurrentServiceVersionHook {
+            return hook()?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        }
+        #endif
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         return version?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
@@ -525,6 +560,14 @@ extension GatewayLaunchAgentManager {
         env["OPENCLAW_GATEWAY_BIND"] = identity.gatewayBind
         env["OPENCLAW_LOG_DIR"] = identity.logsDirURL.path
         env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        // A Sparkle update can advance the signed app bundle while the bundled
+        // JS package metadata still reflects the previous build lane. Persist the
+        // app distribution version into launchd so Jarvis can detect and repair a
+        // stale service after relaunch instead of trusting old package metadata.
+        if let serviceVersion = self.currentServiceVersionString() {
+            env["OPENCLAW_VERSION"] = serviceVersion
+            env["OPENCLAW_SERVICE_VERSION"] = serviceVersion
+        }
         // Packaged consumer runs through Bun on macOS; default to sips unless
         // the caller intentionally asks for the sharp backend.
         env["OPENCLAW_IMAGE_BACKEND"] =
@@ -577,9 +620,13 @@ extension GatewayLaunchAgentManager {
     private static func computeDesiredRestartAction(
         loaded: Bool?,
         hasPlist: Bool,
-        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentRuntime: Bool = true,
+        launchAgentMatchesCurrentEntrypoint: Bool = true,
+        launchAgentMatchesCurrentServiceVersion: Bool = true) -> DesiredAction
     {
+        if hasPlist, !launchAgentMatchesCurrentRuntime { return .install }
         if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        if hasPlist, !launchAgentMatchesCurrentServiceVersion { return .install }
         if loaded == true { return .restart }
         if hasPlist { return .start }
         return .install
@@ -629,6 +676,21 @@ extension GatewayLaunchAgentManager {
         launchAgentMatchesCurrentServiceVersion: Bool = true) -> DesiredAction
     {
         self.computeDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: hasPlist,
+            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint,
+            launchAgentMatchesCurrentServiceVersion: launchAgentMatchesCurrentServiceVersion)
+    }
+
+    static func _testDesiredRestartAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentRuntime: Bool = true,
+        launchAgentMatchesCurrentEntrypoint: Bool = true,
+        launchAgentMatchesCurrentServiceVersion: Bool = true) -> DesiredAction
+    {
+        self.computeDesiredRestartAction(
             loaded: loaded,
             hasPlist: hasPlist,
             launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,

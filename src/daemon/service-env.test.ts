@@ -284,6 +284,20 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("uses explicit app version as the persisted service version", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_VERSION: "2026.3.17",
+        OPENCLAW_SERVICE_VERSION: "2026.3.16",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_SERVICE_VERSION).toBe("2026.3.17");
+  });
+
   it("forwards TMPDIR from the host environment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
