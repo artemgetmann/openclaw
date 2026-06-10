@@ -295,6 +295,13 @@ verification off:
 bash scripts/package-openclaw-mac-dist.sh --trusted-ring-fast
 ```
 
+The trusted-ring lane also uses the local fast packaging path: it skips the
+bundled CLI npm tarball and reuses the cached bundled runtime when runtime
+inputs are unchanged. Because the distribution wrapper requires a clean tracked
+worktree, the cache follows the current commit instead of rehashing generated
+`dist/` output. Run a normal full release phase before relying on a public
+release artifact; trusted-ring output is for local proof and tester handoff.
+
 Required successful ending:
 
 ```text

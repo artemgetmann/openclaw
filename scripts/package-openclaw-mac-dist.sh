@@ -19,6 +19,8 @@ PUBLISH_RELEASE_ASSETS=0
 GITHUB_RELEASE_TAG=""
 PACKAGE_PHASE="full"
 RELEASE_RUN_ROOT=""
+OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
+OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE:-0}"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
 JARVIS_LATEST_RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_RELEASE_REPO}/releases/latest/download"
 JARVIS_DMG_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
@@ -93,6 +95,25 @@ release_run_root() {
     RELEASE_RUN_ROOT="${OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT:-$(openclaw_build_run_root "jarvis-release")}"
   fi
   printf '%s\n' "$RELEASE_RUN_ROOT"
+}
+
+release_phase_now_ms() {
+  /usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time() * 1000'
+}
+
+release_phase_log_elapsed() {
+  local started_ms="$1"
+  local label="$2"
+  local finished_ms
+  local elapsed_ms
+
+  if [[ "${PACKAGE_TIMING:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  finished_ms="$(release_phase_now_ms)"
+  elapsed_ms=$((finished_ms - started_ms))
+  printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
 }
 
 notary_auth_configured() {
@@ -711,10 +732,17 @@ poll_app_notarization_only() {
 }
 
 create_signed_dmg() {
+  local dmg_started_ms
+  local dmg_sign_started_ms
+
   echo "💿 DMG: $DMG"
   rm -f "$DMG" "${DMG%.dmg}-rw.dmg"
+  dmg_started_ms="$(release_phase_now_ms)"
   "$ROOT_DIR/scripts/create-dmg.sh" "$APP_PATH" "$DMG"
+  release_phase_log_elapsed "$dmg_started_ms" "DMG create/verify"
+  dmg_sign_started_ms="$(release_phase_now_ms)"
   sign_dmg_if_possible "$DMG" "$SIGNING_AUTHORITY"
+  release_phase_log_elapsed "$dmg_sign_started_ms" "DMG sign"
 }
 
 submit_dmg_notarization_only() {
@@ -835,6 +863,11 @@ if [[ "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
   SKIP_DSYM="${SKIP_DSYM:-1}"
   PUBLISH_RELEASE_ASSETS=0
   ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE="${ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE:-1}"
+  # Trusted-ring packages are local proof artifacts, not public release assets.
+  # Reuse the package-mac fast path so repeat runs skip the CLI archive and
+  # consume the runtime cache from a clean tracked release-lane commit.
+  OPENCLAW_CONSUMER_FAST_PACKAGING=1
+  OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE=1
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
@@ -921,6 +954,7 @@ if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "build-app-only" || "$PA
     "$ROOT_DIR"/dist/"$PRODUCT"*.dSYM.zip \
     "$ROOT_DIR"/dist/*appcast*.xml
 
+  app_package_started_ms="$(release_phase_now_ms)"
   APP_NAME="$APP_NAME" \
   APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
   BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
@@ -929,11 +963,16 @@ if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "build-app-only" || "$PA
   URL_SCHEME="$EXPECTED_URL_SCHEME" \
   BUILD_CONFIG="$BUILD_CONFIG" \
   BUILD_ARCHS="$BUILD_ARCHS" \
+  OPENCLAW_CONSUMER_FAST_PACKAGING="$OPENCLAW_CONSUMER_FAST_PACKAGING" \
+  OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="$OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE" \
   "$ROOT_DIR/scripts/package-mac-app.sh"
+  release_phase_log_elapsed "$app_package_started_ms" "Jarvis app package"
 
+  app_verify_started_ms="$(release_phase_now_ms)"
   BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
   APP_NAME="$APP_NAME" \
     "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+  release_phase_log_elapsed "$app_verify_started_ms" "Jarvis app verify"
 else
   verify_resume_app_bundle
 fi
@@ -1071,12 +1110,17 @@ echo "📦 Zip: $ZIP"
 # Sparkle's ZIP must not include AppleDouble/resource-fork sidecars. The notary
 # upload ZIP above still uses --sequesterRsrc; this user-download ZIP is the
 # artifact Sparkle expands and validates during self-update.
+zip_started_ms="$(release_phase_now_ms)"
 ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP"
 assert_sparkle_zip_has_no_macos_metadata "$ZIP"
+release_phase_log_elapsed "$zip_started_ms" "Sparkle ZIP create/verify"
+appcast_started_ms="$(release_phase_now_ms)"
 generate_jarvis_appcast
+release_phase_log_elapsed "$appcast_started_ms" "Jarvis appcast"
 write_release_manifest
 
 if [[ "$SKIP_DSYM" != "1" ]]; then
+  dsym_started_ms="$(release_phase_now_ms)"
   DSYM_ARM64="$(find "$BUILD_ROOT/arm64" -type d -path "*/$BUILD_CONFIG/$PRODUCT.dSYM" -print -quit)"
   DSYM_X86="$(find "$BUILD_ROOT/x86_64" -type d -path "*/$BUILD_CONFIG/$PRODUCT.dSYM" -print -quit)"
   if [[ -n "$DSYM_ARM64" || -n "$DSYM_X86" ]]; then
@@ -1102,13 +1146,18 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
   else
     echo "WARN: dSYM not found; skipping zip (set SKIP_DSYM=1 to silence)" >&2
   fi
+  release_phase_log_elapsed "$dsym_started_ms" "dSYM package"
 fi
 
+handoff_started_ms="$(release_phase_now_ms)"
 copy_handoff_artifacts
+release_phase_log_elapsed "$handoff_started_ms" "Handoff artifact copy"
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
   require_notarized_manifest_before_publish
 fi
+publish_started_ms="$(release_phase_now_ms)"
 publish_release_assets
+release_phase_log_elapsed "$publish_started_ms" "Release asset publish/verify"
 write_release_manifest
 
 echo "OpenClaw distribution package ready:"
