@@ -10,6 +10,7 @@ import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/env
 import {
   answerCallbackQuerySpy,
   commandSpy,
+  deleteMessageSpy,
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
@@ -659,6 +660,82 @@ describe("createTelegramBot", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("deletes non-text callback messages before sending model fallback menus", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+    deleteMessageSpy.mockClear();
+    sendMessageSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-fallback-delete-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-6",
+              models: {
+                "anthropic/claude-opus-4-6": {},
+              },
+            },
+          },
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+          session: {
+            store: storePath,
+          },
+        },
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      editMessageTextSpy.mockRejectedValueOnce(
+        new Error("Bad Request: there is no text in the message to edit"),
+      );
+      sendMessageSpy.mockResolvedValueOnce({ message_id: 91 });
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-fallback-delete",
+          data: "mdl_sel_anthropic/claude-opus-4-6",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 16,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(deleteMessageSpy).toHaveBeenCalledWith(1234, 16);
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        expect.stringContaining("✅ Model reset to default"),
+        {},
+      );
+      expect(recordSentMessage).toHaveBeenCalledWith(
+        1234,
+        91,
+        expect.objectContaining({ sessionKey: expect.any(String) }),
+      );
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-fallback-delete");
     } finally {
       await rm(storePath, { force: true });
     }
