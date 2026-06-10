@@ -1016,6 +1016,51 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("voices Telegram /tts on replies as the TTS preview command", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {
+      ttsAuto: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+      CommandBody: "/tts on",
+      BodyForCommands: "/tts on",
+      BodyForAgent: "/tts on",
+      CommandAuthorized: true,
+      SessionKey: "agent:main:telegram:direct:text-tts-on",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => markControlCommandReplyPayload({ text: "🔊 TTS enabled." })),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: false,
+        ttsAuto: "always",
+        payload: expect.objectContaining({
+          text: "🔊 TTS enabled.",
+        }),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "🔊 TTS enabled.",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("keeps typed text silent when TTS is off", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

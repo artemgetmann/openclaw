@@ -43,7 +43,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { maybeResolveTextAlias } from "../commands-registry.js";
+import { maybeResolveTextAlias, normalizeCommandBody } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -107,6 +107,33 @@ function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
             ? ctx.Body
             : "";
   return candidate.trim();
+}
+
+function resolveTelegramTtsCommandAction(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+  visibilityChannel: string | undefined,
+): string | undefined {
+  if (visibilityChannel !== "telegram") {
+    return undefined;
+  }
+  const candidate = resolveCommandCandidateText(ctx);
+  if (!candidate) {
+    return undefined;
+  }
+  if (maybeResolveTextAlias(candidate, cfg) !== "/tts") {
+    return undefined;
+  }
+
+  // `/tts on` is a product demo moment: the acknowledgement should be spoken
+  // even when the command just enabled TTS and the pre-command session snapshot
+  // still looks silent. Other `/tts` subcommands follow the effective setting.
+  const normalized = normalizeCommandBody(candidate).trim().toLowerCase();
+  if (normalized === "/tts") {
+    return "status";
+  }
+  const rest = normalized.startsWith("/tts ") ? normalized.slice(5).trim() : "";
+  return rest.split(/\s+/)[0] || "status";
 }
 
 function isTelegramControlCommandReply(
@@ -324,15 +351,25 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  const telegramTtsCommandAction = resolveTelegramTtsCommandAction(ctx, cfg, visibilityChannel);
+  const isTelegramTtsControlCommand = telegramTtsCommandAction !== undefined;
   const isControlCommandReply = isTelegramControlCommandReply(ctx, cfg, visibilityChannel);
+  const commandTtsAuto =
+    telegramTtsCommandAction === "on"
+      ? "always"
+      : telegramTtsCommandAction === "off"
+        ? "off"
+        : undefined;
   // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
   // as-is, but let inbound audio override typed-message modes like `off` or
   // `tagged` without writing a new preference.
-  const turnTtsAuto = isControlCommandReply
-    ? "off"
-    : inboundAudio && sessionTtsAuto !== "always"
-      ? "inbound"
-      : sessionTtsAuto;
+  const turnTtsAuto = commandTtsAuto
+    ? commandTtsAuto
+    : isControlCommandReply && !isTelegramTtsControlCommand
+      ? "off"
+      : inboundAudio && sessionTtsAuto !== "always"
+        ? "inbound"
+        : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)
@@ -654,7 +691,7 @@ export async function dispatchReplyFromConfig(params: {
       // and `/model` text visible without voicing product UI, while command
       // surfaces that continue into a real assistant answer still get normal
       // final-answer TTS.
-      if (isControlCommandReplyPayload(payload)) {
+      if (isControlCommandReplyPayload(payload) && !isTelegramTtsControlCommand) {
         return payload;
       }
       return maybeApplyTtsToPayload({
