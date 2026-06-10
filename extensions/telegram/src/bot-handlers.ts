@@ -1532,6 +1532,7 @@ export const registerTelegramHandlers = ({
           audit: {
             callsite: "telegram-callback-message-delete",
             reason: "callback_message_cleanup",
+            safetyMode: "deterministic_cleanup",
             accountId,
             classification: "callback",
             topicId: callbackMessage.message_thread_id,
