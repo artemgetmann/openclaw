@@ -359,7 +359,7 @@ struct MenuContent: View {
     }
 
     private func open(tab: SettingsTab) {
-        SettingsWindowOpener.shared.open(tab: tab)
+        SettingsWindowOpener.shared.reveal(tab: tab)
     }
 
     @MainActor
