@@ -1177,6 +1177,11 @@ final class ConsumerModelSetupModel {
         {
             return .gatewayUnreachable
         }
+        if let authError = error as? GatewayConnectAuthError,
+           authError.detail == .authTokenMismatch || authError.detail == .authDeviceTokenMismatch
+        {
+            return .gatewayUnreachable
+        }
 
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain {
@@ -1205,6 +1210,10 @@ final class ConsumerModelSetupModel {
             || lowercased.contains("gateway connection dropped")
             || lowercased.contains("gateway not connected")
             || lowercased.contains("pairing required")
+            || lowercased.contains("token_mismatch")
+            || lowercased.contains("token mismatch")
+            || lowercased.contains("device_token_mismatch")
+            || lowercased.contains("device token mismatch")
             || lowercased.contains("socket is not connected")
             || lowercased.contains("timed out")
             || lowercased.contains("timeout")

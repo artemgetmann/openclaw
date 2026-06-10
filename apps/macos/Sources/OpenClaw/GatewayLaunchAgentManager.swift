@@ -12,6 +12,7 @@ enum GatewayLaunchAgentManager {
         _ timeout: Double,
         _ quiet: Bool) async -> String?)?
     private nonisolated(unsafe) static var testCurrentServiceVersionHook: (() -> String?)?
+    private nonisolated(unsafe) static var testCurrentServiceBuildHook: (() -> String?)?
     #endif
 
     struct EntrypointOwnership: Equatable {
@@ -279,10 +280,15 @@ extension GatewayLaunchAgentManager {
         self.testReadDaemonLoadedHook = nil
         self.testRunDaemonCommandHook = nil
         self.testCurrentServiceVersionHook = nil
+        self.testCurrentServiceBuildHook = nil
     }
 
     static func _setTestingCurrentServiceVersion(_ version: String?) {
         self.testCurrentServiceVersionHook = { version }
+    }
+
+    static func _setTestingCurrentServiceBuild(_ build: String?) {
+        self.testCurrentServiceBuildHook = { build }
     }
     #endif
 
@@ -395,29 +401,55 @@ extension GatewayLaunchAgentManager {
     }
 
     static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
-        guard let expected = self.currentServiceVersionString() else { return true }
-        guard let actual = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
+        guard let expectedVersion = self.currentServiceVersionString() else { return true }
+        guard let actualVersion = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty
         else {
-            return true
+            // Packaged Jarvis can only self-heal a Sparkle replacement if the
+            // LaunchAgent advertises the app build that owns it. Older source
+            // checkout plists do not, so a default consumer app must replace
+            // them instead of attaching to stale code forever.
+            return !self.requiresLaunchAgentServiceIdentity()
         }
-        return self.normalizedVersionString(actual) == self.normalizedVersionString(expected)
+        guard self.normalizedVersionString(actualVersion) == self.normalizedVersionString(expectedVersion)
+        else { return false }
+
+        guard let expectedBuild = self.currentServiceBuildString() else { return true }
+        guard let actualBuild = snapshot?.environment["OPENCLAW_SERVICE_BUILD"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        else {
+            return !self.requiresLaunchAgentServiceIdentity()
+        }
+        return self.normalizedVersionString(actualBuild) == self.normalizedVersionString(expectedBuild)
     }
 
     private static func serviceVersionBlockerMessage(snapshot: LaunchAgentPlistSnapshot?) -> String? {
-        guard let expected = self.currentServiceVersionString() else { return nil }
-        guard let actual = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
+        guard let expectedVersion = self.currentServiceVersionString() else { return nil }
+        let expectedBuild = self.currentServiceBuildString()
+        guard let actualVersion = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty
         else {
+            guard self.requiresLaunchAgentServiceIdentity() else { return nil }
+            return """
+            Telegram live testing is blocked because this app expects service version \(
+                self.serviceIdentityDescription(version: expectedVersion, build: expectedBuild)), but the consumer gateway has no service version metadata. Restart the consumer gateway from this build before capturing the first DM.
+            """
+        }
+        let actualBuild = snapshot?.environment["OPENCLAW_SERVICE_BUILD"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        guard self.normalizedVersionString(actualVersion) != self.normalizedVersionString(expectedVersion) ||
+            self.normalizedOptionalVersionString(actualBuild) != self.normalizedOptionalVersionString(expectedBuild)
+        else {
             return nil
         }
-        guard self.normalizedVersionString(actual) != self.normalizedVersionString(expected) else { return nil }
         return """
         Telegram live testing is blocked because this app expects service version \(
-            expected), but the consumer gateway is still registered as \(
-            actual). Restart the consumer gateway from this build before capturing the first DM.
+            self.serviceIdentityDescription(version: expectedVersion, build: expectedBuild)), but the consumer gateway is still registered as \(
+            self.serviceIdentityDescription(version: actualVersion, build: actualBuild)). Restart the consumer gateway from this build before capturing the first DM.
         """
     }
 
@@ -431,8 +463,32 @@ extension GatewayLaunchAgentManager {
         return version?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
 
+    static func currentServiceBuildString() -> String? {
+        #if DEBUG
+        if let hook = self.testCurrentServiceBuildHook {
+            return hook()?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        }
+        #endif
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return build?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+    }
+
+    private static func requiresLaunchAgentServiceIdentity() -> Bool {
+        AppFlavor.current.isConsumer && ConsumerInstance.current.isDefault
+    }
+
     private static func normalizedVersionString(_ raw: String) -> String {
         raw.replacingOccurrences(of: "^v", with: "", options: .regularExpression)
+    }
+
+    private static func normalizedOptionalVersionString(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        return self.normalizedVersionString(raw)
+    }
+
+    private static func serviceIdentityDescription(version: String, build: String?) -> String {
+        guard let build else { return version }
+        return "\(version) build \(build)"
     }
 
     private static func resolveLaunchAgentEntrypoint(from snapshot: LaunchAgentPlistSnapshot?) -> String? {
@@ -567,6 +623,9 @@ extension GatewayLaunchAgentManager {
         if let serviceVersion = self.currentServiceVersionString() {
             env["OPENCLAW_VERSION"] = serviceVersion
             env["OPENCLAW_SERVICE_VERSION"] = serviceVersion
+        }
+        if let serviceBuild = self.currentServiceBuildString() {
+            env["OPENCLAW_SERVICE_BUILD"] = serviceBuild
         }
         // Packaged consumer runs through Bun on macOS; default to sips unless
         // the caller intentionally asks for the sharp backend.

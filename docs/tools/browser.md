@@ -52,7 +52,7 @@ Gateway.
 For agent browser tool calls:
 
 - Default serious web work to `profile="signed-in"` for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from cloned real Chrome cookies/session state.
-- Prefer `profile="openclaw"` for public browsing, clean isolated runs, and fallback when the signed-in lane is unavailable or worse on a specific site.
+- Use `profile="openclaw"` for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat it as a last-resort fallback only after `profile="signed-in"` and any explicitly required `profile="user-live"` lane are unavailable or proven unsuitable, and only when session state does not matter.
 - Use `profile="user-live"` only when the task explicitly depends on your real signed-in browser session, existing tabs, or installed extensions.
 - If the task clearly depends on existing login state and `profile="signed-in"` or `profile="user-live"` is unavailable, stop and surface the blocker instead of silently switching to a clean isolated browser.
 - If multiple Chrome profiles may exist, use a named `existing-session` profile pinned by `userDataDir`, `profileDirectory`, or `cdpUrl` instead of guessing.
@@ -427,7 +427,7 @@ What to check if attach does not work:
 Agent use:
 
 - Use `profile="signed-in"` by default for serious signed-in web work.
-- Use `profile="openclaw"` for clean public browsing and fallback.
+- Use `profile="openclaw"` for clean public browsing and isolated research. For account-bound work, use it only as a last-resort fallback when session state does not matter.
 - Use `profile="user-live"` only when you need the user’s exact live tabs/extensions/session.
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Only choose `user-live` when the user is at the computer to approve the attach
