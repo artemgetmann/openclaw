@@ -457,6 +457,8 @@ P0 requirements:
 
 - [x] signed + notarized macOS builds for public `v2026.3.15`
 - [x] update manifest hosted through GitHub Releases/appcast for `v2026.3.15`
+- [x] public `v2026.3.17` trusted-tester release assets live with
+      `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`
 - app checks latest version on launch and periodically
 - user can click “Update”
 - update gated by subscription/trial status
@@ -587,25 +589,26 @@ Investigation task:
 
 Current execution priorities:
 
-| Priority | Item                                                                                                                            | Status                                                                                                                | Owner / lane                           | Proof or next gate                                                                                                                                                                           |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P0       | AI access onboarding must be coherent enough that the first Telegram DM can complete a useful task.                             | Open                                                                                                                  | Onboarding redesign lane / tmux pane 1 | Runtime-backed Telegram smoke should reach a bot reply, not stop at missing provider auth.                                                                                                   |
-| P0       | Account activation must be sequenced before Telegram Managed Bots if the backend requires an account token.                     | Source slice complete in PR #782; package/runtime smoke still open.                                                   | Account activation onboarding lane     | "Continue with Email" step now precedes Telegram, stores the account token in macOS Keychain, and blocks Managed Bots until activation.                                                      |
-| P0       | Recut/package from current `main` after the P0 onboarding fixes before claiming source polish ships to the 4-5 waiting testers. | Open                                                                                                                  | Release/package lane after P0          | Build, verify, and smoke the new tester package; do not claim current source fixes are in the old DMG.                                                                                       |
-| P0       | Keep raw/founder keys out of any public-ish package.                                                                            | Ongoing gate                                                                                                          | Release/package lane                   | Re-run the package secret audit on every broader package candidate.                                                                                                                          |
-| P0       | Group/threaded/forum Telegram setup.                                                                                            | Open; active P0 owned by tmux pane 2.                                                                                 | Telegram group/thread/forum lane       | Prove the backend/userbot path for creating the group, adding user plus bot, enabling forum mode, and seeding topics.                                                                        |
-| P1       | Full app run-through after P0 onboarding/account/AI-access and Telegram setup land.                                             | Blocked on tmux panes 1 and 2.                                                                                        | Post-P0 proof lane                     | Use an isolated runtime to prove app onboarding, account activation, Managed Bots DM/group setup, Render health, and representative skill/tool routing without touching the default gateway. |
-| P1       | `ai.jarvis.mac` bundle/runtime/update identity migration.                                                                       | Deferred until after the 4-5 waiting testers receive the next package; required before Reddit or broad public launch. | Dedicated release/runtime lane         | Must preserve permissions, state, LaunchAgents, runtime paths, and Sparkle continuity.                                                                                                       |
-| P1       | Full Sparkle update-cycle proof.                                                                                                | Deferred until after the 4-5 waiting testers package.                                                                 | Release/package lane                   | Prove download, verify, install, relaunch, and state preservation.                                                                                                                           |
-| P1       | Rename verbose/debug UX into `/visibility` language.                                                                            | Deferred until after the 4-5 waiting testers package; required before Reddit/broad public launch.                     | Telegram/product polish lane           | Normal users should see visibility controls, not developer verbose naming.                                                                                                                   |
-| P1       | Expose Claude Code as a consumer model lane and clean up the Telegram model picker.                                             | Deferred until after the next 4-5 waiting testers and more founder use of the Claude CLI backend.                     | Telegram/model picker lane             | Required before website, Stripe, Reddit/GitHub, or public-ish beta launch.                                                                                                                   |
-| P1       | Keep launch tracker docs as completed/open/deferred checklists.                                                                 | In progress                                                                                                           | Docs lane                              | This document is the source of truth for launch task state.                                                                                                                                  |
+| Priority | Item                                                                                                                            | Status                                                                                                                | Owner / lane                       | Proof or next gate                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| P0       | AI access onboarding must be coherent enough that the first Telegram DM can complete a useful task.                             | Accepted for trusted testers; watch real tester feedback.                                                             | Onboarding redesign lane           | Gate2 reached managed Telegram setup and reply proof; first real tester friction is now the proof source.                    |
+| P0       | Account activation must be sequenced before Telegram Managed Bots if the backend requires an account token.                     | Accepted for trusted testers; watch real tester feedback.                                                             | Account activation onboarding lane | Gate2 proved final trial-active account state before managed Telegram setup.                                                 |
+| P0       | Recut/package from current `main` after the P0 onboarding fixes before claiming source polish ships to the 4-5 waiting testers. | Shipped for trusted testers as public `v2026.3.17`; keep broader beta gated.                                          | Release/package lane               | GitHub release `v2026.3.17` is live with `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`; real tester feedback is next. |
+| P0       | Keep raw/founder keys out of any public-ish package.                                                                            | Ongoing gate                                                                                                          | Release/package lane               | Re-run the package secret audit on every broader package candidate.                                                          |
+| P0       | Group/threaded/forum Telegram setup.                                                                                            | Open; active P0 owned by tmux pane 2.                                                                                 | Telegram group/thread/forum lane   | Prove the backend/userbot path for creating the group, adding user plus bot, enabling forum mode, and seeding topics.        |
+| P1       | Full app run-through after P0 onboarding/account/AI-access and Telegram setup land.                                             | Trusted-tester Gate2 accepted; broader run-through still required.                                                    | Post-P0 proof lane                 | Use first real tester feedback plus isolated runtime proof before wider beta.                                                |
+| P1       | `ai.jarvis.mac` bundle/runtime/update identity migration.                                                                       | Deferred until after the 4-5 waiting testers receive the next package; required before Reddit or broad public launch. | Dedicated release/runtime lane     | Must preserve permissions, state, LaunchAgents, runtime paths, and Sparkle continuity.                                       |
+| P1       | Full Sparkle update-cycle proof.                                                                                                | Still required before relying on updates for recovery or broader public distribution.                                 | Release/package lane               | Prove download, verify, install, relaunch, and state preservation.                                                           |
+| P1       | Rename verbose/debug UX into `/visibility` language.                                                                            | Deferred until after the 4-5 waiting testers package; required before Reddit/broad public launch.                     | Telegram/product polish lane       | Normal users should see visibility controls, not developer verbose naming.                                                   |
+| P1       | Expose Claude Code as a consumer model lane and clean up the Telegram model picker.                                             | Deferred until after the next 4-5 waiting testers and more founder use of the Claude CLI backend.                     | Telegram/model picker lane         | Required before website, Stripe, Reddit/GitHub, or public-ish beta launch.                                                   |
+| P1       | Keep launch tracker docs as completed/open/deferred checklists.                                                                 | In progress                                                                                                           | Docs lane                          | This document is the source of truth for launch task state.                                                                  |
 
 Completed foundation:
 
-- [x] Apple signing/notarization and public DMG install smoke for `v2026.3.15`.
+- [x] Public `v2026.3.17` trusted-tester release assets are live.
 - [x] Remove bundled founder keys from public builds or route them through managed backend.
 - [x] Beta account activation and 14-day trial backend contract.
+- [x] Gate2 clean-user onboarding proof for trusted testers.
 - [x] Baseline Sparkle update mechanism proof.
 - [x] Production Render service/env configuration.
 - [x] Page-based setup instead of one long scroll: Chrome, Mac permissions, AI
@@ -807,18 +810,11 @@ Do not overbuild the website first.
 
 Build the commercial spine first:
 
-1. signed/notarized downloadable app for the 3 trusted waiting testers — final
-   2026-05-14 trusted-tester package exists at
-   `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`,
-   built from commit `ab9c3c1ca1`, and is copied to
-   `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`; `Jarvis.dmg` is
-   Gatekeeper-accepted as Notarized Developer ID; public `v2026.3.15` release
-   assets now include `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`;
-   Artem's currently installed `/Applications/Jarvis.app` still reports older
-   build `14d2624bb8`, so the next chat must install the final DMG over it and
-   run the local smoke; this trusted-tester recut keeps
-   `ai.openclaw.consumer.mac`/OpenClaw runtime identity by deliberate 80/20
-   decision
+1. downloadable app for trusted testers — public `v2026.3.17` release assets
+   are live with `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`; this
+   trusted-tester line keeps `ai.openclaw.consumer.mac`/OpenClaw runtime
+   identity by deliberate 80/20 decision, and Gate2 clean-user proof accepts the
+   onboarding path for the first tester round
 2. no leaked founder keys — package guard done in PR #565
 3. account login and 14-day trial activation — beta contract done in PR #647
 4. pricing/plan names, launch README outline, and 60-second demo — drafted in PR #646
@@ -839,7 +835,7 @@ Current implementation order:
 2. Private Render deploy path for the backend. Done in PR #561.
 3. Secrets/public-package audit guard. Done in PR #565.
 4. Account/license persistence. Done in PR #569.
-5. Signing/notarization + updater proof. Public `v2026.3.15` shipped signed/notarized; Sparkle non-UI update completion passed.
+5. Signing/notarization + updater proof. Public `v2026.3.15` shipped signed/notarized; `v2026.3.17` trusted-tester assets are live; full Sparkle update-cycle proof remains open before broader distribution.
 6. Beta account activation + 14-day trial. Done in PR #647.
 7. Pricing/plan names, launch README outline, and 60-second demo. Drafted in PR #646.
 8. Production Render service creation + production env/account/license smoke.
@@ -895,7 +891,8 @@ Progress:
 - [x] Render deploy guardrails / backend Render service path landed in PR #561.
 - [x] Secrets/public-package audit guard prevents public builds from shipping founder/provider keys; landed in PR #565.
 - [x] Account/license persistence replaces stateless trial responses; Neon-backed persistence landed in PR #569.
-- [x] Signing/notarization completed for public `v2026.3.15`.
+- [x] Signing/notarization first completed for public `v2026.3.15`; current
+      trusted-tester release assets are live on `v2026.3.17`.
 - [x] Sparkle non-UI update completion passed from public `v2026.3.14` to `v2026.3.15`.
 - [x] Beta email activation + 14-day trial landed in PR #647.
 - [x] Launch package/pricing/README/demo draft landed in PR #646.
@@ -904,7 +901,7 @@ Progress:
       sections, General is less cluttered, and the consumer Telegram Channels setup
       no longer renders the cramped nested sidebar.
 - [x] Recut/upload Jarvis public artifacts from current `main` for the trusted
-      tester package; public `v2026.3.15` now has `Jarvis.dmg`, `Jarvis.zip`,
+      tester package; public `v2026.3.17` now has `Jarvis.dmg`, `Jarvis.zip`,
       and `jarvis-appcast.xml`.
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
 - [x] Render service has durable production account/license persistence.
@@ -932,16 +929,11 @@ Progress:
       `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`
       and `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` from commit
       `ab9c3c1ca1`. `Jarvis.dmg` passes Gatekeeper as Notarized Developer ID.
-- [x] Install `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` over the
-      current app and complete trusted-tester smoke. `/Applications/Jarvis.app`
-      now reports `OpenClawGitCommit=ab9c3c1ca1` and bundle ID
-      `ai.openclaw.consumer.mac`; Computer Use verified the Permissions tab
-      keeps Screen Recording, Accessibility, Automation (AppleScript), and
-      Location in the primary list while Notifications and Microphone stay under
-      optional permissions; About -> Check for Updates reports Jarvis
-      2026.3.14 is up to date; the isolated fresh-user packaged smoke passed
-      with real user config unchanged. Sending `Jarvis.dmg` to the 3 trusted
-      waiting testers is allowed.
+- [x] Historical May trusted-tester smoke passed for the earlier `Jarvis.dmg`:
+      app metadata, Permissions tab grouping, Sparkle feed retrieval, and
+      isolated fresh-user packaged smoke all passed with real user config
+      unchanged. Current tester package truth is `v2026.3.17`, and first real
+      tester feedback is the next package-level signal.
 - [x] Fix post-launch app-bundle mutation before broader distribution. Root
       cause was packaged Jarvis treating
       `Contents/Resources/OpenClawRuntime/openclaw` as the runtime project root
@@ -1190,21 +1182,21 @@ docs remain historical proof only:
 - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
 - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 
-| Item                                             | Owner                                            | Status                            | Launch-plan handling                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------ | ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Final package through deterministic release lane | Release lane from current `main`                 | Done for trusted testers          | Final 2026-05-14 trusted-tester `Jarvis.dmg` exists at `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg` and `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`, built from commit `ab9c3c1ca1`; the DMG is Gatekeeper-accepted as Notarized Developer ID. It has been installed over `/Applications/Jarvis.app`; installed-app verification, Permissions GUI proof, About update check, and isolated fresh-user package smoke all passed. |
-| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Done for Jarvis trusted tester    | With Artem approval, uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml` to public release `v2026.3.15`. The installed Jarvis feed URL `https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml` now returns 200 and points to the uploaded `Jarvis.zip`. Old OpenClaw-named assets still remain on the release for historical/backward compatibility; do not delete them without a separate compatibility decision.                                       |
-| Release assets involved                          | Release lane                                     | Done for Jarvis trusted tester    | Uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`. No new dSYM zip was produced in the manual continuation after notary profile failure.                                                                                                                                                                                                                                                                                                                                              |
-| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                          | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                                                                                                                                                                           |
-| Clean macOS user install smoke                   | Release/GUI smoke lane                           | Passed for trusted testers        | Isolated fresh-user packaged smoke passed from `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`: bundled runtime seeded, isolated gateway became healthy, onboarding was observed, and real user config stayed unchanged. A true separate macOS account smoke was deliberately skipped as unnecessary for the 3 trusted waiting testers. Sending `Jarvis.dmg` to those testers is allowed.                                                                                                  |
-| Post-launch app-bundle mutation                  | Packaging/runtime lane before public-ish launch  | Fixed and copied-app proof passed | Fixed by treating bundled app resources as seed-only, running packaged gateway identity from the seeded Application Support runtime, and sending managed `acpx` installs to `$OPENCLAW_STATE_DIR/cache/extensions/acpx`. Targeted `acpx` Vitest, macOS bundled-runtime/launch-agent suites, isolated generated-runtime proof, and copied-app signed-bundle proof passed on 2026-05-16 without touching `/Applications/Jarvis.app`.                                                                |
-| Full newer-version Sparkle update-cycle smoke    | Release/GUI smoke lane                           | Deferred for speed                | Current proof covers appcast/feed reachability and no Update Error. A real higher-build appcast should still prove download, signature verification, install, relaunch, and state preservation before relying on updates for recovery or wider distribution. Do not block the 3 trusted waiting testers on this unless an immediate tester update is planned.                                                                                                                                     |
-| Channels duplicate connected-bot UI              | UI polish lane                                   | Current-main GUI proof captured   | Source UI fix removes the duplicated connected-bot Settings copy/buttons. Current-main isolated native UI-smoke proof on 2026-05-16 showed Settings -> Channels with one Telegram detail pane, one `Connected bot` section, one verified card, and one `Open your bot` action; screenshot: `/tmp/openclaw/full-after-ready-channel-click.png`. Existing trusted-tester `Jarvis.dmg` predates PR #719, so recut the release artifact before claiming this polish ships in that DMG.                |
-| Local old-app/package cleanup                    | Cleanup lane after approved delete list          | Done for Artem's machine          | Completed after Artem approved the cleanup list on 2026-05-16: removed `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents. Kept `/Applications/Jarvis.app`, the default gateway, watchdog, mail monitor, and the separate Chrome Telegram-live profile.                                                                                                                                            |
-| Launch audit                                     | Launch/commercial readiness lane                 | Open                              | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                                                                                                           |
-| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking            | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                                                                                                                                                             |
-| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta        | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the small trusted tester ring, including the next 4-5 waiting testers after the P0 onboarding fixes. Before Reddit/GitHub, public-ish beta, or any broader beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                                                                                                |
-| Old worktree `dist` cleanup                      | Cleanup lane                                     | Lower priority                    | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                                                                                                                                                                          |
+| Item                                          | Owner                                            | Status                            | Launch-plan handling                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------- | ------------------------------------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Current trusted-tester package                | Release lane from current `main`                 | Live for trusted testers          | Public release `v2026.3.17` is live with `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`. This supersedes the older 2026-05-14 trusted-tester artifact as the package truth.                                                                                                                                                                                                                                                  |
+| Public `v2026.3.17` release assets            | Release lane with explicit Artem approval        | Done for Jarvis trusted tester    | GitHub release metadata confirms `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml` on `v2026.3.17`. Old release assets remain historical/backward-compatibility context; do not delete them without a separate compatibility decision.                                                                                                                                                                                          |
+| Gate2 clean-user proof                        | Clean-user proof lane                            | Accepted for trusted testers      | On 2026-06-09, `jarvistest` uid `503` ran `Jarvis Consumer Gate2` with isolated LaunchAgent/state, port `25229`, trial-active account state, managed Telegram bot `@jarvis_cdb46705_bot`, setup replay success, and `sendMessage ok`. The Gate2 proof app is not the shipped Jarvis artifact.                                                                                                                                      |
+| Optional Sparkle dialog smoke                 | Release/GUI smoke lane                           | Optional                          | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                                                                                                            |
+| Clean macOS user install smoke                | Release/GUI smoke lane                           | Passed for trusted testers        | Historical isolated fresh-user packaged smoke passed from the May `Jarvis.dmg`, and 2026-06-09 Gate2 proved a separate `jarvistest` macOS account for onboarding. First real tester install feedback is the next decision input.                                                                                                                                                                                                   |
+| Post-launch app-bundle mutation               | Packaging/runtime lane before public-ish launch  | Fixed and copied-app proof passed | Fixed by treating bundled app resources as seed-only, running packaged gateway identity from the seeded Application Support runtime, and sending managed `acpx` installs to `$OPENCLAW_STATE_DIR/cache/extensions/acpx`. Targeted `acpx` Vitest, macOS bundled-runtime/launch-agent suites, isolated generated-runtime proof, and copied-app signed-bundle proof passed on 2026-05-16 without touching `/Applications/Jarvis.app`. |
+| Full newer-version Sparkle update-cycle smoke | Release/GUI smoke lane                           | Required before broader public    | Current proof covers appcast/feed reachability and no Update Error. A real higher-build appcast should still prove download, signature verification, install, relaunch, and state preservation before relying on updates for recovery or wider distribution.                                                                                                                                                                       |
+| Channels duplicate connected-bot UI           | UI polish lane                                   | Current-main GUI proof captured   | Source UI fix removes the duplicated connected-bot Settings copy/buttons. Current-main isolated native UI-smoke proof on 2026-05-16 showed Settings -> Channels with one Telegram detail pane, one `Connected bot` section, one verified card, and one `Open your bot` action. Confirm with first real tester feedback on the current tester package.                                                                              |
+| Local old-app/package cleanup                 | Cleanup lane after approved delete list          | Done for Artem's machine          | Completed after Artem approved the cleanup list on 2026-05-16: removed `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents. Kept `/Applications/Jarvis.app`, the default gateway, watchdog, mail monitor, and the separate Chrome Telegram-live profile.                                                                             |
+| Launch audit                                  | Launch/commercial readiness lane                 | Open                              | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                                            |
+| Overlay/defaults hygiene                      | Future product/platform lane                     | Deferred, non-blocking            | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                                                                                              |
+| Bundle ID migration                           | Separate migration lane before public-ish launch | Required before wider beta        | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the small trusted tester ring, including the next 4-5 waiting testers after the P0 onboarding fixes. Before Reddit/GitHub, public-ish beta, or any broader beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                                 |
+| Old worktree `dist` cleanup                   | Cleanup lane                                     | Lower priority                    | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                                                                                                           |
 
 Deployment/security boundary:
 
@@ -1223,27 +1215,25 @@ Deployment/security boundary:
 - [x] Decide exact plan names and prices. See `docs/consumer/jarvis-launch-package.md`.
 - [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
 - [x] Implement and prove baseline update check/install path through Sparkle non-UI update completion.
-- [x] Sign/notarize macOS app for public `v2026.3.15`.
+- [x] Ship public `v2026.3.17` trusted-tester Jarvis assets.
 - [x] Move non-secret Sparkle release config to machine-level
       `~/Library/Application Support/OpenClaw/release.env`.
-- [x] Produce notarized Jarvis trusted-tester app/DMG/ZIP/appcast from current
-      `main` while keeping `ai.openclaw.consumer.mac` for the 3 trusted waiting
-      testers. Final 2026-05-14 `Jarvis.dmg` is at
-      `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`
-      and `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` from commit
-      `ab9c3c1ca1`; public `v2026.3.15` now includes `Jarvis.dmg`,
-      `Jarvis.zip`, and `jarvis-appcast.xml`.
-- [x] Install the final DMG over current `/Applications/Jarvis.app`, verify
-      Permissions tab grouping, verify About update check, and run isolated
-      fresh-user packaged smoke. The trusted-tester send gate is now open for
-      the 3 waiting testers.
+- [x] Publish Jarvis trusted-tester release assets while keeping
+      `ai.openclaw.consumer.mac` for the small trusted tester ring. Public
+      `v2026.3.17` now includes `Jarvis.dmg`, `Jarvis.zip`, and
+      `jarvis-appcast.xml`.
+- [x] Accept same-user onboarding and Gate2 clean-user proof for the next
+      trusted-tester round. Gate2 passed on 2026-06-09 with clean `jarvistest`
+      ownership, uid `503`, isolated port `25229`, trial-active account state,
+      managed Telegram `@jarvis_cdb46705_bot`, setup replay success, and
+      Telegram reply proof. Permission UI roughness and transient account/email
+      friction are watchlist items, not trusted-tester blockers.
 - [x] Fix signed-app immutability before wider beta: packaged Jarvis now treats
       app bundle resources as read-only seed material and routes writable
       runtime dependencies, including managed `acpx` `node_modules`, under
       Application Support state/cache outside `/Applications/Jarvis.app`.
 - [ ] Run a real newer-version Sparkle update-cycle smoke before depending on
-      updates for tester recovery or wider distribution; defer for the 3 trusted
-      waiting testers unless an immediate update is planned.
+      updates for tester recovery or wider distribution.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keep Keychain-profile auth as fallback only,
       and use the now-ready ASC API-key lane from the machine release env.
@@ -1255,10 +1245,11 @@ Deployment/security boundary:
       monitor, and the separate Chrome Telegram-live profile.
 - [x] Capture current-main GUI proof for the Channels duplicate connected-bot
       UI fix. Screenshot:
-      `/tmp/openclaw/full-after-ready-channel-click.png`; recut release-DMG
-      proof is still needed before claiming the existing trusted-tester DMG
-      contains this polish.
-- [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
+      `/tmp/openclaw/full-after-ready-channel-click.png`; first real tester
+      feedback is the current package-level confirmation path.
+- [x] Recut/upload public artifacts from current `main` before claiming the
+      current trusted-tester package is live. Public `v2026.3.17` assets are
+      present.
 - [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.
 - [ ] Define self-modification boundaries: normal mode, guarded mode, developer mode, fork mode.
