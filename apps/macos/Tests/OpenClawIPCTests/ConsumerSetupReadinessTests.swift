@@ -51,6 +51,13 @@ private func pairingRequiredAuthError() -> GatewayConnectAuthError {
         canRetryWithDeviceToken: false)
 }
 
+private func tokenMismatchAuthError() -> GatewayConnectAuthError {
+    GatewayConnectAuthError(
+        message: "token_mismatch",
+        detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+        canRetryWithDeviceToken: false)
+}
+
 private func rawPairingRequiredGatewayError() -> NSError {
     NSError(
         domain: "gateway",
@@ -361,6 +368,28 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .failed("Jarvis-managed AI did not answer the readiness probe in time."))
         #expect(model.failureKind?.title == "AI access needs a quick reset")
         #expect(model.canRestartOperator)
+    }
+
+    @Test func `consumer model treats gateway token mismatch as restartable local runtime failure`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                throw tokenMismatchAuthError()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            gatewayRecoveryProbeDelaysMs: [])
+
+        await model.refresh()
+
+        #expect(model.phase == .failed("Jarvis is still starting. Wait a moment, then try again."))
+        #expect(model.failureKind == .gatewayUnreachable)
+        #expect(model.canRestartOperator)
+        #expect(model.isAuthChoiceInteractionBlocked)
+        #expect(!model.canChooseAnotherAccessMethod)
     }
 
     @Test func `consumer model loads auth options only once after blocked readiness`() async {
