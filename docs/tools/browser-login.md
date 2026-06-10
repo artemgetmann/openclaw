@@ -55,6 +55,8 @@ of having the agent guess. The default managed profile remains `openclaw`.
 
 - **Read/search/threads:** prefer the **signed-in** lane first.
 - **Post updates:** prefer **signed-in** first, escalate to **user-live** only when the site depends on your active live session or extensions.
+- **Community/account-bound posting:** do not silently switch from `signed-in` to `openclaw` when cookies, login state, or community membership matter. Report the blocker instead.
+- **Fallbacks:** macOS UI or coordinate fallback is acceptable only after the correct browser lane has been attempted or proven blocked, and critical actions still need fresh screenshot/snapshot verification.
 
 ## Sandboxing + host browser access
 
@@ -80,7 +82,7 @@ If the agent is sandboxed, the browser tool defaults to the sandbox. To allow ho
 Then target the host browser:
 
 ```bash
-openclaw browser open https://x.com --browser-profile openclaw --target host
+openclaw browser open https://x.com --browser-profile signed-in --target host
 ```
 
 Or disable sandboxing for the agent that posts updates.
