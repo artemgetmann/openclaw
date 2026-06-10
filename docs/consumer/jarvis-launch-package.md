@@ -1,8 +1,8 @@
 # Jarvis Launch Package
 
-Status: v1 launch package draft
+Status: Jarvis trusted-tester launch package
 Owner: Artem
-Last updated: 2026-05-14
+Last updated: 2026-06-10
 
 Purpose: launch-facing package, pricing, copy, and artifact truth.
 
@@ -24,10 +24,10 @@ Jarvis now.
 
 For the small trusted tester ring only, bundle ID, runtime identity, update
 feed identity, and deeper internal renames intentionally stay on
-`ai.openclaw.consumer.mac` and OpenClaw paths so the next package can ship
-fastest. That trusted ring includes the already-prepared tester package and the
-next 4-5 waiting testers after the P0 onboarding fixes. Before Reddit/GitHub,
-public-ish beta, or any broader beta, `ai.jarvis.mac` bundle
+`ai.openclaw.consumer.mac` and OpenClaw paths so the tester package can move
+fastest. That trusted ring includes the current tester package and the next 4-5
+waiting testers. Before Reddit/GitHub, public-ish beta, or any broader beta,
+`ai.jarvis.mac` bundle
 ID/runtime/update identity migration is a required launch gate. Do not treat
 that migration as a quick rename; it needs a deliberate lane because it can
 affect permissions, state, LaunchAgents, and update continuity.
@@ -75,10 +75,19 @@ require direct BYOK until the backend exposes managed utilities for those shapes
 
 ## Release package status
 
-Current package truth:
+Current release truth:
 
 - Jarvis visible branding is in place for the app name, release artifacts, and
   app icon.
+- Public `v2026.3.17` is live on GitHub with `Jarvis.dmg`, `Jarvis.zip`, and
+  `jarvis-appcast.xml`.
+- Same-user onboarding and Gate2 clean-user proof are accepted for the
+  trusted-tester release gate. Gate2 proved a separate `jarvistest` macOS user,
+  uid `503`, isolated port `25229`, trial-active account state, and managed
+  Telegram bot `@jarvis_cdb46705_bot` with `sendMessage ok`.
+- Gate2 proof details live in
+  `docs/consumer/jarvis-consumer-rc-closeout-20260606.md`; keep this document
+  launch-facing.
 - Bundle ID/runtime/update identity remain `ai.openclaw.consumer.mac` and
   OpenClaw paths only for the small trusted tester ring by deliberate 80/20
   decision.
@@ -86,50 +95,42 @@ Current package truth:
   `~/Library/Application Support/OpenClaw/release.env` and should be inherited
   by all worktrees/chats.
 - API token and Neon URL are stored outside Git in macOS Keychain.
-- Final trusted-tester package from 2026-05-14 was built from commit
+- Historical trusted-tester package from 2026-05-14 was built from commit
   `ab9c3c1ca1` at
   `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`
   and copied to `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`.
-  `Jarvis.dmg` is Gatekeeper-accepted as Notarized Developer ID.
-- Public release assets for `v2026.3.15` now include `Jarvis.dmg`,
-  `Jarvis.zip`, and `jarvis-appcast.xml`; the Jarvis appcast URL returns 200
-  and points Sparkle at the uploaded `Jarvis.zip`.
-- Future sendable Jarvis packages must come from the canonical publish lane:
+  It remains historical proof; do not present it as the current tester package.
+- Public release assets for `v2026.3.17` include `Jarvis.dmg`, `Jarvis.zip`,
+  and `jarvis-appcast.xml`.
+- Future Jarvis packages and updates must come from the canonical publish lane:
   `bash scripts/package-openclaw-mac-dist.sh --publish-release-assets --github-release-tag <latest-tag>`.
-  A release is not sendable unless that command ends with
-  `release_sendable=true` and `sparkle_update_live=true`.
 - The canonical publish lane uploads exactly `Jarvis.dmg`, `Jarvis.zip`, and
   `jarvis-appcast.xml` to `artemgetmann/openclaw`, then verifies the public
   `releases/latest/download` URLs and public appcast metadata.
-- `/Applications/Jarvis.app` on Artem's machine has been installed from the
-  final trusted-tester DMG and now reports `OpenClawGitCommit=ab9c3c1ca1`,
-  `CFBundleDisplayName=Jarvis`, and `CFBundleIdentifier=ai.openclaw.consumer.mac`.
-  The installed app passes `scripts/verify-consumer-mac-app.sh --release`,
-  Gatekeeper accepts it as Notarized Developer ID, and stapler validation
-  succeeds.
-- Prior installed app smoke on the older Jarvis build passed: visible app name
-  and icon were Jarvis, bundle ID intentionally remained
+- Historical May installed-app proof: the app reported
+  `OpenClawGitCommit=ab9c3c1ca1`, `CFBundleDisplayName=Jarvis`, and
+  `CFBundleIdentifier=ai.openclaw.consumer.mac`; release verification,
+  Gatekeeper, and stapler validation passed for that artifact.
+- Historical smoke on the older Jarvis build passed: visible app name and icon
+  were Jarvis, bundle ID intentionally remained
   `ai.openclaw.consumer.mac`, runtime takeover was green, `/healthz` returned
   `{"ok":true,"status":"live"}`, and Channels showed Telegram live/verified as
   `@Jarvis_cl4w_bot`.
-- Computer Use GUI smoke on the installed app verified the Settings sidebar
-  exposes only General, Channels, Browser, AI access, Permissions, and About by
-  default. The Permissions primary list contains only Screen Recording,
-  Accessibility, Automation (AppleScript), and Location. Notifications,
-  Microphone, Camera, and Speech Recognition are under "More permissions
-  (optional)".
-- About -> Check for Updates no longer returns Update Error; the installed app
-  reaches Sparkle and reports "You're up to date! Jarvis 2026.3.14 is currently
-  the newest version available." This proves feed retrieval, not a newer-version
-  update installation.
-- Clean trusted-tester smoke passed: the DMG hash matched
+- Historical Computer Use GUI smoke verified the Settings sidebar exposed only
+  General, Channels, Browser, AI access, Permissions, and About by default. The
+  Permissions primary list contained only Screen Recording, Accessibility,
+  Automation (AppleScript), and Location. Notifications, Microphone, Camera,
+  and Speech Recognition were under "More permissions (optional)".
+- Historical About -> Check for Updates proof reached Sparkle without Update
+  Error. This proved feed retrieval, not a newer-version update installation.
+- Historical clean trusted-tester smoke passed: the DMG hash matched
   `784ee3b1c77f8612a4bf3525b8f8ca8b2e9f63863e0f94732f2f6d309c48ac89`, the
   installed app reports commit `ab9c3c1ca1`, targeted Settings tests passed, and
   the isolated fresh-user packaged smoke passed from the final root
   `Jarvis.dmg` with isolated state, isolated gateway health, onboarding
   observed, and real user config unchanged. A true separate macOS account smoke
   was deliberately skipped as unnecessary for the 3 trusted waiting testers.
-- Post-launch app-bundle mutation has a code fix in the packaging/runtime
+- Historical post-launch app-bundle mutation has a code fix in the packaging/runtime
   branch. Root cause was packaged Jarvis treating bundled app resources as the
   gateway project root while the `acpx` plugin could lazily run `npm install`
   under `dist/extensions/acpx`. The fix treats `OpenClawRuntime` resources as
@@ -145,10 +146,10 @@ Current package truth:
   bundle still had no `dist/extensions/acpx/node_modules`, and
   `codesign --verify --deep --strict` passed after the runtime path was
   exercised.
-- The 2026-05-14 `Jarvis.dmg` remains a trusted-ring artifact only. The next
-  4-5 waiting testers should receive a recut from current `main` after P0
-  onboarding fixes. Do not send wider/public until the `ai.jarvis.mac` identity
-  migration and remaining wider beta gates are complete.
+- The Gate2 proof app is not the shipped Jarvis artifact. Do not present
+  `Jarvis Consumer Gate2` as the current release package.
+- Do not send wider/public until the `ai.jarvis.mac` identity migration and
+  remaining wider beta gates are complete.
 - Full newer-version Sparkle update-cycle testing is deferred for speed. Current
   proof covers appcast/feed reachability and no Update Error; a real
   download/verify/install/relaunch/preserve-state cycle should be tested before
@@ -208,9 +209,8 @@ Current package truth:
   one Telegram detail pane, one `Connected bot` section, one verified card, and
   one `Open your bot` action. Screenshot:
   `/tmp/openclaw/full-after-ready-channel-click.png`. This proves the merged
-  UI state, but the existing trusted-tester `Jarvis.dmg` was built before PR
-  #719, so exact release-DMG proof still requires a recut if we want to ship
-  that polish in a public artifact.
+  UI state; first real tester feedback is now the package-level confirmation
+  path for current release polish.
 - Packaging-smoke iteration speed note from 2026-05-16: the full fast package
   loop was slow because it still staged the full bundled runtime, redeployed the
   large production `node_modules` tree, recopied Node/uv payloads, and signed
@@ -452,16 +452,12 @@ Say this directly:
 - post-launch app-bundle mutation is also a wider-beta blocker: Jarvis must not
   write extension `node_modules` or other runtime dependencies inside
   `/Applications/Jarvis.app` after signing
-- final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
-  notarized, Gatekeeper-accepted, copied to the sacred repo root, uploaded with
-  its Jarvis ZIP/appcast assets, installed over Artem's current app, and smoke
-  tested. It remains a trusted-ring artifact only; the next 4-5 waiting testers
-  should receive a current-main recut after P0 onboarding fixes. Wider
-  distribution still waits on `ai.jarvis.mac` migration, post-launch bundle
-  immutability, and the remaining beta gates.
-- future sendable Jarvis packages must come from the canonical publish lane and
-  end with `release_sendable=true` plus `sparkle_update_live=true`; full
-  Sparkle N-to-N+1 proof is still needed before trusting the next automatic
+- current trusted-tester packaging is `v2026.3.17`, which is live with
+  `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`.
+- Gate2 clean-user proof passed for trusted-tester onboarding, but the proof app
+  was `Jarvis Consumer Gate2`, not the shipped Jarvis artifact.
+- future Jarvis packages and updates must come from the canonical publish lane;
+  full Sparkle N-to-N+1 proof is still needed before trusting the next automatic
   update cycle at scale.
 
 ### Roadmap
@@ -470,12 +466,12 @@ Use `docs/research/jarvis-consumer-launch-plan.md` for the live task tracker,
 owners, proof, and P0/P1/P2 status. This package doc keeps only launch-facing
 truth:
 
-| State                                                            | Launch-facing item                                                                                                                                                                                           |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Completed for trusted testers                                    | Jarvis visible branding, notarized trusted-tester DMG, public Jarvis ZIP/appcast assets, account/trial backend, managed utility backend, page-based onboarding shell, Managed Bots-first Telegram path.      |
-| Needed before the next 4-5 waiting testers receive a new package | A recut from current `main` after the P0 onboarding fixes, plus package verification that source polish and secret-safety gates are actually in the shipped artifact.                                        |
-| Needed before Reddit / broad public beta                         | `ai.jarvis.mac` bundle/runtime/update identity migration, full Sparkle update-cycle proof, broader onboarding polish, Claude Code consumer exposure, Telegram model-picker cleanup, and public-copy cleanup. |
-| Deferred until evidence of friction                              | Maintenance polish that does not block current testers.                                                                                                                                                      |
+| State                                                   | Launch-facing item                                                                                                                                                                                                     |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Completed for trusted testers                           | Jarvis visible branding, public `v2026.3.17` Jarvis DMG/ZIP/appcast assets, account/trial backend, managed utility backend, page-based onboarding shell, Managed Bots-first Telegram path, and Gate2 clean-user proof. |
+| Needed before the next 4-5 waiting testers move forward | First real tester install/use feedback, plus continued package secret-safety and release-asset verification on every new build.                                                                                        |
+| Needed before Reddit / broad public beta                | `ai.jarvis.mac` bundle/runtime/update identity migration, full Sparkle update-cycle proof, broader onboarding polish, Claude Code consumer exposure, Telegram model-picker cleanup, and public-copy cleanup.           |
+| Deferred until evidence of friction                     | Maintenance polish that does not block current testers.                                                                                                                                                                |
 
 ### Telegram command/settings strategy
 
