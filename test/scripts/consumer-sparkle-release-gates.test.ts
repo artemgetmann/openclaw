@@ -77,6 +77,26 @@ describe("consumer Sparkle release gates", () => {
     expect(verifier).not.toContain("DEFAULT_ZIP_URL");
   });
 
+  it("keeps Sparkle release ZIPs free of macOS metadata sidecars", () => {
+    const script = fs.readFileSync(
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
+      "utf8",
+    );
+    const verifier = fs.readFileSync(
+      path.join(root, "scripts", "verify-jarvis-release-assets.mjs"),
+      "utf8",
+    );
+
+    expect(script).toContain("assert_sparkle_zip_has_no_macos_metadata");
+    expect(script).toContain("ditto -c -k --norsrc --keepParent");
+    expect(script).toContain("Sparkle ZIP contains macOS metadata entries");
+    expect(script).toContain('ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"');
+    expect(verifier).toContain("verifyZipHasNoMacOSMetadata");
+    expect(verifier).toContain("zip_contents_ok");
+    expect(verifier).toContain('parts.includes("__MACOSX")');
+    expect(verifier).toContain('part.startsWith("._")');
+  });
+
   it("documents and gates the post-app-build resume phase", () => {
     const script = fs.readFileSync(
       path.join(root, "scripts", "package-openclaw-mac-dist.sh"),

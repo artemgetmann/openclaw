@@ -255,6 +255,28 @@ generate_jarvis_appcast() {
     "$ROOT_DIR/scripts/make_appcast.sh" "$ZIP" "$SPARKLE_FEED_URL"
 }
 
+assert_sparkle_zip_has_no_macos_metadata() {
+  local zip_path="$1"
+  if ! command -v zipinfo >/dev/null; then
+    echo "ERROR: zipinfo is required to verify the Sparkle ZIP contents." >&2
+    exit 1
+  fi
+
+  # Sparkle validates the signed ZIP bytes and the expanded app. Resource-fork
+  # sidecars from ditto --sequesterRsrc create __MACOSX/._* entries that are not
+  # part of the app bundle and can make Sparkle reject an otherwise valid app.
+  local metadata_entries
+  metadata_entries="$(
+    zipinfo -1 "$zip_path" | grep -E '(^__MACOSX/|/__MACOSX/|(^|/)\._[^/]+$|(^|/)\.DS_Store$)' || true
+  )"
+  if [[ -n "$metadata_entries" ]]; then
+    echo "ERROR: Sparkle ZIP contains macOS metadata entries." >&2
+    echo "Recreate it without resource forks, for example with: ditto -c -k --norsrc --keepParent" >&2
+    printf '%s\n' "$metadata_entries" | sed -n '1,20p' >&2
+    exit 1
+  fi
+}
+
 verify_dmg_gatekeeper() {
   local dmg_path="$1"
   if [[ "$NOTARIZE" != "1" ]]; then
@@ -631,7 +653,11 @@ if [[ "$NOTARIZE" == "1" ]]; then
 fi
 
 echo "📦 Zip: $ZIP"
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP"
+# Sparkle's ZIP must not include AppleDouble/resource-fork sidecars. The notary
+# upload ZIP above still uses --sequesterRsrc; this user-download ZIP is the
+# artifact Sparkle expands and validates during self-update.
+ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP"
+assert_sparkle_zip_has_no_macos_metadata "$ZIP"
 generate_jarvis_appcast
 
 if [[ "$SKIP_DSYM" != "1" ]]; then

@@ -16,6 +16,7 @@ const DEFAULT_APPCAST_URL =
 const DEFAULT_RELEASE_REPO_URL = "https://github.com/artemgetmann/openclaw";
 const MAX_REDIRECTS = 10;
 const MAX_APPCAST_BYTES = 1024 * 1024;
+const MAX_ZIPINFO_BYTES = 16 * 1024 * 1024;
 
 function usage() {
   return [
@@ -97,6 +98,48 @@ async function readAppVersions(appPath) {
   ]);
 
   return { bundleVersion, shortVersion };
+}
+
+function isMacOSMetadataZipEntry(entry) {
+  const parts = entry.split("/");
+
+  return (
+    parts.includes("__MACOSX") ||
+    parts.some((part) => part.startsWith("._")) ||
+    entry === ".DS_Store" ||
+    entry.endsWith("/.DS_Store")
+  );
+}
+
+async function verifyZipHasNoMacOSMetadata(zipPath) {
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync("zipinfo", ["-1", zipPath], {
+      maxBuffer: MAX_ZIPINFO_BYTES,
+    }));
+  } catch (error) {
+    const detail = error.stderr?.trim() || error.message;
+    throw new Error(`could not inspect ZIP entries for ${zipPath}: ${detail}`, { cause: error });
+  }
+
+  // Sparkle validates the ZIP it downloads and the expanded app. AppleDouble
+  // sidecars from ditto --sequesterRsrc are not part of the app bundle and can
+  // make the update validator reject a correctly signed app.
+  const metadataEntries = stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .filter((entry) => isMacOSMetadataZipEntry(entry));
+
+  if (metadataEntries.length > 0) {
+    throw new Error(
+      [
+        "zip contains macOS metadata entries that are unsafe for Sparkle updates:",
+        ...metadataEntries.slice(0, 20),
+      ].join("\n"),
+    );
+  }
+
+  return { entryCount: stdout.split(/\r?\n/).filter(Boolean).length };
 }
 
 function requestUrl(urlText, { method, collectBody, redirectCount = 0 }) {
@@ -364,6 +407,8 @@ async function main(argv = process.argv.slice(2)) {
   if (!zipStats.isFile()) {
     throw new Error(`zip path is not a file: ${zipPath}`);
   }
+  const zipProof = await verifyZipHasNoMacOSMetadata(zipPath);
+  console.log(`zip_contents_ok entries=${zipProof.entryCount} macos_metadata=absent`);
 
   const versions = await readAppVersions(appPath);
   const expectedZipUrl = options.zipUrl ?? defaultVersionedZipUrl(versions.shortVersion);
