@@ -31,6 +31,75 @@ cache and support `--json`/`-j` for scripting. Run `peekaboo` or
 `peekaboo <cmd> --help` for flags; `peekaboo --version` prints build metadata.
 Tip: run via `polter peekaboo` to ensure fresh builds.
 
+## Jarvis automation rules
+
+Use Peekaboo as Jarvis's eyes and hands, not as Jarvis's brain. The primary
+Jarvis/Codex model should inspect screenshots, UI maps, and command output
+itself. Peekaboo's `--analyze` path is a debug convenience, not the default
+automation path.
+
+Hard rules:
+
+- Always scope actions with `--window-id`, `--app`, or `--pid`. Unscoped clicks,
+  typing, pastes, drags, hotkeys, and scrolls can hit the wrong app if focus
+  changes.
+- Fail loudly before acting when the focused app, window title, window id, or
+  process id does not match the intended target. Re-run discovery instead of
+  guessing.
+- Prefer `peekaboo see` UI/AX element refs (`--on B3`, `--id T2`) over raw
+  coordinates. Element refs carry intent; coordinates carry assumptions.
+- Screenshot or `see` after every meaningful action and verify the expected
+  state changed before continuing.
+- Insert text with `peekaboo paste --text "$TEXT" --app AppName` or
+  `peekaboo paste --text "$TEXT" --window-id ID`. Positional paste like
+  `peekaboo paste "text"` exists in some versions, but it is a convenience
+  form, not the safe default for Jarvis flows.
+- Avoid `--analyze` by default. Use it only when provider configuration has
+  been verified and the task explicitly wants Peekaboo's own AI answer.
+
+Known-bad pattern:
+
+```bash
+# Wrong: captures one app, hand-converts screenshot pixels, then clicks whatever
+# is focused. This can click Telegram when the intended target was Claude.
+peekaboo image --app Claude --retina --path /tmp/claude.png
+peekaboo click --coords 1800,1400
+```
+
+Safer pattern:
+
+```bash
+peekaboo see --app Claude --annotate --path /tmp/claude-see.png --json
+peekaboo click --on B4 --app Claude
+peekaboo see --app Claude --annotate --path /tmp/claude-after.png --json
+```
+
+## `see` vs `image`
+
+- `peekaboo see` captures a target and returns a UI map: element IDs, labels,
+  roles, bounds, snapshot IDs, and optional annotated screenshots. Use this for
+  target discovery and stable actions.
+- `peekaboo image` captures a raw screenshot. Use this when the model needs to
+  inspect pixels or when no accessible element map is useful.
+- Both commands may support `--analyze`, but Jarvis should not rely on it. Plain
+  screenshots and UI maps do not need an API key. `--analyze` does need a
+  Peekaboo-configured AI provider because the Peekaboo CLI is separate from the
+  Jarvis/Codex model context. Never print raw secret values in examples or logs.
+
+## Coordinate rules
+
+Coordinates are a last resort.
+
+- Never use Retina screenshot pixels directly as click coordinates. Retina
+  captures can be 2x native pixels while input coordinates are usually logical
+  display coordinates.
+- Keep the app/window target on coordinate commands:
+  `peekaboo click --coords 120,160 --window-id 12345`.
+- Prefer window-relative coordinates when the installed Peekaboo version
+  supports them. Use global coordinates only when the task explicitly requires
+  display-level positioning.
+- Re-capture after coordinate actions and confirm the expected target changed.
+
 ## Features (all CLI capabilities, excluding agent/MCP)
 
 Core
@@ -86,9 +155,10 @@ Global runtime flags
 ```bash
 peekaboo permissions
 peekaboo list apps --json
-peekaboo see --annotate --path /tmp/peekaboo-see.png
-peekaboo click --on B1
-peekaboo type "Hello" --return
+peekaboo see --app TextEdit --annotate --path /tmp/peekaboo-see.png --json
+peekaboo click --on B1 --app TextEdit
+peekaboo paste --text "$TEXT" --app TextEdit
+peekaboo see --app TextEdit --annotate --path /tmp/peekaboo-after.png --json
 ```
 
 ## Common targeting parameters (most interaction commands)
@@ -120,9 +190,11 @@ peekaboo type "Hello" --return
 ```bash
 peekaboo see --app Safari --window-title "Login" --annotate --path /tmp/see.png
 peekaboo click --on B3 --app Safari
-peekaboo type "user@example.com" --app Safari
+peekaboo paste --text "$EMAIL" --app Safari
 peekaboo press tab --count 1 --app Safari
-peekaboo type "supersecret" --app Safari --return
+peekaboo paste --text "$PASSWORD" --app Safari
+peekaboo press return --app Safari
+peekaboo see --app Safari --window-title "Login" --annotate --path /tmp/after.png
 ```
 
 ### Target by window id
@@ -130,15 +202,19 @@ peekaboo type "supersecret" --app Safari --return
 ```bash
 peekaboo list windows --app "Visual Studio Code" --json
 peekaboo click --window-id 12345 --coords 120,160
-peekaboo type "Hello from Peekaboo" --window-id 12345
+peekaboo paste --text "$TEXT" --window-id 12345
+peekaboo see --window-id 12345 --annotate --path /tmp/vscode-after.png --json
 ```
 
-### Capture screenshots + analyze
+### Capture screenshots + optional analysis
 
 ```bash
 peekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png
-peekaboo image --app Safari --window-title "Dashboard" --analyze "Summarize KPIs"
-peekaboo see --mode screen --screen-index 0 --analyze "Summarize the dashboard"
+peekaboo image --app Safari --window-title "Dashboard" --path /tmp/dashboard.png
+
+# Debug-only: use analysis only after provider config is verified.
+peekaboo image --app Safari --window-title "Dashboard" --analyze "$PROMPT"
+peekaboo see --mode screen --screen-index 0 --analyze "$PROMPT"
 ```
 
 ### Live capture (motion-aware)
@@ -170,18 +246,18 @@ peekaboo menubar list --json
 ### Mouse + gesture input
 
 ```bash
-peekaboo move 500,300 --smooth
-peekaboo drag --from B1 --to T2
-peekaboo swipe --from-coords 100,500 --to-coords 100,200 --duration 800
-peekaboo scroll --direction down --amount 6 --smooth
+peekaboo see --app Safari --annotate --path /tmp/safari-before-gesture.png --json
+peekaboo drag --from B1 --to T2 --app Safari
+peekaboo scroll --direction down --amount 6 --smooth --app Safari
+peekaboo see --app Safari --annotate --path /tmp/safari-after-gesture.png --json
 ```
 
 ### Keyboard input
 
 ```bash
-peekaboo hotkey --keys "cmd,shift,t"
-peekaboo press escape
-peekaboo type "Line 1\nLine 2" --delay 10
+peekaboo hotkey --keys "cmd,shift,t" --app Safari
+peekaboo press escape --app Safari
+peekaboo paste --text "$MULTILINE_TEXT" --app TextEdit
 ```
 
 Notes
