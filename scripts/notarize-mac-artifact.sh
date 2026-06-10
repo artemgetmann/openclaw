@@ -170,6 +170,7 @@ staple_outputs() {
 
 write_receipt() {
   local submission_id="$1"
+  local status="${2:-submitted}"
   local receipt_path="${RECEIPT_PATH:-${ARTIFACT}.notary.env}"
 
   mkdir -p "$(dirname "$receipt_path")"
@@ -177,6 +178,7 @@ write_receipt() {
     printf 'NOTARY_SUBMISSION_ID=%q\n' "$submission_id"
     printf 'NOTARY_ARTIFACT=%q\n' "$ARTIFACT"
     printf 'NOTARY_STAPLE_APP_PATH=%q\n' "$STAPLE_APP_PATH"
+    printf 'NOTARY_STATUS=%q\n' "$status"
     printf 'NOTARY_CREATED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   } >"$receipt_path"
 
@@ -200,6 +202,7 @@ if [[ "$MODE" == "poll" ]]; then
   fi
 
   echo "notary_status=$status"
+  write_receipt "$SUBMISSION_ID" "$status"
   case "$status" in
     Accepted)
       staple_outputs
@@ -243,19 +246,25 @@ if [[ "$MODE" == "submit-only" ]]; then
   fi
 
   echo "notary_submission_id=$submission_id"
-  write_receipt "$submission_id"
+  write_receipt "$submission_id" "submitted"
   echo "Poll later with:"
   echo "  scripts/notarize-mac-artifact.sh --poll $submission_id --artifact '$ARTIFACT'"
   exit 0
 fi
 
 set +e
-xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
+submit_json="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait --output-format json 2>&1)"
 submit_status=$?
 set -e
 if [[ $submit_status -ne 0 ]]; then
+  echo "$submit_json" >&2
   print_submit_retry_hint
   exit "$submit_status"
+fi
+submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
+status="$(printf '%s\n' "$submit_json" | notary_status)"
+if [[ -n "$submission_id" ]]; then
+  write_receipt "$submission_id" "${status:-Accepted}"
 fi
 staple_outputs
 
