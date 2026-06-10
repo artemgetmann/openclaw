@@ -438,10 +438,10 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       'Browser choice: default serious web work to profile="signed-in"; it launches a cloned signed-in Chrome profile and controls it through Chrome DevTools MCP.',
-      'Prefer profile="openclaw" for public browsing, clean isolated runs, and fallback when the signed-in lane is unavailable or behaving worse on a specific site.',
+      'Use profile="openclaw" for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat profile="openclaw" as a last-resort fallback only after profile="signed-in" and any explicitly required profile="user-live" lane are unavailable or proven unsuitable, and only when session state does not matter.',
       'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
       'Legacy profile="user" aliases to profile="signed-in" unless the operator configured a custom profile literally named "user".',
-      'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
+      'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies/account membership; surface the blocker instead.',
       'profile="user-live" attaches to the user\'s real Chrome session through Chrome DevTools MCP and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
       'Do not send act kind="batch" or unsupported MCP launch args for profile="signed-in", profile="user-live", or other existing-session profiles; send individual actions sequentially.',
