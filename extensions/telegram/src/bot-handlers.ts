@@ -76,6 +76,7 @@ import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
+import { guardedTelegramDeleteMessage } from "./delete-guard.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   migrateTelegramDmThreadStoreEntry,
@@ -1524,11 +1525,19 @@ export const registerTelegramHandlers = ({
         );
       };
       const deleteCallbackMessage = async () => {
-        const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
-        if (typeof deleteFn === "function") {
-          return await ctx.deleteMessage();
-        }
-        return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+        return await guardedTelegramDeleteMessage({
+          api: bot.api,
+          chatId: callbackMessage.chat.id,
+          messageId: callbackMessage.message_id,
+          audit: {
+            callsite: "telegram-callback-message-delete",
+            reason: "callback_message_cleanup",
+            safetyMode: "deterministic_cleanup",
+            accountId,
+            classification: "callback",
+            topicId: callbackMessage.message_thread_id,
+          },
+        });
       };
       const chatId = callbackMessage.chat.id;
       const isGroup =

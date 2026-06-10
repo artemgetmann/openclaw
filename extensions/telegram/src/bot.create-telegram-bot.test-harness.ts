@@ -181,6 +181,7 @@ const grammySpies = vi.hoisted(() => ({
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   editMessageReplyMarkupSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   sendMessageDraftSpy: vi.fn(async () => true) as AnyAsyncMock,
+  deleteMessageSpy: vi.fn(async () => true) as AnyAsyncMock,
   setMessageReactionSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   setMyCommandsSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   getMeSpy: vi.fn(async () => ({
@@ -211,6 +212,7 @@ export const {
   sendMessageSpy,
   sendAnimationSpy,
   sendPhotoSpy,
+  deleteMessageSpy,
   getFileSpy,
 } = grammySpies;
 
@@ -229,6 +231,7 @@ vi.mock("grammy", () => ({
       sendMessage: grammySpies.sendMessageSpy,
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
+      deleteMessage: grammySpies.deleteMessageSpy,
       getFile: grammySpies.getFileSpy,
     };
     use = grammySpies.middlewareUseSpy;
@@ -372,6 +375,8 @@ beforeEach(() => {
   sendPhotoSpy.mockResolvedValue({ message_id: 79 });
   sendMessageSpy.mockReset();
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
+  deleteMessageSpy.mockReset();
+  deleteMessageSpy.mockResolvedValue(true);
   getFileSpy.mockReset();
   getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
 

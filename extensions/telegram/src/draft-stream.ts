@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../../../src/channels/draft-stream-controls.js";
 import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { guardedTelegramDeleteMessage, type TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -109,6 +110,13 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /** Audit fields for conservative delete suppression and opt-in delete attempts. */
+  deleteAudit?: Partial<
+    Pick<
+      TelegramDeleteAuditMetadata,
+      "accountId" | "callsite" | "classification" | "lane" | "reason" | "sessionId" | "topicId"
+    >
+  >;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
@@ -381,7 +389,26 @@ export function createTelegramDraftStream(params: {
     isValidMessageId: (value): value is number =>
       typeof value === "number" && Number.isFinite(value),
     deleteMessage: async (messageId) => {
-      await params.api.deleteMessage(chatId, messageId);
+      // The final-vs-preview classifier is useful for UX, but it is not a
+      // deletion safety boundary. All Telegram deletes go through the central
+      // guard so cleanup is audited and suppressed unless the operator opts in.
+      const result = await guardedTelegramDeleteMessage({
+        api: params.api,
+        chatId,
+        messageId,
+        audit: {
+          callsite: params.deleteAudit?.callsite ?? "telegram-draft-stream-clear",
+          reason: params.deleteAudit?.reason ?? "stream_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
+          accountId: params.deleteAudit?.accountId,
+          lane: params.deleteAudit?.lane,
+          classification: params.deleteAudit?.classification,
+          sessionId: params.deleteAudit?.sessionId,
+          topicId: params.deleteAudit?.topicId,
+          thread: params.thread,
+        },
+      });
+      return result.deleted;
     },
     onDeleteSuccess: (messageId) => {
       params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);

@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import {
   createTelegramDraftStream,
   type TelegramDraftDurableSendEvent,
@@ -28,6 +29,12 @@ export function createTelegramProgressController(params: {
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
   minInitialChars?: number;
+  deleteAudit?: Partial<
+    Pick<
+      TelegramDeleteAuditMetadata,
+      "accountId" | "callsite" | "classification" | "lane" | "reason" | "sessionId" | "topicId"
+    >
+  >;
   renderText: (text: string) => ProgressPreview;
   onMessageDelivered?: (messageId: number, event: TelegramDraftDurableSendEvent) => void;
   log?: (message: string) => void;
@@ -47,6 +54,15 @@ export function createTelegramProgressController(params: {
     previewTransport: "message",
     replyToMessageId: params.replyToMessageId,
     minInitialChars: params.minInitialChars,
+    deleteAudit: {
+      callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",
+      reason: params.deleteAudit?.reason ?? "progress_cleanup",
+      accountId: params.deleteAudit?.accountId,
+      lane: params.deleteAudit?.lane ?? "answer",
+      classification: params.deleteAudit?.classification ?? "progress",
+      sessionId: params.deleteAudit?.sessionId,
+      topicId: params.deleteAudit?.topicId,
+    },
     renderText: params.renderText,
     onMessageDelivered: params.onMessageDelivered,
     log: params.log,

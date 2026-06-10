@@ -25,6 +25,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
+import { guardedTelegramDeleteMessage } from "./delete-guard.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import {
@@ -1039,13 +1040,15 @@ type TelegramDeleteOpts = {
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
+  callsite?: string;
+  reason?: string;
 };
 
 export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   opts: TelegramDeleteOpts = {},
-): Promise<{ ok: true }> {
+): Promise<{ ok: true; deleted: boolean; suppressed?: true }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
@@ -1063,9 +1066,28 @@ export async function deleteMessageTelegram(
     verbose: opts.verbose,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
-  await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
-  logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
-  return { ok: true };
+  const result = await requestWithDiag(
+    () =>
+      guardedTelegramDeleteMessage({
+        api: api as TelegramApi,
+        chatId,
+        messageId,
+        audit: {
+          callsite: opts.callsite ?? "telegram-action-delete-message",
+          reason: opts.reason ?? "action_delete_message",
+          accountId: opts.accountId,
+        },
+      }),
+    "deleteMessage",
+  );
+  if (result.deleted) {
+    logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
+  } else {
+    logVerbose(`[telegram] Suppressed delete for message ${messageId} from chat ${chatId}`);
+  }
+  return result.suppressed
+    ? { ok: true, deleted: false, suppressed: true }
+    : { ok: true, deleted: true };
 }
 
 export async function pinMessageTelegram(
