@@ -11,6 +11,7 @@ const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
+const guardedTelegramDeleteMessage = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 
@@ -28,6 +29,10 @@ vi.mock("./bot/delivery.js", () => ({
 
 vi.mock("./send.js", () => ({
   editMessageTelegram,
+}));
+
+vi.mock("./delete-guard.js", () => ({
+  guardedTelegramDeleteMessage,
 }));
 
 vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
@@ -54,6 +59,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
     editMessageTelegram.mockClear();
+    guardedTelegramDeleteMessage.mockReset();
+    guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: false, suppressed: true });
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
@@ -642,9 +649,21 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
 
     expect(reasoningDraftParams?.onSupersededPreview).toBeTypeOf("function");
-    expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toContainEqual([
-      123, 4444,
-    ]);
+    expect(guardedTelegramDeleteMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: bot.api,
+        chatId: 123,
+        messageId: 4444,
+        audit: expect.objectContaining({
+          callsite: "telegram-archived-reasoning-preview-cleanup",
+          reason: "archived_reasoning_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
+          accountId: "default",
+          lane: "reasoning",
+        }),
+      }),
+    );
+    expect(bot.api.deleteMessage).not.toHaveBeenCalled();
   });
 
   it.each(["block", "partial"] as const)(

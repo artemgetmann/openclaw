@@ -276,7 +276,7 @@ struct ConsumerSetupReadinessTests {
         let blockerDetail = """
         Telegram runtime ownership mismatch at /Users/user/Programming_Projects/openclaw/.worktrees/onboarding-ai-access-recovery-20260519-2158/apps/macos/Sources/OpenClaw/Telegram/DM/bridge.swift
         """
-        let expectedMessage = "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
+        let expectedMessage = "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName) to finish."
         let model = ConsumerModelSetupModel(
             probeReadiness: {
                 readyReadinessPayload()
@@ -385,7 +385,7 @@ struct ConsumerSetupReadinessTests {
 
         await model.refresh()
 
-        #expect(model.phase == .failed("Jarvis is still starting. Wait a moment, then try again."))
+        #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
         #expect(model.isAuthChoiceInteractionBlocked)
@@ -538,7 +538,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
 
         await model.refreshIfNeeded()
 
@@ -601,10 +601,10 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Try again in a moment, or restart Jarvis if this keeps happening."))
+                    "Jarvis is still starting. Restart Jarvis if this keeps happening."))
         #expect(
             model.statusLine
-                == "Jarvis is still starting. Try again in a moment, or restart Jarvis if this keeps happening.")
+                == "Jarvis is still starting. Restart Jarvis if this keeps happening.")
     }
 
     @Test func `consumer model apply auth consumes returned readiness and marks ready`() async {
@@ -883,10 +883,10 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(
             model.statusLine
-                == "Jarvis is still starting. Wait a moment, then try again.")
+                == "Jarvis is still starting. Restart Jarvis if it does not reconnect.")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
     }
@@ -908,7 +908,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.statusLine?.contains("pairing required") == false)
         #expect(model.statusLine?.contains("gateway connect") == false)
         #expect(model.failureKind == .gatewayUnreachable)
@@ -936,7 +936,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.statusLine?.contains("pairing required") == false)
         #expect(model.statusLine?.contains("gateway connect") == false)
         #expect(model.statusLine?.contains("Swift.CancellationError") == false)
@@ -979,7 +979,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.authOptionsLoaded)
         #expect(model.chatGPTSubscriptionOption?.id == "openai-codex-oauth")
         #expect(model.selectedOptionId == "openai-codex-oauth")
@@ -1286,8 +1286,8 @@ struct ConsumerSetupReadinessTests {
 
         #expect(restartCalls.value == 1)
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .failed("Jarvis is still starting. Wait a moment, then try again."))
-        #expect(model.statusLine == "Jarvis is still starting. Wait a moment, then try again.")
+        #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
+        #expect(model.statusLine == "Jarvis is still starting. Restart Jarvis if it does not reconnect.")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
         #expect(!model.isRestartingOperator)
@@ -1340,7 +1340,7 @@ struct ConsumerSetupReadinessTests {
 
         #expect(restartCalls.value == 1)
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .failed("Jarvis is still starting. Wait a moment, then try again."))
+        #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(!model.isRestartingOperator)
 

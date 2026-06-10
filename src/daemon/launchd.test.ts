@@ -724,6 +724,66 @@ describe("launchd install", () => {
     },
   );
 
+  it("allows installed Application Support consumer runtime to repair the shared LaunchAgent", async () => {
+    const canonicalMain = makeTempDir();
+    const appSupportRuntime = path.join(
+      "/Users/test",
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      ".openclaw",
+      "lib",
+      "openclaw-bundled",
+    );
+    const appEntrypoint = path.join(appSupportRuntime, "dist", "index.js");
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/");
+
+    await installLaunchAgent({
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_MAIN_REPO: canonicalMain,
+      },
+      stdout: new PassThrough(),
+      programArguments: ["node", appEntrypoint, "gateway", "--port", "18789"],
+      workingDirectory: appSupportRuntime,
+    });
+
+    expect(state.launchctlCalls.length).toBeGreaterThan(0);
+  });
+
+  it("does not allow lookalike Application Support runtimes outside the current home", async () => {
+    const canonicalMain = makeTempDir();
+    const lookalikeRuntime = path.join(
+      "/tmp",
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      ".openclaw",
+      "lib",
+      "openclaw-bundled",
+    );
+    const appEntrypoint = path.join(lookalikeRuntime, "dist", "index.js");
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/");
+
+    await expect(
+      installLaunchAgent({
+        env: {
+          ...createDefaultLaunchdEnv(),
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+          OPENCLAW_MAIN_REPO: canonicalMain,
+        },
+        stdout: new PassThrough(),
+        programArguments: ["node", appEntrypoint, "gateway", "--port", "18789"],
+        workingDirectory: lookalikeRuntime,
+      }),
+    ).rejects.toThrow("LaunchAgent install blocked");
+
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
   it.each(["OpenClaw.app", "Jarvis.app"])(
     "allows packaged %s consumer entrypoint to repair shared LaunchAgent without reinstalling source watchdog",
     async (appName) => {
