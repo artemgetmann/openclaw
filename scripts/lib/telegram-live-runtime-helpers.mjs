@@ -489,6 +489,18 @@ function resolveCodexHomePath(codexHome) {
   return path.join(os.homedir(), ".codex");
 }
 
+function resolveCodexKeychainAccount(codexHome) {
+  let keychainHome = codexHome;
+  try {
+    keychainHome = fs.realpathSync.native(codexHome);
+  } catch {
+    // Missing CODEX_HOME is still a valid lookup input; the Codex CLI uses the
+    // path string when deriving the account hash, so keep the unresolved value.
+  }
+  const hash = crypto.createHash("sha256").update(keychainHome).digest("hex");
+  return `cli|${hash.slice(0, 16)}`;
+}
+
 function resolveTelegramLiveSeedStateDir(seedStateDir) {
   const configured = String(
     seedStateDir ?? process.env.OPENCLAW_TELEGRAM_LIVE_MEMORY_SEED_STATE_DIR ?? "",
@@ -581,6 +593,150 @@ function decodeJwtExpiryMs(token) {
   } catch {
     return null;
   }
+}
+
+function hashCodexTokenMaterial(access, refresh) {
+  return crypto.createHash("sha256").update(`${access}\u0000${refresh}`).digest("hex");
+}
+
+function buildCodexCredentialFromTokens(tokens, params) {
+  const access = typeof tokens?.access_token === "string" ? tokens.access_token.trim() : "";
+  const refresh = typeof tokens?.refresh_token === "string" ? tokens.refresh_token.trim() : "";
+  if (!access || !refresh) {
+    return null;
+  }
+
+  const nowMs = Number.isFinite(Number(params?.nowMs)) ? Number(params.nowMs) : Date.now();
+  const jwtExpiryMs = decodeJwtExpiryMs(access);
+  const accessExpiryMs =
+    jwtExpiryMs ??
+    (Number.isFinite(Number(params?.fallbackExpiryMs))
+      ? Number(params.fallbackExpiryMs)
+      : nowMs + 60 * 60 * 1000);
+
+  return {
+    type: "oauth",
+    provider: "openai-codex",
+    access,
+    refresh,
+    expires: accessExpiryMs,
+    ...(typeof tokens?.account_id === "string" && tokens.account_id.trim()
+      ? { accountId: tokens.account_id.trim() }
+      : {}),
+  };
+}
+
+function readCodexAuthJsonCandidate(params = {}) {
+  const codexHome = resolveCodexHomePath(params.codexHome);
+  const codexAuthPath = path.join(codexHome, "auth.json");
+  const validation = validateLocalCodexAuth(params);
+  if (!validation.ok) {
+    return null;
+  }
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
+    const credential = buildCodexCredentialFromTokens(raw?.tokens, {
+      ...params,
+      fallbackExpiryMs: validation.accessExpiryMs,
+    });
+    if (!credential) {
+      return null;
+    }
+    return {
+      kind: "codex_cli",
+      sourceKind: "codex_cli_auth_json",
+      sourcePath: codexAuthPath,
+      profileId: "openai-codex:default",
+      credential,
+      accessExpiryMs: validation.accessExpiryMs,
+      expirySource: validation.expirySource,
+      tokenMaterialHash: hashCodexTokenMaterial(credential.access, credential.refresh),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readCodexKeychainCandidate(params = {}) {
+  const platform = params?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return null;
+  }
+
+  const execFileSyncImpl = params?.execFileSync ?? execFileSync;
+  const codexHome = resolveCodexHomePath(params.codexHome);
+  const account = resolveCodexKeychainAccount(codexHome);
+  try {
+    const secret = execFileSyncImpl(
+      "security",
+      ["find-generic-password", "-s", "Codex Auth", "-a", account, "-w"],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    ).trim();
+    const parsed = JSON.parse(secret);
+    const lastRefreshRaw = parsed?.last_refresh;
+    const lastRefreshMs =
+      typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
+        ? new Date(lastRefreshRaw).getTime()
+        : NaN;
+    const fallbackExpiryMs = Number.isFinite(lastRefreshMs)
+      ? lastRefreshMs + 60 * 60 * 1000
+      : Date.now() + 60 * 60 * 1000;
+    const credential = buildCodexCredentialFromTokens(parsed?.tokens, {
+      ...params,
+      fallbackExpiryMs,
+    });
+    if (!credential) {
+      return null;
+    }
+    return {
+      kind: "codex_cli",
+      sourceKind: "codex_cli_keychain",
+      sourcePath: "macos-keychain:Codex Auth",
+      profileId: "openai-codex:default",
+      credential,
+      accessExpiryMs: credential.expires,
+      expirySource:
+        decodeJwtExpiryMs(credential.access) === null ? "keychain_last_refresh" : "jwt_exp",
+      tokenMaterialHash: hashCodexTokenMaterial(credential.access, credential.refresh),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCodexCredentialAuthStore(params) {
+  const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
+  const agentId = String(params?.agentId ?? "main").trim() || "main";
+  const credential = params?.credential;
+  const targetAuthPath = path.join(
+    runtimeStateDir,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
+
+  fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
+  fs.writeFileSync(
+    targetAuthPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": credential,
+        },
+        order: {
+          "openai-codex": ["openai-codex:default"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  fs.chmodSync(targetAuthPath, 0o600);
+  return targetAuthPath;
 }
 
 export function validateLocalCodexAuth(params = {}) {
@@ -705,38 +861,22 @@ export function bootstrapTelegramLiveCodexAuthStore(params) {
     };
   }
 
-  const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
-  const tokens = raw && typeof raw === "object" ? raw.tokens : null;
-  const access = typeof tokens?.access_token === "string" ? tokens.access_token.trim() : "";
-  const refresh = typeof tokens?.refresh_token === "string" ? tokens.refresh_token.trim() : "";
-  fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
-  fs.writeFileSync(
-    authStorePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        profiles: {
-          "openai-codex:default": {
-            type: "oauth",
-            provider: "openai-codex",
-            access,
-            refresh,
-            expires: validation.accessExpiryMs,
-            ...(typeof tokens?.account_id === "string" && tokens.account_id.trim()
-              ? { accountId: tokens.account_id.trim() }
-              : {}),
-          },
-        },
-        order: {
-          "openai-codex": ["openai-codex:default"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  fs.chmodSync(authStorePath, 0o600);
+  const candidate = readCodexAuthJsonCandidate(params);
+  if (!candidate) {
+    return {
+      ok: false,
+      reason: "codex_auth_invalid",
+      codexAuthPath,
+      authStorePath,
+      expirySource: validation.expirySource,
+      accessExpiryMs: validation.accessExpiryMs,
+    };
+  }
+  writeCodexCredentialAuthStore({
+    runtimeStateDir,
+    agentId,
+    credential: candidate.credential,
+  });
 
   return {
     ok: true,
@@ -789,6 +929,44 @@ function validateOpenClawCodexAuthProfile(credential, params = {}) {
   };
 }
 
+function isCandidateExpired(candidate, params = {}) {
+  const nearExpiryWindowMs = Number.isFinite(Number(params.nearExpiryWindowMs))
+    ? Math.max(0, Number(params.nearExpiryWindowMs))
+    : 5 * 60 * 1000;
+  const nowMs = Number.isFinite(Number(params.nowMs)) ? Number(params.nowMs) : Date.now();
+  const accessExpiryMs = Number(candidate?.accessExpiryMs);
+  return Number.isFinite(accessExpiryMs) && accessExpiryMs <= nowMs + nearExpiryWindowMs;
+}
+
+function candidateExpiryScore(candidate) {
+  const accessExpiryMs = Number(candidate?.accessExpiryMs);
+  return Number.isFinite(accessExpiryMs) ? accessExpiryMs : Number.NEGATIVE_INFINITY;
+}
+
+function shouldPreferCodexAuthCandidate(candidate, current) {
+  if (!current) {
+    return true;
+  }
+
+  const candidateExpiry = candidateExpiryScore(candidate);
+  const currentExpiry = candidateExpiryScore(current);
+  if (candidateExpiry > currentExpiry) {
+    return true;
+  }
+  if (candidateExpiry < currentExpiry) {
+    return false;
+  }
+
+  // Jarvis/OpenClaw auth stores stay the default on a true tie. The exception is
+  // Codex CLI OAuth rotation: equal access expiry with different token material
+  // means the local CLI has a different refresh token tuple and is safer to seed.
+  return (
+    candidate.kind === "codex_cli" &&
+    current.kind !== "codex_cli" &&
+    candidate.tokenMaterialHash !== current.tokenMaterialHash
+  );
+}
+
 export function readUsableOpenClawCodexAuthStore(params = {}) {
   const authStorePath = String(params?.authStorePath ?? "").trim();
   if (!authStorePath || !fs.existsSync(authStorePath)) {
@@ -811,10 +989,26 @@ export function readUsableOpenClawCodexAuthStore(params = {}) {
   }
 
   const usableProfileIds = [];
+  let selectedProfile = null;
   for (const [profileId, credential] of codexProfiles) {
     const validation = validateOpenClawCodexAuthProfile(credential, params);
     if (validation.ok) {
       usableProfileIds.push(profileId);
+      const access = typeof credential.access === "string" ? credential.access : credential.token;
+      const refresh = typeof credential.refresh === "string" ? credential.refresh : "";
+      const candidate = {
+        kind: "openclaw_auth_store",
+        sourceKind: "openclaw_auth_store",
+        sourcePath: authStorePath,
+        profileId,
+        credential,
+        accessExpiryMs: validation.accessExpiryMs,
+        expirySource: validation.expirySource,
+        tokenMaterialHash: hashCodexTokenMaterial(access, refresh),
+      };
+      if (shouldPreferCodexAuthCandidate(candidate, selectedProfile)) {
+        selectedProfile = candidate;
+      }
     }
   }
   if (usableProfileIds.length === 0) {
@@ -832,6 +1026,10 @@ export function readUsableOpenClawCodexAuthStore(params = {}) {
     }),
     profileCount: usableProfileIds.length,
     profileIds: usableProfileIds,
+    selectedProfileId: selectedProfile?.profileId,
+    accessExpiryMs: selectedProfile?.accessExpiryMs ?? null,
+    expirySource: selectedProfile?.expirySource ?? "unknown",
+    tokenMaterialHash: selectedProfile?.tokenMaterialHash,
   };
 }
 
@@ -861,38 +1059,104 @@ function copyOpenClawCodexAuthStore(params) {
     authStorePath: targetAuthPath,
     profileCount: source.profileCount,
     profileIds: source.profileIds,
+    selectedProfileId: source.selectedProfileId,
+    accessExpiryMs: source.accessExpiryMs,
+    expirySource: source.expirySource,
   };
+}
+
+function collectTelegramLiveCodexAuthCandidates(params = {}) {
+  const candidates = [];
+  const sourceAuthPaths = normalizeStringList(params?.sourceAuthPaths ?? []);
+
+  for (const authStorePath of sourceAuthPaths) {
+    const source = readUsableOpenClawCodexAuthStore({
+      ...params,
+      authStorePath,
+    });
+    if (source.ok) {
+      candidates.push({
+        kind: "openclaw_auth_store",
+        sourceKind: "openclaw_auth_store",
+        sourcePath: source.authStorePath,
+        profileId: source.selectedProfileId,
+        accessExpiryMs: source.accessExpiryMs,
+        expirySource: source.expirySource,
+        tokenMaterialHash: source.tokenMaterialHash,
+        source,
+      });
+    }
+  }
+
+  for (const candidate of [
+    readCodexKeychainCandidate(params),
+    readCodexAuthJsonCandidate(params),
+  ]) {
+    if (candidate && !isCandidateExpired(candidate, params)) {
+      candidates.push(candidate);
+    }
+  }
+
+  return candidates;
 }
 
 export function bootstrapTelegramLiveCodexAuthStoreFromSources(params = {}) {
   const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
   const agentId = String(params?.agentId ?? "main").trim() || "main";
-  const sourceAuthPaths = normalizeStringList(params?.sourceAuthPaths ?? []);
-  // Try OpenClaw runtime auth first because main Jarvis can have a refreshed
-  // auth-profiles.json even when ~/.codex/auth.json is stale or absent.
-  for (const authStorePath of sourceAuthPaths) {
-    const copied = copyOpenClawCodexAuthStore({
-      ...params,
-      authStorePath,
-      runtimeStateDir,
-      agentId,
-    });
-    if (copied.ok) {
-      return {
-        ...copied,
-        sourceKind: "openclaw_auth_store",
-      };
+  const candidates = collectTelegramLiveCodexAuthCandidates(params);
+  let selected = null;
+  for (const candidate of candidates) {
+    if (shouldPreferCodexAuthCandidate(candidate, selected)) {
+      selected = candidate;
     }
   }
 
-  const codexBootstrap = bootstrapTelegramLiveCodexAuthStore({
-    ...params,
+  if (!selected) {
+    const codexBootstrap = bootstrapTelegramLiveCodexAuthStore({
+      ...params,
+      runtimeStateDir,
+      agentId,
+    });
+    return {
+      ...codexBootstrap,
+      sourceKind: "codex_cli_auth_json",
+      candidateCount: 0,
+    };
+  }
+
+  if (selected.kind === "openclaw_auth_store") {
+    const copied = copyOpenClawCodexAuthStore({
+      ...params,
+      authStorePath: selected.sourcePath,
+      runtimeStateDir,
+      agentId,
+    });
+    return {
+      ...copied,
+      sourceKind: selected.sourceKind,
+      sourceAuthPath: selected.sourcePath,
+      selectedProfileId: selected.profileId,
+      accessExpiryMs: selected.accessExpiryMs,
+      expirySource: selected.expirySource,
+      candidateCount: candidates.length,
+    };
+  }
+
+  const authStorePath = writeCodexCredentialAuthStore({
     runtimeStateDir,
     agentId,
+    credential: selected.credential,
   });
   return {
-    ...codexBootstrap,
-    sourceKind: "codex_cli_auth_json",
+    ok: true,
+    reason: "ok",
+    sourceKind: selected.sourceKind,
+    codexAuthPath: selected.sourcePath,
+    authStorePath,
+    selectedProfileId: selected.profileId,
+    accessExpiryMs: selected.accessExpiryMs,
+    expirySource: selected.expirySource,
+    candidateCount: candidates.length,
   };
 }
 
