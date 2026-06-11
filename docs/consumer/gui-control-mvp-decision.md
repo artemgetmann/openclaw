@@ -404,6 +404,10 @@ Recommendation delta:
   value, post-action state, and mutation risk must be checked before continuing.
 - Claude needs an app-specific submit recipe before any consumer loop depends
   on it.
+- Wrapper kill switch: if the verifier layer becomes duct tape around repeated
+  false positives, false negatives, focus theft, stale refs, or app-specific
+  hacks, stop polishing the wrapper and build native Swift/OpenClaw Computer Use
+  from scratch.
 
 Reusable real-task checklist:
 
@@ -442,6 +446,11 @@ Default path:
 The 80/20 next slice is not "invent computer use". It is proving whether an
 AX-first runtime can complete one safe workflow while refusing to type into the
 wrong app.
+
+Do not let that 80/20 slice become permanent duct tape. If the wrapper needs a
+growing pile of one-off repairs to paper over bad action semantics, graduate the
+work into a native Swift/OpenClaw Computer Use runtime instead of continuing to
+patch around the underlying control layer.
 
 ## Sources Checked
 
