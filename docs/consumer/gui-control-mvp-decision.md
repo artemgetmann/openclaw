@@ -424,28 +424,86 @@ Reusable real-task checklist:
 7. Run at least one pass while the user actively uses another app with Stage
    Manager enabled; score whether the runtime preserves the user's foreground
    workspace and acts on the background target safely.
-8. Peekaboo may be used as screenshot/UI-map fallback, but not as default
+8. Stage Manager same-stage preservation is a hard criterion, not a nice-to-have:
+   the runtime must either keep target windows in the user's active stage or act
+   safely in the background without kicking the user's foreground work away.
+9. Peekaboo may be used as screenshot/UI-map fallback, but not as default
    planner or unscoped actor.
-9. Codex Computer Use stays out of scope.
+10. Codex Computer Use may be used as a calibration benchmark for quality, but
+    stays out of scope as a reusable Jarvis backend.
+
+## Codex Computer Use Calibration Benchmark: 2026-06-11
+
+Scope:
+
+- Codex Computer Use only for GUI actions
+- same real task: inspect existing Safari/X home read-only, then send Claude a
+  labelled summary
+- `cua-guard` acquired before the first Computer Use call and released after
+  final verification
+- no Peekaboo, agent-desktop, Browser/Chrome plugin, AppleScript/JXA,
+  `osascript`, X mutation, repo edit, or commit
+
+Result: pass with caveats.
+
+- Start/end: `2026-06-11 16:17:09 WITA` to `2026-06-11 16:18:44 WITA`.
+- Elapsed GUI benchmark time: 95 seconds.
+- Approximate Computer Use calls: 10, including one refused Terminal state read
+  and one stale-state send warning/retry.
+- Safari/X was already running with an existing `(1) Home / X` tab. Computer Use
+  selected that tab, observed `https://x.com/home`, and did not mutate X.
+- Claude was already running on the benchmark thread. Computer Use set the
+  labelled `[CODEX COMPUTER USE WATCH TEST]` message directly into the composer,
+  retried after a stale-state warning, sent exactly once, and verified a visible
+  Claude reply.
+- Clipboard was not touched.
+
+Important fidelity issues:
+
+- Computer Use refused `get_app_state` for Terminal because Terminal is
+  safety-blocked. `list_apps` still established Terminal as the initial
+  frontmost app.
+- The first Claude send click returned a stale-state warning: "The user changed
+  Claude." Re-querying Claude before retry prevented a double-send.
+- Computer Use foregrounded Safari and Claude. Stage Manager state was not
+  directly exposed, and the run did not prove same-stage preservation. No visible
+  app ejection or rearrangement was observed in the screenshots, but this still
+  needs a dedicated same-stage test.
+
+Recommendation delta:
+
+- Codex Computer Use is the quality bar: fewer steps, direct value insertion,
+  no clipboard use, no duplicate paste recovery, and understandable stale-state
+  recovery.
+- It is not the reusable Jarvis backend for this plan.
+- `agent-desktop` remains the next integration spike because it is reusable and
+  deterministic enough to wrap, but the wrapper must aim for Computer Use-level
+  ergonomics and fail-closed behavior.
+- Peekaboo remains fallback/salvage: useful capture and backup actuation, not a
+  default product driver.
+- If the agent-desktop verifier starts growing toward Peekaboo-style duct tape,
+  stop and build native Swift/OpenClaw Computer Use instead.
 
 ## Recommendation
 
 Default path:
 
-1. Keep Peekaboo as the immediate fallback/bridge host, with strict scoped
+1. Use agent-desktop for the next Jarvis GUI-control integration spike.
+2. Keep Peekaboo as the immediate fallback/bridge host, with strict scoped
    actions and no default `--analyze`.
-2. Use agent-desktop for the next Jarvis GUI-control integration spike.
-3. Revisit MacosUseSDK only after its direct CLI path is fail-closed and
+3. Use Codex Computer Use as the benchmark for what good should feel like, not
+   as the reusable Jarvis backend.
+4. Revisit MacosUseSDK only after its direct CLI path is fail-closed and
    reliable on known running app PIDs.
-4. Evaluate Ghost OS only if Jarvis wants a prebuilt MCP loop, recipes, and
+5. Evaluate Ghost OS only if Jarvis wants a prebuilt MCP loop, recipes, and
    local vision fallback.
-5. Treat screenpipe as optional observation/memory, not a click/type engine.
-6. Treat Appium Mac2 as QA-only.
-7. Use browser-use or Skyvern only for browser surfaces.
+6. Treat screenpipe as optional observation/memory, not a click/type engine.
+7. Treat Appium Mac2 as QA-only.
+8. Use browser-use or Skyvern only for browser surfaces.
 
 The 80/20 next slice is not "invent computer use". It is proving whether an
 AX-first runtime can complete one safe workflow while refusing to type into the
-wrong app.
+wrong app and preserving the user's Stage Manager workspace.
 
 Do not let that 80/20 slice become permanent duct tape. If the wrapper needs a
 growing pile of one-off repairs to paper over bad action semantics, graduate the
