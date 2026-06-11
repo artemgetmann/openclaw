@@ -1683,7 +1683,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
-        text: undefined,
+        text: "FINAL block answer only.",
       }),
     );
   });
@@ -1754,7 +1754,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
-        text: undefined,
+        text: "FINAL visible answer",
       }),
     );
   });
@@ -1856,7 +1856,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
-        text: undefined,
+        text: "FINAL_ONLY_VOICE",
       }),
     );
   });

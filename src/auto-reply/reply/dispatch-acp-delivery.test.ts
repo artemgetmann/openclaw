@@ -3,6 +3,7 @@ import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
@@ -213,7 +214,18 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
   });
 
-  it("delivers synthesized final TTS as a media-only supplement", async () => {
+  it("builds a short deterministic caption preview for final TTS supplements", () => {
+    const preview = buildFinalTtsCaptionPreview(
+      `  ${"First sentence with   irregular whitespace. ".repeat(8)}  `,
+    );
+
+    expect(preview).toBeDefined();
+    expect(preview?.length).toBeLessThanOrEqual(160);
+    expect(preview).not.toContain("  ");
+    expect(preview?.endsWith("...")).toBe(true);
+  });
+
+  it("delivers synthesized final TTS as a captioned media supplement", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const { coordinator, dispatcher } = createCoordinator();
 
@@ -227,13 +239,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: undefined,
+      text: "Final answer already visible.",
       mediaUrl: "https://example.com/final-tts.opus",
       audioAsVoice: true,
     });
   });
 
-  it("delivers visible final text before media-only TTS in the same Telegram thread", async () => {
+  it("delivers visible final text before captioned TTS in the same Telegram thread", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const { coordinator } = createCoordinator({
       provider: "discord",
@@ -272,7 +284,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         to: "telegram:thread-1",
         threadId: 777,
         payload: expect.objectContaining({
-          text: undefined,
+          text: "Final answer.",
           mediaUrl: "https://example.com/final-tts.opus",
           audioAsVoice: true,
         }),
@@ -280,7 +292,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
   });
 
-  it("does not send the media-only TTS supplement when visible final text fails", async () => {
+  it("does not send the captioned TTS supplement when visible final text fails", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     routeMocks.routeReply.mockResolvedValueOnce({ ok: false, messageId: "" });
     const { coordinator } = createCoordinator({

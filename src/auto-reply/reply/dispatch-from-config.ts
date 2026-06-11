@@ -55,6 +55,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -875,7 +876,7 @@ export async function dispatchReplyFromConfig(params: {
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsSupplement = sanitizeTelegramVisiblePayload({
           ...ttsReply,
-          text: undefined,
+          text: buildFinalTtsCaptionPreview(durableBlockFinalText),
         });
         if (shouldRouteToOriginating && originatingChannel && originatingTo) {
           const result = await routeReply({
