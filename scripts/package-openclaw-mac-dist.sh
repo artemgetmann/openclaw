@@ -12,6 +12,7 @@ PRODUCT="OpenClaw"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
+source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
@@ -84,6 +85,9 @@ Env:
   VERSIONED_ARTIFACT_NAMES=1
                       Opt into versioned zip/dmg filenames instead of the
                       clean handoff defaults
+  ALLOW_SLOW_RELEASE_UPLOAD=1
+                      Allow an intentional slow/tunnel GitHub release upload
+                      route after the preflight prints the risk
 
 OpenClaw release packaging is intentionally default-instance only.
 Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
@@ -369,6 +373,8 @@ publish_release_assets() {
       exit 1
     fi
   done
+
+  github_release_upload_preflight
 
   echo "🚀 Uploading Jarvis release assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
