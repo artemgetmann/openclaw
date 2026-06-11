@@ -137,6 +137,22 @@ function hasOpenClawSourcePreviewMarker(payload: ReplyPayload): boolean {
   );
 }
 
+function isFinalTtsSupplementPayload(payload: ReplyPayload): boolean {
+  const openclaw =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.openclaw
+      : undefined;
+
+  return (
+    openclaw != null &&
+    typeof openclaw === "object" &&
+    !Array.isArray(openclaw) &&
+    (openclaw as { finalTtsSupplement?: unknown }).finalTtsSupplement === true
+  );
+}
+
 function isTextOnlyOpenClawSourcePreview(payload: ReplyPayload): boolean {
   return (
     hasOpenClawSourcePreviewMarker(payload) &&
@@ -1255,8 +1271,10 @@ export const dispatchTelegramMessage = async ({
               Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             const hasPayloadText =
               typeof payload.text === "string" && payload.text.trim().length > 0;
-            const isMediaOnlyFinalBoundary =
-              deliveryKind === "final" && hasPayloadMedia && !hasPayloadText;
+            const isTtsMediaFinalBoundary =
+              deliveryKind === "final" &&
+              hasPayloadMedia &&
+              (!hasPayloadText || isFinalTtsSupplementPayload(payload));
             if (deliveryKind === "final") {
               // Assistant callbacks are fire-and-forget; ensure queued boundary
               // rotations/partials are applied before final delivery mapping.
@@ -1269,11 +1287,11 @@ export const dispatchTelegramMessage = async ({
                 assistantPhase === "commentary" ||
                 (deliveryKind === "block" && !assistantPhase))
             ) {
-              if (isMediaOnlyFinalBoundary) {
+              if (isTtsMediaFinalBoundary) {
                 // A TTS/audio supplement is a final boundary, but it is not the
-                // final text. Preserve the buffered answer as durable text first
-                // so the voice message stays additive and cannot inherit a stale
-                // mutable progress bubble.
+                // final text. Captioned TTS carries short preview text for
+                // Telegram, so the explicit supplement marker keeps this from
+                // being mistaken for the full final answer.
                 await flushAmbiguousAnswerBlockAsFinal(`before-${deliveryKind}-media`);
               } else {
                 // A later structural boundary proves the previous phase-less
