@@ -53,6 +53,29 @@
 ## macOS gateway behavior
 
 - The gateway is managed by the mac app.
+- Default CLI commands use `~/.openclaw`, but packaged Jarvis does not. The
+  shared packaged service uses:
+  - home: `~/Library/Application Support/OpenClaw`
+  - state: `~/Library/Application Support/OpenClaw/.openclaw`
+  - config: `~/Library/Application Support/OpenClaw/.openclaw/openclaw.json`
+  - main-agent auth store:
+    `~/Library/Application Support/OpenClaw/.openclaw/agents/main/agent/auth-profiles.json`
+- If `models status --probe` prints `Auth store: ~/.openclaw/...`, it is
+  probing the default CLI store, not packaged Jarvis. For the live packaged
+  service, use:
+
+```bash
+OPENCLAW_HOME="$HOME/Library/Application Support/OpenClaw" \
+OPENCLAW_STATE_DIR="$HOME/Library/Application Support/OpenClaw/.openclaw" \
+OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/OpenClaw/.openclaw/openclaw.json" \
+  pnpm openclaw models status --probe \
+    --probe-provider openai-codex \
+    --probe-profile openai-codex:default \
+    --probe-timeout 60000 \
+    --probe-concurrency 1 \
+    --probe-max-tokens 8
+```
+
 - Use the narrowest restart that matches the job:
   - Gateway service only: `openclaw gateway restart`
   - Worktree mac app lane: `bash scripts/dev-launch-mac.sh`

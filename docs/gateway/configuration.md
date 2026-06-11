@@ -10,6 +10,10 @@ title: "Configuration"
 # Configuration
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`.
+That path is the default CLI state path. Packaged Jarvis/macOS app service
+deployments set `OPENCLAW_CONFIG_PATH`, usually under
+`~/Library/Application Support/OpenClaw/.openclaw/openclaw.json`; probe the
+running service with the same environment when debugging live auth/config.
 
 If the file is missing, OpenClaw uses safe defaults. Common reasons to add a config:
 
