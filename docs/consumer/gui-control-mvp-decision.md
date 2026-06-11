@@ -94,8 +94,9 @@ with risk, and 2 is product-shaped.
   coordinates?
 - Deterministic refs: can a model point to stable element/window ids from a
   snapshot?
-- Background and focus behavior: can it act on the intended app without
-  stealing focus or hitting the frontmost wrong app?
+- Background and focus behavior: can it act on the intended app while the user
+  keeps using the Mac, without stealing focus, breaking Stage Manager grouping,
+  minimizing the user's current app, or hitting the frontmost wrong app?
 - Swift/macOS embeddability: can Jarvis call or bundle it without a fragile
   sidecar?
 - License and commercial fit: can it ship in a consumer product without legal
@@ -328,6 +329,11 @@ Current recommendation:
   window/ref targeting and fail-closed behavior.
 - Keep Peekaboo as the bridge/fallback runtime for capture and Claude handoff
   proof, but only under exact app/window/snapshot targeting.
+- Treat active-user desktop use as a first-class benchmark condition. This
+  rerun happened while the Mac was in normal desktop use with Stage Manager
+  active, so it is useful product signal, but future scoring must distinguish
+  isolated-run success from background-safe success that does not disturb the
+  user's foreground work.
 - Before shipping any GUI-control lane, wrap both runtimes behind a planner that
   verifies target window, target element, post-action state, and account-mutation
   risk after every step.
@@ -349,9 +355,12 @@ Reusable real-task checklist:
    exact action.
 6. For Claude, stop if login, billing, settings, permission, blank-window, or
    no-composer states appear.
-7. Peekaboo may be used as screenshot/UI-map fallback, but not as default
+7. Run at least one pass while the user actively uses another app with Stage
+   Manager enabled; score whether the runtime preserves the user's foreground
+   workspace and acts on the background target safely.
+8. Peekaboo may be used as screenshot/UI-map fallback, but not as default
    planner or unscoped actor.
-8. Codex Computer Use stays out of scope.
+9. Codex Computer Use stays out of scope.
 
 ## Recommendation
 
