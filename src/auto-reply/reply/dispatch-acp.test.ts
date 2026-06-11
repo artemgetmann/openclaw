@@ -277,7 +277,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
-  it("routes Telegram ACP final text before the media-only TTS supplement in the same thread", async () => {
+  it("routes Telegram ACP final text before the captioned TTS supplement in the same thread", async () => {
     setReadyAcpResolution();
     ttsMocks.state.synthesizeFinalAudio = true;
     managerMocks.runTurn.mockImplementation(
@@ -322,7 +322,7 @@ describe("tryDispatchAcpReply", () => {
         to: "telegram:thread-1",
         threadId: 777,
         payload: expect.objectContaining({
-          text: undefined,
+          text: "Final answer.",
           mediaUrl: "https://example.com/final-tts.opus",
           audioAsVoice: true,
         }),
@@ -330,7 +330,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not send Telegram ACP media-only TTS when visible final text delivery fails", async () => {
+  it("does not send Telegram ACP captioned TTS when visible final text delivery fails", async () => {
     setReadyAcpResolution();
     ttsMocks.state.synthesizeFinalAudio = true;
     routeMocks.routeReply

@@ -8,6 +8,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
+import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
 
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
@@ -71,6 +72,44 @@ function stripAcpInternalToolSummaryLines(text: string): string {
       return !previousStripped && !nextStripped;
     })
     .join("\n");
+}
+
+function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        finalTtsSupplement: true,
+      },
+    },
+  };
+}
+
+function isTelegramFinalTtsTarget(params: {
+  ctx: FinalizedMsgContext;
+  originatingChannel?: string;
+  shouldRouteToOriginating: boolean;
+  ttsChannel?: string;
+}): boolean {
+  const channel =
+    params.shouldRouteToOriginating && params.originatingChannel
+      ? params.originatingChannel
+      : (params.ttsChannel ?? params.ctx.Surface ?? params.ctx.Provider);
+  return normalizeMessageChannel(channel) === "telegram";
 }
 
 export type AcpDispatchDeliveryCoordinator = {
@@ -271,7 +310,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: finalText,
       // ACP stream previews are intentionally transient in Telegram. This
       // structural final marker forces the accepted assistant output through
-      // the durable final lane before any media-only TTS supplement can follow.
+      // the durable final lane before any captioned TTS supplement can follow.
       channelData: {
         openclaw: {
           assistantPhase: "final_answer",
@@ -297,13 +336,21 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
-    // The ACP block path has already made the final text visible. Send only
-    // the generated media here so TTS remains additive instead of duplicating
-    // the visible answer as a second final text/caption.
-    return deliverPreparedPayload("final", {
+    // The ACP block path has already made the final text visible. Keep only a
+    // short caption on the generated media so Telegram previews stay useful
+    // without duplicating the full final answer as another text message.
+    const shouldCaption = isTelegramFinalTtsTarget(params);
+    const shouldMarkSupplement =
+      shouldCaption && (!params.shouldRouteToOriginating || shouldUseSourceDispatcherForTelegram());
+    const payload = {
       ...ttsPayload,
-      text: undefined,
-    });
+      text: shouldCaption ? buildFinalTtsCaptionPreview(finalText) : undefined,
+    };
+
+    return deliverPreparedPayload(
+      "final",
+      shouldMarkSupplement ? markFinalTtsSupplement(payload) : payload,
+    );
   };
 
   return {

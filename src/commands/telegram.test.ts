@@ -846,7 +846,7 @@ describe("telegram commands", () => {
             reply_to_msg_id: 510,
             reply_to_top_id: 510,
             sender_id: 777,
-            text: "",
+            text: `FINAL_ONLY_TTS_MARKER ${marker}`,
             thread_anchor: null,
           },
         ],
@@ -915,6 +915,7 @@ describe("telegram commands", () => {
     expect(payload.final_message_id).toBe(512);
     expect(payload.audio_message_id).toBe(513);
     expect(payload.audio_message_kind).toBe("voice");
+    expect(payload.audio_caption_text).toBe(`FINAL_ONLY_TTS_MARKER ${marker}`);
     expect(payload.poison_progress_strings).toEqual([
       `PROGRESS_DO_NOT_VOICE_1 ${marker}`,
       `PROGRESS_DO_NOT_VOICE_2 ${marker}`,
