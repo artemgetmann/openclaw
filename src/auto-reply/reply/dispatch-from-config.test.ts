@@ -73,6 +73,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
+    cleanedFinalText: undefined as string | undefined,
     synthesizeFinalAudio: false,
   };
   return {
@@ -98,6 +99,7 @@ const ttsMocks = vi.hoisted(() => {
       ) {
         return {
           ...params.payload,
+          text: state.cleanedFinalText ?? params.payload.text,
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
         };
@@ -305,6 +307,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    ttsMocks.state.cleanedFinalText = undefined;
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -1683,7 +1686,112 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
+        text: "FINAL block answer only.",
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
+      }),
+    );
+  });
+
+  it("keeps durable block final TTS media-only outside Telegram", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "FINAL block answer only." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
         text: undefined,
+      }),
+    );
+  });
+
+  it("routes durable block final TTS Telegram captions without forcing HTML payload mode", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "FINAL <tag & value" });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const ttsRoute = mocks.routeReply.mock.calls
+      .map(([call]) => call as { payload?: ReplyPayload })
+      .find((call) => call.payload?.mediaUrl === "https://example.com/tts-synth.opus");
+    expect(ttsRoute?.payload).toEqual(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: "FINAL <tag & value",
+      }),
+    );
+    expect(ttsRoute?.payload?.channelData).toBeUndefined();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("builds durable block final TTS captions from directive-cleaned visible text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.state.cleanedFinalText = "FINAL clean answer.";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: "FINAL [[tts:voice=alloy]]clean answer. [[tts:text]]private speech[[/tts:text]]",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: "FINAL clean answer.",
       }),
     );
   });
@@ -1754,7 +1862,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
-        text: undefined,
+        text: "FINAL visible answer",
       }),
     );
   });
@@ -1856,7 +1964,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
-        text: undefined,
+        text: "FINAL_ONLY_VOICE",
       }),
     );
   });

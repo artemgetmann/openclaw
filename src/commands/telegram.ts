@@ -135,6 +135,7 @@ type TelegramScenarioProof = {
   progress_transient_message_id?: number | null;
   audio_message_id?: number | null;
   audio_message_kind?: string | null;
+  audio_caption_text?: string | null;
   durable_progress_texts?: string[];
   gateway_proof?: Record<string, unknown> | null;
 };
@@ -1601,12 +1602,6 @@ function classifyDeterministicProgressPlusTtsScenario(params: {
   const finalMessage =
     botMessages.find((message) => cleanString(message.text) === params.finalText) ??
     params.waitResult.matched;
-  const audioMessage = botMessages.find(
-    (message) =>
-      message.message_id > finalMessage.message_id &&
-      !cleanString(message.text) &&
-      (message.media_kind === "voice" || message.media_kind === "audio"),
-  );
   const durableProgressTexts = botMessages
     .map((message) => cleanString(message.text))
     .filter((text): text is string =>
@@ -1617,6 +1612,8 @@ function classifyDeterministicProgressPlusTtsScenario(params: {
       message.message_id > finalMessage.message_id &&
       (message.media_kind === "voice" || message.media_kind === "audio"),
   );
+  const audioMessage = audioMessagesAfterFinal[0];
+  const audioCaptionText = cleanString(audioMessage?.text);
   const progressTransientMessageId = parseOptionalPositiveInt(
     params.gatewayProof.progress_message_id,
   );
@@ -1627,7 +1624,9 @@ function classifyDeterministicProgressPlusTtsScenario(params: {
     params.gatewayProof.deleted_message_ids.includes(progressTransientMessageId);
   const finalVisibleText = cleanString(finalMessage.text);
   const finalOk = finalVisibleText === params.finalText;
-  const audioOk = audioMessagesAfterFinal.length === 1 && Boolean(audioMessage);
+  const audioCountOk = audioMessagesAfterFinal.length === 1 && Boolean(audioMessage);
+  const audioCaptionOk = Boolean(audioCaptionText) && audioCaptionText === params.finalText;
+  const audioOk = audioCountOk && audioCaptionOk;
   const progressOk = progressExisted && progressWasDeleted && durableProgressTexts.length === 0;
   const ok = finalOk && audioOk && progressOk;
   const failureReasons = [
@@ -1635,7 +1634,8 @@ function classifyDeterministicProgressPlusTtsScenario(params: {
     progressWasDeleted ? null : "progress_transient_message_not_deleted",
     durableProgressTexts.length === 0 ? null : "progress_poison_text_durable",
     finalOk ? null : "final_text_missing_or_changed",
-    audioOk ? null : "exactly_one_audio_after_final_missing",
+    audioCountOk ? null : "exactly_one_audio_after_final_missing",
+    audioCaptionOk ? null : "audio_caption_missing_or_changed",
   ].filter((reason): reason is string => Boolean(reason));
 
   return {
@@ -1681,6 +1681,7 @@ function classifyDeterministicProgressPlusTtsScenario(params: {
     progress_transient_message_id: progressTransientMessageId,
     audio_message_id: audioMessage?.message_id ?? null,
     audio_message_kind: audioMessage?.media_kind ?? null,
+    audio_caption_text: audioCaptionText ?? null,
     durable_progress_texts: durableProgressTexts,
     gateway_proof: params.gatewayProof,
   };

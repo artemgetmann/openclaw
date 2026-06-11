@@ -11,10 +11,13 @@ import {
   collectActiveReservedTelegramBotTokensFromCanonicalConfig,
   collectActiveTelegramTokenLeaseEntries,
   deriveTelegramLiveRuntimeProfile,
+  ensureTelegramLiveSenderAccess,
   extractTelegramBotTokensFromConfig,
   isLocalCodexAuthAvailable,
   isCanonicalSharedGatewayActive,
+  isTelegramLiveIsolatedRuntimeProfile,
   pruneTesterRuntimeAuthStore,
+  resolveTelegramLiveModelAuthProbe,
   selectTelegramTesterToken,
   syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
@@ -325,6 +328,116 @@ describe("telegram live runtime helpers", () => {
         anthropic: ["anthropic:default"],
         "openai-codex": ["openai-codex:default"],
       },
+    });
+  });
+
+  it("auto-allows the Telegram user only inside isolated live tester state", () => {
+    const stateRoot = makeTempDir();
+    const runtimeStateDir = path.join(stateRoot, "tg-live-0123abcd89", ".openclaw");
+    const runtimeConfigPath = path.join(runtimeStateDir, "openclaw.telegram-live.json");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.writeFileSync(
+      runtimeConfigPath,
+      JSON.stringify({ channels: { telegram: { dmPolicy: "pairing" } } }),
+    );
+
+    expect(
+      isTelegramLiveIsolatedRuntimeProfile({ runtimeStateDir, runtimeConfigPath, stateRoot }),
+    ).toBe(true);
+
+    const added = ensureTelegramLiveSenderAccess({
+      runtimeStateDir,
+      runtimeConfigPath,
+      senderId: "1336356696",
+      stateRoot,
+    });
+    expect(added).toMatchObject({
+      ok: true,
+      status: "added",
+      senderId: "1336356696",
+    });
+
+    const allowStore = JSON.parse(
+      fs.readFileSync(
+        path.join(runtimeStateDir, "credentials", "telegram-default-allowFrom.json"),
+        "utf8",
+      ),
+    );
+    expect(allowStore.allowFrom).toEqual(["1336356696"]);
+
+    const present = ensureTelegramLiveSenderAccess({
+      runtimeStateDir,
+      runtimeConfigPath,
+      senderId: "1336356696",
+      stateRoot,
+    });
+    expect(present).toMatchObject({ ok: true, status: "present" });
+  });
+
+  it("rejects Telegram sender auto-approval outside isolated live tester state", () => {
+    const sharedStateDir = path.join(makeTempDir(), ".openclaw");
+    const runtimeConfigPath = path.join(sharedStateDir, "openclaw.json");
+    fs.mkdirSync(sharedStateDir, { recursive: true });
+    fs.writeFileSync(
+      runtimeConfigPath,
+      JSON.stringify({ channels: { telegram: { dmPolicy: "pairing" } } }),
+    );
+
+    expect(
+      isTelegramLiveIsolatedRuntimeProfile({
+        runtimeStateDir: sharedStateDir,
+        runtimeConfigPath,
+      }),
+    ).toBe(false);
+    expect(
+      ensureTelegramLiveSenderAccess({
+        runtimeStateDir: sharedStateDir,
+        runtimeConfigPath,
+        senderId: "1336356696",
+      }),
+    ).toMatchObject({
+      ok: false,
+      status: "unsafe_runtime_profile",
+    });
+  });
+
+  it("skips sender store repair when the isolated runtime is open", () => {
+    const stateRoot = makeTempDir();
+    const runtimeStateDir = path.join(stateRoot, "tg-live-abcdef1234", ".openclaw");
+    const runtimeConfigPath = path.join(runtimeStateDir, "openclaw.telegram-live.json");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.writeFileSync(
+      runtimeConfigPath,
+      JSON.stringify({ channels: { telegram: { dmPolicy: "open" } } }),
+    );
+
+    const result = ensureTelegramLiveSenderAccess({
+      runtimeStateDir,
+      runtimeConfigPath,
+      senderId: "1336356696",
+      stateRoot,
+    });
+    expect(result).toMatchObject({ ok: true, status: "open" });
+    expect(
+      fs.existsSync(path.join(runtimeStateDir, "credentials", "telegram-default-allowFrom.json")),
+    ).toBe(false);
+  });
+
+  it("requires a model auth probe for Codex-backed tester runtime configs", () => {
+    const runtimeStateDir = makeTempDir();
+    const runtimeConfigPath = path.join(runtimeStateDir, "openclaw.telegram-live.json");
+    fs.writeFileSync(
+      runtimeConfigPath,
+      JSON.stringify({
+        agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+      }),
+    );
+
+    expect(resolveTelegramLiveModelAuthProbe({ runtimeConfigPath })).toMatchObject({
+      required: true,
+      provider: "openai-codex",
+      model: "openai-codex/gpt-5.4",
+      profile: "openai-codex:default",
     });
   });
 

@@ -1035,7 +1035,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("finalizes a phase-less answer block before a media-only voice supplement and does not reuse progress on the next turn", async () => {
+  it("finalizes a phase-less answer block before a captioned TTS voice supplement and does not reuse progress on the next turn", async () => {
     const leakedProgressDraftStream = createSequencedDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
     dispatchReplyWithBufferedBlockDispatcher
@@ -1050,6 +1050,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           {
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
+            text: "hi Sir. Still suspiciously operational.",
+            channelData: { openclaw: { finalTtsSupplement: true } },
           },
           { kind: "final" },
         );
@@ -1061,6 +1063,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           {
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
+            text: "Princess Fiona repeat.",
+            channelData: { openclaw: { finalTtsSupplement: true } },
           },
           { kind: "final" },
         );
@@ -1077,9 +1081,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context });
 
     // The phase-less text block is the visible final answer when the next
-    // boundary is only the TTS media supplement. It must never enter the mutable
-    // progress controller, because that controller edits one Telegram bubble
-    // across callbacks and can be reused by the next user turn.
+    // boundary is the TTS media supplement. Even with a Telegram caption, that
+    // supplement must never make the full answer enter the mutable progress
+    // controller, because that controller edits one Telegram bubble across
+    // callbacks and can be reused by the next user turn.
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(leakedProgressDraftStream.update).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenNthCalledWith(
@@ -1099,6 +1104,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
+            text: "hi Sir. Still suspiciously operational.",
           }),
         ],
       }),
@@ -1120,6 +1126,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
+            text: "Princess Fiona repeat.",
           }),
         ],
       }),

@@ -55,6 +55,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -238,6 +239,31 @@ function stripTelegramInternalToolSummaryLines(text: string): string {
     .join("\n");
 }
 
+function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        finalTtsSupplement: true,
+      },
+    },
+  };
+}
+
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -412,6 +438,8 @@ export async function dispatchReplyFromConfig(params: {
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+  const shouldCaptionFinalTtsSupplement = ttsChannel === "telegram";
+  const shouldMarkFinalTtsSupplement = shouldCaptionFinalTtsSupplement && !shouldRouteToOriginating;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -873,10 +901,15 @@ export async function dispatchReplyFromConfig(params: {
       );
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
-        const ttsSupplement = sanitizeTelegramVisiblePayload({
+        const ttsPayload = {
           ...ttsReply,
-          text: undefined,
-        });
+          text: shouldCaptionFinalTtsSupplement
+            ? buildFinalTtsCaptionPreview(ttsReply.text ?? "")
+            : undefined,
+        };
+        const ttsSupplement = sanitizeTelegramVisiblePayload(
+          shouldMarkFinalTtsSupplement ? markFinalTtsSupplement(ttsPayload) : ttsPayload,
+        );
         if (shouldRouteToOriginating && originatingChannel && originatingTo) {
           const result = await routeReply({
             payload: ttsSupplement,
