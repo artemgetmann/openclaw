@@ -5,7 +5,7 @@ import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
 
 function createWrappedTelegramClientFetch(
   proxyFetch: typeof fetch,
-  options?: Parameters<typeof createTelegramBot>[0],
+  options?: Partial<Parameters<typeof createTelegramBot>[0]>,
 ) {
   const shutdown = new AbortController();
   botCtorSpy.mockClear();
