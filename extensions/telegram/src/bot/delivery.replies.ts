@@ -61,6 +61,18 @@ type TelegramReplyChannelData = {
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
 
+function isFinalTtsSupplementPayload(reply: ReplyPayload): boolean {
+  const channelData = reply.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  const openclaw = channelData.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  return (openclaw as { finalTtsSupplement?: unknown }).finalTtsSupplement === true;
+}
+
 function buildChunkTextResolver(params: {
   textLimit: number;
   chunkMode: ChunkMode;
@@ -685,6 +697,7 @@ export async function deliverReplies(params: {
         });
       } else {
         const shouldSplitVoiceSupplement =
+          !isFinalTtsSupplementPayload(reply) &&
           reply.audioAsVoice === true &&
           typeof reply.text === "string" &&
           reply.text.trim().length > 0;

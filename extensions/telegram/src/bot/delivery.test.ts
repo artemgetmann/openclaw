@@ -512,6 +512,42 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("uses final TTS supplement text as a voice caption without resending text", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn(async () => ({ message_id: 10, chat: { id: "123" } }));
+    const sendVoice = vi.fn(async () => ({ message_id: 11, chat: { id: "123" } }));
+    const bot = createBot({ sendMessage, sendVoice });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Final answer.",
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    const sendVoiceCalls = sendVoice.mock.calls as unknown as Array<
+      [unknown, unknown, Record<string, unknown>?]
+    >;
+    expect(sendVoiceCalls[0]?.[2]).toMatchObject({
+      caption: "Final answer.",
+      parse_mode: "HTML",
+    });
+  });
+
   it("renders markdown in media captions", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({

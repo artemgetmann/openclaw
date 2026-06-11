@@ -242,6 +242,11 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       text: "Final answer already visible.",
       mediaUrl: "https://example.com/final-tts.opus",
       audioAsVoice: true,
+      channelData: {
+        openclaw: {
+          finalTtsSupplement: true,
+        },
+      },
     });
   });
 
@@ -287,6 +292,11 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
           text: "Final answer.",
           mediaUrl: "https://example.com/final-tts.opus",
           audioAsVoice: true,
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+            },
+          },
         }),
       }),
     );

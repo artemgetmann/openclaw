@@ -239,6 +239,31 @@ function stripTelegramInternalToolSummaryLines(text: string): string {
     .join("\n");
 }
 
+function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        finalTtsSupplement: true,
+      },
+    },
+  };
+}
+
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -874,10 +899,12 @@ export async function dispatchReplyFromConfig(params: {
       );
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
-        const ttsSupplement = sanitizeTelegramVisiblePayload({
-          ...ttsReply,
-          text: buildFinalTtsCaptionPreview(durableBlockFinalText),
-        });
+        const ttsSupplement = sanitizeTelegramVisiblePayload(
+          markFinalTtsSupplement({
+            ...ttsReply,
+            text: buildFinalTtsCaptionPreview(durableBlockFinalText),
+          }),
+        );
         if (shouldRouteToOriginating && originatingChannel && originatingTo) {
           const result = await routeReply({
             payload: ttsSupplement,

@@ -74,6 +74,31 @@ function stripAcpInternalToolSummaryLines(text: string): string {
     .join("\n");
 }
 
+function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        finalTtsSupplement: true,
+      },
+    },
+  };
+}
+
 export type AcpDispatchDeliveryCoordinator = {
   startReplyLifecycle: () => Promise<void>;
   deliver: (
@@ -301,10 +326,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     // The ACP block path has already made the final text visible. Keep only a
     // short caption on the generated media so Telegram previews stay useful
     // without duplicating the full final answer as another text message.
-    return deliverPreparedPayload("final", {
-      ...ttsPayload,
-      text: buildFinalTtsCaptionPreview(finalText),
-    });
+    return deliverPreparedPayload(
+      "final",
+      markFinalTtsSupplement({
+        ...ttsPayload,
+        text: buildFinalTtsCaptionPreview(finalText),
+      }),
+    );
   };
 
   return {
