@@ -263,7 +263,10 @@ describe("buildMinimalServicePath", () => {
 describe("buildServiceEnvironment", () => {
   it("sets minimal PATH and gateway vars", () => {
     const env = buildServiceEnvironment({
-      env: { HOME: "/home/user" },
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_SERVICE_BUILD: "2026061103",
+      },
       port: 18789,
     });
     expect(env.HOME).toBe("/home/user");
@@ -277,6 +280,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
+    expect(env.OPENCLAW_SERVICE_BUILD).toBe("2026061103");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
     if (process.platform === "darwin") {

@@ -166,6 +166,8 @@ struct ConsumerModelsReadinessProbePayload: Decodable {
 @MainActor
 @Observable
 final class ConsumerModelSetupModel {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "consumer.ai-access")
+
     enum AuthCategory: String, CaseIterable, Identifiable {
         case subscription
         case apiKey
@@ -569,7 +571,8 @@ final class ConsumerModelSetupModel {
 
     private func refresh(
         preservingDisplayedResult: Bool,
-        automaticGatewayRecovery: Bool = false) async
+        automaticGatewayRecovery: Bool = false,
+        allowRuntimeOwnershipRepair: Bool = true) async
     {
         if !automaticGatewayRecovery {
             self.cancelGatewayRecoveryProbe()
@@ -584,17 +587,7 @@ final class ConsumerModelSetupModel {
             self.failureKind = nil
         }
 
-        if ProcessInfo.processInfo.environment["OPENCLAW_SKIP_RUNTIME_OWNERSHIP_BLOCKER"] != "1",
-           self.runtimeOwnershipBlocker() != nil
-        {
-            // If launchd is pinned to a different checkout, do not let the UI
-            // probe auth or model readiness. That would just lie about the real
-            // runtime the user is about to rely on.
-            self.cancelGatewayRecoveryProbe(resetAttempt: true)
-            let detail = Self.consumerFriendlyRuntimeOwnershipBlockerStatusLine()
-            self.phase = .failed(detail)
-            self.statusLine = detail
-            self.failureKind = .runtimeUpdateBlocked
+        if !(await self.repairRuntimeOwnershipBlockerIfNeeded(allowRepair: allowRuntimeOwnershipRepair)) {
             self.authSectionExpanded = true
             return
         }
@@ -635,10 +628,13 @@ final class ConsumerModelSetupModel {
         self.statusLine = "Restarting \(AppFlavor.current.appName)…"
         if !(await self.waitForRestartGateway()) {
             self.restoreGatewayRestartFailureState()
-            await self.refresh(preservingDisplayedResult: true, automaticGatewayRecovery: true)
+            await self.refresh(
+                preservingDisplayedResult: true,
+                automaticGatewayRecovery: true,
+                allowRuntimeOwnershipRepair: false)
             return
         }
-        await self.refresh()
+        await self.refresh(preservingDisplayedResult: false, allowRuntimeOwnershipRepair: false)
     }
 
     func loadAuthOptionsIfNeeded(suppressError: Bool = false) async {
@@ -825,6 +821,55 @@ final class ConsumerModelSetupModel {
         self.enterGatewayReconnectState(statusLine)
         await self.refresh()
         return true
+    }
+
+    private func repairRuntimeOwnershipBlockerIfNeeded(allowRepair: Bool) async -> Bool {
+        guard ProcessInfo.processInfo.environment["OPENCLAW_SKIP_RUNTIME_OWNERSHIP_BLOCKER"] != "1" else {
+            return true
+        }
+        guard let blockerDetail = self.runtimeOwnershipBlocker() else {
+            return true
+        }
+
+        // A runtime ownership blocker means the app would be probing a stale
+        // helper. Repair launchd first, then re-run the same blocker gate before
+        // any AI readiness/auth check is allowed to claim success.
+        Self.logger.warning("AI access runtime helper repair needed: \(blockerDetail, privacy: .public)")
+        self.cancelGatewayRecoveryProbe(resetAttempt: true)
+        guard allowRepair else {
+            self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
+            return false
+        }
+
+        self.phase = .checking
+        self.statusLine = Self.runtimeOwnershipRepairInProgressStatusLine()
+        self.failureKind = nil
+        self.activeModelId = nil
+        self.authSectionExpanded = true
+
+        guard await self.waitForRestartGateway() else {
+            self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
+            return false
+        }
+
+        if let remainingBlocker = self.runtimeOwnershipBlocker() {
+            Self.logger.warning("AI access runtime helper repair did not clear blocker: \(remainingBlocker, privacy: .public)")
+            self.applyRuntimeOwnershipRepairFailure(blockerDetail: remainingBlocker)
+            return false
+        }
+
+        Self.logger.info("AI access runtime helper repair cleared ownership blocker")
+        return true
+    }
+
+    private func applyRuntimeOwnershipRepairFailure(blockerDetail: String) {
+        Self.logger.warning("AI access runtime helper repair failed: \(blockerDetail, privacy: .public)")
+        let detail = Self.runtimeOwnershipRepairFailureStatusLine()
+        self.phase = .failed(detail)
+        self.statusLine = detail
+        self.failureKind = .runtimeUpdateBlocked
+        self.activeModelId = nil
+        self.authSectionExpanded = true
     }
 
     private func enterGatewayReconnectState(_ statusLine: String) {
@@ -1167,8 +1212,12 @@ final class ConsumerModelSetupModel {
         return nil
     }
 
-    private static func consumerFriendlyRuntimeOwnershipBlockerStatusLine() -> String {
-        "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName) to finish."
+    private static func runtimeOwnershipRepairInProgressStatusLine() -> String {
+        "Finishing \(AppFlavor.current.appName) update…"
+    }
+
+    private static func runtimeOwnershipRepairFailureStatusLine() -> String {
+        "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
     }
 
     private static func consumerAccessFailureKind(for error: Error) -> ConsumerAIAccessFailureKind {
@@ -1377,7 +1426,7 @@ struct ConsumerModelsReadinessPayload: Decodable {
         case .readinessFailed:
             return "\(AppFlavor.current.appName) could not finish an AI test message. Restart \(AppFlavor.current.appName) to reconnect AI access."
         case .runtimeUpdateBlocked:
-            return "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName) to finish."
+            return "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
         }
     }
 

@@ -251,8 +251,9 @@ final class GatewayProcessManager {
     private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {
         guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime() else { return false }
         // A healthy gateway is not enough on first launch. If the plist still
-        // points at a source checkout, attaching would strand the packaged app
-        // on stale code and skip the only automatic repair chance.
+        // points at a source checkout or carries stale service identity, attaching
+        // would strand the packaged app on an old helper and skip the automatic
+        // launchd repair path.
         guard GatewayLaunchAgentManager.currentEntrypointOwnership().matchesCurrentEntrypoint else { return false }
         guard !self.launchAgentNeedsOwnershipRepair() else { return false }
         switch self.status {
@@ -302,7 +303,7 @@ final class GatewayProcessManager {
     private func attachExistingGatewayIfAvailable() async -> Bool {
         // Replacement installs need the first active app launch to repair the
         // canonical LaunchAgent. Attaching to a healthy stale service here would
-        // strand the packaged app on the source-checkout entrypoint.
+        // strand the packaged app on the old helper identity.
         guard !self.launchAgentNeedsOwnershipRepair() else { return false }
 
         let port = GatewayEnvironment.gatewayPort()

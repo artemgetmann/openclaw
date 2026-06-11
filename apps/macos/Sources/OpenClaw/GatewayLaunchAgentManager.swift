@@ -268,11 +268,15 @@ extension GatewayLaunchAgentManager {
     static func _setTestingHooks(
         launchAgentWriteDisabled: (() -> Bool)? = nil,
         readDaemonLoaded: (() async -> Bool?)? = nil,
-        runDaemonCommand: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)? = nil)
+        runDaemonCommand: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)? = nil,
+        currentServiceVersion: (() -> String?)? = nil,
+        currentServiceBuild: (() -> String?)? = nil)
     {
         self.testLaunchAgentWriteDisabledHook = launchAgentWriteDisabled
         self.testReadDaemonLoadedHook = readDaemonLoaded
         self.testRunDaemonCommandHook = runDaemonCommand
+        self.testCurrentServiceVersionHook = currentServiceVersion
+        self.testCurrentServiceBuildHook = currentServiceBuild
     }
 
     static func _clearTestingHooks() {
@@ -400,7 +404,7 @@ extension GatewayLaunchAgentManager {
         CommandResolver.gatewayEntrypoint(in: CommandResolver.gatewayLaunchProjectRoot())
     }
 
-    static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+    static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot? = nil) -> Bool {
         guard let expectedVersion = self.currentServiceVersionString() else { return true }
         guard let actualVersion = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)

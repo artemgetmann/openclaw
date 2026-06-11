@@ -112,4 +112,78 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `stale launch agent service identity requires repair even when runtime and entrypoint match`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let packagedRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("OpenClaw.app/Contents/Resources/OpenClawRuntime/openclaw", isDirectory: true)
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: packagedRoot)
+        }
+
+        try FileManager().createDirectory(
+            at: packagedRoot.appendingPathComponent("dist", isDirectory: true),
+            withIntermediateDirectories: true)
+        try Data().write(to: packagedRoot.appendingPathComponent("dist/index.js"))
+        try Data().write(to: packagedRoot.appendingPathComponent("package.json"))
+        try Data().write(to: packagedRoot.appendingPathComponent("openclaw.mjs"))
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": packagedRoot.path,
+            ])
+        {
+            let currentVersion = "2026.3.22"
+            let currentBuild = "2026061103"
+            GatewayLaunchAgentManager._setTestingHooks(
+                currentServiceVersion: { currentVersion },
+                currentServiceBuild: { currentBuild })
+            defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+            let identity = RuntimeIdentity.current
+            let plistURL = home
+                .appendingPathComponent("Library/LaunchAgents/\(identity.gatewayLaunchdLabel).plist")
+            try FileManager().createDirectory(
+                at: plistURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+
+            let plist: [String: Any] = [
+                "ProgramArguments": [
+                    "/opt/homebrew/opt/node/bin/node",
+                    packagedRoot.appendingPathComponent("dist/index.js").path,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                "EnvironmentVariables": [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_SERVICE_VERSION": currentVersion,
+                    // Missing OPENCLAW_SERVICE_BUILD reproduces a Sparkle-updated
+                    // app with a launchd env block from before build markers existed.
+                    "PATH": identity.stateDirURL
+                        .appendingPathComponent("tools/node/bin", isDirectory: true)
+                        .path,
+                ],
+            ]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: [.atomic])
+
+            #expect(GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime())
+            #expect(GatewayLaunchAgentManager.currentEntrypointOwnership().matchesCurrentEntrypoint)
+            #expect(GatewayProcessManager.shared.testingLaunchAgentNeedsOwnershipRepair())
+        }
+    }
+
 }
