@@ -1691,6 +1691,36 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("keeps durable block final TTS media-only outside Telegram", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "FINAL block answer only." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: undefined,
+      }),
+    );
+  });
+
   it("builds durable block final TTS captions from directive-cleaned visible text", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

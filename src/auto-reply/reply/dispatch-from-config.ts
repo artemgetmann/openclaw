@@ -438,6 +438,7 @@ export async function dispatchReplyFromConfig(params: {
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+  const shouldCaptionFinalTtsSupplement = ttsChannel === "telegram";
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -899,11 +900,14 @@ export async function dispatchReplyFromConfig(params: {
       );
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+        const ttsPayload = {
+          ...ttsReply,
+          text: shouldCaptionFinalTtsSupplement
+            ? buildFinalTtsCaptionPreview(ttsReply.text ?? "")
+            : undefined,
+        };
         const ttsSupplement = sanitizeTelegramVisiblePayload(
-          markFinalTtsSupplement({
-            ...ttsReply,
-            text: buildFinalTtsCaptionPreview(ttsReply.text ?? ""),
-          }),
+          shouldCaptionFinalTtsSupplement ? markFinalTtsSupplement(ttsPayload) : ttsPayload,
         );
         if (shouldRouteToOriginating && originatingChannel && originatingTo) {
           const result = await routeReply({

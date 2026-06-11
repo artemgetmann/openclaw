@@ -225,7 +225,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(preview?.endsWith("...")).toBe(true);
   });
 
-  it("delivers synthesized final TTS as a captioned media supplement", async () => {
+  it("keeps synthesized final TTS media-only outside Telegram", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const { coordinator, dispatcher } = createCoordinator();
 
@@ -239,14 +239,9 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "Final answer already visible.",
+      text: undefined,
       mediaUrl: "https://example.com/final-tts.opus",
       audioAsVoice: true,
-      channelData: {
-        openclaw: {
-          finalTtsSupplement: true,
-        },
-      },
     });
   });
 

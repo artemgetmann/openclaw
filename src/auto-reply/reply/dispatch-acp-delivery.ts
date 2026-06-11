@@ -99,6 +99,19 @@ function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
   };
 }
 
+function isTelegramFinalTtsTarget(params: {
+  ctx: FinalizedMsgContext;
+  originatingChannel?: string;
+  shouldRouteToOriginating: boolean;
+  ttsChannel?: string;
+}): boolean {
+  const channel =
+    params.shouldRouteToOriginating && params.originatingChannel
+      ? params.originatingChannel
+      : (params.ttsChannel ?? params.ctx.Surface ?? params.ctx.Provider);
+  return normalizeMessageChannel(channel) === "telegram";
+}
+
 export type AcpDispatchDeliveryCoordinator = {
   startReplyLifecycle: () => Promise<void>;
   deliver: (
@@ -326,12 +339,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     // The ACP block path has already made the final text visible. Keep only a
     // short caption on the generated media so Telegram previews stay useful
     // without duplicating the full final answer as another text message.
+    const payload = {
+      ...ttsPayload,
+      text: isTelegramFinalTtsTarget(params) ? buildFinalTtsCaptionPreview(finalText) : undefined,
+    };
+
     return deliverPreparedPayload(
       "final",
-      markFinalTtsSupplement({
-        ...ttsPayload,
-        text: buildFinalTtsCaptionPreview(finalText),
-      }),
+      isTelegramFinalTtsTarget(params) ? markFinalTtsSupplement(payload) : payload,
     );
   };
 
