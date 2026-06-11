@@ -18,6 +18,8 @@ BUILD_TRUSTED_RING=0
 REQUIRE_LIVE=0
 RUN_STATUS=1
 SINGLE_ARCH_SMOKE=0
+LAUNCH_WRITE_DISABLED=0
+LAUNCH_SETTLE_SECONDS="${JARVIS_FAST_GATEWAY_LAUNCH_SETTLE_SECONDS:-8}"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +36,11 @@ Options:
   --require-live     Require an already-safe gateway LaunchAgent/RPC proof.
                      The script does not launch default Jarvis.app because that can
                      mutate ai.openclaw.gateway from a feature worktree.
+  --launch-write-disabled
+                     Launch the packaged app with the app state disable-launchagent
+                     marker present, then prove the protected LaunchAgent plist did
+                     not change. The marker is removed afterward if this script
+                     created it.
   --no-status        Skip the read-only gateway status/RPC probe.
   -h, --help         Show this help.
 
@@ -92,6 +99,22 @@ path_is_under() {
   [[ "$child" == "$parent" || "$child" == "$parent/"* ]]
 }
 
+file_sha256() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    /usr/bin/shasum -a 256 "$path" | /usr/bin/awk '{ print $1 }'
+  else
+    printf 'missing\n'
+  fi
+}
+
+process_pids_for_binary() {
+  local binary_path="$1"
+  /bin/ps -axo pid=,command= |
+    /usr/bin/awk -v target="$binary_path" 'index($0, target) > 0 { print $1 }' |
+    /usr/bin/sort
+}
+
 runtime_manifest_value() {
   local manifest_path="$1"
   local key="$2"
@@ -127,6 +150,104 @@ run_gateway_status_probe() {
     pnpm --dir "$ROOT_DIR" openclaw:local gateway status --deep --require-rpc --json
 }
 
+run_write_disabled_launch_probe() {
+  local marker_path="$1"
+  local plist_path="$2"
+  local app_path="$3"
+  local app_binary="$4"
+  local marker_created=0
+  local marker_preexisting=0
+  local before_hash
+  local after_hash
+  local before_pids
+  local after_pids
+  local new_pids
+
+  before_pids="$(mktemp "${TMPDIR:-/tmp}/jarvis-fast-gateway-before.XXXXXX")"
+  after_pids="$(mktemp "${TMPDIR:-/tmp}/jarvis-fast-gateway-after.XXXXXX")"
+
+  cleanup_write_disabled_launch_probe() {
+    if [[ -s "$after_pids" ]]; then
+      local pids
+      pids="$(/usr/bin/comm -13 "$before_pids" "$after_pids" | /usr/bin/tr '\n' ' ')"
+      if [[ -n "$pids" ]]; then
+        # Only terminate app processes that this proof launched from the inspected bundle.
+        /bin/kill $pids >/dev/null 2>&1 || true
+      fi
+    fi
+    if [[ "$marker_created" == "1" ]]; then
+      /bin/rm -f "$marker_path"
+    fi
+    /bin/rm -f "$before_pids" "$after_pids"
+  }
+
+  echo "write_disabled_launch=running"
+  echo "  launchagent_disable_marker=$marker_path"
+
+  if [[ -e "$marker_path" ]]; then
+    marker_preexisting=1
+  else
+    if ! /bin/mkdir -p "$(dirname "$marker_path")"; then
+      cleanup_write_disabled_launch_probe
+      return 1
+    fi
+    if ! /bin/cat >"$marker_path" <<EOF
+{
+  "version": 1,
+  "source": "scripts/prove-jarvis-fast-gateway.sh",
+  "reason": "write-disabled launch proof",
+  "createdBy": "jarvis-fast-gateway"
+}
+EOF
+    then
+      cleanup_write_disabled_launch_probe
+      return 1
+    fi
+    marker_created=1
+  fi
+
+  echo "  launchagent_disable_marker_preexisting=$([[ "$marker_preexisting" == "1" ]] && printf true || printf false)"
+  before_hash="$(file_sha256 "$plist_path")"
+  echo "  launchagent_plist_hash_before=$before_hash"
+  process_pids_for_binary "$app_binary" >"$before_pids"
+
+  if ! /usr/bin/open -n -g "$app_path"; then
+    cleanup_write_disabled_launch_probe
+    return 1
+  fi
+
+  new_pids=""
+  for _ in {1..30}; do
+    process_pids_for_binary "$app_binary" >"$after_pids"
+    new_pids="$(/usr/bin/comm -13 "$before_pids" "$after_pids" | /usr/bin/tr '\n' ' ')"
+    if [[ -n "$new_pids" ]]; then
+      break
+    fi
+    /bin/sleep 0.5
+  done
+
+  echo "  launched_app_pids=${new_pids:-none}"
+  if [[ -z "$new_pids" ]]; then
+    cleanup_write_disabled_launch_probe
+    return 1
+  fi
+
+  /bin/sleep "$LAUNCH_SETTLE_SECONDS"
+  after_hash="$(file_sha256 "$plist_path")"
+  echo "  launchagent_plist_hash_after=$after_hash"
+
+  cleanup_write_disabled_launch_probe
+
+  if [[ "$before_hash" != "$after_hash" ]]; then
+    echo "  launchagent_plist_unchanged=false"
+    return 1
+  fi
+
+  echo "  launchagent_plist_unchanged=true"
+  echo "write_disabled_launch=true"
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app)
@@ -144,6 +265,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --require-live)
       REQUIRE_LIVE=1
+      shift
+      ;;
+    --launch-write-disabled)
+      LAUNCH_WRITE_DISABLED=1
       shift
       ;;
     --no-status)
@@ -215,8 +340,10 @@ RUNTIME_RESOURCE_ROOT="$APP_PATH/Contents/Resources/OpenClawRuntime"
 RUNTIME_PROJECT_ROOT="$RUNTIME_RESOURCE_ROOT/openclaw"
 RUNTIME_ENTRYPOINT="$RUNTIME_PROJECT_ROOT/dist/index.js"
 RUNTIME_MANIFEST="$RUNTIME_RESOURCE_ROOT/manifest.json"
+APP_BINARY="$APP_PATH/Contents/MacOS/OpenClaw"
 [[ -d "$RUNTIME_RESOURCE_ROOT" ]] || die "bundled runtime resource missing: $RUNTIME_RESOURCE_ROOT"
 [[ -r "$RUNTIME_ENTRYPOINT" ]] || die "bundled runtime entrypoint missing: $RUNTIME_ENTRYPOINT"
+[[ -x "$APP_BINARY" ]] || die "app executable missing: $APP_BINARY"
 
 SIGNATURE_STATUS="invalid"
 if /usr/bin/codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1; then
@@ -242,6 +369,7 @@ LAUNCHAGENT_PRESENT=0
 LAUNCHAGENT_MATCHES_EXPECTED=0
 PROTECTED_DRIFT=0
 STATUS_PROBE_OK=0
+WRITE_DISABLED_LAUNCH_OK=0
 PROOF_GAP=""
 
 echo "Jarvis fast gateway package facts:"
@@ -331,6 +459,18 @@ if [[ "$LAUNCHAGENT_MATCHES_EXPECTED" == "1" && "$RUN_STATUS" == "1" ]]; then
   fi
 fi
 
+if [[ "$LAUNCH_WRITE_DISABLED" == "1" ]]; then
+  if run_write_disabled_launch_probe \
+    "$EXPECTED_STATE_DIR/disable-launchagent" \
+    "$LAUNCHAGENT_PLIST" \
+    "$APP_PATH" \
+    "$APP_BINARY"; then
+    WRITE_DISABLED_LAUNCH_OK=1
+  else
+    die "write-disabled packaged app launch mutated the LaunchAgent or failed to launch"
+  fi
+fi
+
 if [[ "$LAUNCHAGENT_PRESENT" == "0" ]]; then
   PROOF_GAP="gateway LaunchAgent is not present for $EXPECTED_LABEL"
 elif [[ "$LAUNCHAGENT_MATCHES_EXPECTED" != "1" ]]; then
@@ -344,7 +484,11 @@ if [[ -n "$PROOF_GAP" ]]; then
   echo "jarvis_fast_gateway_live=false"
   echo "proof_gap=$PROOF_GAP"
   if [[ "$EXPECTED_LABEL" == "ai.openclaw.gateway" ]]; then
-    echo "safe_live_hook_needed=release Jarvis.app needs a non-default isolated launch/proof mode, or an app-level write-disabled dry-run that reports GatewayLaunchAgentManager's desired install without modifying ai.openclaw.gateway"
+    if [[ "$WRITE_DISABLED_LAUNCH_OK" == "1" ]]; then
+      echo "safe_live_hook=write-disabled packaged app launch preserved ai.openclaw.gateway"
+    else
+      echo "safe_live_hook_needed=release Jarvis.app needs a non-default isolated launch/proof mode, or an app-level write-disabled dry-run that reports GatewayLaunchAgentManager's desired install without modifying ai.openclaw.gateway"
+    fi
   fi
   if [[ "$REQUIRE_LIVE" == "1" ]]; then
     die "live packaged gateway proof required but unsafe or incomplete: $PROOF_GAP"
