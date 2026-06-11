@@ -258,10 +258,84 @@ Real-task conclusion:
 
 - Partial winner: agent-desktop, because it targeted the intended Safari/X
   window more deterministically.
-- Overall gate remains closed until the local Claude app exposes a safe composer
-  target again.
-- Do not treat this as proof that either runtime can complete the Twitter/X to
-  Claude handoff end to end.
+
+## Real Task Rerun: 2026-06-11
+
+Reason for rerun: the user showed Claude open on the `Greeting` conversation
+with a visible `Write a message...` composer after the earlier blocked run.
+
+Scope stayed unchanged:
+
+- read-only on Twitter/X
+- no post, like, repost, reply, bookmark, unbookmark, follow, DM, settings,
+  profile/account menu, or Twitter/X account-state mutation
+- no Telegram, Messages, Jarvis, `/Applications/Jarvis.app`, shared runtime, or
+  Codex Computer Use
+- no Peekaboo `--analyze`
+
+Result: both runtimes completed the X-to-Claude handoff, but neither is clean
+enough to ship as an unsupervised consumer GUI-control default.
+
+Peekaboo 3.4.1 result: pass for the rerun, with guardrails.
+
+- Permissions were already granted for Screen Recording and Accessibility.
+- Safari was observed through exact window id `99`, titled `(1) Home / X`.
+  The known Private Browsing window `101` was left untouched.
+- Claude window id `2592` exposed the composer only after a deeper AX capture
+  with larger depth/element limits.
+- Peekaboo clicked the `Write a message...` element ref from the Claude
+  snapshot, typed the labelled `[PEEKABOO GUI BENCHMARK RERUN]` prompt into
+  Claude, and submitted it.
+- Claude visibly replied:
+  `Confirmed - X home page shows the "For you" feed with topic tabs including OpenClaw, post composer visible, right rail with Premium upsell, WWDC/AI news items, and Indonesian trends.`
+- Safety issue: Peekaboo still needs strict exact-window targeting and deeper
+  AX limits for Claude; app-scoped Safari use remains too risky around the
+  adjacent locked Private Browsing window.
+
+agent-desktop 0.2.3 result: pass for the rerun, but with input/submit
+friction.
+
+- Permissions were already granted for Screen Recording and Accessibility.
+- Safari was observed through exact window ref `w-99`, titled `(1) Home / X`.
+- Claude composer was cleanly exposed as a real textfield ref with
+  `Write your prompt to Claude`, plus `SetValue` and `SetFocus`.
+- `type` inserted the labelled `[AGENT-DESKTOP GUI BENCHMARK RERUN]` prompt,
+  but initially duplicated text and preserved placeholder text in the composer.
+- Pressing `return` did not submit. AX-clicking the visible `Send message`
+  button reported success but did not submit. `cmd+return` targeted to Claude
+  finally submitted.
+- Claude visibly replied:
+  `Confirmed - X home shows "For you" feed, topic tabs including OpenClaw, untouched post composer, right rail with Premium upsell, news on WWDC and AI worker fatigue, Indonesian trends (Donat, #Pakuhaji, Pemuda), and Who to follow suggestions.`
+- Safety issue: no X/Twitter mutation occurred, but Claude input fidelity and
+  submit semantics need wrapper handling before this can be trusted in a
+  product loop.
+
+Rerun winner: Peekaboo, narrowly, for this specific real handoff.
+
+Reason:
+
+- both runtimes safely observed X read-only
+- both sent to Claude and captured a visible Claude reply
+- Peekaboo needed deeper AX configuration but completed the Claude handoff more
+  directly once the composer was targetable
+- agent-desktop had cleaner structured targeting overall, but its Claude
+  text-entry path duplicated input and needed a keyboard-submit workaround
+
+Current recommendation:
+
+- Keep consumer GUI control deferred from the first MVP.
+- Keep agent-desktop as the next integration spike for deterministic
+  window/ref targeting and fail-closed behavior.
+- Keep Peekaboo as the bridge/fallback runtime for capture and Claude handoff
+  proof, but only under exact app/window/snapshot targeting.
+- Before shipping any GUI-control lane, wrap both runtimes behind a planner that
+  verifies target window, target element, post-action state, and account-mutation
+  risk after every step.
+- The Claude-composer gate is now open for this machine state, but the
+  production gate remains closed until submit behavior and input fidelity are
+  wrapped and retested.
+- Do not treat this as proof that either runtime can complete arbitrary
+  Twitter/X-to-Claude workflows without supervision.
 
 Reusable real-task checklist:
 
