@@ -696,8 +696,9 @@ export async function deliverReplies(params: {
           progress,
         });
       } else {
+        const finalTtsSupplement = isFinalTtsSupplementPayload(reply);
         const shouldSplitVoiceSupplement =
-          !isFinalTtsSupplementPayload(reply) &&
+          !finalTtsSupplement &&
           reply.audioAsVoice === true &&
           typeof reply.text === "string" &&
           reply.text.trim().length > 0;
@@ -746,7 +747,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
-          voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement,
+          voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement || finalTtsSupplement,
         });
         firstDeliveredMessageId ??= mediaMessageId;
       }

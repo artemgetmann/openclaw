@@ -73,6 +73,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
+    cleanedFinalText: undefined as string | undefined,
     synthesizeFinalAudio: false,
   };
   return {
@@ -98,6 +99,7 @@ const ttsMocks = vi.hoisted(() => {
       ) {
         return {
           ...params.payload,
+          text: state.cleanedFinalText ?? params.payload.text,
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
         };
@@ -305,6 +307,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    ttsMocks.state.cleanedFinalText = undefined;
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -1684,6 +1687,39 @@ describe("dispatchReplyFromConfig", () => {
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
         text: "FINAL block answer only.",
+      }),
+    );
+  });
+
+  it("builds durable block final TTS captions from directive-cleaned visible text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.state.cleanedFinalText = "FINAL clean answer.";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: "FINAL [[tts:voice=alloy]]clean answer. [[tts:text]]private speech[[/tts:text]]",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: "FINAL clean answer.",
       }),
     );
   });

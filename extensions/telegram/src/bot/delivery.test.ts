@@ -548,6 +548,38 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("skips text fallback when a marked final TTS supplement cannot be sent as voice", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 12,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Final preview.",
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("renders markdown in media captions", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({

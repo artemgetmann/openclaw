@@ -902,7 +902,7 @@ export async function dispatchReplyFromConfig(params: {
         const ttsSupplement = sanitizeTelegramVisiblePayload(
           markFinalTtsSupplement({
             ...ttsReply,
-            text: buildFinalTtsCaptionPreview(durableBlockFinalText),
+            text: buildFinalTtsCaptionPreview(ttsReply.text ?? ""),
           }),
         );
         if (shouldRouteToOriginating && originatingChannel && originatingTo) {
