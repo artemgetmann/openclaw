@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import { getLastTtsAttempt, maybeApplyTtsToPayload } from "../../tts/tts.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -324,6 +324,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (!finalText) {
       return false;
     }
+    const attemptStartedAt = Date.now();
+    logVerbose(
+      `dispatch-acp: final TTS supplement synthesis start textLength=${finalText.length} channel=${params.ttsChannel ?? "unknown"}`,
+    );
     const ttsPayload = await maybeApplyTtsToPayload({
       payload: { text: finalText },
       cfg: params.cfg,
@@ -333,6 +337,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
     if (!ttsPayload.mediaUrl && !(ttsPayload.mediaUrls?.length ?? 0)) {
+      const lastAttempt = getLastTtsAttempt();
+      const failedThisAttempt =
+        lastAttempt && lastAttempt.timestamp >= attemptStartedAt && !lastAttempt.success;
+      logVerbose(
+        `dispatch-acp: final TTS supplement synthesis ${failedThisAttempt ? "failed" : "skipped"} textLength=${finalText.length} error=${failedThisAttempt ? (lastAttempt.error ?? "unknown") : "none"}`,
+      );
+      if (failedThisAttempt && isTelegramFinalTtsTarget(params)) {
+        await deliverPreparedPayload("final", {
+          text: "Voice note failed. Final text is above.",
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+              ttsFailureStatus: true,
+            },
+          },
+        });
+      }
       return false;
     }
 
@@ -347,10 +368,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: shouldCaption ? buildFinalTtsCaptionPreview(finalText) : undefined,
     };
 
-    return deliverPreparedPayload(
+    logVerbose(
+      `dispatch-acp: final TTS supplement media send start textLength=${finalText.length} hasCaption=${String(Boolean(payload.text))}`,
+    );
+    const delivered = await deliverPreparedPayload(
       "final",
       shouldMarkSupplement ? markFinalTtsSupplement(payload) : payload,
     );
+    logVerbose(
+      `dispatch-acp: final TTS supplement media send ${delivered ? "end" : "failure"} textLength=${finalText.length}`,
+    );
+    return delivered;
   };
 
   return {

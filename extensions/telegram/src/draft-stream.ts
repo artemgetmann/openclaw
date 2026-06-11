@@ -168,6 +168,7 @@ export function createTelegramDraftStream(params: {
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
+  let previewStoppedBecauseLength = false;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -314,6 +315,7 @@ export function createTelegramDraftStream(params: {
       // Telegram text messages/edits cap at 4096 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
+      previewStoppedBecauseLength = true;
       params.warn?.(
         `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
       );
@@ -429,6 +431,7 @@ export function createTelegramDraftStream(params: {
     }
     lastSentText = "";
     lastSentParseMode = undefined;
+    previewStoppedBecauseLength = false;
     loop.resetPending();
     loop.resetThrottleWindow();
   };
@@ -441,6 +444,12 @@ export function createTelegramDraftStream(params: {
    */
   const materialize = async (): Promise<number | undefined> => {
     await stop();
+    if (previewStoppedBecauseLength) {
+      params.warn?.(
+        "telegram stream preview materialize skipped after over-limit preview; using durable final send",
+      );
+      return undefined;
+    }
     // If using message transport, the streamMessageId is already a real message.
     if (previewTransport === "message" && typeof streamMessageId === "number") {
       return streamMessageId;

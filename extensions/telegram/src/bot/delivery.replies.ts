@@ -727,28 +727,48 @@ export async function deliverReplies(params: {
           });
           reply = { ...reply, text: voiceCaptionPreview };
         }
-        const mediaMessageId = await deliverMediaReply({
-          reply,
-          mediaList,
-          bot: params.bot,
-          chatId: params.chatId,
-          runtime: params.runtime,
-          thread: params.thread,
-          tableMode: params.tableMode,
-          mediaLocalRoots: params.mediaLocalRoots,
-          chunkText,
-          onVoiceRecording: params.onVoiceRecording,
-          linkPreview: params.linkPreview,
-          replyQuoteMessageId: params.replyQuoteMessageId,
-          replyQuoteText: params.replyQuoteText,
-          replyQuotePosition: params.replyQuotePosition,
-          replyQuoteEntities: params.replyQuoteEntities,
-          replyMarkup,
-          replyToId,
-          replyToMode: params.replyToMode,
-          progress,
-          voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement || finalTtsSupplement,
-        });
+        if (finalTtsSupplement) {
+          logVerbose(
+            `telegram: final TTS supplement media send start chat=${params.chatId} thread=${params.thread?.id ?? "none"} mediaCount=${mediaList.length}`,
+          );
+        }
+        let mediaMessageId: number | undefined;
+        try {
+          mediaMessageId = await deliverMediaReply({
+            reply,
+            mediaList,
+            bot: params.bot,
+            chatId: params.chatId,
+            runtime: params.runtime,
+            thread: params.thread,
+            tableMode: params.tableMode,
+            mediaLocalRoots: params.mediaLocalRoots,
+            chunkText,
+            onVoiceRecording: params.onVoiceRecording,
+            linkPreview: params.linkPreview,
+            replyQuoteMessageId: params.replyQuoteMessageId,
+            replyQuoteText: params.replyQuoteText,
+            replyQuotePosition: params.replyQuotePosition,
+            replyQuoteEntities: params.replyQuoteEntities,
+            replyMarkup,
+            replyToId,
+            replyToMode: params.replyToMode,
+            progress,
+            voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement || finalTtsSupplement,
+          });
+          if (finalTtsSupplement) {
+            logVerbose(
+              `telegram: final TTS supplement media send end chat=${params.chatId} thread=${params.thread?.id ?? "none"} message=${mediaMessageId ?? "unknown"}`,
+            );
+          }
+        } catch (error) {
+          if (finalTtsSupplement) {
+            logVerbose(
+              `telegram: final TTS supplement media send failure chat=${params.chatId} thread=${params.thread?.id ?? "none"} error=${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          throw error;
+        }
         firstDeliveredMessageId ??= mediaMessageId;
       }
       await maybePinFirstDeliveredMessage({

@@ -51,7 +51,7 @@ export function createTelegramProgressController(params: {
     chatId: params.chatId,
     maxChars: params.maxChars,
     thread: params.thread,
-    previewTransport: "message",
+    previewTransport: "auto",
     replyToMessageId: params.replyToMessageId,
     minInitialChars: params.minInitialChars,
     deleteAudit: {

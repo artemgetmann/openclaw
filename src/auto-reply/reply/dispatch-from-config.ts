@@ -41,7 +41,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
-import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
+import { getLastTtsAttempt, maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { maybeResolveTextAlias, normalizeCommandBody } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
@@ -895,6 +895,7 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (replies.length === 0 && durableBlockFinalText.trim()) {
+      const ttsAttemptStartedAt = Date.now();
       const ttsReply = await maybeApplyAutomaticTts(
         { text: durableBlockFinalText.trim() },
         "final",
@@ -933,6 +934,42 @@ export async function dispatchReplyFromConfig(params: {
           }
         } else {
           queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
+        }
+      } else if (
+        shouldCaptionFinalTtsSupplement &&
+        !sourceReplyPolicy.suppressAutomaticSourceDelivery
+      ) {
+        const lastAttempt = getLastTtsAttempt();
+        const failedThisAttempt =
+          lastAttempt && lastAttempt.timestamp >= ttsAttemptStartedAt && !lastAttempt.success;
+        if (failedThisAttempt) {
+          const failurePayload = markFinalTtsSupplement({
+            text: "Voice note failed. Final text is above.",
+            channelData: {
+              openclaw: {
+                ttsFailureStatus: true,
+              },
+            },
+          });
+          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const result = await routeReply({
+              payload: failurePayload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: ctx.SessionKey,
+              accountId: ctx.AccountId,
+              threadId: routeThreadId,
+              cfg,
+              isGroup,
+              groupId,
+            });
+            queuedFinal = result.ok || queuedFinal;
+            if (result.ok) {
+              routedFinalCount += 1;
+            }
+          } else {
+            queuedFinal = dispatcher.sendFinalReply(failurePayload) || queuedFinal;
+          }
         }
       }
     }

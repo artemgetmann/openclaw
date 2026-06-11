@@ -304,6 +304,31 @@ describe("createTelegramDraftStream", () => {
     expect(clearCall?.[3]).toEqual({ message_thread_id: 42 });
   });
 
+  it("skips materializing stale draft text after preview exceeds the cap", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      maxChars: 12,
+      warn,
+    });
+
+    stream.update("Short draft");
+    await stream.flush();
+    stream.update("This preview is too long for Telegram drafts");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBeUndefined();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("telegram stream preview stopped (text length 44 > 12)");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview materialize skipped after over-limit preview; using durable final send",
+    );
+  });
+
   it("retries materialize send without thread when dm thread lookup fails", async () => {
     const api = createMockDraftApi();
     api.sendMessage

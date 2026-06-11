@@ -189,13 +189,16 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
-        minInitialChars: 1,
+        previewTransport: "auto",
+        minInitialChars: 12,
       }),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Checking the page.");
     expect(progressStream.flush).toHaveBeenCalledTimes(1);
     expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      progressStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
@@ -736,7 +739,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     },
   );
 
-  it("uses message preview transport for DM reasoning streams while streaming is active", async () => {
+  it("uses native draft preview transport for DM reasoning streams while streaming is active", async () => {
     const reasoningDraftStream = createDraftStream(111);
     createTelegramDraftStream.mockReturnValue(reasoningDraftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -754,7 +757,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_Working on it..._");

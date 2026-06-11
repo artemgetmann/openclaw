@@ -110,6 +110,7 @@ const ttsMocks = vi.hoisted(() => {
       typeof value === "string" ? value : undefined,
     ),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    getLastTtsAttempt: vi.fn(() => undefined),
   };
 });
 
@@ -197,6 +198,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
   };
 });
 vi.mock("../../tts/tts.js", () => ({
+  getLastTtsAttempt: () => ttsMocks.getLastTtsAttempt(),
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
@@ -310,6 +312,7 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.state.cleanedFinalText = undefined;
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
+    ttsMocks.getLastTtsAttempt.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
