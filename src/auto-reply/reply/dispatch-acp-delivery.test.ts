@@ -287,14 +287,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
           text: "Final answer.",
           mediaUrl: "https://example.com/final-tts.opus",
           audioAsVoice: true,
-          channelData: {
-            openclaw: {
-              finalTtsSupplement: true,
-            },
-          },
         }),
       }),
     );
+    expect(
+      (routeMocks.routeReply.mock.calls[1]?.[0] as { payload?: ReplyPayload } | undefined)?.payload
+        ?.channelData,
+    ).toBeUndefined();
   });
 
   it("does not send the captioned TTS supplement when visible final text fails", async () => {

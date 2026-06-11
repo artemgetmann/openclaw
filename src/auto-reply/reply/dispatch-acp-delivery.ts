@@ -339,14 +339,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     // The ACP block path has already made the final text visible. Keep only a
     // short caption on the generated media so Telegram previews stay useful
     // without duplicating the full final answer as another text message.
+    const shouldCaption = isTelegramFinalTtsTarget(params);
+    const shouldMarkSupplement =
+      shouldCaption && (!params.shouldRouteToOriginating || shouldUseSourceDispatcherForTelegram());
     const payload = {
       ...ttsPayload,
-      text: isTelegramFinalTtsTarget(params) ? buildFinalTtsCaptionPreview(finalText) : undefined,
+      text: shouldCaption ? buildFinalTtsCaptionPreview(finalText) : undefined,
     };
 
     return deliverPreparedPayload(
       "final",
-      isTelegramFinalTtsTarget(params) ? markFinalTtsSupplement(payload) : payload,
+      shouldMarkSupplement ? markFinalTtsSupplement(payload) : payload,
     );
   };
 
