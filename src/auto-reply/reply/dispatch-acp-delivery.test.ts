@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
