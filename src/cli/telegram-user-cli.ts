@@ -31,39 +31,39 @@ export function registerTelegramUserCli(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           [
-            'pnpm openclaw:local telegram-user login --phone "+15551234567"',
+            'openclaw telegram-user login --phone "+15551234567"',
             "Start login, prompt for OTP/2FA when needed, and store the session locally.",
           ],
           [
-            'OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" pnpm openclaw:local telegram-user login --phone "+15551234567" --code 12345 --json',
+            'OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" openclaw telegram-user login --phone "+15551234567" --code 12345 --json',
             "Finish a 2FA step non-interactively without exposing the password in process arguments.",
           ],
           [
-            "pnpm openclaw:local telegram-user status --json",
+            "openclaw telegram-user status --json",
             "Inspect whether the Telegram-as-me session is ready, expired, or awaiting reauth.",
           ],
           [
-            'pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hello"',
+            'openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello"',
             "Send as the Telegram user account.",
           ],
           [
-            "pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --media /tmp/proof.ogg --voice --json",
+            "openclaw telegram-user send --chat @jarvis_tester_1_bot --media /tmp/proof.ogg --voice --json",
             "Upload media as the Telegram user account, with --reply-to available for topic targeting.",
           ],
           [
-            'pnpm openclaw:local telegram-user topic-create --chat -1003783709877 --title "voice proof" --json',
+            'openclaw telegram-user topic-create --chat -1003783709877 --title "voice proof" --json',
             "Create a forum topic and return its topic anchor for follow-up replies.",
           ],
           [
-            "pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json",
-            "Read recent DM messages with raw metadata.",
+            "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof --limit 5 --json",
+            "Read matching recent DM messages with raw metadata; use CLI filters instead of piping JSON to grep.",
           ],
           [
-            "pnpm openclaw:local telegram-user inbox --unread --dm-only --limit 10 --json",
-            "List inbox dialogs for unread DM triage with raw metadata.",
+            "openclaw telegram-user inbox --contains Artem --unread --dm-only --limit 10 --json",
+            "List matching inbox dialogs for unread DM triage with raw metadata.",
           ],
           [
-            "pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json",
+            "openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json",
             "Wait for a matching reply with structured diagnostics.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
@@ -167,6 +167,7 @@ export function registerTelegramUserCli(program: Command) {
     .option("--limit <n>", "Read up to this many recent messages", "20")
     .option("--after-id <id>", "Only include messages newer than this id")
     .option("--before-id <id>", "Only include messages older than this id")
+    .option("--contains <text>", "Only include messages containing this substring")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserReadCommand } = await import("../commands/telegram-user.js");
@@ -180,6 +181,7 @@ export function registerTelegramUserCli(program: Command) {
     .option("--unread", "Only include dialogs with unread counts, mentions, or reactions", false)
     .option("--dm-only", "Only include direct-message dialogs", false)
     .option("--limit <n>", "List up to this many dialogs", "20")
+    .option("--contains <text>", "Only include dialogs whose title, username, or last text matches")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserInboxCommand } = await import("../commands/telegram-user.js");

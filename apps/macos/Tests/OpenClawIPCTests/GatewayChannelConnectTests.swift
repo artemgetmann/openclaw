@@ -154,6 +154,51 @@ struct GatewayChannelConnectTests {
             #expect(sent.role() == "node")
         }
     }
+
+    @Test func `operator shared gateway token wins over stored operator device token`() async throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-channel-auth-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": root.path]) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "stale-operator-device-token",
+                scopes: [])
+
+            let sent = CapturedConnectAuth()
+            let session = GatewayTestWebSocketSession(
+                taskFactory: {
+                    GatewayTestWebSocketTask(
+                        sendHook: { _, message, sendIndex in
+                            if sendIndex == 0 {
+                                sent.record(message)
+                            }
+                        })
+                })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "shared-operator-token",
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "operator",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "ui",
+                    clientDisplayName: "OpenClaw Test"))
+
+            try await channel.connect()
+
+            #expect(await channel.authSource() == .sharedToken)
+            #expect(sent.authToken() == "shared-operator-token")
+            #expect(sent.role() == "operator")
+        }
+    }
 }
 
 private final class CapturedConnectAuth: @unchecked Sendable {

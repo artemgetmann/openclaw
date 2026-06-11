@@ -30,9 +30,12 @@ function createOpenclawLocalHarness(): {
 
   writeExecutable(
     path.join(root, "scripts", "fake-node.sh"),
-    ["#!/usr/bin/env bash", 'printf "node:%s\\n" "$*" >> "$OPENCLAW_TEST_CALLS"', "exit 0"].join(
-      "\n",
-    ),
+    [
+      "#!/usr/bin/env bash",
+      'printf "node:%s\\n" "$*" >> "$OPENCLAW_TEST_CALLS"',
+      'printf "telegram-compat:%s\\n" "${OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT:-}" >> "$OPENCLAW_TEST_CALLS"',
+      "exit 0",
+    ].join("\n"),
   );
   writeExecutable(
     path.join(root, "scripts", "restart-local-gateway.sh"),
@@ -150,6 +153,7 @@ describe("scripts/openclaw-local.sh restart routing", () => {
 
       expect(result.status).toBe(0);
       expect(calls).toContain("bootstrap:--strict");
+      expect(calls).toContain("telegram-compat:1");
       expect(calls).toContain(
         `node:${fs.realpathSync(path.join(harness.root, "openclaw.mjs"))} telegram-user status --json`,
       );

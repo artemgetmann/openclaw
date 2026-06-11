@@ -103,6 +103,20 @@ class FakeInboxClient:
       yield dialog
 
 
+class FakeReadClient:
+  def __init__(self, messages: list[SimpleNamespace]) -> None:
+    self.disconnected = False
+    self.get_messages_calls: list[dict[str, object]] = []
+    self.messages = messages
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+  async def get_messages(self, chat, *, limit: int):
+    self.get_messages_calls.append({"chat": chat, "limit": limit})
+    return self.messages[:limit]
+
+
 class FakeSentMessage:
   def __init__(
     self,
@@ -196,6 +210,7 @@ def build_fake_dialog(
   *,
   chat_id: int,
   is_user: bool,
+  message_text: str | None = None,
   unread_count: int = 0,
   unread_mentions_count: int = 0,
   unread_reactions_count: int = 0,
@@ -209,6 +224,19 @@ def build_fake_dialog(
     title = title,
     username = username,
   )
+  message = None
+  if message_text is not None:
+    message = SimpleNamespace(
+      chat_id = chat_id,
+      chat = entity,
+      date = None,
+      direct_messages_topic = None,
+      id = chat_id * 10,
+      message = message_text,
+      out = False,
+      reply_to = None,
+      sender_id = chat_id,
+    )
   return SimpleNamespace(
     archived = False,
     dialog = SimpleNamespace(notify_settings = SimpleNamespace(mute_until = None)),
@@ -217,7 +245,7 @@ def build_fake_dialog(
     is_channel = False,
     is_group = not is_user,
     is_user = is_user,
-    message = None,
+    message = message,
     name = label,
     pinned = False,
     unread_count = unread_count,
@@ -357,6 +385,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       ):
         exit_code = await telethon_cli.run_inbox(
           argparse.Namespace(
+            contains = "",
             dm_only = True,
             limit = 1,
             session = str(session_path),
@@ -369,6 +398,105 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertTrue(fake_client.disconnected)
     self.assertEqual(len(emitted["dialogs"]), 1)
     self.assertEqual(emitted["dialogs"][0]["chat_username"], "jarvis_tester_1_bot")
+
+  async def test_run_inbox_filters_by_contains_before_emitting_json(self) -> None:
+    fake_client = FakeInboxClient([
+      build_fake_dialog(
+        chat_id = 101,
+        is_user = True,
+        message_text = "noise only",
+        username = "wrong_chat",
+      ),
+      build_fake_dialog(
+        chat_id = 202,
+        is_user = True,
+        message_text = "Launch proof landed",
+        username = "jarvis_tester_1_bot",
+      ),
+    ])
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_inbox(
+          argparse.Namespace(
+            contains = "proof",
+            dm_only = False,
+            limit = 1,
+            session = str(session_path),
+            unread = False,
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(fake_client.iter_dialogs_calls, [{"ignore_pinned": False, "limit": 1000}])
+    self.assertEqual(len(emitted["dialogs"]), 1)
+    self.assertEqual(emitted["dialogs"][0]["chat_username"], "jarvis_tester_1_bot")
+
+  async def test_run_read_filters_by_contains_and_scans_deeper_than_result_limit(self) -> None:
+    fake_client = FakeReadClient([
+      SimpleNamespace(
+        chat = SimpleNamespace(id = 10, title = None, username = "jarvis_tester_1_bot"),
+        chat_id = 10,
+        date = None,
+        direct_messages_topic = None,
+        id = 1,
+        message = "noise",
+        out = False,
+        reply_to = None,
+        sender_id = 101,
+      ),
+      SimpleNamespace(
+        chat = SimpleNamespace(id = 10, title = None, username = "jarvis_tester_1_bot"),
+        chat_id = 10,
+        date = None,
+        direct_messages_topic = None,
+        id = 2,
+        message = "proof matched",
+        out = False,
+        reply_to = None,
+        sender_id = 102,
+      ),
+    ])
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_read(
+          argparse.Namespace(
+            after_id = 0,
+            before_id = 0,
+            chat = "@jarvis_tester_1_bot",
+            contains = "proof",
+            limit = 1,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(fake_client.get_messages_calls, [{"chat": "@jarvis_tester_1_bot", "limit": 200}])
+    self.assertEqual(len(emitted["messages"]), 1)
+    self.assertEqual(emitted["messages"][0]["text"], "proof matched")
 
   async def test_run_send_uploads_media_as_voice_with_caption_and_reply_target(self) -> None:
     fake_client = FakeSendClient()
@@ -541,6 +669,15 @@ class TelethonCliSyncTests(unittest.TestCase):
     self.assertEqual(
       telethon_cli.compute_inbox_scan_cap(limit = 20, dm_only = False, unread_only = False),
       20,
+    )
+    self.assertEqual(
+      telethon_cli.compute_inbox_scan_cap(
+        contains = "proof",
+        limit = 1,
+        dm_only = False,
+        unread_only = False,
+      ),
+      1_000,
     )
     self.assertEqual(
       telethon_cli.compute_inbox_scan_cap(limit = 1, dm_only = True, unread_only = True),

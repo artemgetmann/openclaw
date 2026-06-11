@@ -48,10 +48,10 @@ Then prove:
 
 Use the repo-local CLI first:
 
-- `pnpm openclaw:local telegram-user precheck ...`
-- `pnpm openclaw:local telegram-user send ...`
-- `pnpm openclaw:local telegram-user read ...`
-- `pnpm openclaw:local telegram-user wait ...`
+- `openclaw telegram-user precheck ...`
+- `openclaw telegram-user send ...`
+- `openclaw telegram-user read ...`
+- `openclaw telegram-user wait ...`
 
 Use lower-level scripts only when the CLI path is missing the required feature.
 

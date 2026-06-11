@@ -811,6 +811,15 @@ if (!result?.ok) {
     `ACP validation auth bootstrap failed: ${result?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
   );
 }
+console.log(`codex_auth_bootstrap=${JSON.stringify({
+  agentId: "main",
+  sourceKind: result.sourceKind ?? "unknown",
+  sourcePath: result.sourceAuthPath ?? result.codexAuthPath ?? "",
+  selectedProfileId: result.selectedProfileId ?? "",
+  accessExpiryMs: result.accessExpiryMs ?? null,
+  expirySource: result.expirySource ?? "unknown",
+  candidateCount: result.candidateCount ?? 0,
+})}`);
 NODE
     then
       add_failure "runtime_auth_bootstrap_failed"
@@ -859,6 +868,18 @@ const {
   syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
 } = await import(pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href);
+
+function emitCodexAuthBootstrapDiagnostic(agentId, bootstrap) {
+  console.log(`codex_auth_bootstrap=${JSON.stringify({
+    agentId,
+    sourceKind: bootstrap?.sourceKind ?? "unknown",
+    sourcePath: bootstrap?.sourceAuthPath ?? bootstrap?.codexAuthPath ?? "",
+    selectedProfileId: bootstrap?.selectedProfileId ?? "",
+    accessExpiryMs: bootstrap?.accessExpiryMs ?? null,
+    expirySource: bootstrap?.expirySource ?? "unknown",
+    candidateCount: bootstrap?.candidateCount ?? 0,
+  })}`);
+}
 
 let config = {};
 if (fs.existsSync(runtimeConfigPath)) {
@@ -939,6 +960,7 @@ for (const agentId of agentIds) {
           `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
         );
       }
+      emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
     }
     continue;
   }
@@ -959,6 +981,7 @@ for (const agentId of agentIds) {
           `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
         );
       }
+      emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
       continue;
     }
   }
@@ -989,6 +1012,7 @@ for (const agentId of agentIds) {
         `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
       );
     }
+    emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
     continue;
   }
 

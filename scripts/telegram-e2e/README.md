@@ -107,7 +107,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Manual setup is optional now. `pnpm openclaw:local telegram-user ...` auto-bootstraps `.venv` only when missing/broken and stays quiet when healthy.
+Manual setup is optional now. `openclaw telegram-user ...` auto-bootstraps
+`.venv` only when missing/broken and stays quiet when healthy. Use
+`pnpm openclaw:local telegram-user ...` only when an internal smoke script must
+pin execution to this checkout.
 
 ### Preferred CLI path
 
@@ -124,50 +127,61 @@ Use `telegram-user` directly when you need the lower-level MTProto primitives:
 Use the repo-local CLI for normal operator work and automation:
 
 ```bash
-pnpm openclaw:local telegram-user status --json
+openclaw telegram-user status --json
 
-pnpm openclaw:local telegram-user login \
+openclaw telegram-user login \
   --phone "+15551234567"
 
 OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" \
-  pnpm openclaw:local telegram-user login \
+  openclaw telegram-user login \
     --phone "+15551234567" \
     --code 12345 \
     --json
 
-pnpm openclaw:local telegram-user precheck --chat @jarvis_tester_1_bot
+openclaw telegram-user precheck --chat @jarvis_tester_1_bot
 
-pnpm openclaw:local telegram-user send \
+openclaw telegram-user send \
   --chat @jarvis_tester_1_bot \
   --message "hello from the Telegram user CLI" \
   --json
 
-pnpm openclaw:local telegram-user topic-create \
+openclaw telegram-user topic-create \
   --chat -1003783709877 \
   --title "voice proof $(date +%s)" \
   --json
 
-pnpm openclaw:local telegram-user send \
+openclaw telegram-user send \
   --chat -1003783709877 \
   --media /tmp/proof.ogg \
   --voice \
   --reply-to <topic_anchor> \
   --json
 
-pnpm openclaw:local telegram-user read \
+openclaw telegram-user read \
   --chat @jarvis_tester_1_bot \
+  --contains proof \
   --limit 5 \
   --json
 
-pnpm openclaw:local telegram-user wait \
+openclaw telegram-user wait \
   --chat @jarvis_tester_1_bot \
   --after-id 12345 \
   --sender-id 67890 \
   --thread-anchor 7001 \
   --json
 
-pnpm openclaw:local telegram-user logout --json
+openclaw telegram-user logout --json
 ```
+
+For discovery, prefer structured filters over shell parsing:
+
+```bash
+openclaw telegram-user inbox --contains "Artem" --unread --json
+openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json
+```
+
+Do not pipe Telegram JSON to `grep` when `inbox`, `read`, or `wait` already has
+the selector you need.
 
 Session states returned by `telegram-user status`:
 
@@ -203,7 +217,7 @@ scripts/telegram-e2e/userbot-send-live.sh \
 What it does:
 
 1. Maps the older `--text` flag to CLI `--message`.
-2. Calls `pnpm openclaw:local telegram-user send ...`.
+2. Calls `pnpm openclaw:local telegram-user send ...` to pin execution to this checkout.
 3. Keeps humans and scripts on one operator surface instead of reviving direct Python entrypoints.
 
 ### Internal Python backend
@@ -213,10 +227,13 @@ The Python files under `scripts/telegram-e2e/` still exist, but they are now tra
 ### 3) Create local env file
 
 ```bash
-cp scripts/telegram-e2e/.env.example scripts/telegram-e2e/.env.local
+mkdir -p ~/.openclaw/telegram-user
+cp scripts/telegram-e2e/.env.example ~/.openclaw/telegram-user/.env.local
 ```
 
-Fill `scripts/telegram-e2e/.env.local` with your real values.
+Fill `~/.openclaw/telegram-user/.env.local` with your real values. Existing
+repo checkouts that already have `scripts/telegram-e2e/.env.local` keep using
+that file for compatibility.
 
 ## AI/operator handoff (credentials continuity)
 
@@ -229,7 +246,7 @@ Use one source of truth in your main checkout, then copy into each worktree.
 3. For every new worktree, run:
    - `bash scripts/bootstrap-worktree-telegram.sh`
 4. Smoke check from that worktree:
-   - `pnpm openclaw:local telegram-user send --chat "<chat-id-or-username>" --message "handoff smoke"`
+   - `openclaw telegram-user send --chat "<chat-id-or-username>" --message "handoff smoke"`
 5. First runtime claim happens on first canonical ensure run:
    - `scripts/telegram-live-runtime.sh ensure`
    - This auto-claims a tester bot token for the worktree when one is available.
@@ -363,11 +380,11 @@ For safety, the automatic path still uses the same default GC policy:
 
 ## Required values and anchors
 
-`scripts/telegram-e2e/.env.local` keys:
+Telegram user env file keys:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
-- `USERBOT_SESSION` (optional override; default is `scripts/telegram-e2e/tmp/userbot.session`)
+- `USERBOT_SESSION` (optional override; fresh-install default is `~/.openclaw/telegram-user/userbot.session`; existing repo-local sessions are honored)
 - `TG_BOT_TOKEN` (`<botId>:<token>`)
 - `TG_BIN` (absolute path to built `tg`)
 - `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
@@ -473,12 +490,12 @@ Preferred future-facing command flow:
 ```bash
 scripts/telegram-live-runtime.sh ensure
 
-pnpm openclaw:local telegram-user send \
+openclaw telegram-user send \
   --chat @jarvis_tester_1_bot \
   --message "codex smoke $(date +%s)" \
   --json
 
-pnpm openclaw:local telegram-user wait \
+openclaw telegram-user wait \
   --chat @jarvis_tester_1_bot \
   --after-id <sent_message_id> \
   --sender-id <bot_user_id> \

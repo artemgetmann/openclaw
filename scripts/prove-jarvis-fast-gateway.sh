@@ -332,9 +332,15 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
 fi
 
 echo "jarvis_fast_gateway_static=verifying"
-APP_NAME="$DISPLAY_NAME" \
-BUNDLE_ID="$BUNDLE_ID" \
-  "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+if ((${#VERIFY_ARGS[@]})); then
+  APP_NAME="$DISPLAY_NAME" \
+  BUNDLE_ID="$BUNDLE_ID" \
+    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+else
+  APP_NAME="$DISPLAY_NAME" \
+  BUNDLE_ID="$BUNDLE_ID" \
+    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "$APP_PATH"
+fi
 
 RUNTIME_RESOURCE_ROOT="$APP_PATH/Contents/Resources/OpenClawRuntime"
 RUNTIME_PROJECT_ROOT="$RUNTIME_RESOURCE_ROOT/openclaw"
@@ -357,7 +363,7 @@ EXPECTED_STATE_DIR="$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_CONFIG_PATH="$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_LOGS_PATH="$(consumer_instance_logs_path "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_PROFILE="$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")"
-EXPECTED_INSTALLED_ENTRYPOINT="$EXPECTED_RUNTIME_ROOT/lib/openclaw-bundled/dist/index.js"
+EXPECTED_INSTALLED_ENTRYPOINT="$EXPECTED_STATE_DIR/lib/openclaw-bundled/dist/index.js"
 EXPECTED_NODE_PATH_ENTRY="$EXPECTED_STATE_DIR/tools/node/bin"
 EXPECTED_CANONICAL_CONFIG=""
 if [[ "$EXPECTED_LABEL" == "ai.openclaw.gateway" ]]; then

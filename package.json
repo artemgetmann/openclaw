@@ -32,6 +32,10 @@
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
     "extensions/",
+    "scripts/telegram-e2e/.env.example",
+    "scripts/telegram-e2e/requirements.txt",
+    "scripts/telegram-e2e/telethon_cli.py",
+    "scripts/telegram-e2e/telethon_compat.py",
     "skills/"
   ],
   "type": "module",

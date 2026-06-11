@@ -329,6 +329,7 @@ export function buildServiceEnvironment(params: {
     (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   const serviceVersion = firstNonEmpty(env.OPENCLAW_VERSION, env.OPENCLAW_SERVICE_VERSION, VERSION);
+  const serviceBuild = firstNonEmpty(env.OPENCLAW_SERVICE_BUILD);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_CONSUMER_INSTANCE_ID: env.OPENCLAW_CONSUMER_INSTANCE_ID,
@@ -343,6 +344,7 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: serviceVersion,
+    OPENCLAW_SERVICE_BUILD: serviceBuild,
   };
 }
 

@@ -200,6 +200,7 @@ fi
 
 if is_telegram_user_command "$@"; then
   ensure_telegram_user_lane_assets
+  export OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT=1
 fi
 
 # Hard-pin lane restart commands to the local fork service script, but never

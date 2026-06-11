@@ -78,10 +78,13 @@ and more reliable default.
     text, and additive TTS.
   - Release the lane when done: `bash scripts/telegram-live-runtime.sh release`.
 - User E2E operator path:
-  - Start broad triage with `pnpm openclaw:local telegram-user inbox --json`
-  - Use `pnpm openclaw:local telegram-user inbox --unread --json` for unread-only sweeps
+  - Start broad triage with `openclaw telegram-user inbox --json`
+  - Use `openclaw telegram-user inbox --unread --json` for unread-only sweeps
+  - Use `openclaw telegram-user inbox --contains <text> --json` for known chat labels or preview text
   - Narrow with `--dm-only` and `--limit` when you only need a lighter scan
-  - Use `pnpm openclaw:local telegram-user read --chat <chat> --limit <n> --json` only after picking the target chat
+  - Use `openclaw telegram-user read --chat <chat> --contains <text> --limit <n> --json` for known message text
+  - Use `openclaw telegram-user read --chat <chat> --limit <n> --json` only after picking the target chat
+  - Do not pipe Telegram JSON to `grep` for chat/message discovery when these CLI filters fit
   - Then continue with `precheck`, `send`, or `wait` on that chosen chat
 - Full repo-local details:
   - `scripts/telegram-e2e/README.md`

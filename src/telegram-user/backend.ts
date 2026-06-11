@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
+import { resolveStateDir } from "../config/paths.js";
 import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
@@ -54,8 +55,23 @@ const repoRoot = resolveRepoRoot();
 const telegramE2eDir = path.join(repoRoot, "scripts", "telegram-e2e");
 const backendScriptPath = path.join(telegramE2eDir, "telethon_cli.py");
 const requirementsPath = path.join(telegramE2eDir, "requirements.txt");
-const defaultEnvFilePath = path.join(telegramE2eDir, ".env.local");
-const defaultSessionPath = path.join(telegramE2eDir, "tmp", "userbot.session");
+const repoLocalEnvFilePath = path.join(telegramE2eDir, ".env.local");
+const repoLocalSessionPath = path.join(telegramE2eDir, "tmp", "userbot.session");
+const telegramUserStateDir = path.join(resolveStateDir(), "telegram-user");
+const stateEnvFilePath = path.join(telegramUserStateDir, ".env.local");
+const stateSessionPath = path.join(telegramUserStateDir, "userbot.session");
+const hasExplicitStateDir = Boolean(
+  process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim(),
+);
+const preferRepoLocalCompat = process.env.OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT === "1";
+const defaultEnvFilePath =
+  (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalEnvFilePath)
+    ? repoLocalEnvFilePath
+    : stateEnvFilePath;
+const defaultSessionPath =
+  (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalSessionPath)
+    ? repoLocalSessionPath
+    : stateSessionPath;
 const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
 
 type PythonInvocation = {
@@ -83,9 +99,9 @@ const minTelethonVersion: ParsedVersion = { major: 1, minor: 43, patch: 1 };
 
 function resolveVenvPythonPath(): string {
   if (process.platform === "win32") {
-    return path.join(telegramE2eDir, ".venv", "Scripts", "python.exe");
+    return path.join(telegramUserStateDir, ".venv", "Scripts", "python.exe");
   }
-  return path.join(telegramE2eDir, ".venv", "bin", "python");
+  return path.join(telegramUserStateDir, ".venv", "bin", "python");
 }
 
 function parseVersion(raw: string): ParsedVersion | null {
@@ -208,7 +224,8 @@ async function ensureTelethonPython(): Promise<string> {
   }
 
   const python = await detectSystemPython();
-  const venvDir = path.join(telegramE2eDir, ".venv");
+  const venvDir = path.join(telegramUserStateDir, ".venv");
+  await fs.mkdir(telegramUserStateDir, { recursive: true });
   await execFileAsync(python.command, [...python.argsPrefix, "-m", "venv", venvDir], {
     timeout: 60_000,
   });
@@ -239,10 +256,32 @@ function resolveTelegramCredSource(
   return "missing";
 }
 
+function readNonEmpty(value: string | null | undefined): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveTelegramUserSessionPath(params: {
+  env?: NodeJS.ProcessEnv;
+  explicitSession?: string | null;
+  loadedEnv?: Record<string, string>;
+}): string {
+  const env = params.env ?? process.env;
+  return path.resolve(
+    readNonEmpty(params.explicitSession) ??
+      readNonEmpty(params.loadedEnv?.USERBOT_SESSION) ??
+      readNonEmpty(env.USERBOT_SESSION) ??
+      readNonEmpty(env.OPENCLAW_TELEGRAM_USER_SESSION) ??
+      defaultSessionPath,
+  );
+}
+
 async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
   const envFilePath = options.envFile ? path.resolve(options.envFile) : defaultEnvFilePath;
   const loadedEnv = await loadScopedEnvFile(envFilePath);
-  const sessionPath = path.resolve(options.session ?? defaultSessionPath);
+  const sessionPath = resolveTelegramUserSessionPath({
+    explicitSession: options.session,
+    loadedEnv,
+  });
   return {
     env: {
       ...process.env,
@@ -363,6 +402,7 @@ export function getTelegramUserDefaults() {
     backendScriptPath,
     defaultEnvFilePath,
     defaultSessionPath,
+    telegramUserStateDir,
     telegramE2eDir,
   };
 }
@@ -463,6 +503,7 @@ export async function runTelegramUserRead(
     afterId?: number | null;
     beforeId?: number | null;
     chat: string;
+    contains?: string | null;
     limit?: number | null;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserReadResult> {
@@ -470,6 +511,7 @@ export async function runTelegramUserRead(
   pushOptionalNumberArg(args, "--limit", params.limit);
   pushOptionalNumberArg(args, "--after-id", params.afterId);
   pushOptionalNumberArg(args, "--before-id", params.beforeId);
+  pushOptionalStringArg(args, "--contains", params.contains);
   return runBackendCommand<TelegramUserReadResult>({
     ...params,
     args,
@@ -478,6 +520,7 @@ export async function runTelegramUserRead(
 
 export async function runTelegramUserInbox(
   params: {
+    contains?: string | null;
     dmOnly?: boolean | null;
     limit?: number | null;
     unreadOnly?: boolean | null;
@@ -485,6 +528,7 @@ export async function runTelegramUserInbox(
 ): Promise<TelegramUserInboxResult> {
   const args = ["inbox"];
   pushOptionalNumberArg(args, "--limit", params.limit);
+  pushOptionalStringArg(args, "--contains", params.contains);
   if (params.unreadOnly) {
     args.push("--unread");
   }
