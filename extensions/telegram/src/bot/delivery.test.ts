@@ -476,7 +476,7 @@ describe("deliverReplies", () => {
     expect(events).toEqual(["recordVoice", "sendVoice"]);
   });
 
-  it("sends voice supplements without duplicating final text as a caption", async () => {
+  it("sends voice supplements with a short final-text caption preview", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn(async () => ({ message_id: 10, chat: { id: "123" } }));
     const sendVoice = vi.fn(async () => ({ message_id: 11, chat: { id: "123" } }));
@@ -506,8 +506,10 @@ describe("deliverReplies", () => {
       [unknown, unknown, Record<string, unknown>?]
     >;
     const sendVoiceOptions = sendVoiceCalls[0]?.[2] ?? {};
-    expect(sendVoiceOptions).not.toHaveProperty("caption");
-    expect(sendVoiceOptions).not.toHaveProperty("parse_mode");
+    expect(sendVoiceOptions).toMatchObject({
+      caption: "Final answer.",
+      parse_mode: "HTML",
+    });
   });
 
   it("renders markdown in media captions", async () => {

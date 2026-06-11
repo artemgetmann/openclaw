@@ -1,5 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../../../src/auto-reply/chunk.js";
+import { buildFinalTtsCaptionPreview } from "../../../../src/auto-reply/reply/tts-caption-preview.js";
 import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
 import type { ReplyToMode } from "../../../../src/config/config.js";
 import type { MarkdownTableMode } from "../../../../src/config/types.base.js";
@@ -377,14 +378,14 @@ async function deliverMediaReply(params: {
           await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
         } catch (voiceErr) {
           if (isVoiceMessagesForbidden(voiceErr)) {
+            if (params.voiceFallbackTextAlreadySent) {
+              logVerbose(
+                "telegram sendVoice forbidden after visible text was already delivered; skipping voice supplement",
+              );
+              continue;
+            }
             const fallbackText = params.reply.text;
             if (!fallbackText || !fallbackText.trim()) {
-              if (params.voiceFallbackTextAlreadySent) {
-                logVerbose(
-                  "telegram sendVoice forbidden after visible text was already delivered; skipping voice supplement",
-                );
-                continue;
-              }
               throw voiceErr;
             }
             logVerbose(
@@ -689,8 +690,10 @@ export async function deliverReplies(params: {
           reply.text.trim().length > 0;
         if (shouldSplitVoiceSupplement) {
           // TTS voice is a supplement to the durable final text, not a second
-          // visible copy of that final as a media caption. Send the text first,
-          // then send the voice/audio payload without caption text.
+          // full visible copy of that final as a media caption. Send the text
+          // first, then keep only a short preview caption on the voice/audio
+          // payload so Telegram chat-list/topic previews retain context.
+          const voiceCaptionPreview = buildFinalTtsCaptionPreview(reply.text ?? "");
           firstDeliveredMessageId = await deliverTextReply({
             bot: params.bot,
             chatId: params.chatId,
@@ -708,7 +711,7 @@ export async function deliverReplies(params: {
             replyToMode: params.replyToMode,
             progress,
           });
-          reply = { ...reply, text: undefined };
+          reply = { ...reply, text: voiceCaptionPreview };
         }
         const mediaMessageId = await deliverMediaReply({
           reply,
