@@ -42,7 +42,7 @@ Use the lightest evidence that proves the failing layer.
    - Treat this as plumbing proof only. It is not enough when the real bug is
      model-authored progress in a natural task.
 3. Userbot message-ID proof
-   - Use `pnpm openclaw:local telegram-user send/read/wait ... --json`.
+   - Use `openclaw telegram-user send/read/wait ... --json`.
    - Record exact message ids, media kinds, and text.
    - Classify the sequence from Telegram messages, not from assumptions.
 4. GUI or screenshot proof
@@ -89,7 +89,7 @@ runtime by accident.
 Use this when progress and TTS interact.
 
 ```bash
-pnpm openclaw:local telegram-user send \
+openclaw telegram-user send \
   --chat <tester-bot> \
   --message "/tts on" \
   --json
@@ -140,18 +140,18 @@ There should be no voice between progress/media and final text.
 After sending a prompt, keep the prompt message id and wait from there:
 
 ```bash
-pnpm openclaw:local telegram-user send \
+openclaw telegram-user send \
   --chat <tester-bot> \
   --message "<prompt>" \
   --json
 
-pnpm openclaw:local telegram-user wait \
+openclaw telegram-user wait \
   --chat <tester-bot> \
   --after-id <prompt-message-id> \
   --sender-id <bot-id> \
   --json
 
-pnpm openclaw:local telegram-user read \
+openclaw telegram-user read \
   --chat <tester-bot> \
   --limit 20 \
   --json
@@ -200,7 +200,7 @@ and report that GUI proof is blocked. Do not improvise from broken GUI state.
 Always clean up test state:
 
 ```bash
-pnpm openclaw:local telegram-user send \
+openclaw telegram-user send \
   --chat <tester-bot> \
   --message "/tts off" \
   --json

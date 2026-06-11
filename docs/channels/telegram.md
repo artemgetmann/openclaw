@@ -787,38 +787,35 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
     - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
 
-    For local Telegram-as-me work, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers. The old bash wrappers are compatibility shims only.
+    For local Telegram-as-me work, prefer the installed OpenClaw MTProto CLI
+    instead of ad-hoc Python helpers. The old bash wrappers are compatibility
+    shims only.
 
     For agent/tooling workflows, use the bundled WhatsApp-style skill surface:
 
     - `skills/telegram-user/SKILL.md`
-    - stable wrapper: `skills/telegram-user/scripts/telegram-user-cli.sh`
+    - canonical command: `openclaw telegram-user ...`
+    - repo-local fallback wrapper: `skills/telegram-user/scripts/telegram-user-cli.sh`
 
     The skill is for "triage/read/send as my real Telegram account" flows. It
     is not the normal Telegram bot-account channel.
 
 ```bash
-skills/telegram-user/scripts/telegram-user-cli.sh status --json
-skills/telegram-user/scripts/telegram-user-cli.sh inbox --json
-skills/telegram-user/scripts/telegram-user-cli.sh inbox --unread --json
-skills/telegram-user/scripts/telegram-user-cli.sh inbox --unread --dm-only --limit 10 --json
-skills/telegram-user/scripts/telegram-user-cli.sh precheck --chat @jarvis_tester_1_bot --json
-skills/telegram-user/scripts/telegram-user-cli.sh send --chat @jarvis_tester_1_bot --message "hi" --json
-skills/telegram-user/scripts/telegram-user-cli.sh read --chat @jarvis_tester_1_bot --limit 5 --json
-skills/telegram-user/scripts/telegram-user-cli.sh wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
-skills/telegram-user/scripts/telegram-user-cli.sh logout --json
-
-pnpm openclaw:local telegram-user status --json
-pnpm openclaw:local telegram-user login --phone "+15551234567"
+openclaw telegram-user status --json
+openclaw telegram-user login --phone "+15551234567"
 OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" \
-  pnpm openclaw:local telegram-user login --phone "+15551234567" --code 12345 --json
-pnpm openclaw:local telegram-user inbox --json
-pnpm openclaw:local telegram-user inbox --unread --json
-pnpm openclaw:local telegram-user inbox --unread --dm-only --limit 10 --json
-pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
-pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
-pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
-pnpm openclaw:local telegram-user logout --json
+  openclaw telegram-user login --phone "+15551234567" --code 12345 --json
+openclaw telegram-user inbox --json
+openclaw telegram-user inbox --unread --json
+openclaw telegram-user inbox --unread --dm-only --limit 10 --json
+openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json
+openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
+openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
+openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
+openclaw telegram-user logout --json
+
+# Fallback from a repo checkout if the installed command is unavailable:
+skills/telegram-user/scripts/telegram-user-cli.sh status --json
 ```
 
     Broad unread triage should start with `telegram-user inbox`, especially
