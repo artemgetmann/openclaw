@@ -210,6 +210,21 @@ bash scripts/package-openclaw-mac-dist.sh \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
+Before the large GitHub release asset upload, the package script runs a
+GitHub-specific network preflight. It checks routes to `github.com`,
+`api.github.com`, and `uploads.github.com`, then quickly probes the GitHub API
+and upload host. If those hosts route through a tunnel/VPN interface such as
+`utun*`, `wg*`, `ppp*`, or `ipsec*`, the script fails before upload. Turn off
+VPN/tunnel routing, switch Wi-Fi/hotspot, then rerun the publish phase. If the
+slow route is intentional and known-good, rerun with:
+
+```bash
+ALLOW_SLOW_RELEASE_UPLOAD=1 bash scripts/package-openclaw-mac-dist.sh \
+  --phase publish-assets-only \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
 `--phase` controls where packaging starts. The default is `full`: build, sign,
 verify, notarize, package, publish, and verify in one pass. Use the broad
 recovery phase only after the app build/sign/verify steps already succeeded and
