@@ -159,6 +159,7 @@ openclaw telegram-user send \
 
 openclaw telegram-user read \
   --chat @jarvis_tester_1_bot \
+  --contains proof \
   --limit 5 \
   --json
 
@@ -171,6 +172,16 @@ openclaw telegram-user wait \
 
 openclaw telegram-user logout --json
 ```
+
+For discovery, prefer structured filters over shell parsing:
+
+```bash
+openclaw telegram-user inbox --contains "Artem" --unread --json
+openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json
+```
+
+Do not pipe Telegram JSON to `grep` when `inbox`, `read`, or `wait` already has
+the selector you need.
 
 Session states returned by `telegram-user status`:
 

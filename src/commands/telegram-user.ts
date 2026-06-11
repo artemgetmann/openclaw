@@ -574,6 +574,7 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     limit: readNumberOpt(opts, "limit") ?? 20,
     afterId: readNumberOpt(opts, "afterId"),
     beforeId: readNumberOpt(opts, "beforeId"),
+    contains: readStringOpt(opts, "contains"),
   });
   if (readBooleanOpt(opts, "json")) {
     logJson(runtime, result);
@@ -587,6 +588,7 @@ export async function telegramUserInboxCommand(opts: Record<string, unknown>, ru
   const dmOnly = readBooleanOpt(opts, "dmOnly");
   const result = await runTelegramUserInbox({
     ...resolveBackendOptions(opts),
+    contains: readStringOpt(opts, "contains"),
     dmOnly,
     limit: readNumberOpt(opts, "limit") ?? 20,
     unreadOnly,
