@@ -521,6 +521,203 @@ function resolveDefaultTelegramLiveStateRoot() {
   );
 }
 
+function readJsonObject(filePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePrivateJsonFile(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  try {
+    fs.chmodSync(tempPath, 0o600);
+  } catch {
+    // Best-effort privacy hardening; the rename below is the durable write.
+  }
+  fs.renameSync(tempPath, filePath);
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // Existing platforms/filesystems may not support chmod. The file contents
+    // are non-secret sender IDs, so this should not block the preflight.
+  }
+}
+
+function isPathInside(parentDir, childPath) {
+  const relative = path.relative(path.resolve(parentDir), path.resolve(childPath));
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+export function isTelegramLiveIsolatedRuntimeProfile(params) {
+  const runtimeStateDir = String(params?.runtimeStateDir ?? "").trim();
+  const runtimeConfigPath = String(params?.runtimeConfigPath ?? "").trim();
+  if (!runtimeStateDir || !runtimeConfigPath) {
+    return false;
+  }
+
+  const stateDir = path.resolve(runtimeStateDir);
+  const configPath = path.resolve(runtimeConfigPath);
+  if (configPath !== path.join(stateDir, "openclaw.telegram-live.json")) {
+    return false;
+  }
+
+  const stateRoot =
+    typeof params?.stateRoot === "string" && params.stateRoot.trim().length > 0
+      ? path.resolve(params.stateRoot.trim())
+      : resolveDefaultTelegramLiveStateRoot();
+  if (!isPathInside(stateRoot, stateDir)) {
+    return false;
+  }
+
+  const relativeParts = path.relative(stateRoot, stateDir).split(path.sep).filter(Boolean);
+  const profileId = relativeParts[0] ?? "";
+  if (!/^tg-live-[a-f0-9]{10}$/u.test(profileId)) {
+    return false;
+  }
+
+  // Default tester profiles use <root>/<profile>/.openclaw. ACP validation
+  // profiles use <root>/<profile>/acp-validation. Both are isolated tester
+  // state trees; shared app state never matches this shape.
+  return (
+    relativeParts.length === 2 &&
+    (relativeParts[1] === ".openclaw" || relativeParts[1] === "acp-validation")
+  );
+}
+
+function resolveRuntimeTelegramDmPolicy(config) {
+  const telegram = config?.channels?.telegram;
+  const policy =
+    telegram && typeof telegram === "object" && typeof telegram.dmPolicy === "string"
+      ? telegram.dmPolicy.trim().toLowerCase()
+      : "";
+  return policy || "pairing";
+}
+
+export function resolveTelegramLiveModelAuthProbe(params) {
+  const runtimeConfigPath = String(params?.runtimeConfigPath ?? "").trim();
+  if (!runtimeConfigPath || !fs.existsSync(runtimeConfigPath)) {
+    return {
+      required: false,
+      reason: "runtime_config_missing",
+      model: "",
+      provider: "",
+      profile: "",
+    };
+  }
+
+  const config = readJsonObject(runtimeConfigPath);
+  const modelConfig = config?.agents?.defaults?.model;
+  const model =
+    typeof modelConfig === "string"
+      ? modelConfig.trim()
+      : modelConfig && typeof modelConfig === "object" && typeof modelConfig.primary === "string"
+        ? modelConfig.primary.trim()
+        : "";
+  const slashIndex = model.indexOf("/");
+  const provider = slashIndex > 0 ? model.slice(0, slashIndex).trim().toLowerCase() : "";
+
+  if (provider !== "openai-codex") {
+    return {
+      required: false,
+      reason: provider ? `provider_not_probe_gated:${provider}` : "model_unresolved",
+      model,
+      provider,
+      profile: "",
+    };
+  }
+
+  return {
+    required: true,
+    reason: "codex_model_selected",
+    model,
+    provider,
+    profile: "openai-codex:default",
+  };
+}
+
+export function ensureTelegramLiveSenderAccess(params) {
+  const runtimeStateDir = String(params?.runtimeStateDir ?? "").trim();
+  const runtimeConfigPath = String(params?.runtimeConfigPath ?? "").trim();
+  const senderId = String(params?.senderId ?? "").trim();
+  if (!senderId) {
+    return {
+      ok: false,
+      status: "sender_missing",
+      reason: "telegram_user_id_missing",
+      senderId: "",
+      storePath: "",
+    };
+  }
+  if (
+    !isTelegramLiveIsolatedRuntimeProfile({
+      runtimeStateDir,
+      runtimeConfigPath,
+      stateRoot: params?.stateRoot,
+    })
+  ) {
+    return {
+      ok: false,
+      status: "unsafe_runtime_profile",
+      reason: "runtime_state_not_isolated_telegram_live_profile",
+      senderId,
+      storePath: "",
+    };
+  }
+
+  const config = readJsonObject(runtimeConfigPath);
+  const dmPolicy = resolveRuntimeTelegramDmPolicy(config);
+  if (dmPolicy === "open") {
+    return {
+      ok: true,
+      status: "open",
+      reason: "dmPolicy=open",
+      senderId,
+      storePath: "",
+    };
+  }
+  if (dmPolicy !== "pairing") {
+    return {
+      ok: false,
+      status: "unsupported_dm_policy",
+      reason: `dmPolicy=${dmPolicy}`,
+      senderId,
+      storePath: "",
+    };
+  }
+
+  const storePath = path.join(runtimeStateDir, "credentials", "telegram-default-allowFrom.json");
+  const store = readJsonObject(storePath);
+  const current = Array.isArray(store.allowFrom)
+    ? store.allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
+    : [];
+  if (current.includes(senderId)) {
+    return {
+      ok: true,
+      status: "present",
+      reason: "sender_already_allowed",
+      senderId,
+      storePath,
+    };
+  }
+
+  writePrivateJsonFile(storePath, {
+    version: 1,
+    allowFrom: [...current, senderId],
+  });
+  return {
+    ok: true,
+    status: "added",
+    reason: "sender_added_to_isolated_pairing_store",
+    senderId,
+    storePath,
+  };
+}
+
 function copyDirectoryContents(sourceDir, targetDir) {
   fs.mkdirSync(targetDir, { recursive: true });
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {

@@ -425,6 +425,10 @@ This enforces:
 3. deterministic isolated runtime (`runtime_port`, `runtime_state_dir`)
 4. ownership and health proof lines
 5. plugin isolation for live runtime (`plugins.allow=["telegram"]`, `plugins.slots.memory=none`)
+6. Codex model auth probe before runtime startup when the tester lane selects
+   an `openai-codex/*` model
+7. repo-local Telegram userbot sender access in the isolated pairing store, so
+   DM pairing is repaired before the first scenario send
 
 Do not manually start `gateway run` for Telegram live tests.
 

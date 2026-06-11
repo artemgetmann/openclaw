@@ -85,6 +85,21 @@ declare module "*telegram-live-runtime-helpers.mjs" {
     runtimePort: number;
     runtimeStateDir: string;
   };
+  export function isTelegramLiveIsolatedRuntimeProfile(params?: unknown): boolean;
+  export function resolveTelegramLiveModelAuthProbe(params?: unknown): {
+    required: boolean;
+    reason: string;
+    model: string;
+    provider: string;
+    profile: string;
+  };
+  export function ensureTelegramLiveSenderAccess(params?: unknown): {
+    ok: boolean;
+    status: string;
+    reason: string;
+    senderId: string;
+    storePath: string;
+  };
   export function syncTelegramLiveRuntimeMemoryStore(params?: unknown): {
     copied: boolean;
     reason?: string;
