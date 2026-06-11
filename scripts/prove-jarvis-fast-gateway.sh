@@ -173,6 +173,13 @@ if [[ "$BUILD_TRUSTED_RING" == "1" ]]; then
 fi
 
 APP_REAL_PATH="$(real_path "$APP_PATH")"
+ROOT_REAL_PATH="$(real_path "$ROOT_DIR")"
+CANONICAL_MAIN_ROOT="$(real_path "${OPENCLAW_CANONICAL_MAIN_ROOT:-$HOME/Programming_Projects/openclaw}")"
+ROOT_IS_CANONICAL_MAIN=0
+if [[ "$ROOT_REAL_PATH" == "$CANONICAL_MAIN_ROOT" ]]; then
+  ROOT_IS_CANONICAL_MAIN=1
+fi
+
 if [[ "$APP_REAL_PATH" == "/Applications/Jarvis.app" ]]; then
   die "refusing to inspect /Applications/Jarvis.app in this lane; use dist/Jarvis.app or another local packaged bundle"
 fi
@@ -283,7 +290,8 @@ if [[ -f "$LAUNCHAGENT_PLIST" ]]; then
 
   if [[ "$EXPECTED_LABEL" == "ai.openclaw.gateway" ]] &&
     [[ -n "$ACTUAL_ENTRYPOINT" ]] &&
-    { path_is_under "$ACTUAL_ENTRYPOINT" "$ROOT_DIR" || [[ "$ACTUAL_ENTRYPOINT" == *"/.worktrees/"* ]]; }; then
+    { [[ "$ACTUAL_ENTRYPOINT" == *"/.worktrees/"* ]] ||
+      { path_is_under "$ACTUAL_ENTRYPOINT" "$ROOT_REAL_PATH" && [[ "$ROOT_IS_CANONICAL_MAIN" != "1" ]]; }; }; then
     PROTECTED_DRIFT=1
   fi
 
