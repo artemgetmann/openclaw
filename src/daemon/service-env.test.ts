@@ -298,6 +298,31 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_SERVICE_VERSION).toBe("2026.3.17");
   });
 
+  it("preserves explicit app build as the persisted service build", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_SERVICE_BUILD: " 2026052201 ",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_SERVICE_BUILD).toBe("2026052201");
+  });
+
+  it("omits service build when caller does not provide one", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_SERVICE_BUILD).toBeUndefined();
+  });
+
   it("forwards TMPDIR from the host environment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
