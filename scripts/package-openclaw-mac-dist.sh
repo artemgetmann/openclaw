@@ -116,6 +116,21 @@ release_phase_log_elapsed() {
   printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
 }
 
+verify_app_bundle() {
+  # macOS still ships old bash in places; under set -u, expanding an empty
+  # array can abort the release lane. Keep default-instance verification free of
+  # optional array expansion while preserving named-instance arguments.
+  if ((${#VERIFY_ARGS[@]})); then
+    BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+    APP_NAME="$APP_NAME" \
+      "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+  else
+    BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+    APP_NAME="$APP_NAME" \
+      "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "$APP_PATH"
+  fi
+}
+
 notary_auth_configured() {
   if [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYTOOL_ISSUER:-}" ]]; then
     return 0
@@ -663,9 +678,7 @@ verify_resume_app_bundle() {
 
   read_app_build_receipt
   echo "🔁 Resuming release packaging from existing app bundle: $APP_PATH"
-  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-  APP_NAME="$APP_NAME" \
-    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+  verify_app_bundle
 }
 
 submit_app_notarization_only() {
@@ -724,11 +737,9 @@ poll_app_notarization_only() {
     exit "$status"
   fi
 
-  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-  APP_NAME="$APP_NAME" \
   OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
   SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
-    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+    verify_app_bundle
 }
 
 create_signed_dmg() {
@@ -969,9 +980,7 @@ if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "build-app-only" || "$PA
   release_phase_log_elapsed "$app_package_started_ms" "Jarvis app package"
 
   app_verify_started_ms="$(release_phase_now_ms)"
-  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-  APP_NAME="$APP_NAME" \
-    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+  verify_app_bundle
   release_phase_log_elapsed "$app_verify_started_ms" "Jarvis app verify"
 else
   verify_resume_app_bundle
@@ -1089,11 +1098,9 @@ if [[ "$NOTARIZE" == "1" ]]; then
     "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
   write_release_manifest
-  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-  APP_NAME="$APP_NAME" \
   OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
   SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
-    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+    verify_app_bundle
 fi
 
 create_signed_dmg
