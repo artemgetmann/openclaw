@@ -343,6 +343,68 @@ Current recommendation:
 - Do not treat this as proof that either runtime can complete arbitrary
   Twitter/X-to-Claude workflows without supervision.
 
+## Codex + agent-desktop Direct Benchmark: 2026-06-11
+
+Scope:
+
+- direct Codex use of `npx --yes agent-desktop`
+- no custom wrapper glue
+- no Peekaboo, Codex Computer Use, Browser/Chrome plugins, AppleScript/JXA, or
+  `osascript`
+- same real task: inspect visible Safari/X home read-only, then send Claude a
+  labelled summary
+
+Result: pass with caveats.
+
+- `agent-desktop` 0.2.3 reported Accessibility and Screen Recording granted.
+- Codex targeted Safari window `w-99`, selected the existing `(1) Home / X`
+  tab by structured tab ref, and observed `https://x.com/home` read-only.
+- Visible X context included `For you`, topic tabs through OpenClaw, untouched
+  post composer, AI/Anthropic-related feed posts, Premium upsell, WWDC and AI
+  worker-fatigue news, Indonesia trends, and Who to follow suggestions.
+- Claude exposed the composer as a structured textfield ref. The labelled
+  `[CODEX + AGENT-DESKTOP DIRECT BENCHMARK]` message was submitted, and Claude
+  visibly replied with a confirmation summary.
+- Captured Claude reply text through AX title:
+  `Confirmed - X home shows "For you" feed, topic tabs including OpenClaw, untouched composer, AI/Anthropic posts in feed, right rail with Premium upsell, WWDC an...`
+
+Important fidelity issues:
+
+- `set-value` on Claude returned `ACTION_FAILED`, but a later snapshot showed
+  the message had actually been inserted.
+- Clicking Claude's visible `Send message` button by ref returned success but
+  did not submit.
+- Targeted `cmd+return --app Claude` submitted successfully.
+- Claude's window id changed from `w-0` to `w-2592` after submit.
+- Unfiltered `list-windows` sometimes omitted Claude while app-filtered
+  `list-windows --app Claude` found it.
+- AX and screenshot capture could prove a reply existed, but extracting the
+  exact full reply text was not reliable: AX truncated it, Copy returned an
+  empty clipboard, and the screenshot was slow and not readable enough for full
+  text recovery.
+
+Focus and desktop disturbance:
+
+- Terminal/tmux was focused before the run and again after most observations.
+- Selecting the Safari X tab by ref did not leave Safari focused.
+- Focusing Claude's composer likely stole focus briefly; later Terminal was
+  focused again.
+- No visible Stage Manager regrouping or window move/minimize was observed, but
+  Claude window ids and all-window visibility changed.
+- Clipboard was touched during reply extraction and restored.
+
+Recommendation delta:
+
+- Direct Codex can drive `agent-desktop` without wrapper glue for this bounded
+  real task.
+- Raw direct use is still not product-safe because command success/failure can
+  diverge from actual UI state.
+- Keep `agent-desktop` as the next low-level integration spike, but require a
+  thin verifier around every action: target window, target element, intended
+  value, post-action state, and mutation risk must be checked before continuing.
+- Claude needs an app-specific submit recipe before any consumer loop depends
+  on it.
+
 Reusable real-task checklist:
 
 1. Verify tool version and permissions before the run.
