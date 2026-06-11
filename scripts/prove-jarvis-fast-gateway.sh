@@ -357,7 +357,7 @@ EXPECTED_STATE_DIR="$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_CONFIG_PATH="$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_LOGS_PATH="$(consumer_instance_logs_path "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_PROFILE="$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")"
-EXPECTED_INSTALLED_ENTRYPOINT="$EXPECTED_RUNTIME_ROOT/lib/openclaw-bundled/dist/index.js"
+EXPECTED_INSTALLED_ENTRYPOINT="$EXPECTED_STATE_DIR/lib/openclaw-bundled/dist/index.js"
 EXPECTED_NODE_PATH_ENTRY="$EXPECTED_STATE_DIR/tools/node/bin"
 EXPECTED_CANONICAL_CONFIG=""
 if [[ "$EXPECTED_LABEL" == "ai.openclaw.gateway" ]]; then
