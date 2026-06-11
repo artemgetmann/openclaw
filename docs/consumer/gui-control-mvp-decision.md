@@ -1,6 +1,6 @@
 # Consumer GUI Control MVP Decision
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 Status: deferred for launch; active bakeoff for a later Jarvis GUI-control lane
 
 ## Decision
@@ -58,10 +58,10 @@ do not repeat the Telegram-vs-Claude click failure.
 
 ## Current Peekaboo Reality
 
-Verified on 2026-06-10:
+Verified on 2026-06-11:
 
-- local Homebrew install: `peekaboo` 3.1.2
-- Homebrew stable in `steipete/tap`: 3.3.0
+- local Homebrew install after explicit upgrade: `peekaboo` 3.4.1
+- Homebrew stable in `steipete/tap`: 3.4.1
 - upstream `openclaw/Peekaboo` latest release: `v3.4.1`, published
   2026-06-10
 - upstream Peekaboo is MIT, Swift, macOS 15+, and now exposes capture, UI maps,
@@ -213,6 +213,71 @@ Immediate conclusion:
   commands side-effect-free.
 - Keep Peekaboo as the bridge/fallback while agent-desktop gets a broader app
   matrix and packaged-Jarvis proof.
+
+## Real Task Probe: 2026-06-11
+
+Prompt used:
+
+```text
+Using the GUI-control runtime, open Safari to my Twitter/X home/front page, inspect only what is visible on the front page, then open the Claude app and send Claude a concise context summary of what was visible. Report back with what Claude said.
+Do not post, like, repost, reply, bookmark, unbookmark, follow, DM, open settings, or mutate Twitter/X account state.
+```
+
+Scope:
+
+- read-only on Twitter/X
+- Claude app handoff allowed only because the test explicitly asked for it
+- no bookmark/unbookmark action; that still requires a separate explicit go
+- no Telegram, Messages, Jarvis, `/Applications/Jarvis.app`, shared runtime, or
+  Codex Computer Use
+
+Result: no full pass.
+
+- Peekaboo 3.4.1 opened `https://x.com/home` in Safari and observed the X home
+  page read-only, but app-scoped Safari capture drifted to a locked Private
+  Browsing password window on a later observation. The run recovered by
+  targeting the exact X Safari window id, but that drift is a safety concern.
+- agent-desktop 0.2.3 observed the same X page through Safari window `w-99`
+  with stable window/ref targeting and avoided the locked Private Browsing
+  window.
+- Both tools stopped before Claude handoff because the Claude app opened as a
+  blank window with an `MCP mypc: Server disconnected` toast and exposed no safe
+  message composer. No prompt was sent to Claude, so there was no Claude reply.
+
+Visible X context captured:
+
+- X home page was logged in and visible at `https://x.com/home`.
+- The page showed Home navigation, `For you` selected, topic tabs including
+  Following, Build in Public, Engineering, `claude code`, Startup Community,
+  X Finance, AI Builders Collective, AI MVP Builders, and OpenClaw.
+- The post composer was visible as `Post text`; it was not clicked or edited.
+- Right rail showed `Subscribe to Premium`, Today's News / What's happening,
+  trends in Indonesia, and who-to-follow suggestions.
+
+Real-task conclusion:
+
+- Partial winner: agent-desktop, because it targeted the intended Safari/X
+  window more deterministically.
+- Overall gate remains closed until the local Claude app exposes a safe composer
+  target again.
+- Do not treat this as proof that either runtime can complete the Twitter/X to
+  Claude handoff end to end.
+
+Reusable real-task checklist:
+
+1. Verify tool version and permissions before the run.
+2. Confirm intended app and window before every input or click.
+3. Prefer app/window/ref/snapshot targeting over coordinates.
+4. Stop if Safari is not logged in to X or shows auth, CAPTCHA, payment,
+   permission, password, passkey, or sensitive account flows.
+5. Do not open X DMs, notifications, profile, bookmarks, settings, account
+   menus, or mutation controls unless a separate explicit approval covers that
+   exact action.
+6. For Claude, stop if login, billing, settings, permission, blank-window, or
+   no-composer states appear.
+7. Peekaboo may be used as screenshot/UI-map fallback, but not as default
+   planner or unscoped actor.
+8. Codex Computer Use stays out of scope.
 
 ## Recommendation
 
