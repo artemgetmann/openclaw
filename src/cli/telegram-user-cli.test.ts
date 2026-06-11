@@ -22,6 +22,30 @@ describe("telegram-user cli", () => {
     vi.clearAllMocks();
   });
 
+  it("teaches the installed openclaw telegram-user path in command help", async () => {
+    const program = new Command();
+    let help = "";
+
+    program.exitOverride();
+    program.configureOutput({
+      writeOut: (text) => {
+        help += text;
+      },
+      writeErr: (text) => {
+        help += text;
+      },
+    });
+    registerTelegramUserCli(program);
+
+    await expect(program.parseAsync(["telegram-user", "--help"], { from: "user" })).rejects.toThrow(
+      "outputHelp",
+    );
+
+    expect(help).toContain("openclaw telegram-user status --json");
+    expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
+    expect(help).not.toContain("pnpm openclaw:local telegram-user");
+  });
+
   it("registers the inbox command and forwards unread triage flags", async () => {
     const program = new Command();
     registerTelegramUserCli(program);

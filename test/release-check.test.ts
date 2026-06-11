@@ -167,6 +167,23 @@ describe("collectForbiddenPackPaths", () => {
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
   });
+
+  it("allows the Telegram user env template but rejects local secrets and sessions", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "scripts/telegram-e2e/.env.example",
+        "scripts/telegram-e2e/.env",
+        "scripts/telegram-e2e/.env.local",
+        "scripts/telegram-e2e/tmp/userbot.session",
+        "scripts/telegram-e2e/userbot.session.openclaw-login.json",
+      ]),
+    ).toEqual([
+      "scripts/telegram-e2e/.env",
+      "scripts/telegram-e2e/.env.local",
+      "scripts/telegram-e2e/tmp/userbot.session",
+      "scripts/telegram-e2e/userbot.session.openclaw-login.json",
+    ]);
+  });
 });
 
 describe("collectPackUnpackedSizeErrors", () => {
