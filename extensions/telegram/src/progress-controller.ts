@@ -27,7 +27,9 @@ export function createTelegramProgressController(params: {
   chatId: number;
   maxChars: number;
   thread?: TelegramThreadSpec | null;
+  previewTransport?: "auto" | "message" | "draft";
   replyToMessageId?: number;
+  throttleMs?: number;
   minInitialChars?: number;
   deleteAudit?: Partial<
     Pick<
@@ -51,8 +53,9 @@ export function createTelegramProgressController(params: {
     chatId: params.chatId,
     maxChars: params.maxChars,
     thread: params.thread,
-    previewTransport: "auto",
+    previewTransport: params.previewTransport ?? "auto",
     replyToMessageId: params.replyToMessageId,
+    ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
     minInitialChars: params.minInitialChars,
     deleteAudit: {
       callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",

@@ -109,7 +109,9 @@ const ttsMocks = vi.hoisted(() => {
     normalizeTtsAutoMode: vi.fn((value: unknown) =>
       typeof value === "string" ? value : undefined,
     ),
+    resolveTtsAutoMode: vi.fn((_params: unknown) => "off"),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-test-tts.json"),
     getLastTtsAttempt: vi.fn(() => undefined),
   };
 });
@@ -201,7 +203,9 @@ vi.mock("../../tts/tts.js", () => ({
   getLastTtsAttempt: () => ttsMocks.getLastTtsAttempt(),
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  resolveTtsAutoMode: (params: unknown) => ttsMocks.resolveTtsAutoMode(params),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");

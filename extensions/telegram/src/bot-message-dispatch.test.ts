@@ -167,7 +167,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   }
 
-  it("streams progress drafts in private threads and forwards thread id", async () => {
+  it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(progressStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -189,8 +189,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
-        previewTransport: "auto",
-        minInitialChars: 12,
+        previewTransport: "message",
+        throttleMs: 250,
+        minInitialChars: 1,
       }),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Checking the page.");
@@ -214,6 +215,32 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not wait for a sentence before surfacing same-chat DM source previews", async () => {
+    const progressStream = createDraftStream(9004);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: "A",
+          channelData: { openclaw: { sourcePreview: true } },
+        });
+        await dispatcherOptions.deliver({ text: "Answer." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previewTransport: "message",
+        minInitialChars: 1,
+      }),
+    );
+    expect(progressStream.update).toHaveBeenCalledWith("A");
   });
 
   it("accumulates block progress in one transient bubble before the final answer", async () => {

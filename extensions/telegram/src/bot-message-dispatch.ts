@@ -63,6 +63,10 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX). */
 const DRAFT_MIN_INITIAL_CHARS = 12;
+/** DMs optimize for time-to-first-visible text; push-notification debounce matters less there. */
+const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
+/** Keep fast DM previews responsive after the first send without token-by-token API spam. */
+const DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS = 250;
 const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
 
 // Continuation-style agent runs can re-enter Telegram delivery between tool
@@ -98,6 +102,7 @@ function shouldEmitCoalescedDraftPreview(params: {
   previousText: string;
   nextText: string;
   laneName: LaneName;
+  fastFirstPreview?: boolean;
 }): boolean {
   if (params.laneName === "reasoning") {
     return true;
@@ -108,6 +113,9 @@ function shouldEmitCoalescedDraftPreview(params: {
     return false;
   }
   if (!previous) {
+    if (params.fastFirstPreview) {
+      return true;
+    }
     // Avoid creating Telegram drafts for tiny token prefixes; the final lane
     // still receives the complete answer even when early previews are skipped.
     return next.length >= 48 || /(?:[.!?…]["')\]]?|[\n\r]{2,})$/.test(next);
@@ -427,7 +435,19 @@ export const dispatchTelegramMessage = async ({
     progressThreadKey,
     ctxPayload.SessionKey ?? "no-session",
   ].join("|");
-  const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
+  // Native Telegram drafts animate nicely, but real message/edit previews are
+  // the lower-latency DM path. Use them for user-visible answer/progress text;
+  // keep native draft transport available for reasoning and non-DM surfaces.
+  const useMessagePreviewTransportForDm =
+    threadSpec?.scope === "dm" && (canStreamAnswerDraft || canStreamProgressDraft);
+  const answerPreviewTransport = useMessagePreviewTransportForDm ? "message" : "auto";
+  const progressPreviewTransport = useMessagePreviewTransportForDm ? "message" : "auto";
+  const draftMinInitialChars = useMessagePreviewTransportForDm
+    ? DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW
+    : DRAFT_MIN_INITIAL_CHARS;
+  const dmMessagePreviewThrottleMs = useMessagePreviewTransportForDm
+    ? DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS
+    : undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -454,15 +474,20 @@ export const dispatchTelegramMessage = async ({
     draftDurableSendClassificationByLane[laneName] = classification;
   };
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+    const laneMinInitialChars =
+      laneName === "answer" ? draftMinInitialChars : DRAFT_MIN_INITIAL_CHARS;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: "auto",
+          previewTransport: laneName === "answer" ? answerPreviewTransport : "auto",
           replyToMessageId: draftReplyToMessageId,
-          minInitialChars: draftMinInitialChars,
+          ...(laneName === "answer" && dmMessagePreviewThrottleMs != null
+            ? { throttleMs: dmMessagePreviewThrottleMs }
+            : {}),
+          minInitialChars: laneMinInitialChars,
           deleteAudit: {
             callsite: `telegram-${laneName}-preview-clear`,
             reason: "lane_preview_cleanup",
@@ -594,7 +619,9 @@ export const dispatchTelegramMessage = async ({
         chatId,
         maxChars: draftMaxChars,
         thread: threadSpec,
+        previewTransport: progressPreviewTransport,
         replyToMessageId: draftReplyToMessageId,
+        ...(dmMessagePreviewThrottleMs != null ? { throttleMs: dmMessagePreviewThrottleMs } : {}),
         minInitialChars: draftMinInitialChars,
         deleteAudit: {
           callsite: "telegram-progress-controller-clear",
@@ -845,6 +872,7 @@ export const dispatchTelegramMessage = async ({
         previousText: previousDeliveredPreviewText,
         nextText: previewText,
         laneName,
+        fastFirstPreview: lane === answerLane && useMessagePreviewTransportForDm,
       })
     ) {
       lane.lastPartialText = previewText;

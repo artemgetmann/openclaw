@@ -14,6 +14,7 @@ const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
     failFinalAudio: false,
+    autoMode: "off",
     lastAttempt: undefined as
       | {
           timestamp: number;
@@ -56,6 +57,12 @@ const ttsMocks = vi.hoisted(() => {
       return params.payload;
     }),
     getLastTtsAttempt: vi.fn(() => state.lastAttempt),
+    resolveTtsAutoMode: vi.fn((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionAuto?: string };
+      return params.sessionAuto ?? state.autoMode;
+    }),
+    resolveTtsConfig: vi.fn(() => ({ mode: "final" })),
+    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-test-tts.json"),
   };
 });
 
@@ -66,6 +73,9 @@ vi.mock("./route-reply.js", () => ({
 vi.mock("../../tts/tts.js", () => ({
   getLastTtsAttempt: () => ttsMocks.getLastTtsAttempt(),
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveTtsAutoMode: (params: unknown) => ttsMocks.resolveTtsAutoMode(params),
+  resolveTtsConfig: () => ttsMocks.resolveTtsConfig(),
+  resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -116,9 +126,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     routeMocks.routeReply.mockClear();
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.state.failFinalAudio = false;
+    ttsMocks.state.autoMode = "off";
     ttsMocks.state.lastAttempt = undefined;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.getLastTtsAttempt.mockClear();
+    ttsMocks.resolveTtsAutoMode.mockClear();
+    ttsMocks.resolveTtsConfig.mockClear();
+    ttsMocks.resolveTtsPrefsPath.mockClear();
   });
 
   it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
@@ -398,6 +412,39 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         payload: expect.objectContaining({ text: "Final answer." }),
       }),
     );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Voice note failed. Final text is above.",
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+              ttsFailureStatus: true,
+            },
+          },
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a lightweight Telegram status when final TTS was expected but no attempt is recorded", async () => {
+    ttsMocks.state.autoMode = "always";
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement("Final answer.");
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(false);
     expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
