@@ -332,8 +332,20 @@ describe("telegram-user commands", () => {
       ],
     });
 
-    await telegramUserReadCommand({ chat: "@jarvis_tester_1_bot", limit: "5" }, runtime);
+    await telegramUserReadCommand(
+      { chat: "@jarvis_tester_1_bot", contains: "reply", limit: "5" },
+      runtime,
+    );
 
+    expect(backendMocks.runTelegramUserRead).toHaveBeenCalledWith({
+      afterId: undefined,
+      beforeId: undefined,
+      chat: "@jarvis_tester_1_bot",
+      contains: "reply",
+      envFile: undefined,
+      limit: 5,
+      session: undefined,
+    });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
@@ -378,9 +390,13 @@ describe("telegram-user commands", () => {
       ],
     });
 
-    await telegramUserInboxCommand({ dmOnly: true, json: true, limit: "5", unread: true }, runtime);
+    await telegramUserInboxCommand(
+      { contains: "attention", dmOnly: true, json: true, limit: "5", unread: true },
+      runtime,
+    );
 
     expect(backendMocks.runTelegramUserInbox).toHaveBeenCalledWith({
+      contains: "attention",
       dmOnly: true,
       envFile: undefined,
       limit: 5,

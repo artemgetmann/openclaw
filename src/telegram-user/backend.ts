@@ -503,6 +503,7 @@ export async function runTelegramUserRead(
     afterId?: number | null;
     beforeId?: number | null;
     chat: string;
+    contains?: string | null;
     limit?: number | null;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserReadResult> {
@@ -510,6 +511,7 @@ export async function runTelegramUserRead(
   pushOptionalNumberArg(args, "--limit", params.limit);
   pushOptionalNumberArg(args, "--after-id", params.afterId);
   pushOptionalNumberArg(args, "--before-id", params.beforeId);
+  pushOptionalStringArg(args, "--contains", params.contains);
   return runBackendCommand<TelegramUserReadResult>({
     ...params,
     args,
@@ -518,6 +520,7 @@ export async function runTelegramUserRead(
 
 export async function runTelegramUserInbox(
   params: {
+    contains?: string | null;
     dmOnly?: boolean | null;
     limit?: number | null;
     unreadOnly?: boolean | null;
@@ -525,6 +528,7 @@ export async function runTelegramUserInbox(
 ): Promise<TelegramUserInboxResult> {
   const args = ["inbox"];
   pushOptionalNumberArg(args, "--limit", params.limit);
+  pushOptionalStringArg(args, "--contains", params.contains);
   if (params.unreadOnly) {
     args.push("--unread");
   }

@@ -480,6 +480,7 @@ export function buildAgentSystemPrompt(params: {
     "Concrete anti-pattern: do not retry raw `wacli send ...` against a locked store when the WhatsApp skill already provides `skills/wacli/scripts/wacli-send-safe.sh` to pause the recorded sync owner, send, and restore it automatically.",
     "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends, the send path should be `skills/wacli/scripts/wacli-send-safe.sh`, not a hand-rolled kill/send/restart loop around `wacli sync --follow`.",
     "For Telegram-as-me messaging, use the `telegram-user` path (`login`, `status`, `precheck`, `send`, `read`, `wait`) and keep it separate from the bot-account Telegram channel.",
+    "For Telegram-as-me lookup/search, use structured `telegram-user inbox/read/wait` filters such as `--unread`, `--dm-only`, `--limit`, `--after-id`, and `--contains`; do not pipe Telegram JSON to `grep` when a CLI filter exists.",
     "Concrete anti-pattern: do not fake Telegram-as-me replies through the bot channel when the real-account `telegram-user` path is available and already carries session and thread metadata.",
     "If a shared `~/.wacli` owner is live, do not stop it manually unless the safe helper is unavailable or demonstrably broken.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,

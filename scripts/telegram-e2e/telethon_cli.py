@@ -378,28 +378,67 @@ def dialog_has_unread(dialog) -> bool:
   )
 
 
-def dialog_matches_inbox_filters(dialog, *, dm_only: bool, unread_only: bool) -> bool:
+def text_contains(value: object, needle: str) -> bool:
+  return bool(needle) and needle in str(value or "")
+
+
+def message_matches_text(message, *, contains: str) -> bool:
+  if not contains:
+    return True
+  return text_contains(getattr(message, "message", ""), contains)
+
+
+def dialog_matches_text(dialog, *, contains: str) -> bool:
+  if not contains:
+    return True
+  # Match the fields agents usually grep from raw inbox JSON: chat labels and
+  # preview text. This stays a structured operator selector, not full-history
+  # Telegram search.
+  entity = getattr(dialog, "entity", None)
+  last_message = getattr(dialog, "message", None)
+  candidates = (
+    getattr(dialog, "name", ""),
+    getattr(entity, "title", ""),
+    getattr(entity, "username", ""),
+    getattr(last_message, "message", ""),
+  )
+  return any(text_contains(candidate, contains) for candidate in candidates)
+
+
+def dialog_matches_inbox_filters(dialog, *, contains: str = "", dm_only: bool, unread_only: bool) -> bool:
   if dm_only and not bool(getattr(dialog, "is_user", False)):
     return False
   if unread_only and not dialog_has_unread(dialog):
     return False
+  if not dialog_matches_text(dialog, contains = contains):
+    return False
   return True
 
 
-def compute_inbox_scan_cap(*, limit: int, dm_only: bool, unread_only: bool) -> int:
+def compute_inbox_scan_cap(*, contains: str = "", limit: int, dm_only: bool, unread_only: bool) -> int:
   # Unfiltered inbox reads can stop at the caller's requested window because every
   # scanned dialog is eligible for return. Filtered reads are different: a busy
   # account can have hundreds of pinned/groups/read chats ahead of the first
   # unread DM, so we reserve a larger but still bounded scan budget.
-  if not dm_only and not unread_only:
+  if not contains and not dm_only and not unread_only:
     return limit
 
   filter_multiplier = 12
+  if contains:
+    filter_multiplier = 50
   if dm_only and unread_only:
-    filter_multiplier = 25
+    filter_multiplier = max(filter_multiplier, 25)
   elif dm_only or unread_only:
-    filter_multiplier = 15
+    filter_multiplier = max(filter_multiplier, 15)
   return min(5_000, max(limit * filter_multiplier, 1_000))
+
+
+def compute_message_scan_cap(*, contains: str = "", limit: int) -> int:
+  if not contains:
+    return limit
+  # With text filtering, limit means "matches returned", not the shallow
+  # collection window. Scan deeper so operators do not need `--limit 200 | grep`.
+  return min(1_000, max(limit * 50, 200))
 
 
 def build_dialog_payload(dialog) -> dict[str, object | None]:
@@ -478,11 +517,13 @@ def build_parser() -> argparse.ArgumentParser:
   read.add_argument("--limit", type = int, default = 20, help = "Maximum number of messages")
   read.add_argument("--after-id", type = int, default = 0, help = "Only return newer messages")
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
+  read.add_argument("--contains", default = "", help = "Only return messages containing this substring")
 
   inbox = subparsers.add_parser("inbox", help = "List dialogs with unread metadata")
   inbox.add_argument("--limit", type = int, default = 20, help = "Maximum number of dialogs")
   inbox.add_argument("--unread", action = "store_true", help = "Only include unread dialogs")
   inbox.add_argument("--dm-only", action = "store_true", help = "Only include direct messages")
+  inbox.add_argument("--contains", default = "", help = "Only include matching title, username, or last text")
 
   subparsers.add_parser("logout", help = "Clear the Telegram user session")
   return parser
@@ -787,10 +828,14 @@ async def run_topic_create(args: argparse.Namespace) -> int:
 async def run_read(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
+  contains = str(args.contains or "")
   with acquire_session_lock(session_path):
     client, _ = await connect_client(session_path)
     try:
-      messages = await client.get_messages(resolve_chat(args.chat), limit = limit)
+      messages = await client.get_messages(
+        resolve_chat(args.chat),
+        limit = compute_message_scan_cap(contains = contains, limit = limit),
+      )
       normalized = []
       for message in messages:
         message_id = int(getattr(message, "id", 0) or 0)
@@ -798,7 +843,11 @@ async def run_read(args: argparse.Namespace) -> int:
           continue
         if args.before_id and message_id >= args.before_id:
           continue
+        if not message_matches_text(message, contains = contains):
+          continue
         normalized.append(build_message_payload(message))
+        if len(normalized) >= limit:
+          break
       return emit({"messages": normalized})
     finally:
       await client.disconnect()
@@ -807,11 +856,13 @@ async def run_read(args: argparse.Namespace) -> int:
 async def run_inbox(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
+  contains = str(args.contains or "")
   with acquire_session_lock(session_path):
     client, _ = await connect_client(session_path)
     try:
       dialogs = []
       scan_cap = compute_inbox_scan_cap(
+        contains = contains,
         limit = limit,
         dm_only = bool(args.dm_only),
         unread_only = bool(args.unread),
@@ -821,6 +872,7 @@ async def run_inbox(args: argparse.Namespace) -> int:
       async for dialog in client.iter_dialogs(limit = scan_cap, ignore_pinned = False):
         if not dialog_matches_inbox_filters(
           dialog,
+          contains = contains,
           dm_only = bool(args.dm_only),
           unread_only = bool(args.unread),
         ):

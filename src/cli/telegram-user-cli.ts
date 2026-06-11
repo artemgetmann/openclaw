@@ -55,12 +55,12 @@ export function registerTelegramUserCli(program: Command) {
             "Create a forum topic and return its topic anchor for follow-up replies.",
           ],
           [
-            "openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json",
-            "Read recent DM messages with raw metadata.",
+            "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof --limit 5 --json",
+            "Read matching recent DM messages with raw metadata; use CLI filters instead of piping JSON to grep.",
           ],
           [
-            "openclaw telegram-user inbox --unread --dm-only --limit 10 --json",
-            "List inbox dialogs for unread DM triage with raw metadata.",
+            "openclaw telegram-user inbox --contains Artem --unread --dm-only --limit 10 --json",
+            "List matching inbox dialogs for unread DM triage with raw metadata.",
           ],
           [
             "openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json",
@@ -167,6 +167,7 @@ export function registerTelegramUserCli(program: Command) {
     .option("--limit <n>", "Read up to this many recent messages", "20")
     .option("--after-id <id>", "Only include messages newer than this id")
     .option("--before-id <id>", "Only include messages older than this id")
+    .option("--contains <text>", "Only include messages containing this substring")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserReadCommand } = await import("../commands/telegram-user.js");
@@ -180,6 +181,7 @@ export function registerTelegramUserCli(program: Command) {
     .option("--unread", "Only include dialogs with unread counts, mentions, or reactions", false)
     .option("--dm-only", "Only include direct-message dialogs", false)
     .option("--limit <n>", "List up to this many dialogs", "20")
+    .option("--contains <text>", "Only include dialogs whose title, username, or last text matches")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserInboxCommand } = await import("../commands/telegram-user.js");
