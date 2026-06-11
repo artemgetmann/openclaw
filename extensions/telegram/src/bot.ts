@@ -78,6 +78,8 @@ type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
 type GlobalFetchInput = Parameters<typeof globalThis.fetch>[0];
 type GlobalFetchInit = Parameters<typeof globalThis.fetch>[1];
 
+const TELEGRAM_GET_UPDATES_FETCH_TIMEOUT_MS = 45_000;
+
 function readRequestUrl(input: TelegramFetchInput): string | null {
   if (typeof input === "string") {
     return input;
@@ -166,6 +168,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
       const onShutdown = () => abortWith(shutdownSignal);
       let onRequestAbort: (() => void) | undefined;
+      let getUpdatesTimer: ReturnType<typeof setTimeout> | undefined;
       if (shutdownSignal.aborted) {
         abortWith(shutdownSignal);
       } else {
@@ -179,10 +182,27 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           init.signal.addEventListener("abort", onRequestAbort);
         }
       }
+      // The operator can raise the general Telegram API timeout for large outbound
+      // sends, but long-polling must still prove liveness frequently. A stuck
+      // getUpdates request otherwise leaves inbound Telegram silent until the
+      // slower session watchdog notices and restarts the poller.
+      if (extractTelegramApiMethod(input) === "getUpdates" && !controller.signal.aborted) {
+        getUpdatesTimer = setTimeout(() => {
+          controller.abort(
+            new Error(
+              `telegram getUpdates fetch timed out after ${TELEGRAM_GET_UPDATES_FETCH_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, TELEGRAM_GET_UPDATES_FETCH_TIMEOUT_MS);
+        getUpdatesTimer.unref?.();
+      }
       return callFetch(input as GlobalFetchInput, {
         ...(init as GlobalFetchInit),
         signal: controller.signal,
       }).finally(() => {
+        if (getUpdatesTimer) {
+          clearTimeout(getUpdatesTimer);
+        }
         shutdownSignal.removeEventListener("abort", onShutdown);
         if (init?.signal && onRequestAbort) {
           init.signal.removeEventListener("abort", onRequestAbort);
