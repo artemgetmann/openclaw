@@ -2,11 +2,13 @@ import { Command, Option } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const telegramUserInboxCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserReadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicCreateCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/telegram-user.js", () => ({
   telegramUserInboxCommand,
+  telegramUserReadCommand,
   telegramUserSendCommand,
   telegramUserTopicCreateCommand,
 }));
@@ -43,6 +45,10 @@ describe("telegram-user cli", () => {
 
     expect(help).toContain("openclaw telegram-user status --json");
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
+    expect(help).toContain(
+      "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
+    );
+    expect(help).toContain("instead of piping JSON to grep");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
   });
 
@@ -58,6 +64,8 @@ describe("telegram-user cli", () => {
       [
         "telegram-user",
         "inbox",
+        "--contains",
+        "urgent",
         "--unread",
         "--dm-only",
         "--limit",
@@ -73,12 +81,43 @@ describe("telegram-user cli", () => {
 
     expect(telegramUserInboxCommand).toHaveBeenCalledWith(
       expect.objectContaining({
+        contains: "urgent",
         dmOnly: true,
         envFile: "/tmp/tg.env",
         json: true,
         limit: "7",
         session: "/tmp/userbot.session",
         unread: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("registers read --contains and forwards structured text filters", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "read",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--contains",
+        "proof",
+        "--limit",
+        "5",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserReadCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "@jarvis_tester_1_bot",
+        contains: "proof",
+        json: true,
+        limit: "5",
       }),
       expect.any(Object),
     );

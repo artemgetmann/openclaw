@@ -36,6 +36,10 @@ Automation Rule
   `skills/telegram-user/scripts/telegram-user-cli.sh <subcommand> ...`
 - Run one command per call. Do not add shell chains, pipes, or redirection
   around the wrapper unless the user explicitly asks for raw shell plumbing.
+- Use structured CLI filters before shell parsing. If you need to find a known
+  chat or message, prefer `inbox --contains ...`, `read --contains ...`, or
+  `wait --contains ...`; do not pipe Telegram JSON to `grep` when one of those
+  options fits.
 - Start with the cheapest truthful check:
   `openclaw telegram-user status --json`
 - For broad unread triage, start with inbox discovery before picking a chat:
@@ -103,12 +107,16 @@ Default Commands
   `openclaw telegram-user inbox --json`
 - Inbox overview limited to unread chats:
   `openclaw telegram-user inbox --unread --json`
+- Inbox overview matching a known chat label or preview text:
+  `openclaw telegram-user inbox --contains "Artem" --json`
 - Unread DM-only sweep with a smaller result set:
   `openclaw telegram-user inbox --unread --dm-only --limit 10 --json`
 - Precheck one chat:
   `openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json`
 - Read recent messages from one chosen chat:
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json`
+- Read recent messages matching known text:
+  `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json`
 - Send a message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
 - Reply to a specific message:

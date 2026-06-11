@@ -807,10 +807,11 @@ OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" \
   openclaw telegram-user login --phone "+15551234567" --code 12345 --json
 openclaw telegram-user inbox --json
 openclaw telegram-user inbox --unread --json
+openclaw telegram-user inbox --contains "Artem" --json
 openclaw telegram-user inbox --unread --dm-only --limit 10 --json
 openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json
 openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
-openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
+openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json
 openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
 openclaw telegram-user logout --json
 
@@ -820,6 +821,8 @@ skills/telegram-user/scripts/telegram-user-cli.sh status --json
 
     Broad unread triage should start with `telegram-user inbox`, especially
     `--unread` when the agent is looking for what needs attention next.
+    Use `--contains` on `inbox`, `read`, or `wait` for known chat/message text
+    instead of piping Telegram JSON to `grep`.
     Use `read --chat ...` only after choosing a target chat from that inbox
     sweep or when the user already named the chat explicitly.
 
