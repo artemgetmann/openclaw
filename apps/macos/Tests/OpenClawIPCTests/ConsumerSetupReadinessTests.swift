@@ -169,6 +169,14 @@ private final class SendableCounter: @unchecked Sendable {
     var value = 0
 }
 
+private final class SendableFlag: @unchecked Sendable {
+    var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+}
+
 private final class ReadinessContinuationBox: @unchecked Sendable {
     var continuation: CheckedContinuation<ConsumerModelsReadinessPayload, any Error>?
 }
@@ -272,14 +280,54 @@ struct ConsumerSetupReadinessTests {
         #expect(!model.canRestartOperator)
     }
 
-    @Test func `consumer model runtime ownership blocker stays consumer safe`() async {
+    @Test func `consumer model runtime ownership blocker repairs before readiness probe`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
         let blockerDetail = """
         Telegram runtime ownership mismatch at /Users/user/Programming_Projects/openclaw/.worktrees/onboarding-ai-access-recovery-20260519-2158/apps/macos/Sources/OpenClaw/Telegram/DM/bridge.swift
         """
-        let expectedMessage = "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName) to finish."
         let model = ConsumerModelSetupModel(
             probeReadiness: {
-                readyReadinessPayload()
+                probeCalls.value += 1
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                restartCalls.value == 0 ? blockerDetail : nil
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            })
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(model.statusLine?.localizedCaseInsensitiveContains("local helper") == false)
+        #expect(model.statusLine?.contains("Telegram") == false)
+        #expect(model.statusLine?.contains("DM") == false)
+        #expect(model.statusLine?.contains("/Users/") == false)
+    }
+
+    @Test func `consumer model runtime ownership repair failure stays consumer safe and restartable`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerDetail = """
+        Telegram runtime ownership mismatch at /Users/user/Programming_Projects/openclaw/.worktrees/onboarding-ai-access-recovery-20260519-2158/apps/macos/Sources/OpenClaw/Telegram/DM/bridge.swift
+        """
+        let expectedMessage = "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return readyReadinessPayload()
             },
             listAuthOptions: {
                 ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
@@ -289,10 +337,15 @@ struct ConsumerSetupReadinessTests {
             },
             runtimeOwnershipBlocker: {
                 blockerDetail
+            },
+            restartGateway: {
+                restartCalls.value += 1
             })
 
         await model.refresh()
 
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 0)
         #expect(model.phase == .failed(expectedMessage))
         #expect(model.statusLine == expectedMessage)
         #expect(model.statusLine?.localizedCaseInsensitiveContains("local helper") == false)
@@ -303,6 +356,79 @@ struct ConsumerSetupReadinessTests {
         #expect(model.canRestartOperator)
         #expect(model.isAuthChoiceInteractionBlocked)
         #expect(!model.canChooseAnotherAccessMethod)
+    }
+
+    @Test func `consumer model restart operator refreshes after runtime ownership repair`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerDetail = "stale launchd helper at /Users/user/Programming_Projects/openclaw/.worktrees/stale/dist/index.js"
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                restartCalls.value < 2 ? blockerDetail : nil
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            })
+
+        await model.refresh()
+        #expect(model.failureKind == .runtimeUpdateBlocked)
+        #expect(model.canRestartOperator)
+
+        await model.restartOperator()
+
+        #expect(restartCalls.value == 2)
+        #expect(probeCalls.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.failureKind == nil)
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(!model.canRestartOperator)
+    }
+
+    @Test func `consumer model refresh clears runtime ownership blocker after repair`() async {
+        let probeCalls = SendableCounter()
+        let blockerActive = SendableFlag(true)
+        let expectedMessage = "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: "openai-codex-oauth")
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerActive.value ? "stale launchd service metadata" : nil
+            },
+            restartGateway: {
+            })
+
+        await model.refresh()
+        #expect(model.phase == .failed(expectedMessage))
+        #expect(probeCalls.value == 0)
+
+        blockerActive.value = false
+        await model.refreshOnAppActivationIfNeeded()
+
+        #expect(probeCalls.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(model.authOptionsLoaded)
     }
 
     @Test func `consumer model readiness surfaces missing auth as provider auth failure`() async {

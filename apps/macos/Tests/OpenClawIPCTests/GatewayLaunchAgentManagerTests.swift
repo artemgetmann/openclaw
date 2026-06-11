@@ -49,11 +49,63 @@ struct GatewayLaunchAgentManagerTests {
             launchAgentMatchesCurrentServiceVersion: false) == .install)
     }
 
-    @Test func `restart reinstalls loaded launch agent when service version is stale`() {
+    @Test func `service identity requires matching version and build when version marker exists`() throws {
+        let currentVersion = "2026.3.22"
+        let currentBuild = "2026061103"
+        GatewayLaunchAgentManager._setTestingCurrentServiceVersion(currentVersion)
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild(currentBuild)
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let matching = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [
+                "OPENCLAW_SERVICE_VERSION": currentVersion,
+                "OPENCLAW_SERVICE_BUILD": currentBuild,
+            ],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let missingBuild = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [
+                "OPENCLAW_SERVICE_VERSION": currentVersion,
+            ],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let staleBuild = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [
+                "OPENCLAW_SERVICE_VERSION": currentVersion,
+                "OPENCLAW_SERVICE_BUILD": "\(currentBuild)-stale",
+            ],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: nil)
+
+        #expect(GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: matching))
+        #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: missingBuild))
+        #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: staleBuild))
+    }
+
+    @Test func `restart reinstalls loaded launch agent when service version or runtime is stale`() {
         #expect(GatewayLaunchAgentManager._testDesiredRestartAction(
             loaded: true,
             hasPlist: true,
             launchAgentMatchesCurrentServiceVersion: false) == .install)
+        #expect(GatewayLaunchAgentManager._testDesiredRestartAction(
+            loaded: true,
+            hasPlist: true,
+            launchAgentMatchesCurrentRuntime: false) == .install)
     }
 
     @MainActor
