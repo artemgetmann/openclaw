@@ -73,7 +73,16 @@ const sessionStoreMocks = vi.hoisted(() => ({
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
+    autoMode: "off",
     cleanedFinalText: undefined as string | undefined,
+    lastAttempt: undefined as
+      | {
+          timestamp: number;
+          success: boolean;
+          textLength?: number;
+          error?: string;
+        }
+      | undefined,
     synthesizeFinalAudio: false,
   };
   return {
@@ -109,10 +118,10 @@ const ttsMocks = vi.hoisted(() => {
     normalizeTtsAutoMode: vi.fn((value: unknown) =>
       typeof value === "string" ? value : undefined,
     ),
-    resolveTtsAutoMode: vi.fn((_params: unknown) => "off"),
+    resolveTtsAutoMode: vi.fn((_params: unknown) => state.autoMode),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
     resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-test-tts.json"),
-    getLastTtsAttempt: vi.fn(() => undefined),
+    getLastTtsAttempt: vi.fn(() => state.lastAttempt),
   };
 });
 
@@ -313,7 +322,9 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    ttsMocks.state.autoMode = "off";
     ttsMocks.state.cleanedFinalText = undefined;
+    ttsMocks.state.lastAttempt = undefined;
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.getLastTtsAttempt.mockClear();
@@ -1701,6 +1712,44 @@ describe("dispatchReplyFromConfig", () => {
         },
       }),
     );
+  });
+
+  it("sends a lightweight Telegram status when block-streamed final TTS was expected but no media is produced", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "FINAL block answer only." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "FINAL block answer only." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Voice note failed. Final text is above.",
+      channelData: {
+        openclaw: {
+          finalTtsSupplement: true,
+          ttsFailureStatus: true,
+        },
+      },
+    });
   });
 
   it("keeps durable block final TTS media-only outside Telegram", async () => {

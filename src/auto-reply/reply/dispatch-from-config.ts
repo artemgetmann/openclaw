@@ -24,6 +24,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { logInfo } from "../../logger.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -41,7 +42,14 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
-import { getLastTtsAttempt, maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
+import {
+  getLastTtsAttempt,
+  maybeApplyTtsToPayload,
+  normalizeTtsAutoMode,
+  resolveTtsAutoMode,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+} from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { maybeResolveTextAlias, normalizeCommandBody } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
@@ -65,6 +73,39 @@ const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINES = 6;
 const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINE_CHARS = 180;
 const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_LINES = 3;
 const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_CHARS = 240;
+
+function hasTtsDirective(text: string): boolean {
+  return /\[\[tts(?::|\]|\s)/i.test(text);
+}
+
+function shouldExpectFinalTtsAttempt(params: {
+  cfg: OpenClawConfig;
+  inboundAudio: boolean;
+  sessionTtsAuto?: string;
+  text: string;
+}): boolean {
+  const text = params.text.trim();
+  if (text.length < 10) {
+    return false;
+  }
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const autoMode = resolveTtsAutoMode({
+    config,
+    prefsPath,
+    ...(params.sessionTtsAuto ? { sessionAuto: params.sessionTtsAuto } : {}),
+  });
+  if (autoMode === "always") {
+    return true;
+  }
+  if (autoMode === "inbound") {
+    return params.inboundAudio;
+  }
+  if (autoMode === "tagged") {
+    return hasTtsDirective(text);
+  }
+  return false;
+}
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -896,6 +937,9 @@ export async function dispatchReplyFromConfig(params: {
     let routedFinalCount = 0;
     if (replies.length === 0 && durableBlockFinalText.trim()) {
       const ttsAttemptStartedAt = Date.now();
+      logInfo(
+        `tts: final supplement synthesis start path=block-stream textLength=${durableBlockFinalText.trim().length} channel=${ttsChannel ?? "unknown"}`,
+      );
       const ttsReply = await maybeApplyAutomaticTts(
         { text: durableBlockFinalText.trim() },
         "final",
@@ -935,6 +979,9 @@ export async function dispatchReplyFromConfig(params: {
         } else {
           queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
         }
+        logInfo(
+          `tts: final supplement media send queued path=block-stream textLength=${durableBlockFinalText.trim().length}`,
+        );
       } else if (
         shouldCaptionFinalTtsSupplement &&
         !sourceReplyPolicy.suppressAutomaticSourceDelivery
@@ -942,7 +989,16 @@ export async function dispatchReplyFromConfig(params: {
         const lastAttempt = getLastTtsAttempt();
         const failedThisAttempt =
           lastAttempt && lastAttempt.timestamp >= ttsAttemptStartedAt && !lastAttempt.success;
-        if (failedThisAttempt) {
+        const expectedThisAttempt = shouldExpectFinalTtsAttempt({
+          cfg,
+          inboundAudio,
+          sessionTtsAuto: turnTtsAuto,
+          text: durableBlockFinalText,
+        });
+        logInfo(
+          `tts: final supplement synthesis ${failedThisAttempt ? "failed" : "skipped"} path=block-stream textLength=${durableBlockFinalText.trim().length} expected=${String(expectedThisAttempt)} error=${failedThisAttempt ? (lastAttempt.error ?? "unknown") : "none"}`,
+        );
+        if (failedThisAttempt || expectedThisAttempt) {
           const failurePayload = markFinalTtsSupplement({
             text: "Voice note failed. Final text is above.",
             channelData: {

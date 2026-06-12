@@ -780,6 +780,14 @@ describe("tts", () => {
       });
     });
 
+    it("uses a long enough default timeout for long final-answer synthesis", () => {
+      const cfg = {
+        messages: { tts: {} },
+      } satisfies OpenClawConfig;
+
+      expect(resolveTtsConfig(cfg).timeoutMs).toBe(90_000);
+    });
+
     it("keeps visible URLs but shortens them for OpenAI speech input", async () => {
       await withMockedAutoTtsFetch(async (fetchMock) => {
         const longSourceUrl =
