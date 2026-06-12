@@ -69,13 +69,37 @@ cp -f "$NOTES_HTML" "$TMP_DIR/${ZIP_BASE}.html"
 
 DOWNLOAD_URL_PREFIX=${SPARKLE_DOWNLOAD_URL_PREFIX:-"https://github.com/openclaw/openclaw/releases/download/v${VERSION}/"}
 
-export PATH="$ROOT/apps/macos/.build/artifacts/sparkle/Sparkle/bin:$PATH"
-if ! command -v generate_appcast >/dev/null; then
-  echo "generate_appcast not found in PATH. Build Sparkle tools via SwiftPM." >&2
+SPARKLE_TOOL_DIRS=(
+  "$ROOT/apps/macos/.build/artifacts/sparkle/Sparkle/bin"
+  "$ROOT/apps/macos/.build/arm64/artifacts/sparkle/Sparkle/bin"
+  "$ROOT/apps/macos/.build/x86_64/artifacts/sparkle/Sparkle/bin"
+)
+
+GENERATE_APPCAST=""
+for sparkle_tool_dir in "${SPARKLE_TOOL_DIRS[@]}"; do
+  # Prefer repo-built Sparkle tools so release scripts are reproducible across
+  # shells and do not depend on a manually exported PATH.
+  if [[ -x "$sparkle_tool_dir/generate_appcast" ]]; then
+    GENERATE_APPCAST="$sparkle_tool_dir/generate_appcast"
+    break
+  fi
+done
+
+if [[ -z "$GENERATE_APPCAST" ]]; then
+  GENERATE_APPCAST="$(command -v generate_appcast 2>/dev/null || true)"
+fi
+
+if [[ -z "$GENERATE_APPCAST" ]]; then
+  echo "generate_appcast not found. Build Sparkle tools via SwiftPM." >&2
+  echo "Searched:" >&2
+  for sparkle_tool_dir in "${SPARKLE_TOOL_DIRS[@]}"; do
+    echo "  $sparkle_tool_dir/generate_appcast" >&2
+  done
+  echo "  PATH=$PATH" >&2
   exit 1
 fi
 
-generate_appcast \
+"$GENERATE_APPCAST" \
   --ed-key-file "$PRIVATE_KEY_FILE" \
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
   --embed-release-notes \

@@ -45,11 +45,15 @@ Options:
                       Required with --publish-release-assets. Must match the
                       repo's latest release because Sparkle checks the public
                       releases/latest/download appcast feed.
-  --phase <full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|publish-assets-only|verify-public-assets-only|trusted-ring-fast>
+  --phase <full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast>
                       full is the default one-shot lane. post-app-build resumes
                       from an existing dist/Jarvis.app and runs the release tail.
                       Narrow phases resume failed tails from saved artifacts,
                       receipts, and dist/jarvis-release-manifest.env.
+                      create-local-release-assets-only creates Jarvis.zip and
+                      jarvis-appcast.xml from an existing accepted Jarvis.app
+                      without rebuilding, notarizing, stapling, uploading, or
+                      verifying public URLs.
   --resume-after-app-build
                       Alias for --phase post-app-build.
   --trusted-ring-fast
@@ -569,6 +573,17 @@ write_release_manifest() {
   dmg_notary_id="$(notary_receipt_submission_id "$dmg_notary_receipt")"
   app_notary_status="$(notary_receipt_status "$app_notary_receipt")"
   dmg_notary_status="$(notary_receipt_status "$dmg_notary_receipt")"
+  # Resume phases treat the manifest as durable operator metadata. If a later
+  # local-assets or publish-only run lacks the original receipt files, preserve
+  # the last recorded notary status instead of clobbering it with blanks.
+  if [[ ! -f "$app_notary_receipt" ]]; then
+    app_notary_id="$(manifest_value "JARVIS_APP_NOTARY_SUBMISSION_ID")"
+    app_notary_status="$(manifest_value "JARVIS_APP_NOTARY_STATUS")"
+  fi
+  if [[ ! -f "$dmg_notary_receipt" ]]; then
+    dmg_notary_id="$(manifest_value "JARVIS_DMG_NOTARY_SUBMISSION_ID")"
+    dmg_notary_status="$(manifest_value "JARVIS_DMG_NOTARY_STATUS")"
+  fi
 
   mkdir -p "$(dirname "$RELEASE_MANIFEST_PATH")"
   {
@@ -626,6 +641,27 @@ require_notarized_manifest_before_publish() {
     echo "Poll the saved submissions before uploading public assets." >&2
     exit 1
   fi
+}
+
+require_local_release_asset_phase_inputs() {
+  local app_status
+  local failed=0
+
+  if [[ ! -d "$APP_PATH" ]]; then
+    echo "ERROR: --phase create-local-release-assets-only requires an existing app bundle: $APP_PATH" >&2
+    echo "Run the default package lane once, or point APP_NAME/APP_BUNDLE_NAME at the already-built Jarvis app." >&2
+    failed=1
+  fi
+
+  app_status="$(manifest_value "JARVIS_APP_NOTARY_STATUS")"
+  if [[ "$app_status" != "Accepted" ]]; then
+    echo "ERROR: create-local-release-assets-only requires accepted app notarization in $RELEASE_MANIFEST_PATH." >&2
+    echo "app_notary_status=${app_status:-missing}" >&2
+    echo "Poll the app notarization receipt before creating the local Sparkle ZIP/appcast." >&2
+    failed=1
+  fi
+
+  [[ "$failed" == "0" ]] || exit 1
 }
 
 require_app_notarized_manifest() {
@@ -814,6 +850,25 @@ poll_dmg_notarization_only() {
   fi
 }
 
+create_local_release_assets_only() {
+  require_local_release_asset_phase_inputs
+  if [[ "$NOTARIZE" != "1" ]]; then
+    echo "ERROR: create-local-release-assets-only requires notarized release mode." >&2
+    echo "Unset SKIP_NOTARIZE; this phase creates signed Sparkle release assets from an already accepted app." >&2
+    exit 1
+  fi
+  require_sparkle_private_key_file
+
+  echo "📦 Zip: $ZIP"
+  # Recreate only the local Sparkle assets. The app and DMG receipts are inputs
+  # here; this phase must not rebuild, staple, upload, or touch the DMG.
+  rm -f "$ZIP" "$ROOT_DIR/dist/jarvis-appcast.xml"
+  ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP"
+  assert_sparkle_zip_has_no_macos_metadata "$ZIP"
+  generate_jarvis_appcast
+  write_release_manifest
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --publish-release-assets)
@@ -830,7 +885,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --phase)
       if [[ $# -lt 2 ]]; then
-        echo "ERROR: --phase requires a value: full or post-app-build" >&2
+        echo "ERROR: --phase requires a value" >&2
         exit 1
       fi
       PACKAGE_PHASE="$2"
@@ -866,11 +921,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PACKAGE_PHASE" in
-  full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|publish-assets-only|verify-public-assets-only|trusted-ring-fast)
+  full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast)
     ;;
   *)
     echo "ERROR: unknown --phase value: $PACKAGE_PHASE" >&2
-    echo "Use --phase full, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, publish-assets-only, verify-public-assets-only, or trusted-ring-fast." >&2
+    echo "Use --phase full, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, create-local-release-assets-only, publish-assets-only, verify-public-assets-only, or trusted-ring-fast." >&2
     exit 1
     ;;
 esac
@@ -925,7 +980,16 @@ if [[ "$SKIP_NOTARIZE" == "1" ]]; then
 fi
 
 case "$PACKAGE_PHASE" in
-  full|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization)
+  create-local-release-assets-only)
+    require_local_release_asset_phase_inputs
+    ;;
+  publish-assets-only)
+    require_notarized_manifest_before_publish
+    ;;
+esac
+
+case "$PACKAGE_PHASE" in
+  full|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization|create-local-release-assets-only)
     consumer_sparkle_release_gate
     ;;
 esac
@@ -938,6 +1002,7 @@ case "$PACKAGE_PHASE" in
     fi
     ;;
   publish-assets-only)
+    require_notarized_manifest_before_publish
     if [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]]; then
       echo "ERROR: --phase publish-assets-only requires --publish-release-assets." >&2
       exit 1
@@ -1029,6 +1094,13 @@ case "$PACKAGE_PHASE" in
     ;;
   poll-dmg-notarization)
     ;;
+  create-local-release-assets-only)
+    create_local_release_assets_only
+    echo "release_sendable=false"
+    echo "reason=local Sparkle ZIP/appcast were generated but not uploaded/verified"
+    echo "next_phase=publish-assets-only"
+    exit 0
+    ;;
   publish-assets-only)
     require_notarized_manifest_before_publish
     publish_release_assets
@@ -1090,7 +1162,11 @@ case "$PACKAGE_PHASE" in
   poll-dmg-notarization)
     poll_dmg_notarization_only
     echo "release_sendable=false"
-    echo "reason=DMG notarization accepted; continue with --phase post-app-build or create zip/appcast manually if already generated"
+    if [[ ! -f "$ZIP" || ! -f "$ROOT_DIR/dist/jarvis-appcast.xml" ]]; then
+      echo "reason=DMG notarization accepted; continue with --phase create-local-release-assets-only to create missing ZIP/appcast"
+    else
+      echo "reason=DMG notarization accepted; local ZIP/appcast exist, continue with --phase publish-assets-only --publish-release-assets --github-release-tag <latest-tag>"
+    fi
     exit 0
     ;;
 esac

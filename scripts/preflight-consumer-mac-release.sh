@@ -36,18 +36,23 @@ has_developer_id_application_cert() {
 
 sparkle_tool_path() {
   local name="$1"
-  local built_tool="$ROOT_DIR/apps/macos/.build/artifacts/sparkle/Sparkle/bin/$name"
-  local arch_tool="$ROOT_DIR/apps/macos/.build/arm64/artifacts/sparkle/Sparkle/bin/$name"
+  local sparkle_tool_dirs=(
+    "$ROOT_DIR/apps/macos/.build/artifacts/sparkle/Sparkle/bin"
+    "$ROOT_DIR/apps/macos/.build/arm64/artifacts/sparkle/Sparkle/bin"
+    "$ROOT_DIR/apps/macos/.build/x86_64/artifacts/sparkle/Sparkle/bin"
+  )
+  local sparkle_tool_dir
+  local sparkle_tool
 
-  if [[ -x "$built_tool" ]]; then
-    printf '%s\n' "$built_tool"
-    return 0
-  fi
-
-  if [[ -x "$arch_tool" ]]; then
-    printf '%s\n' "$arch_tool"
-    return 0
-  fi
+  for sparkle_tool_dir in "${sparkle_tool_dirs[@]}"; do
+    # Mirror make_appcast.sh so preflight reports the same tool that release
+    # generation will actually execute.
+    sparkle_tool="$sparkle_tool_dir/$name"
+    if [[ -x "$sparkle_tool" ]]; then
+      printf '%s\n' "$sparkle_tool"
+      return 0
+    fi
+  done
 
   command -v "$name" 2>/dev/null || true
 }
