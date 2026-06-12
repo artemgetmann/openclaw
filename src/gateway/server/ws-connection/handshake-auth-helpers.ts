@@ -57,10 +57,13 @@ export function shouldAllowSilentLocalPairing(params: {
   authMethod?: GatewayAuthResult["method"];
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
+  const isTrustedMacAppMode =
+    params.clientMode === GATEWAY_CLIENT_MODES.UI ||
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE;
   const isTrustedMacAppRoleUpgrade =
     params.reason === "role-upgrade" &&
     params.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
-    params.clientMode === GATEWAY_CLIENT_MODES.UI &&
+    isTrustedMacAppMode &&
     (params.authMethod === "token" || params.authMethod === "password");
 
   return (
@@ -69,8 +72,9 @@ export function shouldAllowSilentLocalPairing(params: {
     // Local-first clients on the same machine should not need manual approval just
     // because the app reports newer platform/device-family metadata after an update.
     // Keep role upgrades explicit except for the signed, local macOS app after it
-    // has already proven the shared gateway secret; that is the consumer app
-    // repairing its own local runtime, not a new remote device.
+    // has already proven the shared gateway secret. Jarvis owns both the visible
+    // settings UI and the helper/node websocket, so either mode may be the first
+    // connection to notice that the paired local device metadata needs repair.
     (params.reason === "not-paired" ||
       params.reason === "scope-upgrade" ||
       params.reason === "metadata-upgrade" ||
