@@ -110,7 +110,7 @@ struct GatewayChannelConnectTests {
         }
     }
 
-    @Test func `stored role device token wins over shared gateway token`() async throws {
+    @Test func `node shared gateway token wins over stored node device token`() async throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-channel-auth-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
@@ -136,6 +136,51 @@ struct GatewayChannelConnectTests {
             let channel = try GatewayChannelActor(
                 url: #require(URL(string: "ws://127.0.0.1:18789")),
                 token: "shared-operator-token",
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "node",
+                    clientDisplayName: "OpenClaw Test"))
+
+            try await channel.connect()
+
+            #expect(await channel.authSource() == .sharedToken)
+            #expect(sent.authToken() == "shared-operator-token")
+            #expect(sent.role() == "node")
+        }
+    }
+
+    @Test func `node uses stored device token when no shared gateway token is configured`() async throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-channel-auth-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": root.path]) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "node",
+                token: "stored-node-token",
+                scopes: [])
+
+            let sent = CapturedConnectAuth()
+            let session = GatewayTestWebSocketSession(
+                taskFactory: {
+                    GatewayTestWebSocketTask(
+                        sendHook: { _, message, sendIndex in
+                            if sendIndex == 0 {
+                                sent.record(message)
+                            }
+                        })
+                })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: nil,
                 session: WebSocketSessionBox(session: session),
                 connectOptions: GatewayConnectOptions(
                     role: "node",
