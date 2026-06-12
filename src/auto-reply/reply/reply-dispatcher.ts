@@ -9,7 +9,10 @@ import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
-type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
+type ReplyDispatchErrorHandler = (
+  err: unknown,
+  info: { kind: ReplyDispatchKind; payload: ReplyPayload },
+) => void;
 
 type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
@@ -54,6 +57,13 @@ export type ReplyDispatcherOptions = {
   onError?: ReplyDispatchErrorHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
+  /**
+   * Called when a resolver streamed the final visible answer as block replies
+   * and later confirms no separate final text payload will arrive. Channels with
+   * mutable previews use this to clean transient progress immediately after the
+   * durable block text is flushed, before slower supplements such as TTS run.
+   */
+  onBlockReplyFinalized?: () => Promise<void> | void;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
 };
@@ -78,6 +88,7 @@ export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
+  finalizeBlockReply?: () => Promise<void>;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
@@ -167,7 +178,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
       })
       .catch((err) => {
-        options.onError?.(err, { kind });
+        options.onError?.(err, { kind, payload: normalized });
       })
       .finally(() => {
         pending -= 1;
@@ -211,6 +222,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    finalizeBlockReply: async () => {
+      // Preserve the no-flash contract: cleanup hooks must run only after every
+      // queued block send has settled, so the durable text is visible first.
+      await sendChain;
+      await options.onBlockReplyFinalized?.();
+    },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,

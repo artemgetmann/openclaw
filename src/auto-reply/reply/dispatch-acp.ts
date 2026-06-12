@@ -16,6 +16,7 @@ import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { logInfo } from "../../logger.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import {
   normalizeAttachmentPath,
@@ -183,10 +184,11 @@ function isTelegramAcpDeliveryTarget(params: {
   ctx: FinalizedMsgContext;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
+  ttsChannel?: string;
 }): boolean {
   const channel = params.shouldRouteToOriginating
     ? params.originatingChannel
-    : (params.ctx.Surface ?? params.ctx.Provider);
+    : (params.ttsChannel ?? params.ctx.Surface ?? params.ctx.Provider);
   return normalizeMessageChannel(channel) === "telegram";
 }
 
@@ -326,20 +328,32 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     const finalOutputText = projector.getFinalOutputText().trim();
     if (finalOutputText) {
+      const isTelegramFinalTarget = isTelegramAcpDeliveryTarget({
+        ctx: params.ctx,
+        shouldRouteToOriginating: params.shouldRouteToOriginating,
+        originatingChannel: params.originatingChannel,
+        ttsChannel: params.ttsChannel,
+      });
+      logInfo(
+        `dispatch-acp: final target provider=${params.ctx.Provider ?? "unknown"} surface=${params.ctx.Surface ?? "unknown"} originating=${params.originatingChannel ?? "none"} ttsChannel=${params.ttsChannel ?? "none"} route=${String(params.shouldRouteToOriginating)} telegram=${String(isTelegramFinalTarget)} textLength=${finalOutputText.length}`,
+      );
       // ACP output chunks are delivered as source previews so progress never
       // speaks early. In Telegram, source previews are transient progress, so
       // the accepted final text must be delivered as durable final text before
       // any media-only TTS supplement is allowed to follow.
       let visibleFinalDelivered = true;
-      if (
-        isTelegramAcpDeliveryTarget({
-          ctx: params.ctx,
-          shouldRouteToOriginating: params.shouldRouteToOriginating,
-          originatingChannel: params.originatingChannel,
-        })
-      ) {
+      if (isTelegramFinalTarget) {
         visibleFinalDelivered = await delivery.deliverFinalTextBeforeTts(finalOutputText);
         queuedFinal = queuedFinal || visibleFinalDelivered;
+        if (visibleFinalDelivered) {
+          logInfo(
+            `telegram: acp final text ready; finalizing block preview before tts textLength=${finalOutputText.length}`,
+          );
+          await params.dispatcher.finalizeBlockReply?.();
+          logInfo(
+            `telegram: acp final preview finalized before tts textLength=${finalOutputText.length}`,
+          );
+        }
       }
       if (visibleFinalDelivered) {
         const delivered = await delivery.deliverFinalTtsSupplement(finalOutputText);

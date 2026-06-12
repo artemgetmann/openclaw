@@ -25,6 +25,7 @@ import type {
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
+import { logInfo } from "../logger.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { resolveOpenAiNonModelEnvApiKey } from "../openai/auth-split.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -46,7 +47,10 @@ import {
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+// Edge is the no-key fallback for Telegram voice notes. Long final answers can
+// legitimately need more than 30s to synthesize, so keep the default aligned
+// with the 4096-char user limit instead of failing just under the cap.
+const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
@@ -664,6 +668,8 @@ export async function textToSpeech(params: {
 
   for (const provider of providers) {
     const providerStart = Date.now();
+    logVerbose(`TTS: provider synthesis start provider=${provider}`);
+    logInfo(`tts: provider synthesis start provider=${provider}`);
     try {
       if (provider === "edge") {
         if (!config.edge.enabled) {
@@ -725,10 +731,17 @@ export async function textToSpeech(params: {
         scheduleCleanup(tempDir);
         const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
 
+        const latencyMs = Date.now() - providerStart;
+        logVerbose(
+          `TTS: provider synthesis end provider=${provider} latencyMs=${latencyMs} outputFormat=${edgeResult.outputFormat}`,
+        );
+        logInfo(
+          `tts: provider synthesis end provider=${provider} latencyMs=${latencyMs} outputFormat=${edgeResult.outputFormat}`,
+        );
         return {
           success: true,
           audioPath: edgeResult.audioPath,
-          latencyMs: Date.now() - providerStart,
+          latencyMs,
           provider,
           outputFormat: edgeResult.outputFormat,
           voiceCompatible,
@@ -790,15 +803,29 @@ export async function textToSpeech(params: {
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
+      logVerbose(
+        `TTS: provider synthesis end provider=${provider} latencyMs=${latencyMs} outputFormat=${provider === "openai" ? output.openai : output.elevenlabs}`,
+      );
+      const outputFormat = provider === "openai" ? output.openai : output.elevenlabs;
+      logInfo(
+        `tts: provider synthesis end provider=${provider} latencyMs=${latencyMs} outputFormat=${outputFormat}`,
+      );
       return {
         success: true,
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      logVerbose(
+        `TTS: provider synthesis failure provider=${provider} latencyMs=${Date.now() - providerStart} error=${errorText}`,
+      );
+      logInfo(
+        `tts: provider synthesis failure provider=${provider} latencyMs=${Date.now() - providerStart} error=${errorText}`,
+      );
       errors.push(formatTtsProviderError(provider, err));
     }
   }
@@ -908,6 +935,15 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     sessionAuto: params.ttsAuto,
   });
+  const maxLength = getTtsMaxLength(prefsPath);
+  const summarizeEnabled = isSummarizationEnabled(prefsPath);
+  const preferredProvider = getTtsProvider(config, prefsPath);
+  logVerbose(
+    `TTS: resolved mode=${config.mode ?? "final"} auto=${autoMode} maxLength=${maxLength} summarize=${String(summarizeEnabled)} provider=${preferredProvider} kind=${params.kind ?? "unknown"} textLength=${params.payload.text?.length ?? 0}`,
+  );
+  logInfo(
+    `tts: resolved mode=${config.mode ?? "final"} auto=${autoMode} maxLength=${maxLength} summarize=${String(summarizeEnabled)} provider=${preferredProvider} kind=${params.kind ?? "unknown"} textLength=${params.payload.text?.length ?? 0}`,
+  );
   if (autoMode === "off") {
     return params.payload;
   }
@@ -956,12 +992,11 @@ export async function maybeApplyTtsToPayload(params: {
     return nextPayload;
   }
 
-  const maxLength = getTtsMaxLength(prefsPath);
   let textForAudio = ttsText.trim();
   let wasSummarized = false;
 
   if (textForAudio.length > maxLength) {
-    if (!isSummarizationEnabled(prefsPath)) {
+    if (!summarizeEnabled) {
       logVerbose(
         `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );
@@ -998,6 +1033,12 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const ttsStart = Date.now();
+  logVerbose(
+    `TTS: synthesis start provider=${preferredProvider} inputLength=${textForAudio.length} originalLength=${text.length} summarized=${String(wasSummarized)}`,
+  );
+  logInfo(
+    `tts: synthesis start provider=${preferredProvider} inputLength=${textForAudio.length} originalLength=${text.length} summarized=${String(wasSummarized)}`,
+  );
   const result = await textToSpeech({
     text: textForAudio,
     cfg: params.cfg,
@@ -1016,6 +1057,12 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
+    logVerbose(
+      `TTS: synthesis end provider=${result.provider ?? preferredProvider} latencyMs=${result.latencyMs ?? Date.now() - ttsStart} audioPath=${result.audioPath}`,
+    );
+    logInfo(
+      `tts: synthesis end provider=${result.provider ?? preferredProvider} latencyMs=${result.latencyMs ?? Date.now() - ttsStart} audioPath=${result.audioPath}`,
+    );
     const channelId = resolveChannelId(params.channel);
     const shouldVoice =
       channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
@@ -1036,7 +1083,12 @@ export async function maybeApplyTtsToPayload(params: {
   };
 
   const latency = Date.now() - ttsStart;
-  logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
+  logVerbose(
+    `TTS: synthesis failure provider=${preferredProvider} latencyMs=${latency} error=${result.error ?? "unknown"}`,
+  );
+  logInfo(
+    `tts: synthesis failure provider=${preferredProvider} latencyMs=${latency} error=${result.error ?? "unknown"}`,
+  );
   return nextPayload;
 }
 

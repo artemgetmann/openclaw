@@ -152,6 +152,31 @@ describe("createTelegramDraftStream", () => {
     await stream.clear();
 
     expect(api.deleteMessage).not.toHaveBeenCalled();
+    expect(api.sendMessageDraft).toHaveBeenLastCalledWith(123, expect.any(Number), "", {
+      message_thread_id: 42,
+    });
+  });
+
+  it("clears abandoned native draft previews without deleting messages", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    stream.update("Abandoned draft");
+    await stream.flush();
+    await stream.clear();
+
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(
+      1,
+      123,
+      expect.any(Number),
+      "Abandoned draft",
+      { message_thread_id: 42 },
+    );
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(2, 123, expect.any(Number), "", {
+      message_thread_id: 42,
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
   it("supports forcing message transport in dm threads", async () => {
@@ -302,6 +327,34 @@ describe("createTelegramDraftStream", () => {
     expect(clearCall).toBeDefined();
     expect(clearCall?.[0]).toBe(123);
     expect(clearCall?.[3]).toEqual({ message_thread_id: 42 });
+  });
+
+  it("skips materializing stale draft text after preview exceeds the cap", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      maxChars: 12,
+      warn,
+    });
+
+    stream.update("Short draft");
+    await stream.flush();
+    stream.update("This preview is too long for Telegram drafts");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBeUndefined();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(2, 123, expect.any(Number), "", {
+      message_thread_id: 42,
+    });
+    expect(warn).toHaveBeenCalledWith("telegram stream preview stopped (text length 44 > 12)");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview materialize skipped after over-limit preview; using durable final send",
+    );
   });
 
   it("retries materialize send without thread when dm thread lookup fails", async () => {

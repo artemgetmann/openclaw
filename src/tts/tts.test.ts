@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -745,6 +746,46 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("preserves always mode and 4096 limit after long final TTS", async () => {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const prefsPath = process.env.OPENCLAW_TTS_PREFS!;
+        const cfg: OpenClawConfig = {
+          ...baseCfg,
+          messages: {
+            ...baseCfg.messages!,
+            tts: { ...baseCfg.messages!.tts, auto: "off" },
+          },
+        };
+        tts.setTtsAutoMode(prefsPath, "always");
+        tts.setTtsMaxLength(prefsPath, 4096);
+        tts.setSummarizationEnabled(prefsPath, false);
+
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "Long final answer. ".repeat(260) },
+          cfg,
+          channel: "telegram",
+          kind: "final",
+          inboundAudio: false,
+        });
+
+        const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as {
+          tts?: { auto?: string; maxLength?: number };
+        };
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(prefs.tts?.auto).toBe("always");
+        expect(prefs.tts?.maxLength).toBe(4096);
+      });
+    });
+
+    it("uses a long enough default timeout for long final-answer synthesis", () => {
+      const cfg = {
+        messages: { tts: {} },
+      } satisfies OpenClawConfig;
+
+      expect(resolveTtsConfig(cfg).timeoutMs).toBe(90_000);
     });
 
     it("keeps visible URLs but shortens them for OpenAI speech input", async () => {

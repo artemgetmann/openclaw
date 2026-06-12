@@ -63,7 +63,10 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX). */
 const DRAFT_MIN_INITIAL_CHARS = 12;
+/** DMs optimize for time-to-first-visible text; push-notification debounce matters less there. */
 const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
+/** Keep fast DM previews responsive after the first send without token-by-token API spam. */
+const DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS = 250;
 const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
 
 // Continuation-style agent runs can re-enter Telegram delivery between tool
@@ -93,6 +96,35 @@ function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
   const isSingleLine = !/\n/.test(trimmed);
   const isShortHeading = trimmed.length <= 120 && /^[^!?\n]{1,80}[:：]\s*[^.!?\n]*$/.test(trimmed);
   return isSingleLine && isShortHeading;
+}
+
+function shouldEmitCoalescedDraftPreview(params: {
+  previousText: string;
+  nextText: string;
+  laneName: LaneName;
+  fastFirstPreview?: boolean;
+}): boolean {
+  if (params.laneName === "reasoning") {
+    return true;
+  }
+  const previous = params.previousText.trimEnd();
+  const next = params.nextText.trimEnd();
+  if (!next || next === previous) {
+    return false;
+  }
+  if (!previous) {
+    if (params.fastFirstPreview) {
+      return true;
+    }
+    // Avoid creating Telegram drafts for tiny token prefixes; the final lane
+    // still receives the complete answer even when early previews are skipped.
+    return next.length >= 48 || /(?:[.!?…]["')\]]?|[\n\r]{2,})$/.test(next);
+  }
+  if (next.length < previous.length) {
+    return true;
+  }
+  const addedChars = next.length - previous.length;
+  return addedChars >= 180 || /(?:[.!?…]["')\]]?|[\n\r]{2,})$/.test(next);
 }
 
 function hasInternalToolTraceText(text?: string) {
@@ -403,14 +435,19 @@ export const dispatchTelegramMessage = async ({
     progressThreadKey,
     ctxPayload.SessionKey ?? "no-session",
   ].join("|");
-  // Keep DM preview lanes on real message transport. Native draft previews still
-  // require a draft->message materialize hop, and that overlap keeps reintroducing
-  // a visible duplicate flash at finalize time.
+  // Native Telegram drafts animate nicely, but real message/edit previews are
+  // the lower-latency DM path. Use them for user-visible answer/progress text;
+  // keep native draft transport available for reasoning and non-DM surfaces.
   const useMessagePreviewTransportForDm =
     threadSpec?.scope === "dm" && (canStreamAnswerDraft || canStreamProgressDraft);
+  const answerPreviewTransport = useMessagePreviewTransportForDm ? "message" : "auto";
+  const progressPreviewTransport = useMessagePreviewTransportForDm ? "message" : "auto";
   const draftMinInitialChars = useMessagePreviewTransportForDm
     ? DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW
     : DRAFT_MIN_INITIAL_CHARS;
+  const dmMessagePreviewThrottleMs = useMessagePreviewTransportForDm
+    ? DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS
+    : undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -437,15 +474,20 @@ export const dispatchTelegramMessage = async ({
     draftDurableSendClassificationByLane[laneName] = classification;
   };
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+    const laneMinInitialChars =
+      laneName === "answer" ? draftMinInitialChars : DRAFT_MIN_INITIAL_CHARS;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
+          previewTransport: laneName === "answer" ? answerPreviewTransport : "auto",
           replyToMessageId: draftReplyToMessageId,
-          minInitialChars: draftMinInitialChars,
+          ...(laneName === "answer" && dmMessagePreviewThrottleMs != null
+            ? { throttleMs: dmMessagePreviewThrottleMs }
+            : {}),
+          minInitialChars: laneMinInitialChars,
           deleteAudit: {
             callsite: `telegram-${laneName}-preview-clear`,
             reason: "lane_preview_cleanup",
@@ -577,7 +619,9 @@ export const dispatchTelegramMessage = async ({
         chatId,
         maxChars: draftMaxChars,
         thread: threadSpec,
+        previewTransport: progressPreviewTransport,
         replyToMessageId: draftReplyToMessageId,
+        ...(dmMessagePreviewThrottleMs != null ? { throttleMs: dmMessagePreviewThrottleMs } : {}),
         minInitialChars: draftMinInitialChars,
         deleteAudit: {
           callsite: "telegram-progress-controller-clear",
@@ -822,10 +866,23 @@ export const dispatchTelegramMessage = async ({
       callsite: `${laneName}-partial-preview`,
       sourceKind: "partial",
     });
-    // Mark only previews we actually render. A suppressed heading like
-    // "example.com:" is just an early final-answer prefix, not progress.
-    lane.hasStreamedMessage = true;
+    const previousDeliveredPreviewText = laneStream.lastDeliveredText?.() ?? "";
+    if (
+      !shouldEmitCoalescedDraftPreview({
+        previousText: previousDeliveredPreviewText,
+        nextText: previewText,
+        laneName,
+        fastFirstPreview: lane === answerLane && useMessagePreviewTransportForDm,
+      })
+    ) {
+      lane.lastPartialText = previewText;
+      return;
+    }
     lane.lastPartialText = previewText;
+    // `lastPartialText` is the complete accumulated snapshot. This flag means
+    // a preview update was actually queued, which controls later materialize
+    // and cleanup behavior.
+    lane.hasStreamedMessage = true;
     laneStream.update(previewText);
   };
   const ingestDraftLaneSegments = async (text: string | undefined) => {
@@ -1162,20 +1219,12 @@ export const dispatchTelegramMessage = async ({
       hasMedia,
       isError: payload.isError,
     });
-    const progressCleanupResult = await clearProgressController("before-final", {
-      timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
-    });
-    if (progressCleanupResult === "timed-out") {
-      // The timed-out cleanup may still delete the old progress message later.
-      // Force the final through a fresh send so late cleanup cannot erase the
-      // user's durable answer.
-      forceNextAnswerFinalSend = true;
-    }
     setDraftDurableSendClassification("answer", {
       reason: classifyPayloadDurableSendReason(payload, "final"),
       callsite: "answer-final-preview",
       sourceKind: "final",
     });
+    let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
     if (forceNextAnswerFinalSend) {
       forceNextAnswerFinalSend = false;
       const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
@@ -1184,15 +1233,40 @@ export const dispatchTelegramMessage = async ({
         laneName: "answer",
         infoKind: "final",
       });
-      return delivered ? "sent" : "skipped";
+      result = delivered ? "sent" : "skipped";
+    } else {
+      result = await deliverLaneText({
+        laneName: "answer",
+        text: preparedText,
+        payload,
+        infoKind: "final",
+        previewButtons,
+      });
     }
-    return deliverLaneText({
-      laneName: "answer",
-      text: preparedText,
-      payload,
-      infoKind: "final",
-      previewButtons,
-    });
+    if (result !== "skipped") {
+      await clearProgressController("after-final", {
+        timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+      });
+    }
+    return result;
+  };
+
+  const sendFinalPayloadThenCleanupProgress = async (
+    payload: ReplyPayload,
+    classification: {
+      reason?: TelegramDurableSendReason;
+      callsite?: string;
+      laneName?: LaneName;
+      infoKind?: string;
+    },
+  ) => {
+    const delivered = await sendPayload(payload, classification);
+    if (delivered) {
+      await clearProgressController(`${classification.callsite ?? "final"}-after-final`, {
+        timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+      });
+    }
+    return delivered;
   };
 
   type PendingAmbiguousAnswerBlock = {
@@ -1262,6 +1336,18 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         typingCallbacks,
+        onBlockReplyFinalized: async () => {
+          // Some providers stream the visible final answer as phase-less block
+          // callbacks and return no separate final payload. Once the generic
+          // reply layer confirms the block stream is complete, materialize that
+          // buffered text as the durable final before slower supplements such as
+          // TTS run; otherwise users can see a duplicate preview until voice
+          // synthesis finishes.
+          logVerbose(
+            `telegram: block stream finalize hook buffered=${String(Boolean(pendingAmbiguousAnswerBlock))}`,
+          );
+          await flushAmbiguousAnswerBlockAsFinal("after-block-stream-final");
+        },
         deliver: async (payload, info) => {
           try {
             const assistantPhase = resolveOpenClawAssistantPhase(payload);
@@ -1281,6 +1367,19 @@ export const dispatchTelegramMessage = async ({
               await enqueueDraftLaneEvent(async () => {});
             }
             if (
+              pendingAmbiguousAnswerBlock &&
+              deliveryKind === "final" &&
+              assistantPhase === "final_answer" &&
+              !isTtsMediaFinalBoundary
+            ) {
+              // The generic/ACP layer is now sending the accepted final text
+              // with an explicit phase marker. Treat that marker as the
+              // authority and drop the older phase-less block buffer; otherwise
+              // Telegram briefly shows the same text once as mutable progress
+              // and again as durable final text.
+              pendingAmbiguousAnswerBlock = undefined;
+              logVerbose("telegram: dropped phase-unknown answer buffer before marked final");
+            } else if (
               pendingAmbiguousAnswerBlock &&
               (deliveryKind === "final" ||
                 deliveryKind === "tool" ||
@@ -1329,8 +1428,6 @@ export const dispatchTelegramMessage = async ({
                 return;
               }
             }
-            const split = splitTextIntoLaneSegments(payload.text);
-            const segments = split.segments;
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
             const flushBufferedFinalAnswer = async () => {
@@ -1350,6 +1447,19 @@ export const dispatchTelegramMessage = async ({
               });
               reasoningStepState.resetForNextStep();
             };
+
+            if (isTtsMediaFinalBoundary) {
+              await sendFinalPayloadThenCleanupProgress(payload, {
+                reason: classifyPayloadDurableSendReason(payload, deliveryKind),
+                callsite: "dispatch-final-tts-supplement",
+                infoKind: deliveryKind,
+              });
+              await flushBufferedFinalAnswer();
+              return;
+            }
+
+            const split = splitTextIntoLaneSegments(payload.text);
+            const segments = split.segments;
 
             for (const segment of segments) {
               if (
@@ -1429,21 +1539,24 @@ export const dispatchTelegramMessage = async ({
             }
             if (split.suppressedReasoningOnly) {
               if (hasMedia) {
-                if (deliveryKind === "final") {
-                  await clearProgressController("before-final-media", {
-                    timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
-                  });
-                }
                 const payloadWithoutSuppressedReasoning =
                   typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-                await sendPayload(payloadWithoutSuppressedReasoning, {
+                const classification = {
                   reason: classifyPayloadDurableSendReason(
                     payloadWithoutSuppressedReasoning,
                     deliveryKind,
                   ),
                   callsite: "dispatch-suppressed-reasoning-media",
                   infoKind: deliveryKind,
-                });
+                };
+                if (deliveryKind === "final") {
+                  await sendFinalPayloadThenCleanupProgress(
+                    payloadWithoutSuppressedReasoning,
+                    classification,
+                  );
+                } else {
+                  await sendPayload(payloadWithoutSuppressedReasoning, classification);
+                }
               }
               if (deliveryKind === "final") {
                 await flushBufferedFinalAnswer();
@@ -1485,29 +1598,27 @@ export const dispatchTelegramMessage = async ({
               }
               return;
             }
+            const payloadToSend = payload.text
+              ? applyTextToPayload(
+                  payload,
+                  deliveryKind === "final"
+                    ? await prepareFinalAnswerText(payload.text, {
+                        hasMedia,
+                        isError: payload.isError,
+                      })
+                    : renderTextWithToolProgress(payload.text),
+                )
+              : payload;
+            const classification = {
+              reason: classifyPayloadDurableSendReason(payload, deliveryKind),
+              callsite: "dispatch-direct-payload",
+              infoKind: deliveryKind,
+            };
             if (deliveryKind === "final") {
-              await clearProgressController("before-final-payload", {
-                timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
-              });
+              await sendFinalPayloadThenCleanupProgress(payloadToSend, classification);
+            } else {
+              await sendPayload(payloadToSend, classification);
             }
-            await sendPayload(
-              payload.text
-                ? applyTextToPayload(
-                    payload,
-                    deliveryKind === "final"
-                      ? await prepareFinalAnswerText(payload.text, {
-                          hasMedia,
-                          isError: payload.isError,
-                        })
-                      : renderTextWithToolProgress(payload.text),
-                  )
-                : payload,
-              {
-                reason: classifyPayloadDurableSendReason(payload, deliveryKind),
-                callsite: "dispatch-direct-payload",
-                infoKind: deliveryKind,
-              },
-            );
             if (deliveryKind === "final") {
               await flushBufferedFinalAnswer();
             }
@@ -1528,6 +1639,35 @@ export const dispatchTelegramMessage = async ({
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+          const failedPayload = info.payload;
+          const failedTtsMedia =
+            info.kind === "final" &&
+            failedPayload &&
+            (isFinalTtsSupplementPayload(failedPayload) ||
+              ((Boolean(failedPayload.mediaUrl) || (failedPayload.mediaUrls?.length ?? 0) > 0) &&
+                failedPayload.audioAsVoice === true));
+          if (failedTtsMedia) {
+            // TTS is additive. If the media send fails after the durable final
+            // text is already visible, keep the text in place and add a small
+            // status instead of deleting/replacing anything.
+            void sendFinalPayloadThenCleanupProgress(
+              {
+                text: "Voice note failed. Final text is above.",
+                channelData: {
+                  openclaw: {
+                    finalTtsSupplement: true,
+                    ttsFailureStatus: true,
+                  },
+                },
+              },
+              {
+                callsite: "dispatch-final-tts-send-failure",
+                infoKind: "final",
+              },
+            ).catch((statusErr) => {
+              logVerbose(`telegram: final TTS failure status send failed: ${String(statusErr)}`);
+            });
+          }
         },
       },
       replyOptions: {

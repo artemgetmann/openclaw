@@ -133,6 +133,7 @@ async function expectFinalEditFallbackToSend(params: {
   expect(params.harness.editPreview).toHaveBeenCalledTimes(1);
   expect(params.harness.sendPayload).toHaveBeenCalledWith(
     expect.objectContaining({ text: params.text }),
+    expect.objectContaining({ infoKind: "final" }),
   );
   expect(params.harness.log).toHaveBeenCalledWith(
     expect.stringContaining(params.expectedLogSnippet),
@@ -270,6 +271,7 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("sent");
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: HELLO_FINAL }),
+      expect.objectContaining({ infoKind: "final" }),
     );
     expect(harness.log).toHaveBeenCalledWith(
       expect.stringContaining("failed before reaching Telegram; falling back"),
@@ -300,6 +302,7 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editPreview).not.toHaveBeenCalled();
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Short final" }),
+      expect.objectContaining({ infoKind: "final" }),
     );
   });
 
@@ -333,7 +336,10 @@ describe("createLaneTextDeliverer", () => {
 
     expect(result).toBe("sent");
     expect(harness.editPreview).not.toHaveBeenCalled();
-    expect(harness.sendPayload).toHaveBeenCalledWith(expect.objectContaining({ text: longText }));
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: longText }),
+      expect.objectContaining({ infoKind: "final" }),
+    );
     expect(harness.log).toHaveBeenCalledWith(expect.stringContaining("preview final too long"));
   });
 
@@ -404,6 +410,7 @@ describe("createLaneTextDeliverer", () => {
     expect(answerStream.materialize).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: HELLO_FINAL }),
+      expect.objectContaining({ infoKind: "final" }),
     );
     expect(harness.log).toHaveBeenCalledWith(
       expect.stringContaining("draft preview materialize produced no message id"),
@@ -428,6 +435,7 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("sent");
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Image incoming", mediaUrl: "file:///tmp/example.png" }),
+      expect.objectContaining({ infoKind: "final" }),
     );
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
@@ -451,6 +459,7 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("sent");
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Choose one" }),
+      expect.objectContaining({ infoKind: "final" }),
     );
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
@@ -478,6 +487,7 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Complete final answer" }),
+      expect.objectContaining({ infoKind: "final" }),
     );
     expect(result).toBe("sent");
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
@@ -531,6 +541,7 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("sent");
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: HELLO_FINAL }),
+      expect.objectContaining({ infoKind: "final" }),
     );
   });
 
@@ -572,6 +583,7 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("sent");
     expect(harness.sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Final with media", mediaUrl: "file:///tmp/example.png" }),
+      expect.objectContaining({ infoKind: "final" }),
     );
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(4444);
   });

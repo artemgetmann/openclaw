@@ -1735,6 +1735,35 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("finalizes block replies only after queued block delivery settles", async () => {
+    let resolveBlock: (() => void) | undefined;
+    const events: string[] = [];
+    const deliver = vi.fn(
+      async (_payload, info) =>
+        await new Promise<void>((resolve) => {
+          events.push(`deliver:${info.kind}`);
+          resolveBlock = resolve;
+        }),
+    );
+    const onBlockReplyFinalized = vi.fn(() => {
+      events.push("finalize");
+    });
+    const dispatcher = createReplyDispatcher({ deliver, onBlockReplyFinalized });
+
+    dispatcher.sendBlockReply({ text: "streamed final text" });
+    await Promise.resolve();
+    const finalizePromise = dispatcher.finalizeBlockReply?.();
+
+    expect(events).toEqual(["deliver:block"]);
+    resolveBlock?.();
+    await finalizePromise;
+
+    expect(events).toEqual(["deliver:block", "finalize"]);
+    expect(onBlockReplyFinalized).toHaveBeenCalledTimes(1);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
   it("fires onIdle when the queue drains", async () => {
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
       await Promise.resolve();

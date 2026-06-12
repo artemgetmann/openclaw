@@ -112,6 +112,7 @@ function createDispatcher(): {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
+    finalizeBlockReply: vi.fn(async () => {}),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
     markComplete: vi.fn(),
@@ -146,6 +147,7 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   sessionTtsAuto?: "always" | "off" | "tagged" | "inbound";
+  ttsChannel?: string;
   shouldRouteToOriginating?: boolean;
   shouldSendToolSummaries?: boolean;
   onReplyStart?: () => void;
@@ -164,6 +166,7 @@ async function runDispatch(params: {
     sessionKey,
     inboundAudio: false,
     sessionTtsAuto: params.sessionTtsAuto,
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
@@ -326,6 +329,100 @@ describe("tryDispatchAcpReply", () => {
           mediaUrl: "https://example.com/final-tts.opus",
           audioAsVoice: true,
         }),
+      }),
+    );
+  });
+
+  it("treats Telegram TTS channel as a final-text-first ACP target", async () => {
+    setReadyAcpResolution();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Final answer.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Final answer.",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
+    expect(dispatcher.finalizeBlockReply).toHaveBeenCalledTimes(1);
+    const finalizeOrder = (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const finalTtsCallIndex = ttsMocks.maybeApplyTtsToPayload.mock.calls.findIndex(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCallIndex).toBeGreaterThanOrEqual(0);
+    const finalTtsOrder =
+      ttsMocks.maybeApplyTtsToPayload.mock.invocationCallOrder[finalTtsCallIndex] ??
+      Number.POSITIVE_INFINITY;
+    expect(finalizeOrder).toBeLessThan(finalTtsOrder);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "Final answer.",
+        mediaUrl: "https://example.com/final-tts.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
+  it("delivers direct Telegram ACP final text before the captioned TTS supplement", async () => {
+    setReadyAcpResolution();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Final answer.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      sessionTtsAuto: "always",
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Final answer.",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "Final answer.",
+        mediaUrl: "https://example.com/final-tts.opus",
+        audioAsVoice: true,
       }),
     );
   });

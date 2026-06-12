@@ -73,7 +73,16 @@ const sessionStoreMocks = vi.hoisted(() => ({
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
+    autoMode: "off",
     cleanedFinalText: undefined as string | undefined,
+    lastAttempt: undefined as
+      | {
+          timestamp: number;
+          success: boolean;
+          textLength?: number;
+          error?: string;
+        }
+      | undefined,
     synthesizeFinalAudio: false,
   };
   return {
@@ -109,7 +118,10 @@ const ttsMocks = vi.hoisted(() => {
     normalizeTtsAutoMode: vi.fn((value: unknown) =>
       typeof value === "string" ? value : undefined,
     ),
+    resolveTtsAutoMode: vi.fn((_params: unknown) => state.autoMode),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-test-tts.json"),
+    getLastTtsAttempt: vi.fn(() => state.lastAttempt),
   };
 });
 
@@ -197,9 +209,12 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
   };
 });
 vi.mock("../../tts/tts.js", () => ({
+  getLastTtsAttempt: () => ttsMocks.getLastTtsAttempt(),
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  resolveTtsAutoMode: (params: unknown) => ttsMocks.resolveTtsAutoMode(params),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -217,6 +232,7 @@ function createDispatcher(): ReplyDispatcher {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
+    finalizeBlockReply: vi.fn(async () => {}),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
@@ -307,9 +323,12 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    ttsMocks.state.autoMode = "off";
     ttsMocks.state.cleanedFinalText = undefined;
+    ttsMocks.state.lastAttempt = undefined;
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
+    ttsMocks.getLastTtsAttempt.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
@@ -1675,14 +1694,34 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    expect(dispatcher.finalizeBlockReply).toHaveBeenCalledTimes(1);
     expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "final",
         payload: { text: "FINAL block answer only." },
       }),
     );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    const finalizeOrder = (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const finalTtsCallIndex = ttsMocks.maybeApplyTtsToPayload.mock.calls.findIndex(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCallIndex).toBeGreaterThanOrEqual(0);
+    const finalTtsOrder =
+      ttsMocks.maybeApplyTtsToPayload.mock.invocationCallOrder[finalTtsCallIndex] ??
+      Number.POSITIVE_INFINITY;
+    expect(finalizeOrder).toBeLessThan(finalTtsOrder);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL block answer only.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
@@ -1694,6 +1733,52 @@ describe("dispatchReplyFromConfig", () => {
         },
       }),
     );
+  });
+
+  it("sends a lightweight Telegram status when block-streamed final TTS was expected but no media is produced", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "FINAL block answer only." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "FINAL block answer only." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL block answer only.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      text: "Voice note failed. Final text is above.",
+      channelData: {
+        openclaw: {
+          finalTtsSupplement: true,
+          ttsFailureStatus: true,
+        },
+      },
+    });
   });
 
   it("keeps durable block final TTS media-only outside Telegram", async () => {
@@ -1749,6 +1834,27 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    const durableFinalRoute = mocks.routeReply.mock.calls
+      .map(([call]) => call as { payload?: ReplyPayload })
+      .find((call) => {
+        const channelData = call.payload?.channelData as
+          | { openclaw?: { assistantPhase?: string } }
+          | undefined;
+        return (
+          call.payload?.text === "FINAL <tag & value" &&
+          channelData?.openclaw?.assistantPhase === "final_answer"
+        );
+      });
+    expect(durableFinalRoute?.payload).toEqual(
+      expect.objectContaining({
+        text: "FINAL <tag & value",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
     const ttsRoute = mocks.routeReply.mock.calls
       .map(([call]) => call as { payload?: ReplyPayload })
       .find((call) => call.payload?.mediaUrl === "https://example.com/tts-synth.opus");
@@ -1786,12 +1892,70 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL clean answer.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
         text: "FINAL clean answer.",
+      }),
+    );
+  });
+
+  it("sends returned Telegram final text before synthesizing final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async () => ({ text: "FINAL returned answer." }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL returned answer.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.finalizeBlockReply).toHaveBeenCalledTimes(1);
+    const finalizeOrder = (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const finalTtsCallIndex = ttsMocks.maybeApplyTtsToPayload.mock.calls.findIndex(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCallIndex).toBeGreaterThanOrEqual(0);
+    const finalTtsOrder =
+      ttsMocks.maybeApplyTtsToPayload.mock.invocationCallOrder[finalTtsCallIndex] ??
+      Number.POSITIVE_INFINITY;
+    expect(finalizeOrder).toBeLessThan(finalTtsOrder);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: "FINAL returned answer.",
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
       }),
     );
   });

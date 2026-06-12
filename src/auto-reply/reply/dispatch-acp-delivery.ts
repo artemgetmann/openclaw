@@ -2,7 +2,13 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import {
+  getLastTtsAttempt,
+  maybeApplyTtsToPayload,
+  resolveTtsAutoMode,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+} from "../../tts/tts.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -110,6 +116,39 @@ function isTelegramFinalTtsTarget(params: {
       ? params.originatingChannel
       : (params.ttsChannel ?? params.ctx.Surface ?? params.ctx.Provider);
   return normalizeMessageChannel(channel) === "telegram";
+}
+
+function hasTtsDirective(text: string): boolean {
+  return /\[\[tts(?::|\]|\s)/i.test(text);
+}
+
+function shouldExpectFinalTtsAttempt(params: {
+  cfg: OpenClawConfig;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  text: string;
+}): boolean {
+  const text = params.text.trim();
+  if (text.length < 10) {
+    return false;
+  }
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const autoMode = resolveTtsAutoMode({
+    config,
+    prefsPath,
+    ...(params.sessionTtsAuto ? { sessionAuto: params.sessionTtsAuto } : {}),
+  });
+  if (autoMode === "always") {
+    return true;
+  }
+  if (autoMode === "inbound") {
+    return params.inboundAudio;
+  }
+  if (autoMode === "tagged") {
+    return hasTtsDirective(text);
+  }
+  return false;
 }
 
 export type AcpDispatchDeliveryCoordinator = {
@@ -324,6 +363,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (!finalText) {
       return false;
     }
+    const attemptStartedAt = Date.now();
+    logVerbose(
+      `dispatch-acp: final TTS supplement synthesis start textLength=${finalText.length} channel=${params.ttsChannel ?? "unknown"}`,
+    );
     const ttsPayload = await maybeApplyTtsToPayload({
       payload: { text: finalText },
       cfg: params.cfg,
@@ -333,6 +376,29 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
     if (!ttsPayload.mediaUrl && !(ttsPayload.mediaUrls?.length ?? 0)) {
+      const lastAttempt = getLastTtsAttempt();
+      const failedThisAttempt =
+        lastAttempt && lastAttempt.timestamp >= attemptStartedAt && !lastAttempt.success;
+      const expectedThisAttempt = shouldExpectFinalTtsAttempt({
+        cfg: params.cfg,
+        inboundAudio: params.inboundAudio,
+        sessionTtsAuto: params.sessionTtsAuto,
+        text: finalText,
+      });
+      logVerbose(
+        `dispatch-acp: final TTS supplement synthesis ${failedThisAttempt ? "failed" : "skipped"} textLength=${finalText.length} expected=${String(expectedThisAttempt)} error=${failedThisAttempt ? (lastAttempt.error ?? "unknown") : "none"}`,
+      );
+      if ((failedThisAttempt || expectedThisAttempt) && isTelegramFinalTtsTarget(params)) {
+        await deliverPreparedPayload("final", {
+          text: "Voice note failed. Final text is above.",
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+              ttsFailureStatus: true,
+            },
+          },
+        });
+      }
       return false;
     }
 
@@ -347,10 +413,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: shouldCaption ? buildFinalTtsCaptionPreview(finalText) : undefined,
     };
 
-    return deliverPreparedPayload(
+    logVerbose(
+      `dispatch-acp: final TTS supplement media send start textLength=${finalText.length} hasCaption=${String(Boolean(payload.text))}`,
+    );
+    const delivered = await deliverPreparedPayload(
       "final",
       shouldMarkSupplement ? markFinalTtsSupplement(payload) : payload,
     );
+    logVerbose(
+      `dispatch-acp: final TTS supplement media send ${delivered ? "end" : "failure"} textLength=${finalText.length}`,
+    );
+    return delivered;
   };
 
   return {
