@@ -87,7 +87,7 @@ describe("createTelegramProgressController", () => {
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
-  it("caps cumulative progress by dropping oldest entries before Telegram rejects edits", async () => {
+  it("caps cumulative progress by dropping oldest entries without leaking an omitted marker", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
       editMessageText: vi.fn().mockResolvedValue(true),
@@ -109,9 +109,9 @@ describe("createTelegramProgressController", () => {
 
     const latestEditText = String(api.editMessageText.mock.lastCall?.[2] ?? "");
     expect(latestEditText.length).toBeLessThanOrEqual(80);
-    expect(latestEditText).toContain("earlier progress omitted");
     expect(latestEditText).toContain("Third progress entry");
     expect(latestEditText).not.toContain("First progress entry");
+    expect(latestEditText).not.toContain("earlier progress omitted");
   });
 
   it("keeps the newest progress entry visible when that entry alone needs truncation", async () => {

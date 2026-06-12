@@ -12,7 +12,6 @@ type ProgressPreview = {
   parseMode?: "HTML";
 };
 
-const OMITTED_PROGRESS_PREFIX = "[earlier progress omitted]";
 const PROGRESS_ENTRY_SEPARATOR = "\n\n";
 const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 
@@ -106,24 +105,20 @@ export function createTelegramProgressController(params: {
     }
 
     const latestEntry = progressEntries[progressEntries.length - 1] ?? "";
-    const maxEntryChars =
-      maxProgressChars - OMITTED_PROGRESS_PREFIX.length - PROGRESS_ENTRY_SEPARATOR.length;
-    if (maxEntryChars <= 0) {
-      return latestEntry.slice(0, maxProgressChars);
-    }
-
     const retained: string[] = [
-      latestEntry.length > maxEntryChars ? latestEntry.slice(0, maxEntryChars) : latestEntry,
+      latestEntry.length > maxProgressChars ? latestEntry.slice(0, maxProgressChars) : latestEntry,
     ];
     for (let index = progressEntries.length - 2; index >= 0; index -= 1) {
       const candidate = [progressEntries[index], ...retained].join(PROGRESS_ENTRY_SEPARATOR);
-      const prefixedCandidate = `${OMITTED_PROGRESS_PREFIX}${PROGRESS_ENTRY_SEPARATOR}${candidate}`;
-      if (prefixedCandidate.length > maxProgressChars) {
+      // This text is shown directly in Telegram previews/drafts. Do not add a
+      // synthetic "omitted" marker here; users can see it before cleanup, and
+      // the final answer delivery owns the durable transcript.
+      if (candidate.length > maxProgressChars) {
         continue;
       }
       retained.unshift(progressEntries[index]);
     }
-    return `${OMITTED_PROGRESS_PREFIX}${PROGRESS_ENTRY_SEPARATOR}${retained.join(PROGRESS_ENTRY_SEPARATOR)}`;
+    return retained.join(PROGRESS_ENTRY_SEPARATOR);
   };
 
   return {
