@@ -1016,6 +1016,54 @@ refresh_bundled_runtime_build_info() {
   cp "$source_build_info" "$runtime_build_info"
 }
 
+sync_bundled_runtime_package_version() {
+  local runtime_package_json="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/package.json"
+
+  if [[ "$APP_VARIANT" != "consumer" || ! -f "$runtime_package_json" ]]; then
+    return 0
+  fi
+
+  # Consumer app releases are versioned by APP_VERSION/Sparkle, while the
+  # bundled runtime starts from the repo root package.json. Update only the
+  # package metadata version so `openclaw --version` and app update metadata do
+  # not drift across cache/reuse packaging paths.
+  "$VALIDATED_NODE_BIN" --input-type=module - "$runtime_package_json" "$APP_VERSION" <<'NODE'
+import fs from "node:fs";
+
+const [packagePath, appVersion] = process.argv.slice(2);
+const source = fs.readFileSync(packagePath, "utf8");
+const parsed = JSON.parse(source);
+
+if (typeof parsed.version !== "string") {
+  throw new Error(`Bundled runtime package.json has no string version: ${packagePath}`);
+}
+
+if (parsed.version === appVersion) {
+  process.exit(0);
+}
+
+const oldVersionLiteral = JSON.stringify(parsed.version);
+const newVersionLiteral = JSON.stringify(appVersion);
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const versionPattern = new RegExp(
+  `(^\\s*"version"\\s*:\\s*)${escapeRegExp(oldVersionLiteral)}`,
+  "m",
+);
+const next = source.replace(versionPattern, `$1${newVersionLiteral}`);
+
+if (next === source) {
+  throw new Error(`Unable to update bundled runtime package.json version in ${packagePath}`);
+}
+
+fs.writeFileSync(packagePath, next);
+NODE
+}
+
+refresh_bundled_runtime_metadata() {
+  refresh_bundled_runtime_build_info
+  sync_bundled_runtime_package_version
+}
+
 prepare_bundled_consumer_runtime() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
@@ -1045,7 +1093,7 @@ prepare_bundled_consumer_runtime() {
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
       rsync -a "$REUSABLE_RUNTIME_STAGE_DIR/" "$BUNDLED_RUNTIME_RESOURCE_DIR/"
-      refresh_bundled_runtime_build_info
+      refresh_bundled_runtime_metadata
       return 0
     fi
 
@@ -1059,7 +1107,7 @@ prepare_bundled_consumer_runtime() {
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
       rsync -a "$cache_root/" "$BUNDLED_RUNTIME_RESOURCE_DIR/"
-      refresh_bundled_runtime_build_info
+      refresh_bundled_runtime_metadata
       return 0
     fi
 
@@ -1151,6 +1199,8 @@ prepare_bundled_consumer_runtime() {
   cat > "$manifest_path" <<EOF
 {"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}","runtimeInputKey":"${runtime_input_key}"}
 EOF
+
+  sync_bundled_runtime_package_version
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
     local cache_stage_root=""
