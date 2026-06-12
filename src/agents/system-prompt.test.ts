@@ -245,22 +245,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("When creating a monitor, encode deterministic wake instructions.");
     expect(prompt).toContain("pin that exact command");
     expect(prompt).toContain("create the tiny check script during monitor setup");
-    expect(prompt).toContain("Concrete anti-pattern");
-    expect(prompt).toContain("wacli-recent-reply.sh");
     expect(prompt).toContain(
-      "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends",
+      "For WhatsApp or Telegram-as-me jobs, route through the matching skill",
     );
-    expect(prompt).toContain("wacli-send-safe.sh");
-    expect(prompt).toContain("not a hand-rolled kill/send/restart loop");
-    expect(prompt).toContain("Telegram-as-me messaging");
-    expect(prompt).toContain("telegram-user");
-    expect(prompt).toContain("keep it separate from the bot-account Telegram channel");
-    expect(prompt).toContain("telegram-user inbox/read/wait");
-    expect(prompt).toContain("telegram-user download --chat <chat> --message-id <id>");
+    expect(prompt).toContain("`wacli` or `telegram-user`");
+    expect(prompt).toContain(
+      "keep those channel-specific procedures there instead of copying command playbooks into the prompt",
+    );
+    expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
     expect(prompt).toContain("media transcribe --file <path> --json");
-    expect(prompt).toContain("do not inspect Telethon internals");
-    expect(prompt).toContain("do not pipe Telegram JSON to `grep`");
-    expect(prompt).toContain("do not fake Telegram-as-me replies through the bot channel");
+    expect(prompt).toContain(
+      "channel-specific voice-note retrieval belongs in the matching channel skill",
+    );
+    expect(prompt).not.toContain("wacli-recent-reply.sh");
+    expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
+    expect(prompt).not.toContain("do not inspect Telethon internals");
   });
 
   it("classifies cron as the default for reminders and explicit monitors", () => {
