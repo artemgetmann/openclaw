@@ -86,6 +86,7 @@ enum ConsumerRuntime {
     static func bootstrapProcessEnvironment() {
         let identity = self.identity
         let instance = ConsumerInstance.current
+        self.sanitizeInheritedDefaultConsumerEnvironment(instance: instance)
         OpenClawPaths.migrateConsumerRuntimeIfNeeded(identity: identity, instanceID: instance.id)
         // Keep the app, launch agents, and any child CLI processes pointed at the
         // consumer-owned runtime before any config/state loaders spin up.
@@ -113,13 +114,39 @@ enum ConsumerRuntime {
         // Packaged first-run must repair the app-owned helper/runtime before we
         // derive OPENCLAW_FORK_ROOT or any PATH-sensitive gateway/setup checks.
         ConsumerBundledRuntime.bootstrapIfNeeded()
-        if let projectRoot = CommandResolver.projectRootEnvironmentHint() {
+        if let projectRoot = self.forkRootEnvironmentHint(instance: instance) {
             // The dev mac app often shells out through the local fork wrapper in PATH.
             // Seed the worktree root explicitly so child commands do not fall back to
             // whatever founder checkout happened to export `openclaw` first.
             self.setEnv("OPENCLAW_FORK_ROOT", value: projectRoot)
+        } else {
+            unsetenv("OPENCLAW_FORK_ROOT")
         }
         ConsumerBootstrap.bootstrapIfNeeded()
+    }
+
+    private static func sanitizeInheritedDefaultConsumerEnvironment(instance: ConsumerInstance) {
+        guard instance.isDefault else { return }
+        // Finder/LaunchServices normally starts Jarvis with a clean environment,
+        // but local install proof can launch the packaged app from an agent
+        // shell. A stale OPENCLAW_FORK_ROOT from that shell makes app-side
+        // helper ownership checks compare the installed helper against a source
+        // checkout and can leave AI access stuck behind a false repair blocker.
+        unsetenv("OPENCLAW_FORK_ROOT")
+    }
+
+    private static func forkRootEnvironmentHint(instance: ConsumerInstance) -> String? {
+        if instance.isDefault {
+            // Default Jarvis is the installed consumer app, so a fork root is
+            // valid only after the bundled runtime has been seeded into
+            // Application Support. Falling back to a source checkout here makes
+            // packaged ownership checks compare against developer state.
+            return CommandResolver.bundledConsumerRuntimeProjectRoot()?.path
+        }
+
+        // Named instances are explicit tester lanes. They may intentionally run
+        // against a worktree, so keep the broader resolver behavior for them.
+        return CommandResolver.projectRootEnvironmentHint()
     }
 
     static func applyInheritedToolIsolationEnvironment(
