@@ -211,6 +211,7 @@ actual_build_ts="$(/usr/libexec/PlistBuddy -c "Print :OpenClawBuildTimestamp" "$
 sparkle_feed_url="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_public_ed_key="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_auto_checks="$(/usr/libexec/PlistBuddy -c "Print :SUEnableAutomaticChecks" "$INFO_PLIST" 2>/dev/null || true)"
+runtime_package_version="$("$OPENCLAW_NODE_BIN" "$ROOT_DIR/scripts/verify-consumer-runtime-package-version.mjs" "$APP_PATH")"
 
 if [[ -n "$actual_instance_id" ]]; then
   normalized_actual_instance_id="$(consumer_instance_normalize_id "$actual_instance_id")"
@@ -398,6 +399,7 @@ echo "  variant=$actual_variant"
 echo "  instance_id=${EFFECTIVE_INSTANCE_ID:-default}"
 echo "  url_scheme=$actual_url_scheme"
 echo "  version=$actual_version"
+echo "  runtime_package_version=$runtime_package_version"
 echo "  build=$actual_build"
 echo "  git_commit=$actual_commit"
 echo "  build_timestamp=$actual_build_ts"
