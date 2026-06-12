@@ -936,6 +936,62 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("silently repairs local macOS app node role upgrade after operator pairing", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const operatorClient = {
+      id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+      mode: GATEWAY_CLIENT_MODES.UI,
+      version: "test",
+      platform: "darwin",
+      displayName: "Jarvis",
+    };
+    const helperClient = {
+      ...operatorClient,
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    };
+    const { identityPath, identity } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-device-macos-node-role-upgrade-",
+      clientId: operatorClient.id,
+      clientMode: operatorClient.mode,
+      displayName: "Jarvis",
+      platform: "darwin",
+    });
+
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    let helperWs: WebSocket | undefined;
+    try {
+      ws.close();
+
+      helperWs = await openWs(port);
+      const nonce = await readConnectChallengeNonce(helperWs);
+      const connected = await connectReq(helperWs, {
+        token: "secret",
+        role: "node",
+        scopes: [],
+        client: helperClient,
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client: helperClient,
+          role: "node",
+          scopes: [],
+          nonce,
+        }),
+      });
+      expect(connected.ok).toBe(true);
+
+      const repaired = await getPairedDevice(identity.deviceId);
+      expect(repaired?.role).toBe("node");
+      expect(repaired?.roles ?? []).toEqual(expect.arrayContaining(["operator", "node"]));
+      const pending = await listDevicePairing();
+      expect(pending.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    } finally {
+      ws.close();
+      helperWs?.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("requires pairing for gateway backend clients when connection is not local-direct", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();
