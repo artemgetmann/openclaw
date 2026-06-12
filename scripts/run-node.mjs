@@ -162,12 +162,23 @@ const readGitStatus = (deps) => {
   }
 };
 
-const parseGitStatusPaths = (output) =>
+const parseGitStatusEntries = (output) =>
   output
     .split("\n")
-    .flatMap((line) => line.slice(3).split(" -> "))
-    .map((entry) => normalizePath(entry.trim()))
-    .filter(Boolean);
+    .map((line) => ({
+      status: line.slice(0, 2),
+      paths: line
+        .slice(3)
+        .split(" -> ")
+        .map((entry) => normalizePath(entry.trim()))
+        .filter(Boolean),
+    }))
+    .filter((entry) => entry.paths.length > 0);
+
+const parseGitStatusPaths = (output) =>
+  parseGitStatusEntries(output).flatMap((entry) => entry.paths);
+
+const isStructuralGitStatus = (status) => /[DR]/u.test(status);
 
 const hasDirtySourceTree = (deps) => {
   const output = readGitStatus(deps);
@@ -175,6 +186,18 @@ const hasDirtySourceTree = (deps) => {
     return null;
   }
   return parseGitStatusPaths(output).some((repoPath) => isBuildRelevantRunNodePath(repoPath));
+};
+
+const hasStructuralDirtySourceChange = (deps) => {
+  const output = readGitStatus(deps);
+  if (output === null) {
+    return null;
+  }
+  return parseGitStatusEntries(output).some(
+    (entry) =>
+      isStructuralGitStatus(entry.status) &&
+      entry.paths.some((repoPath) => isBuildRelevantRunNodePath(repoPath)),
+  );
 };
 
 const readBuildStamp = (deps) => {
@@ -239,7 +262,15 @@ const shouldBuild = (deps) => {
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
     if (dirty === true) {
-      return true;
+      const structuralDirtySource = hasStructuralDirtySourceChange(deps);
+      if (structuralDirtySource !== false) {
+        return true;
+      }
+      // A dirty source tree means the git commit hash is not enough to prove freshness.
+      // Use filesystem times as the second proof: once a rebuild stamps the current
+      // dirty files, repeated CLI runs stay fast until a watched source/config file
+      // changes again.
+      return hasSourceMtimeChanged(stamp.mtime, deps);
     }
     if (dirty === false) {
       return false;

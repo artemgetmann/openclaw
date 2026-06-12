@@ -98,6 +98,7 @@ export function resolveGatewayScopedTools(params: {
     senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
+    enableGuiControlTool: params.surface === "loopback",
     pluginToolGlobalRegistryOnly: params.surface === "loopback",
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

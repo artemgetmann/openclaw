@@ -1,0 +1,71 @@
+import type { Command } from "commander";
+import { runGuiBenchmark, type GuiBenchmarkTask } from "../gui-control/benchmark.js";
+import type { GuiRuntimeName } from "../gui-control/types.js";
+import { defaultRuntime } from "../runtime.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
+
+function parseRuntime(value: string): GuiRuntimeName {
+  if (value === "agent-desktop" || value === "open-computer-use") {
+    return value;
+  }
+  throw new Error(`Unsupported GUI runtime: ${value}`);
+}
+
+function parseTask(value: string): GuiBenchmarkTask {
+  if (value === "x-to-claude") {
+    return value;
+  }
+  throw new Error(`Unsupported GUI benchmark task: ${value}`);
+}
+
+export function registerGuiBenchmarkCli(program: Command) {
+  program
+    .command("gui-benchmark")
+    .description("Experimental dev-only Jarvis GUI-control benchmark harness")
+    .requiredOption("--runtime <runtime>", "Runtime adapter: agent-desktop, open-computer-use")
+    .requiredOption("--task <task>", "Benchmark task: x-to-claude")
+    .option("--dry-run", "Simulate the benchmark without touching real apps", false)
+    .option("--write-report", "Write structured JSON report under artifacts/gui-benchmark", false)
+    .option("--report-dir <path>", "Directory for --write-report output")
+    .option("--json", "Print structured JSON instead of markdown", false)
+    .option(
+      "--approve-claude-send",
+      "Allow the labelled benchmark message to be sent to Claude",
+      false,
+    )
+    .option(
+      "--open-x-home",
+      "Open https://x.com/home in Safari before resolving the exact benchmark window",
+      false,
+    )
+    .option(
+      "--require-codex-parity",
+      "Exit nonzero unless the benchmark passes the Codex Computer Use parity gate",
+      false,
+    )
+    .option("--no-clipboard-fallback", "Disable clipboard-based Claude reply extraction fallback")
+    .option("--claude-input-ref <ref>", "Claude composer element ref from a fresh snapshot")
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await runGuiBenchmark({
+          runtime: parseRuntime(String(opts.runtime)),
+          task: parseTask(String(opts.task)),
+          dryRun: Boolean(opts.dryRun),
+          writeReport: Boolean(opts.writeReport),
+          reportDir: typeof opts.reportDir === "string" ? opts.reportDir : undefined,
+          approveClaudeSend: Boolean(opts.approveClaudeSend),
+          openXHome: Boolean(opts.openXHome),
+          allowClipboardFallback: opts.requireCodexParity
+            ? false
+            : opts.clipboardFallback !== false,
+          claudeInputRef: typeof opts.claudeInputRef === "string" ? opts.claudeInputRef : undefined,
+          progress: (message) => defaultRuntime.error(message),
+        });
+        defaultRuntime.log(opts.json ? JSON.stringify(result, null, 2) : result.markdownSummary);
+        const passed = opts.requireCodexParity
+          ? result.qualityGate.onParWithCodexComputerUse === true
+          : result.ok;
+        defaultRuntime.exit(passed ? 0 : 1);
+      });
+    });
+}

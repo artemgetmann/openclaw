@@ -1,6 +1,6 @@
 # Consumer GUI Control MVP Decision
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 Status: deferred for launch; active bakeoff for a later Jarvis GUI-control lane
 
 ## Decision
@@ -479,10 +479,59 @@ Recommendation delta:
 - `agent-desktop` remains the next integration spike because it is reusable and
   deterministic enough to wrap, but the wrapper must aim for Computer Use-level
   ergonomics and fail-closed behavior.
+- Screenshot truth corrected the earlier Stage Manager uncertainty: the user's
+  visual observation showed target apps remained usable behind or alongside
+  Terminal, with a visible virtual pointer, low command count, and clean
+  post-action proof. That makes the target behavior sharper: make
+  `agent-desktop` approach Codex Computer Use behavior, not copy raw
+  `agent-desktop` behavior as-is.
 - Peekaboo remains fallback/salvage: useful capture and backup actuation, not a
   default product driver.
 - If the agent-desktop verifier starts growing toward Peekaboo-style duct tape,
   stop and build native Swift/OpenClaw Computer Use instead.
+
+## Wrapper Hardening Slice: 2026-06-11
+
+The next wrapper slice promoted concrete failures into generic primitives:
+
+- AX `description`, static visible text, and bounds are preserved in snapshots.
+- `labelIncludes` searches label/name/title/description, while
+  `valueIncludes` stays for placeholders/current values.
+- `set-value` treats runtime failure as advisory and succeeds only if
+  re-observation proves the value landed.
+- `click` treats runtime success as advisory and fails if post-state proof is
+  missing or unchanged.
+- `press --app <App> --keys <combo>` is now a first-class verified action for
+  Claude-like submit flows where AX-clicking the button is unreliable.
+- `scroll` is a first-class verified action on real element refs.
+- The `x-to-claude` benchmark uses the wrapper only and records direct runtime
+  escape use plus reply-text extraction.
+- Reply extraction is now tied to a fresh benchmark reply token, so stale Claude
+  text or app chrome cannot count as success.
+- If AX-visible text cannot expose the reply, the wrapper may use a controlled
+  clipboard copy/restore fallback, but this is recorded as clipboard use and
+  remains below the Codex Computer Use no-clipboard bar.
+- The benchmark now reports `replyExtractionMethod` and `qualityGate`, so a
+  wrapper-only completion can pass functionally while still failing the stricter
+  Codex Computer Use parity gate.
+- The benchmark also records frontmost-app telemetry before and after the run;
+  leaving a different app frontmost is treated as workspace debt and blocks
+  Codex Computer Use parity.
+- When the runtime can identify the originally focused window, the benchmark now
+  attempts to restore it and counts that restore as an action.
+- The benchmark resolves Safari/X by exact `Home / X` window id when available
+  and fails closed before Claude if the X window is missing or ambiguous.
+- The benchmark can now open `https://x.com/home` with explicit `--open-x-home`
+  approval, then waits for and records the exact selected Safari window id.
+- `--require-codex-parity` is available for decision gates so a functional pass
+  with debt exits nonzero instead of being mistaken for Codex Computer Use
+  parity.
+- Parity-required runs disable clipboard fallback; explicit
+  `--no-clipboard-fallback` is available when the test must prove AX-visible
+  Claude reply extraction.
+
+This does not change the consumer-MVP decision: GUI control remains deferred
+until live proof beats the Codex Computer Use quality bar.
 
 ## Recommendation
 

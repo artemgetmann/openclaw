@@ -13,6 +13,7 @@ import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createGuiControlTool } from "./tools/gui-control-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools/memory-tool.js";
@@ -85,6 +86,8 @@ export function createOpenClawTools(
     disablePluginTools?: boolean;
     /** If true, plugin tools may only come from the already-initialized global plugin registry. */
     pluginToolGlobalRegistryOnly?: boolean;
+    /** If true, expose experimental host GUI-control tools. Loopback Codex tests only for now. */
+    enableGuiControlTool?: boolean;
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
@@ -171,6 +174,7 @@ export function createOpenClawTools(
       allowHostControl: options?.allowHostBrowserControl,
       agentSessionKey: options?.agentSessionKey,
     }),
+    ...(options?.enableGuiControlTool ? [createGuiControlTool()] : []),
     createCanvasTool({ config: options?.config }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,

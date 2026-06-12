@@ -87,6 +87,16 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "gui-control",
+    description: "Experimental CLI-first macOS GUI control for development",
+    hasSubcommands: true,
+  },
+  {
+    name: "gui-benchmark",
+    description: "Experimental dev-only Jarvis GUI-control benchmark harness",
+    hasSubcommands: false,
+  },
+  {
     name: "browser",
     description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
     hasSubcommands: true,

@@ -206,6 +206,26 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
+        name: "gui-control",
+        description: "Experimental CLI-first macOS GUI control for development",
+        hasSubcommands: true,
+      },
+      {
+        name: "gui-benchmark",
+        description: "Experimental dev-only Jarvis GUI-control benchmark harness",
+        hasSubcommands: false,
+      },
+    ],
+    register: async ({ program }) => {
+      const control = await import("../gui-control-cli.js");
+      control.registerGuiControlCli(program);
+      const mod = await import("../gui-benchmark-cli.js");
+      mod.registerGuiBenchmarkCli(program);
+    },
+  },
+  {
+    commands: [
+      {
         name: "browser",
         description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
         hasSubcommands: true,
