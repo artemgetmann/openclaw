@@ -13,6 +13,7 @@ Use it when the user means:
 
 - "send from my Telegram account"
 - "read my real Telegram messages"
+- "download/transcribe a voice note from my real Telegram messages"
 - "wait for their reply to land in my Telegram account"
 - "connect or repair Telegram-as-me on this Mac"
 
@@ -51,12 +52,17 @@ Automation Rule
   `status --json` or `precheck --chat <chat> --json` before write actions.
 - Use `read --chat <chat>` only after inbox triage or the user has already named
   the target chat.
+- If `read` shows `media_kind` for a voice/audio message, download the payload
+  with `telegram-user download`, then use the generic `media transcribe`
+  command. Do not inspect Telethon internals or write a one-off downloader.
 - Prefer direct repo-local execution on this machine. Do not invent a second
   Python backend or wrap a third-party Telegram CLI.
 
 When To Use
 
 - Read recent messages from a Telegram chat as the user's real account.
+- Download a known Telegram message media payload by chat and message id.
+- Transcribe downloaded Telegram voice/audio through the generic media command.
 - Triage broad unread Telegram activity before drilling into one chat.
 - Send or reply to a Telegram chat as the user's real account.
 - Wait for a matching reply in a Telegram DM/thread/topic-aware flow.
@@ -117,6 +123,10 @@ Default Commands
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json`
 - Read recent messages matching known text:
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json`
+- Download media from a known message:
+  `openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json`
+- Transcribe the downloaded audio file:
+  `openclaw media transcribe --file /tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga --json`
 - Send a message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
 - Reply to a specific message:
@@ -133,10 +143,12 @@ Behavior Notes
   manage `phone_code_hash` by hand.
 - Use `inbox` for discovery and unread triage across chats.
 - Use `read --chat` only once the target chat is known.
+- `read` exposes `media_kind` for media-bearing messages; use `download` for
+  the payload and keep transcription generic through `openclaw media transcribe`.
 - `wait` is thread-aware through the existing backend semantics around
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
-- Prefer text-first workflows for now. Do not promise broad media/history
-  features unless the underlying CLI already supports them.
+- Do not promise broad media/history search features beyond the explicit
+  read/download/transcribe path the CLI supports.
 
 Safety
 

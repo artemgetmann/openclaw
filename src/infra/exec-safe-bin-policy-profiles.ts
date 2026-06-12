@@ -5,6 +5,7 @@ export type SafeBinProfile = {
   allowedValueFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
   commandFamilies?: readonly (readonly string[])[];
+  commandFamilyOptions?: readonly SafeBinCommandFamilyOptions[];
   allowUnknownOptions?: boolean;
   guardedValueFlags?: ReadonlyMap<string, SafeBinValueGuard>;
   // Precomputed long-option metadata for GNU abbreviation resolution.
@@ -15,6 +16,13 @@ export type SafeBinProfile = {
 
 export type SafeBinValueGuard = "forbid" | "pathOrSafeLiteral" | "safeLiteral" | "stdinOnly";
 
+export type SafeBinCommandFamilyOptions = {
+  family: readonly string[];
+  allowedFlags?: ReadonlySet<string>;
+  allowedValueFlags?: ReadonlySet<string>;
+  guardedValueFlags?: ReadonlyMap<string, SafeBinValueGuard>;
+};
+
 export type SafeBinProfileFixture = {
   minPositional?: number;
   maxPositional?: number;
@@ -22,6 +30,12 @@ export type SafeBinProfileFixture = {
   allowedValueFlags?: readonly string[];
   deniedFlags?: readonly string[];
   commandFamilies?: readonly (readonly string[])[];
+  commandFamilyOptions?: readonly {
+    family: readonly string[];
+    allowedFlags?: readonly string[];
+    allowedValueFlags?: readonly string[];
+    guardedValueFlags?: Readonly<Record<string, SafeBinValueGuard>>;
+  }[];
   allowUnknownOptions?: boolean;
   guardedValueFlags?: Readonly<Record<string, SafeBinValueGuard>>;
 };
@@ -107,12 +121,28 @@ function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
   const guardedValueFlags = new Map(Object.entries(fixture.guardedValueFlags ?? {}));
+  const commandFamilyOptions = (fixture.commandFamilyOptions ?? []).map((entry) => ({
+    family: entry.family,
+    allowedFlags: toFlagSet(entry.allowedFlags),
+    allowedValueFlags: toFlagSet(entry.allowedValueFlags),
+    guardedValueFlags: new Map(Object.entries(entry.guardedValueFlags ?? {})),
+  }));
   const knownLongFlags = collectKnownLongFlags(
     allowedFlags,
     allowedValueFlags,
     deniedFlags,
     guardedValueFlags,
   );
+  for (const entry of commandFamilyOptions) {
+    for (const flag of collectKnownLongFlags(
+      entry.allowedFlags ?? NO_FLAGS,
+      entry.allowedValueFlags ?? NO_FLAGS,
+      NO_FLAGS,
+      entry.guardedValueFlags,
+    )) {
+      knownLongFlags.push(flag);
+    }
+  }
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
@@ -120,6 +150,7 @@ function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
     allowedValueFlags,
     deniedFlags,
     commandFamilies: fixture.commandFamilies,
+    commandFamilyOptions,
     allowUnknownOptions: fixture.allowUnknownOptions === true,
     guardedValueFlags,
     knownLongFlags,
@@ -307,8 +338,10 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "send"],
       ["telegram-user", "topic-create"],
       ["telegram-user", "read"],
+      ["telegram-user", "download"],
       ["telegram-user", "inbox"],
       ["telegram-user", "wait"],
+      ["media", "transcribe"],
     ],
     allowUnknownOptions: false,
     allowedFlags: [
@@ -343,6 +376,23 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     guardedValueFlags: {
       "--media": "pathOrSafeLiteral",
     },
+    commandFamilyOptions: [
+      {
+        family: ["telegram-user", "download"],
+        allowedValueFlags: ["--message-id", "--output"],
+        guardedValueFlags: {
+          "--output": "pathOrSafeLiteral",
+        },
+      },
+      {
+        family: ["media", "transcribe"],
+        allowedValueFlags: ["--agent-dir", "--file", "--mime"],
+        guardedValueFlags: {
+          "--agent-dir": "pathOrSafeLiteral",
+          "--file": "pathOrSafeLiteral",
+        },
+      },
+    ],
   },
   jq: {
     maxPositional: 1,

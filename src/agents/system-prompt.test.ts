@@ -256,6 +256,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("telegram-user");
     expect(prompt).toContain("keep it separate from the bot-account Telegram channel");
     expect(prompt).toContain("telegram-user inbox/read/wait");
+    expect(prompt).toContain("telegram-user download --chat <chat> --message-id <id>");
+    expect(prompt).toContain("media transcribe --file <path> --json");
+    expect(prompt).toContain("do not inspect Telethon internals");
     expect(prompt).toContain("do not pipe Telegram JSON to `grep`");
     expect(prompt).toContain("do not fake Telegram-as-me replies through the bot channel");
   });

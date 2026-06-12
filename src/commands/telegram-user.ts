@@ -7,6 +7,7 @@ import {
   runTelegramUserLogout,
   runTelegramUserPrecheck,
   runTelegramUserRead,
+  runTelegramUserDownload,
   runTelegramUserSend,
   runTelegramUserStatus,
   runTelegramUserTopicCreate,
@@ -15,6 +16,7 @@ import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
+  TelegramUserDownloadResult,
   TelegramUserInboxDialog,
   TelegramUserInboxResult,
   TelegramUserLoginResult,
@@ -288,6 +290,18 @@ function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
     return;
   }
   runtime.log(formatTelegramUserMessages(result.messages));
+}
+
+function logDownloadText(runtime: RuntimeEnv, result: TelegramUserDownloadResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  runtime.log(
+    ok(
+      `Telegram user download ok. message_id=${result.message_id} media_kind=${result.media_kind ?? "-"} path=${result.path}`,
+    ),
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+  runtime.log(`size_bytes=${result.size_bytes ?? "-"}`);
 }
 
 function logInboxText(
@@ -581,6 +595,29 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     return;
   }
   logReadText(runtime, result);
+}
+
+export async function telegramUserDownloadCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  const messageId = readNumberOpt(opts, "messageId");
+  const output = readStringOpt(opts, "output");
+  if (!chat || !messageId || !output) {
+    throw new Error("Telegram user download requires --chat, --message-id, and --output.");
+  }
+  const result = await runTelegramUserDownload({
+    ...resolveBackendOptions(opts),
+    chat,
+    messageId,
+    output,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logDownloadText(runtime, result);
 }
 
 export async function telegramUserInboxCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

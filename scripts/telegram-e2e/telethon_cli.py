@@ -479,6 +479,46 @@ def build_dialog_payload(dialog) -> dict[str, object | None]:
   }
 
 
+def sanitize_filename_component(value: object) -> str:
+  text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip())
+  return text.strip("-._") or "chat"
+
+
+def guess_media_extension(message) -> str:
+  file_info = getattr(message, "file", None)
+  file_ext = str(getattr(file_info, "ext", "") or "").strip()
+  if file_ext.startswith(".") and len(file_ext) > 1:
+    return file_ext
+  mime_type = str(getattr(file_info, "mime_type", "") or getattr(message, "mime_type", "") or "")
+  if "ogg" in mime_type or getattr(message, "voice", None) is not None:
+    return ".oga"
+  if "mpeg" in mime_type or "mp3" in mime_type:
+    return ".mp3"
+  if "wav" in mime_type:
+    return ".wav"
+  if "mp4" in mime_type:
+    return ".mp4"
+  if getattr(message, "photo", None) is not None:
+    return ".jpg"
+  return ".bin"
+
+
+def resolve_download_output_path(output_raw: str, *, chat_raw: str, message) -> Path:
+  output = Path(output_raw).expanduser()
+  if output.exists() and output.is_dir():
+    target_dir = output
+  elif not output.exists() and not output.suffix:
+    target_dir = output
+  else:
+    output.parent.mkdir(parents = True, exist_ok = True)
+    return output
+
+  target_dir.mkdir(parents = True, exist_ok = True)
+  message_id = int(getattr(message, "id", 0) or 0)
+  chat_component = sanitize_filename_component(chat_raw)
+  return target_dir / f"telegram-{chat_component}-{message_id}{guess_media_extension(message)}"
+
+
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description = "Telethon transport for OpenClaw Telegram user tooling")
   parser.add_argument("--session", help = "Telethon session path override")
@@ -518,6 +558,11 @@ def build_parser() -> argparse.ArgumentParser:
   read.add_argument("--after-id", type = int, default = 0, help = "Only return newer messages")
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
   read.add_argument("--contains", default = "", help = "Only return messages containing this substring")
+
+  download = subparsers.add_parser("download", help = "Download media from one message")
+  download.add_argument("--chat", required = True, help = "Target chat username or id")
+  download.add_argument("--message-id", type = int, required = True, help = "Message id containing media")
+  download.add_argument("--output", required = True, help = "Output file path or directory")
 
   inbox = subparsers.add_parser("inbox", help = "List dialogs with unread metadata")
   inbox.add_argument("--limit", type = int, default = 20, help = "Maximum number of dialogs")
@@ -853,6 +898,44 @@ async def run_read(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_download(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  message_id = int(args.message_id or 0)
+  output_raw = str(args.output or "").strip()
+  if message_id <= 0:
+    return fail("E_USAGE", "Telegram download requires --message-id.")
+  if not output_raw:
+    return fail("E_USAGE", "Telegram download requires --output.")
+
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      message = await client.get_messages(resolve_chat(args.chat), ids = message_id)
+      if message is None:
+        return fail("E_MESSAGE_NOT_FOUND", f"Telegram message {message_id} was not found.")
+      if getattr(message, "media", None) is None:
+        return fail("E_NO_MEDIA", f"Telegram message {message_id} has no downloadable media.")
+      output_path = resolve_download_output_path(output_raw, chat_raw = args.chat, message = message)
+      downloaded = await client.download_media(message, file = str(output_path))
+      if not downloaded:
+        return fail("E_DOWNLOAD_FAILED", f"Telegram media download returned no file for message {message_id}.")
+      downloaded_path = Path(str(downloaded)).expanduser()
+      size_bytes = downloaded_path.stat().st_size if downloaded_path.exists() else None
+      message_payload = build_message_payload(message)
+      return emit(
+        {
+          "chat": args.chat,
+          "message": message_payload,
+          "message_id": message_id,
+          "media_kind": message_payload.get("media_kind"),
+          "path": str(downloaded_path),
+          "size_bytes": size_bytes,
+        }
+      )
+    finally:
+      await client.disconnect()
+
+
 async def run_inbox(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
@@ -917,6 +1000,8 @@ async def run() -> int:
       return await run_topic_create(args)
     if args.command == "read":
       return await run_read(args)
+    if args.command == "download":
+      return await run_download(args)
     if args.command == "inbox":
       return await run_inbox(args)
     return fail("E_USAGE", f"Unsupported command: {args.command}")

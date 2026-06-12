@@ -59,6 +59,10 @@ export function registerTelegramUserCli(program: Command) {
             "Read matching recent DM messages with raw metadata; use CLI filters instead of piping JSON to grep.",
           ],
           [
+            "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json",
+            "Download media from a known Telegram message id before running generic media tools.",
+          ],
+          [
             "openclaw telegram-user inbox --contains Artem --unread --dm-only --limit 10 --json",
             "List matching inbox dialogs for unread DM triage with raw metadata.",
           ],
@@ -174,6 +178,20 @@ export function registerTelegramUserCli(program: Command) {
         await telegramUserReadCommand(opts, defaultRuntime);
       });
     });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("download")
+      .description("Download media from one Telegram message by chat and message id")
+      .requiredOption("--chat <target>", "Target chat username or id")
+      .requiredOption("--message-id <id>", "Message id containing downloadable media")
+      .requiredOption("--output <path>", "Output file path or directory"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserDownloadCommand } = await import("../commands/telegram-user.js");
+      await telegramUserDownloadCommand(opts, defaultRuntime);
+    });
+  });
 
   withTelegramUserBase(
     telegramUser.command("inbox").description("List Telegram dialogs with unread triage metadata"),

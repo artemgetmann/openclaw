@@ -11,6 +11,7 @@ import type {
   TelegramUserBackendMeta,
   TelegramUserBackendError,
   TelegramUserBackendOptions,
+  TelegramUserDownloadResult,
   TelegramUserInboxResult,
   TelegramUserLoginResult,
   TelegramUserLogoutResult,
@@ -513,6 +514,21 @@ export async function runTelegramUserRead(
   pushOptionalNumberArg(args, "--before-id", params.beforeId);
   pushOptionalStringArg(args, "--contains", params.contains);
   return runBackendCommand<TelegramUserReadResult>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserDownload(
+  params: {
+    chat: string;
+    messageId: number;
+    output: string;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserDownloadResult> {
+  const args = ["download", "--chat", params.chat, "--message-id", String(params.messageId)];
+  pushOptionalStringArg(args, "--output", params.output);
+  return runBackendCommand<TelegramUserDownloadResult>({
     ...params,
     args,
   });

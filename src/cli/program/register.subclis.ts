@@ -276,6 +276,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "media",
+    description: "Generic local media tools",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../media-cli.js");
+      mod.registerMediaCli(program);
+    },
+  },
+  {
     name: "telegram",
     description: "Telegram live workflow tooling for doctor/runtime/smoke operations",
     hasSubcommands: true,

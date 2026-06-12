@@ -271,6 +271,22 @@ describe("exec safe bin policy product-owned cli defaults", () => {
       validateSafeBinArgv(
         [
           "telegram-user",
+          "download",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message-id",
+          "52830",
+          "--output",
+          "/tmp/openclaw-media",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
           "wait",
           "--chat",
           "@jarvis_tester_1_bot",
@@ -288,6 +304,12 @@ describe("exec safe bin policy product-owned cli defaults", () => {
           "50",
           "--json",
         ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["media", "transcribe", "--file", "/tmp/openclaw-media/voice.oga", "--json"],
         openclawProfile,
       ),
     ).toBe(true);
