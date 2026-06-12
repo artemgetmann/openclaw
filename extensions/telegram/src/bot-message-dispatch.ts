@@ -1336,6 +1336,18 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         typingCallbacks,
+        onBlockReplyFinalized: async () => {
+          // Some providers stream the visible final answer as phase-less block
+          // callbacks and return no separate final payload. Once the generic
+          // reply layer confirms the block stream is complete, materialize that
+          // buffered text as the durable final before slower supplements such as
+          // TTS run; otherwise users can see a duplicate preview until voice
+          // synthesis finishes.
+          logVerbose(
+            `telegram: block stream finalize hook buffered=${String(Boolean(pendingAmbiguousAnswerBlock))}`,
+          );
+          await flushAmbiguousAnswerBlockAsFinal("after-block-stream-final");
+        },
         deliver: async (payload, info) => {
           try {
             const assistantPhase = resolveOpenClawAssistantPhase(payload);
@@ -1355,6 +1367,19 @@ export const dispatchTelegramMessage = async ({
               await enqueueDraftLaneEvent(async () => {});
             }
             if (
+              pendingAmbiguousAnswerBlock &&
+              deliveryKind === "final" &&
+              assistantPhase === "final_answer" &&
+              !isTtsMediaFinalBoundary
+            ) {
+              // The generic/ACP layer is now sending the accepted final text
+              // with an explicit phase marker. Treat that marker as the
+              // authority and drop the older phase-less block buffer; otherwise
+              // Telegram briefly shows the same text once as mutable progress
+              // and again as durable final text.
+              pendingAmbiguousAnswerBlock = undefined;
+              logVerbose("telegram: dropped phase-unknown answer buffer before marked final");
+            } else if (
               pendingAmbiguousAnswerBlock &&
               (deliveryKind === "final" ||
                 deliveryKind === "tool" ||
@@ -1614,6 +1639,35 @@ export const dispatchTelegramMessage = async ({
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+          const failedPayload = info.payload;
+          const failedTtsMedia =
+            info.kind === "final" &&
+            failedPayload &&
+            (isFinalTtsSupplementPayload(failedPayload) ||
+              ((Boolean(failedPayload.mediaUrl) || (failedPayload.mediaUrls?.length ?? 0) > 0) &&
+                failedPayload.audioAsVoice === true));
+          if (failedTtsMedia) {
+            // TTS is additive. If the media send fails after the durable final
+            // text is already visible, keep the text in place and add a small
+            // status instead of deleting/replacing anything.
+            void sendFinalPayloadThenCleanupProgress(
+              {
+                text: "Voice note failed. Final text is above.",
+                channelData: {
+                  openclaw: {
+                    finalTtsSupplement: true,
+                    ttsFailureStatus: true,
+                  },
+                },
+              },
+              {
+                callsite: "dispatch-final-tts-send-failure",
+                infoKind: "final",
+              },
+            ).catch((statusErr) => {
+              logVerbose(`telegram: final TTS failure status send failed: ${String(statusErr)}`);
+            });
+          }
         },
       },
       replyOptions: {

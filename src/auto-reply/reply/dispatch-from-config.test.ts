@@ -232,6 +232,7 @@ function createDispatcher(): ReplyDispatcher {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
+    finalizeBlockReply: vi.fn(async () => {}),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
@@ -1693,14 +1694,34 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    expect(dispatcher.finalizeBlockReply).toHaveBeenCalledTimes(1);
     expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "final",
         payload: { text: "FINAL block answer only." },
       }),
     );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    const finalizeOrder = (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const finalTtsCallIndex = ttsMocks.maybeApplyTtsToPayload.mock.calls.findIndex(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCallIndex).toBeGreaterThanOrEqual(0);
+    const finalTtsOrder =
+      ttsMocks.maybeApplyTtsToPayload.mock.invocationCallOrder[finalTtsCallIndex] ??
+      Number.POSITIVE_INFINITY;
+    expect(finalizeOrder).toBeLessThan(finalTtsOrder);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL block answer only.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
@@ -1740,8 +1761,16 @@ describe("dispatchReplyFromConfig", () => {
         payload: { text: "FINAL block answer only." },
       }),
     );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL block answer only.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
       text: "Voice note failed. Final text is above.",
       channelData: {
         openclaw: {
@@ -1805,6 +1834,27 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    const durableFinalRoute = mocks.routeReply.mock.calls
+      .map(([call]) => call as { payload?: ReplyPayload })
+      .find((call) => {
+        const channelData = call.payload?.channelData as
+          | { openclaw?: { assistantPhase?: string } }
+          | undefined;
+        return (
+          call.payload?.text === "FINAL <tag & value" &&
+          channelData?.openclaw?.assistantPhase === "final_answer"
+        );
+      });
+    expect(durableFinalRoute?.payload).toEqual(
+      expect.objectContaining({
+        text: "FINAL <tag & value",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
     const ttsRoute = mocks.routeReply.mock.calls
       .map(([call]) => call as { payload?: ReplyPayload })
       .find((call) => call.payload?.mediaUrl === "https://example.com/tts-synth.opus");
@@ -1842,12 +1892,70 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL clean answer.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
         text: "FINAL clean answer.",
+      }),
+    );
+  });
+
+  it("sends returned Telegram final text before synthesizing final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async () => ({ text: "FINAL returned answer." }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL returned answer.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.finalizeBlockReply).toHaveBeenCalledTimes(1);
+    const finalizeOrder = (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const finalTtsCallIndex = ttsMocks.maybeApplyTtsToPayload.mock.calls.findIndex(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCallIndex).toBeGreaterThanOrEqual(0);
+    const finalTtsOrder =
+      ttsMocks.maybeApplyTtsToPayload.mock.invocationCallOrder[finalTtsCallIndex] ??
+      Number.POSITIVE_INFINITY;
+    expect(finalizeOrder).toBeLessThan(finalTtsOrder);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: "FINAL returned answer.",
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
       }),
     );
   });
