@@ -150,12 +150,9 @@ export function createTelegramProgressController(params: {
         return;
       }
       cleared = true;
-      if (hasProgress || typeof stream.messageId() === "number") {
-        // Clear should leave proof of the latest visible progress state before
-        // deleting it. The draft stream's raw clear intentionally cancels pending
-        // edits; the progress controller owns the stricter finalization contract.
-        await stream.flush();
-      }
+      // Final-answer delivery owns the durable transcript. Progress cleanup
+      // should remove the current preview quickly, not force one last pending
+      // edit that can briefly duplicate the final answer before deletion.
       await stream.clear();
     },
     messageId: () => stream.messageId(),
