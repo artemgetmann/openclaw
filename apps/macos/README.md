@@ -193,6 +193,28 @@ bash scripts/verify-consumer-mac-app.sh --release "dist/Jarvis.app"
 If the user asks an agent to "build me a new application", "push an update",
 or "make a sendable Jarvis package", this is the canonical lane.
 
+Start with the persistent Jarvis release worktree launcher:
+
+```bash
+bash scripts/jarvis-release-worktree.sh
+```
+
+Use `.worktrees/jarvis-release-current` for the macOS release/update/package,
+appcast, and notarization work. Do not create an ad-hoc cold worktree for this
+lane; repeated cold bootstraps are slow and make retry evidence noisy.
+Follow the launcher's printed next steps, then run the release commands from the
+release lane.
+
+Normal app-building release phases require macOS prewarm proof. If the release
+lane is cold, the release path should fail fast and suggest:
+
+```bash
+bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+```
+
+`ALLOW_COLD_RELEASE_LANE=1` is the emergency override. If you use it, document
+that the macOS prewarm proof was skipped.
+
 For a real update to existing installations, bump `APP_VERSION` and/or
 `APP_BUILD` before packaging. Sparkle updates only when the new
 `CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
