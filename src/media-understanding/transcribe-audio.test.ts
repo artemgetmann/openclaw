@@ -32,8 +32,26 @@ describe("transcribeAudioFile", () => {
       },
       cfg: {} as OpenClawConfig,
       agentDir: undefined,
+      localPathRoots: undefined,
     });
     expect(result).toEqual({ text: "hello" });
+  });
+
+  it("passes explicit local path roots through to the audio runner", async () => {
+    runAudioTranscription.mockResolvedValue({ transcript: "hello", attachments: [] });
+
+    await transcribeAudioFile({
+      filePath: "/tmp/openclaw-media/voice.ogg",
+      cfg: {} as OpenClawConfig,
+      localPathRoots: ["/tmp/openclaw-media"],
+      mime: "audio/ogg",
+    });
+
+    expect(runAudioTranscription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localPathRoots: ["/tmp/openclaw-media"],
+      }),
+    );
   });
 
   it("returns undefined when helper returns no transcript", async () => {

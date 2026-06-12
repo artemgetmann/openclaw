@@ -40,6 +40,10 @@ export async function mediaTranscribeCommand(
     filePath,
     cfg: loadConfig(),
     agentDir: readStringOpt(opts, "agentDir") ?? resolveOpenClawAgentDir(),
+    // The media-understanding runner normally restricts attachment paths to
+    // inbound media roots. A CLI operator-provided file is its own trust
+    // boundary, so allow exactly the containing directory for this one call.
+    localPathRoots: [path.dirname(filePath)],
     mime,
   });
   const payload: MediaTranscribeCommandResult = {
