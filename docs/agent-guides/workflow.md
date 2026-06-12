@@ -81,6 +81,26 @@
 
 ## Release preflight operator notes
 
+- Start sendable Jarvis DMG, app-update, package, appcast, and notary work with
+  the release-lane launcher:
+
+  ```bash
+  bash scripts/jarvis-release-worktree.sh
+  ```
+
+- That lane is the persistent prewarmed Jarvis release worktree at
+  `.worktrees/jarvis-release-current`. Use it for macOS release/update/package,
+  appcast, and notarization work instead of creating ad-hoc cold worktrees.
+- Normal app-building release phases require macOS prewarm proof. A cold lane is
+  expected to fail fast with this recovery command:
+
+  ```bash
+  bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+  ```
+
+- `ALLOW_COLD_RELEASE_LANE=1` is an emergency override only. Use it when release
+  urgency beats warm-lane proof, and call out the skipped prewarm proof in the
+  handoff.
 - Use `bash scripts/preflight-consumer-mac-release.sh` for the read-only
   consumer macOS release credential check before a notarized Jarvis lane.
 - The default notarization path is App Store Connect API-key auth:

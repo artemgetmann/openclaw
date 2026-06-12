@@ -13,6 +13,7 @@ source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
+source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
@@ -100,6 +101,13 @@ Env:
   ALLOW_SLOW_RELEASE_UPLOAD=1
                       Allow an intentional slow/tunnel GitHub release upload
                       route after the preflight prints the risk
+  ALLOW_COLD_RELEASE_LANE=1
+                      Emergency-only bypass for the macOS prewarm proof gate.
+                      Normal app-building phases must first run:
+                      bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+  ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1
+                      Emergency-only bypass when the built CFBundleVersion is
+                      not newer than /Applications/Jarvis.app
 
 OpenClaw release packaging is intentionally default-instance only.
 Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
@@ -911,6 +919,10 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_PHASE="trusted-ring-fast"
       shift
       ;;
+    --local-proof)
+      PACKAGE_PHASE="local-proof"
+      shift
+      ;;
     --instance)
       if [[ $# -lt 2 ]]; then
         echo "ERROR: --instance requires a value" >&2
@@ -1019,7 +1031,7 @@ case "$PACKAGE_PHASE" in
 esac
 
 case "$PACKAGE_PHASE" in
-  full|post-app-build)
+  full|post-app-build|local-proof)
     require_release_publish_prereqs
     if [[ "$NOTARIZE" == "1" ]]; then
       require_sparkle_private_key_file
@@ -1042,6 +1054,7 @@ esac
 
 case "$PACKAGE_PHASE" in
   full|local-proof|build-app-only|trusted-ring-fast)
+    openclaw_require_macos_prewarm_proof "$ROOT_DIR"
     require_clean_git_for_release_build
     ;;
 esac
@@ -1082,6 +1095,11 @@ else
 fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
+case "$PACKAGE_PHASE" in
+  full|local-proof|build-app-only|trusted-ring-fast)
+    openclaw_require_incremental_sparkle_build "$APP_PATH"
+    ;;
+esac
 ARTIFACT_BASENAME="${APP_NAME}"
 if [[ "${VERSIONED_ARTIFACT_NAMES:-0}" == "1" ]]; then
   # Clean filenames are the default for human handoff because most consumer
@@ -1155,7 +1173,7 @@ case "$PACKAGE_PHASE" in
 esac
 
 case "$PACKAGE_PHASE" in
-  full|post-app-build|trusted-ring-fast)
+  full|local-proof|post-app-build|trusted-ring-fast)
     # Remove stale final artifacts only when this run is about to recreate them.
     # Narrow resume phases must preserve the artifacts they are explicitly
     # resuming from.

@@ -57,15 +57,17 @@ if [[ ! -f "$ROOT/package.json" ]]; then
 fi
 
 source "$ROOT/scripts/lib/validated-node.sh"
+source "$ROOT/scripts/lib/macos-release-gates.sh"
 openclaw_use_validated_node "$ROOT" >/dev/null
 
 echo "prewarm_root=${ROOT}"
 echo "prewarm_step=pnpm-install"
-pnpm --dir "$ROOT" install --frozen-lockfile
+openclaw_run_repo_pnpm "$ROOT" install --frozen-lockfile
 
 if [[ "$PREWARM_MACOS" == "1" ]]; then
   echo "prewarm_step=swift-build-macos"
   swift build --package-path "$ROOT/apps/macos" --product OpenClaw
+  openclaw_write_macos_prewarm_proof "$ROOT"
 fi
 
 echo "prewarm_status=ok"
