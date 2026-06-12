@@ -1080,7 +1080,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           {
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
-            text: "hi Sir. Still suspiciously operational.",
+            text: "hi Sir. Still suspiciously operational. This caption should stay attached to the voice supplement.",
             channelData: { openclaw: { finalTtsSupplement: true } },
           },
           { kind: "final" },
@@ -1093,7 +1093,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           {
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
-            text: "Princess Fiona repeat.",
+            text: "Princess Fiona repeat. This caption should also stay attached to the voice supplement.",
             channelData: { openclaw: { finalTtsSupplement: true } },
           },
           { kind: "final" },
@@ -1134,7 +1134,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
-            text: "hi Sir. Still suspiciously operational.",
+            text: "hi Sir. Still suspiciously operational. This caption should stay attached to the voice supplement.",
           }),
         ],
       }),
@@ -1156,7 +1156,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
-            text: "Princess Fiona repeat.",
+            text: "Princess Fiona repeat. This caption should also stay attached to the voice supplement.",
           }),
         ],
       }),

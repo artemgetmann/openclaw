@@ -461,4 +461,34 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
   });
+
+  it("sends a lightweight direct Telegram status when final TTS was expected but no attempt is recorded", async () => {
+    ttsMocks.state.autoMode = "always";
+    const { coordinator, dispatcher } = createCoordinator({
+      provider: "telegram",
+      surface: "telegram",
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement("Final answer.");
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(false);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Final answer." }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "Voice note failed. Final text is above.",
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+            ttsFailureStatus: true,
+          },
+        },
+      }),
+    );
+  });
 });

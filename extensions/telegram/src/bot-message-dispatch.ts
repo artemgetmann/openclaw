@@ -1403,8 +1403,6 @@ export const dispatchTelegramMessage = async ({
                 return;
               }
             }
-            const split = splitTextIntoLaneSegments(payload.text);
-            const segments = split.segments;
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
             const flushBufferedFinalAnswer = async () => {
@@ -1424,6 +1422,19 @@ export const dispatchTelegramMessage = async ({
               });
               reasoningStepState.resetForNextStep();
             };
+
+            if (isTtsMediaFinalBoundary) {
+              await sendFinalPayloadThenCleanupProgress(payload, {
+                reason: classifyPayloadDurableSendReason(payload, deliveryKind),
+                callsite: "dispatch-final-tts-supplement",
+                infoKind: deliveryKind,
+              });
+              await flushBufferedFinalAnswer();
+              return;
+            }
+
+            const split = splitTextIntoLaneSegments(payload.text);
+            const segments = split.segments;
 
             for (const segment of segments) {
               if (

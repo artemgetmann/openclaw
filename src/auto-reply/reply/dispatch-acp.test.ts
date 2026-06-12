@@ -330,6 +330,49 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("delivers direct Telegram ACP final text before the captioned TTS supplement", async () => {
+    setReadyAcpResolution();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Final answer.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      sessionTtsAuto: "always",
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Final answer.",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "Final answer.",
+        mediaUrl: "https://example.com/final-tts.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("does not send Telegram ACP captioned TTS when visible final text delivery fails", async () => {
     setReadyAcpResolution();
     ttsMocks.state.synthesizeFinalAudio = true;
