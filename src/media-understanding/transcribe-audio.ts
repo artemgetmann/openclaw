@@ -14,6 +14,7 @@ export async function transcribeAudioFile(params: {
   filePath: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  localPathRoots?: readonly string[];
   mime?: string;
 }): Promise<{ text: string | undefined }> {
   const ctx = {
@@ -24,6 +25,7 @@ export async function transcribeAudioFile(params: {
     ctx,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    localPathRoots: params.localPathRoots,
   });
   return { text: transcript };
 }

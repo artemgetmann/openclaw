@@ -53,6 +53,7 @@ describe("media commands", () => {
       agentDir: "/tmp/openclaw-agent",
       cfg: { tools: { media: { audio: { enabled: true } } } },
       filePath,
+      localPathRoots: [tempDir],
       mime: "audio/ogg",
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"text": "hello from voice"'));
