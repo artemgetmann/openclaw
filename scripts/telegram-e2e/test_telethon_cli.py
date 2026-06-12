@@ -117,6 +117,27 @@ class FakeReadClient:
     return self.messages[:limit]
 
 
+class FakeDownloadClient:
+  def __init__(self, message: SimpleNamespace | None) -> None:
+    self.disconnected = False
+    self.download_media_calls: list[dict[str, object]] = []
+    self.get_messages_calls: list[dict[str, object]] = []
+    self.message = message
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+  async def get_messages(self, chat, *, ids: int):
+    self.get_messages_calls.append({"chat": chat, "ids": ids})
+    return self.message
+
+  async def download_media(self, message, *, file: str):
+    self.download_media_calls.append({"file": file, "message": message})
+    Path(file).parent.mkdir(parents = True, exist_ok = True)
+    Path(file).write_bytes(b"voice")
+    return file
+
+
 class FakeSentMessage:
   def __init__(
     self,
@@ -142,6 +163,27 @@ class FakeSentMessage:
 
   async def get_chat(self):
     return SimpleNamespace(id = self.chat_id, title = "Jarvis Lab", username = None)
+
+
+def build_fake_media_message(*, media_kind: str = "voice", message_id: int = 52830) -> SimpleNamespace:
+  return SimpleNamespace(
+    audio = SimpleNamespace() if media_kind == "audio" else None,
+    chat = SimpleNamespace(id = 10, title = None, username = "jarvis_tester_1_bot"),
+    chat_id = 10,
+    date = None,
+    direct_messages_topic = None,
+    document = SimpleNamespace() if media_kind in {"audio", "document", "voice"} else None,
+    file = SimpleNamespace(ext = ".oga" if media_kind == "voice" else ".bin", mime_type = "audio/ogg"),
+    id = message_id,
+    media = SimpleNamespace(),
+    message = "",
+    out = False,
+    photo = SimpleNamespace() if media_kind == "photo" else None,
+    reply_to = None,
+    sender_id = 101,
+    video = SimpleNamespace() if media_kind == "video" else None,
+    voice = SimpleNamespace() if media_kind == "voice" else None,
+  )
 
 
 class FakeSendClient:
@@ -498,6 +540,64 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(len(emitted["messages"]), 1)
     self.assertEqual(emitted["messages"][0]["text"], "proof matched")
 
+  async def test_run_download_saves_message_media_to_deterministic_output_path(self) -> None:
+    message = build_fake_media_message(media_kind = "voice", message_id = 52830)
+    fake_client = FakeDownloadClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      output_dir = Path(temp_dir) / "downloads"
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_download(
+          argparse.Namespace(
+            chat = "@jarvis_tester_1_bot",
+            message_id = 52830,
+            output = str(output_dir),
+            session = str(session_path),
+          )
+        )
+
+    expected_path = output_dir / "telegram-jarvis_tester_1_bot-52830.oga"
+    self.assertEqual(exit_code, 0)
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(fake_client.get_messages_calls, [{"chat": "@jarvis_tester_1_bot", "ids": 52830}])
+    self.assertEqual(fake_client.download_media_calls[0]["file"], str(expected_path))
+    self.assertEqual(emitted["path"], str(expected_path))
+    self.assertEqual(emitted["media_kind"], "voice")
+    self.assertEqual(emitted["size_bytes"], 5)
+
+  async def test_run_download_rejects_messages_without_media(self) -> None:
+    message = build_fake_media_message(media_kind = "voice", message_id = 52831)
+    message.media = None
+    fake_client = FakeDownloadClient(message)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())):
+        exit_code = await telethon_cli.run_download(
+          argparse.Namespace(
+            chat = "@jarvis_tester_1_bot",
+            message_id = 52831,
+            output = str(Path(temp_dir) / "downloads"),
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertTrue(fake_client.disconnected)
+
   async def test_run_send_uploads_media_as_voice_with_caption_and_reply_target(self) -> None:
     fake_client = FakeSendClient()
     emitted: dict[str, object] = {}
@@ -664,6 +764,19 @@ class TelethonCliSyncTests(unittest.TestCase):
     self.assertEqual(send_args.media, "/tmp/proof.ogg")
     self.assertEqual(send_args.caption, "voice proof")
     self.assertTrue(send_args.voice)
+
+    download_args = parser.parse_args([
+      "download",
+      "--chat",
+      "@jarvis_tester_1_bot",
+      "--message-id",
+      "52830",
+      "--output",
+      "/tmp/downloads",
+    ])
+    self.assertEqual(download_args.command, "download")
+    self.assertEqual(download_args.message_id, 52830)
+    self.assertEqual(download_args.output, "/tmp/downloads")
 
   def test_compute_inbox_scan_cap_keeps_filtered_queries_bounded_but_deeper(self) -> None:
     self.assertEqual(

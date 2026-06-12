@@ -163,6 +163,16 @@ openclaw telegram-user read \
   --limit 5 \
   --json
 
+openclaw telegram-user download \
+  --chat @jarvis_tester_1_bot \
+  --message-id 52830 \
+  --output /tmp/openclaw-media \
+  --json
+
+openclaw media transcribe \
+  --file /tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga \
+  --json
+
 openclaw telegram-user wait \
   --chat @jarvis_tester_1_bot \
   --after-id 12345 \
@@ -182,6 +192,11 @@ openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --lim
 
 Do not pipe Telegram JSON to `grep` when `inbox`, `read`, or `wait` already has
 the selector you need.
+
+For media-bearing Telegram messages, keep fetching and understanding separate:
+`read` discovers `media_kind`, `telegram-user download` saves the payload by
+chat and message id, and `media transcribe` turns local audio into text through
+the configured media audio provider path.
 
 Session states returned by `telegram-user status`:
 

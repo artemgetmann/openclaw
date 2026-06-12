@@ -114,6 +114,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "media",
+    description: "Generic local media tools",
+    hasSubcommands: true,
+  },
+  {
     name: "telegram",
     description: "Telegram live workflow tooling for doctor/runtime/smoke operations",
     hasSubcommands: true,
