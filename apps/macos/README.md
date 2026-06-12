@@ -202,6 +202,22 @@ The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public
 appcast, and only declares the package sendable after Sparkle is live.
 
+For local Jarvis release proof, do not run the full distribution lane. Prove
+the signed app bundle first:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --local-proof
+```
+
+This builds `dist/Jarvis.app`, runs `verify-consumer-mac-app.sh` against the
+stable release identity, verifies the bundled runtime `package.json` version
+matches the app version, writes `dist/jarvis-release-manifest.env`, writes the
+app build receipt, and stops. It does not create `Jarvis.dmg`, `Jarvis.zip`, or
+`jarvis-appcast.xml`; it also does not notarize, publish GitHub assets, install
+or launch the app, touch launchd, or change the shared gateway runtime. Use this
+when the question is "does this Jarvis app build verify locally?" instead of
+"is this public distribution artifact sendable?"
+
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 gh release view --repo artemgetmann/openclaw --json tagName,url
@@ -234,9 +250,10 @@ VPN/tunnel routing should be off for Apple and GitHub release uploads unless the
 slow path is intentional and known-good.
 
 `--phase` controls where packaging starts. The default is `full`: build, sign,
-verify, notarize, package, publish, and verify in one pass. Use the broad
-recovery phase only after the app build/sign/verify steps already succeeded and
-`dist/Jarvis.app` is still present:
+verify, notarize, package, publish, and verify in one pass. `--local-proof` is
+an alias for `--phase local-proof` and is the fastest app-only proof path. Use
+the broad recovery phase only after the app build/sign/verify steps already
+succeeded and `dist/Jarvis.app` is still present:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
@@ -264,6 +281,11 @@ Build/package the app once and stop before notarization:
 ```bash
 bash scripts/package-openclaw-mac-dist.sh --phase build-app-only
 ```
+
+For repeat local proof, prefer `--local-proof` over `--phase build-app-only`.
+It uses the same app build and verifier path, but also forces local proof
+defaults: no notarization, no dSYM, no publish, default Sparkle key allowed for
+smoke proof, and cached bundled runtime reuse from a clean tracked commit.
 
 Submit app notarization only from the existing app bundle:
 

@@ -45,9 +45,11 @@ Options:
                       Required with --publish-release-assets. Must match the
                       repo's latest release because Sparkle checks the public
                       releases/latest/download appcast feed.
-  --phase <full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast>
+  --phase <full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast>
                       full is the default one-shot lane. post-app-build resumes
                       from an existing dist/Jarvis.app and runs the release tail.
+                      local-proof builds and verifies dist/Jarvis.app, writes
+                      the manifest/receipt, and stops before distribution work.
                       Narrow phases resume failed tails from saved artifacts,
                       receipts, and dist/jarvis-release-manifest.env.
                       create-local-release-assets-only creates Jarvis.zip and
@@ -56,6 +58,12 @@ Options:
                       verifying public URLs.
   --resume-after-app-build
                       Alias for --phase post-app-build.
+  --local-proof
+                      Alias for --phase local-proof. Builds the signed Jarvis
+                      app with local proof defaults, verifies the stable release
+                      identity and bundled runtime version, records metadata,
+                      then skips DMG, ZIP, appcast, notary, publish, install,
+                      launchd, and shared runtime changes.
   --trusted-ring-fast
                       Alias for --phase trusted-ring-fast. Builds local trusted
                       tester artifacts and skips notarization, dSYM, publishing,
@@ -895,6 +903,10 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_PHASE="post-app-build"
       shift
       ;;
+    --local-proof)
+      PACKAGE_PHASE="local-proof"
+      shift
+      ;;
     --trusted-ring-fast)
       PACKAGE_PHASE="trusted-ring-fast"
       shift
@@ -921,14 +933,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PACKAGE_PHASE" in
-  full|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast)
+  full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast)
     ;;
   *)
     echo "ERROR: unknown --phase value: $PACKAGE_PHASE" >&2
-    echo "Use --phase full, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, create-local-release-assets-only, publish-assets-only, verify-public-assets-only, or trusted-ring-fast." >&2
+    echo "Use --phase full, local-proof, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, create-local-release-assets-only, publish-assets-only, verify-public-assets-only, or trusted-ring-fast." >&2
     exit 1
     ;;
 esac
+
+if [[ "$PACKAGE_PHASE" == "local-proof" ]]; then
+  SKIP_NOTARIZE=1
+  SKIP_DSYM="${SKIP_DSYM:-1}"
+  PUBLISH_RELEASE_ASSETS=0
+  ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE="${ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE:-1}"
+  # Local proof is about the signed app bundle plus release identity verifier,
+  # not distribution artifacts. Reuse the runtime cache so repeated local
+  # iterations do not restage Node, uv, and production node_modules.
+  OPENCLAW_CONSUMER_FAST_PACKAGING=1
+  OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE=1
+fi
 
 if [[ "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
   SKIP_NOTARIZE=1
@@ -989,7 +1013,7 @@ case "$PACKAGE_PHASE" in
 esac
 
 case "$PACKAGE_PHASE" in
-  full|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization|create-local-release-assets-only)
+  full|local-proof|build-app-only|post-app-build|trusted-ring-fast|submit-app-notarization|poll-app-notarization|create-local-release-assets-only)
     consumer_sparkle_release_gate
     ;;
 esac
@@ -1017,7 +1041,7 @@ case "$PACKAGE_PHASE" in
 esac
 
 case "$PACKAGE_PHASE" in
-  full|build-app-only|trusted-ring-fast)
+  full|local-proof|build-app-only|trusted-ring-fast)
     require_clean_git_for_release_build
     ;;
 esac
@@ -1026,7 +1050,7 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
-if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
+if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
   # Stale release artifacts under dist/ can get copied into the bundled runtime
   # before the fresh app is assembled. Remove only mac release outputs here; JS
   # build outputs under dist/ are still needed by the packaged CLI/runtime.
@@ -1075,6 +1099,18 @@ write_app_build_receipt
 write_release_manifest
 
 case "$PACKAGE_PHASE" in
+  local-proof)
+    echo "Jarvis local proof app bundle ready:"
+    echo "  phase=$PACKAGE_PHASE"
+    echo "  app=$APP_PATH"
+    echo "  manifest=$RELEASE_MANIFEST_PATH"
+    echo "  app_build_receipt=$(app_build_receipt_path)"
+    echo "  app_version=$VERSION"
+    echo "  signing_authority=${SIGNING_AUTHORITY:-unknown}"
+    echo "release_sendable=false"
+    echo "reason=local-proof stops before notarization, DMG, ZIP, appcast, publish, install, launchd, and shared runtime changes"
+    exit 0
+    ;;
   build-app-only)
     echo "OpenClaw app bundle ready:"
     echo "  phase=$PACKAGE_PHASE"
