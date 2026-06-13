@@ -65,6 +65,33 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain("Blocked sensitive GUI surface");
   });
 
+  it("does not block a safe mutation because unrelated snapshot chrome says remove", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "Claude", windowTitle: "Claude" },
+      snapshot: snapshot({
+        appName: "Claude",
+        windowTitle: "Claude",
+        summary: "Composer ready. Toolbar secondary action: Remove from toolbar.",
+        visibleText: ["Write your prompt to Claude", "Remove from toolbar"],
+      }),
+      element: {
+        ref: "@input",
+        role: "text entry area",
+        label: "Write your prompt to Claude",
+        description: "Write your prompt to Claude",
+        value: "Write a message…",
+      },
+      reason: "Write approved benchmark message.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("send_message_to_approved_assistant"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
   it("allows approved assistant message submission with post-state verification", () => {
     const decision = evaluateGuiPolicy({
       actionType: "press",

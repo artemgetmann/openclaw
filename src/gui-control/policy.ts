@@ -136,6 +136,33 @@ function searchableText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function sensitiveSurfaceText(input: GuiPolicyInput): string {
+  if (input.actionType === "observe") {
+    return searchableText(input);
+  }
+
+  // Mutations should be judged against the target and selected element, not
+  // every unrelated AX string in the app snapshot. Browser/toolbars often
+  // expose generic items like "Remove from toolbar"; treating that as the
+  // action surface creates false blocks while adding no real safety.
+  return [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    input.element?.description,
+    input.element?.value,
+    input.reason,
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function intendedActionText(input: GuiPolicyInput): string {
   return [
     input.target.appName,
@@ -233,7 +260,7 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   // Denied surfaces are capability-proof. Login, payment, account settings,
   // and destructive surfaces stay blocked even when a caller has mutation
   // approval, because those require a higher-trust flow than this verifier.
-  const text = searchableText(input);
+  const text = sensitiveSurfaceText(input);
   const blockedSurface = hasAnyTerm(text, taskPolicy.deniedSurfaceTerms);
   if (blockedSurface) {
     return {
