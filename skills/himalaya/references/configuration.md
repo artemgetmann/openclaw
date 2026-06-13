@@ -238,3 +238,9 @@ himalaya envelope list -a icloud --folder INBOX --page 1 --page-size 5
 ```
 
 If folder names differ from the examples above, update `folder.aliases.*` to match what `folder list` returns for that provider.
+
+When using Himalaya as a fallback for a failed Gmail action, treat the account
+identity as part of validation. The configured account email/login must match
+the Gmail mailbox the user intended before reading, replying, drafting, or
+sending. If it does not clearly match, stop and ask instead of using a different
+sender.

@@ -44,6 +44,16 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 
 - Prefer direct safe-bin invocation first: `himalaya account list`,
   `himalaya folder list`, then `himalaya envelope list`.
+- Use Himalaya for email only. It is not a fallback for Google Calendar, Drive,
+  Docs, Sheets, or Contacts.
+- When a Gmail-specific `gog` task fails because Google auth/provider/tooling is
+  unavailable, use Himalaya only if `himalaya account list` or config proves the
+  account is the same mailbox the user intended.
+- For sends, never silently switch sender identities. If the same-mailbox
+  account is unclear, stop and ask the user before sending.
+- If Gmail auth fails and Himalaya is not safely configured for the same
+  mailbox, report the blocker and ask whether the user wants to reconnect
+  Google.
 - In Normal permissions mode, direct `himalaya ...` commands are allowed. The
   default restriction is on shell wrappers (`bash -lc`, `sh -c`), pipes,
   chaining, and redirection.

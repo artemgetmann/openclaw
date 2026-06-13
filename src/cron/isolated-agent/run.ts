@@ -129,6 +129,10 @@ function stringifyCronRunError(err: unknown): string | undefined {
     return err.description?.trim() || undefined;
   }
   if (typeof err === "object") {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return message.trim();
+    }
     try {
       return JSON.stringify(err).trim() || undefined;
     } catch {
@@ -933,10 +937,10 @@ export async function runCronIsolatedAgentTurn(params: {
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
-  const runLevelError = finalRunResult.meta?.error;
+  const runLevelErrorText = stringifyCronRunError(finalRunResult.meta?.error);
   const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
   const hasSuccessfulPayloadAfterLastError =
-    !runLevelError &&
+    !runLevelErrorText &&
     lastErrorPayloadIndex >= 0 &&
     payloads
       .slice(lastErrorPayloadIndex + 1)
@@ -944,14 +948,27 @@ export async function runCronIsolatedAgentTurn(params: {
   // Tool wrappers can emit transient/false-positive error payloads before a valid final
   // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
   // did not report a model/context-level error and (b) a non-error payload follows.
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  const hasFatalRunLevelError = Boolean(runLevelErrorText);
+  const hasFatalErrorPayload =
+    hasFatalRunLevelError || (hasErrorPayload && !hasSuccessfulPayloadAfterLastError);
   const lastErrorPayloadText = [...payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
-  const embeddedRunError = hasFatalErrorPayload
-    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+  const runLevelFailureText = runLevelErrorText
+    ? `cron isolated run failed: ${runLevelErrorText}`
     : undefined;
+  const embeddedRunError = hasFatalErrorPayload
+    ? (runLevelFailureText ?? lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    : undefined;
+  if (runLevelFailureText) {
+    // A run-level error means the agent runtime failed even if it produced
+    // partial assistant prose.  Cron state and alerts must reflect the
+    // mechanical failure, and normal delivery must not leak success-looking
+    // partial text to the user.
+    summary = runLevelFailureText;
+    outputText = runLevelFailureText;
+  }
   const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
@@ -966,9 +983,10 @@ export async function runCronIsolatedAgentTurn(params: {
     });
 
   if (hasFatalErrorPayload) {
-    // Fatal error payloads are internal run failures, not user-facing cron output.
-    // The cron service records the error and can route configured failure alerts;
-    // direct announce delivery would leak raw strings like "LLM request timed out."
+    // Fatal error payloads and run-level errors are internal run failures, not
+    // normal user-facing cron output.  The cron service records the error and
+    // can route configured failure alerts; direct announce delivery would leak
+    // raw provider/tool strings or misleading partial prose.
     return resolveRunOutcome({ delivered: false, deliveryAttempted: false });
   }
 
