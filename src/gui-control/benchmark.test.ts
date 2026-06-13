@@ -1108,6 +1108,46 @@ describe("runGuiBenchmark", () => {
     );
   });
 
+  it("does not treat an OCU AX description composer echo as a Claude reply", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot(message, replyToken) {
+          return benchmarkSnapshot({
+            id: "claude-after-noop-press",
+            appName: "Claude",
+            visibleText: [
+              "text )",
+              "76 text |",
+              "77 pop up button More",
+              `105 button Reload this page text 2:42 PM container ${replyToken} Snap`,
+            ],
+            elements: [
+              {
+                ref: "@350",
+                role: "text entry area (settable, string)",
+                label: "text entry area (settable, string)",
+                description: `Write your prompt to Claude ${message}`,
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.replyTextExtracted).toBe(false);
+    expect(result.replyExtractionMethod).toBe("none");
+    expect(result.audit[1]?.postStateVerification).toBe(
+      "Claude composer cleared after scoped submit.",
+    );
+  });
+
   it("extracts Claude reply through copy fallback and restores clipboard", async () => {
     const messageValues: string[] = [];
     let clipboard = "original clipboard";

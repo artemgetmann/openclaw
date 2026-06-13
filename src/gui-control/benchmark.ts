@@ -586,13 +586,30 @@ function buildWorkspaceTelemetry(input: {
 }
 
 function composerContains(snapshot: GuiSnapshot, text: string): boolean {
-  return snapshot.elements.some(
-    (element) =>
-      (element.role?.toLowerCase().includes("text") ||
-        element.label?.toLowerCase().includes("message") ||
-        element.description?.toLowerCase().includes("message")) &&
-      textIncludesVisible(element.value, text),
-  );
+  return snapshot.elements.some((element) => {
+    const descriptor = normalizeVisibleText(
+      [element.role, element.label, element.description, element.name, element.title]
+        .filter(Boolean)
+        .join(" "),
+    );
+    const looksLikeComposer =
+      descriptor.includes("write your prompt to claude") ||
+      descriptor.includes("write a message") ||
+      descriptor.includes("text entry area") ||
+      descriptor.includes("textarea") ||
+      descriptor.includes("textfield") ||
+      descriptor.includes("text field");
+
+    // OCU text dumps often put the filled Claude composer in AX Description
+    // instead of AXValue. Treat those composer-scoped fields as unsent input
+    // so nearby visible text cannot be stitched into a fake assistant reply.
+    return (
+      looksLikeComposer &&
+      [element.value, element.description, element.label].some((field) =>
+        textIncludesVisible(field, text),
+      )
+    );
+  });
 }
 
 function snapshotContainsText(snapshot: GuiSnapshot, text: string): boolean {
