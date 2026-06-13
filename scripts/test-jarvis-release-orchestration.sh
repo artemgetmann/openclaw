@@ -156,6 +156,8 @@ test_wrapper_dry_run() {
   local verify_out="$TMP_DIR/wrapper-verify-assets.out"
   local verify_err="$TMP_DIR/wrapper-verify-assets.err"
   local verify_summary="$TMP_DIR/wrapper-verify-summary.env"
+  local stale_publish_root="$TMP_DIR/wrapper-stale-publish-assets"
+  local stale_publish_out="$TMP_DIR/wrapper-stale-publish-assets.out"
   local status
 
   mkdir -p "$root/dist/Jarvis.app"
@@ -242,6 +244,25 @@ test_wrapper_dry_run() {
     fail "wrapper verify tag failure did not write durable failure summary"
   fi
   pass "wrapper verify execution requires tag"
+
+  mkdir -p "$stale_publish_root/dist/Jarvis.app"
+  : >"$stale_publish_root/dist/Jarvis.dmg"
+  : >"$stale_publish_root/dist/Jarvis.zip"
+  printf '<rss><channel><item><enclosure url="https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.zip"/></item></channel></rss>\n' \
+    >"$stale_publish_root/dist/jarvis-appcast.xml"
+  write_manifest_status "$stale_publish_root" "Accepted" "Accepted"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$stale_publish_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --publish-release-assets \
+      --github-release-tag v-current \
+      >"$stale_publish_out"
+  if ! grep -q 'selected_phase=create-local-release-assets-only' "$stale_publish_out"; then
+    cat "$stale_publish_out" >&2
+    fail "wrapper stale appcast publish dry run did not choose local asset regeneration"
+  fi
+  pass "wrapper stale publish appcast regenerates local assets first"
 }
 
 test_package_create_assets_rejects_stale_tag() {

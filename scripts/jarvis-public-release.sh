@@ -94,6 +94,20 @@ write_summary_report() {
   } >"$SUMMARY_REPORT"
 }
 
+tagged_zip_url() {
+  local tag="$1"
+  printf 'https://github.com/%s/releases/download/%s/Jarvis.zip\n' "$GITHUB_RELEASE_REPO" "$tag"
+}
+
+appcast_targets_tagged_zip() {
+  local appcast="$DIST_DIR/jarvis-appcast.xml"
+  local expected_url="$1"
+
+  [[ -f "$appcast" ]] || return 1
+  /usr/bin/grep -Fq "url=\"$expected_url\"" "$appcast" \
+    || /usr/bin/grep -Fq "url='$expected_url'" "$appcast"
+}
+
 fail_before_execute() {
   local status="$1"
   shift
@@ -181,6 +195,15 @@ if [[ "$FORCED_PHASE" == "auto" ]]; then
   )"
 else
   SELECTED_PHASE="$FORCED_PHASE"
+fi
+
+if [[ "$FORCED_PHASE" == "auto" && "$SELECTED_PHASE" == "publish-assets-only" && -n "$GITHUB_RELEASE_TAG" ]]; then
+  # Old successful local-asset runs could leave an appcast that points at
+  # releases/latest/download/Jarvis.zip. That file exists, but it is not safe to
+  # upload because Sparkle appcasts must sign an immutable tagged ZIP URL.
+  if ! appcast_targets_tagged_zip "$(tagged_zip_url "$GITHUB_RELEASE_TAG")"; then
+    SELECTED_PHASE="create-local-release-assets-only"
+  fi
 fi
 
 if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
