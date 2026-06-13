@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  OpenComputerUseRuntime,
   parseOpenComputerUseActionResult,
   parseOpenComputerUseApps,
   parseOpenComputerUseSnapshot,
@@ -56,6 +57,29 @@ describe("parseOpenComputerUseApps", () => {
 });
 
 describe("parseOpenComputerUseWindows", () => {
+  it("parses live list_apps text into app-level frontmost placeholders", () => {
+    expect(
+      parseOpenComputerUseWindows({
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: "Terminal — com.apple.Terminal [running, last-used=2026-06-12, uses=7780]\nClaude — com.anthropic.claudefordesktop [running, frontmost, uses=59]",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        appName: "Terminal",
+        focused: false,
+      },
+      {
+        appName: "Claude",
+        focused: true,
+      },
+    ]);
+  });
+
   it("accepts common window envelope keys", () => {
     expect(
       parseOpenComputerUseWindows({
@@ -79,6 +103,24 @@ describe("parseOpenComputerUseWindows", () => {
         title: "X / Home",
         focused: true,
       },
+    ]);
+  });
+
+  it("accepts focused flag aliases from structured windows", () => {
+    expect(
+      parseOpenComputerUseWindows({
+        windows: [
+          { appName: "Focused", focused: true },
+          { appName: "IsFocused", is_focused: true },
+          { appName: "Frontmost", frontmost: true },
+          { appName: "Background" },
+        ],
+      }).map((window) => ({ appName: window.appName, focused: window.focused })),
+    ).toEqual([
+      { appName: "Focused", focused: true },
+      { appName: "IsFocused", focused: true },
+      { appName: "Frontmost", focused: true },
+      { appName: "Background", focused: false },
     ]);
   });
 });
@@ -234,5 +276,25 @@ describe("parseOpenComputerUseActionResult", () => {
         message: "element not found",
       }),
     );
+  });
+});
+
+describe("OpenComputerUseRuntime", () => {
+  it("reports focusWindow as unsupported without shelling out", async () => {
+    const runtime = new OpenComputerUseRuntime({ command: "unused-open-computer-use" });
+
+    await expect(runtime.focusWindow({ appName: "Claude", focused: true })).resolves.toEqual({
+      ok: false,
+      actionCount: 0,
+      movedFocus: false,
+      usedClipboard: false,
+      rawCoordinatesUsed: false,
+      message:
+        "OpenComputerUse CLI does not expose a supported window or app focus tool for workspace restore.",
+      raw: {
+        unsupported: "focusWindow",
+        target: { appName: "Claude", focused: true },
+      },
+    });
   });
 });

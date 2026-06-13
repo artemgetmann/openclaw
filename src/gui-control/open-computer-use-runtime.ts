@@ -161,8 +161,25 @@ function parseAppTextLines(text: string | undefined): AppState[] {
     });
 }
 
+function parseAppTextWindows(text: string | undefined): WindowState[] {
+  // OCU currently exposes app inventory but not real window inventory. These
+  // placeholder entries preserve workspace/frontmost telemetry without
+  // pretending we have a restorable window handle.
+  return parseAppTextLines(text).map(
+    (app): WindowState => ({
+      appName: app.appName,
+      pid: app.pid,
+      focused: app.frontmost === true,
+    }),
+  );
+}
+
 export function parseOpenComputerUseWindows(raw: unknown): WindowState[] {
-  return readArrayPayload(raw, "windows").map((candidate: unknown): WindowState => {
+  const structuredWindows = readArrayPayload(raw, "windows");
+  if (!structuredWindows.length) {
+    return parseAppTextWindows(readMcpText(raw));
+  }
+  return structuredWindows.map((candidate: unknown): WindowState => {
     const window = asRecord(candidate);
     return {
       id: firstStringLike(
@@ -538,6 +555,26 @@ export class OpenComputerUseRuntime implements GuiRuntime {
 
   async listApps(): Promise<AppState[]> {
     return parseOpenComputerUseApps(await this.callTool("list_apps"));
+  }
+
+  async listWindows(): Promise<WindowState[]> {
+    return parseOpenComputerUseWindows(await this.callTool("list_apps"));
+  }
+
+  async focusWindow(target: WindowState): Promise<ActionResult> {
+    return {
+      ok: false,
+      actionCount: 0,
+      movedFocus: false,
+      usedClipboard: false,
+      rawCoordinatesUsed: false,
+      message:
+        "OpenComputerUse CLI does not expose a supported window or app focus tool for workspace restore.",
+      raw: {
+        unsupported: "focusWindow",
+        target,
+      },
+    };
   }
 
   async observe(target: AppTarget): Promise<GuiSnapshot> {
