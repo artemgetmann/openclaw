@@ -13,6 +13,7 @@ source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
@@ -29,6 +30,7 @@ JARVIS_DMG_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
 JARVIS_ZIP_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.zip"
 JARVIS_APPCAST_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/jarvis-appcast.xml"
 RELEASE_MANIFEST_PATH="${OPENCLAW_JARVIS_RELEASE_MANIFEST:-$ROOT_DIR/dist/jarvis-release-manifest.env}"
+RELEASE_TIMING_REPORT_PATH="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 
 usage() {
   cat <<'EOF'
@@ -130,14 +132,22 @@ release_phase_log_elapsed() {
   local label="$2"
   local finished_ms
   local elapsed_ms
+  local phase_status="${3:-ok}"
 
-  if [[ "${PACKAGE_TIMING:-0}" != "1" ]]; then
+  if [[ "${PACKAGE_TIMING:-0}" != "1" && -z "${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-}" ]]; then
     return 0
   fi
 
   finished_ms="$(release_phase_now_ms)"
   elapsed_ms=$((finished_ms - started_ms))
   printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
+  mkdir -p "$(dirname "$RELEASE_TIMING_REPORT_PATH")"
+  if [[ ! -f "$RELEASE_TIMING_REPORT_PATH" ]]; then
+    printf 'phase\tlabel\tstatus\tstarted_ms\tfinished_ms\telapsed_ms\n' >"$RELEASE_TIMING_REPORT_PATH"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$PACKAGE_PHASE" "$label" "$phase_status" "$started_ms" "$finished_ms" "$elapsed_ms" \
+    >>"$RELEASE_TIMING_REPORT_PATH"
 }
 
 verify_app_bundle() {
@@ -187,7 +197,11 @@ bundle_signing_authority() {
 
 github_latest_release_tag() {
   local latest_json latest_tag
-  latest_json="$(gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName,url)"
+  latest_json="$(
+    jarvis_release_retry \
+      "gh release view latest for $GITHUB_RELEASE_REPO" \
+      gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName,url
+  )"
   latest_tag="$(
     printf '%s\n' "$latest_json" \
       | /usr/bin/sed -n 's/.*"tagName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -215,6 +229,24 @@ require_latest_release_tag() {
   fi
 }
 
+require_latest_release_tag_for_appcast() {
+  if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
+    echo "ERROR: creating Jarvis public Sparkle assets requires --github-release-tag <latest-tag>." >&2
+    echo "The appcast must sign an immutable tagged Jarvis.zip URL before any public upload." >&2
+    exit 1
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "ERROR: validating the Jarvis appcast tag requires the GitHub CLI (gh)." >&2
+    exit 1
+  fi
+
+  # A stale enclosure URL is worse than a missing appcast: Sparkle would see a
+  # live feed that points at bytes from the wrong release. Validate before
+  # signing local assets, then validate the generated XML again before upload.
+  require_latest_release_tag
+}
+
 jarvis_tagged_release_download_base() {
   if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
     echo "ERROR: a tagged Jarvis release URL requires --github-release-tag." >&2
@@ -229,6 +261,32 @@ jarvis_appcast_zip_public_url() {
     return 0
   fi
   printf '%s\n' "$JARVIS_ZIP_PUBLIC_URL"
+}
+
+require_local_appcast_targets_current_tag() {
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  local expected_zip_url
+
+  if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
+    echo "ERROR: local appcast upload validation requires --github-release-tag <latest-tag>." >&2
+    exit 1
+  fi
+
+  expected_zip_url="$(jarvis_appcast_zip_public_url)"
+  if [[ ! -f "$appcast" ]]; then
+    echo "ERROR: local Jarvis appcast is missing before upload: $appcast" >&2
+    exit 1
+  fi
+
+  # The URL has no XML-sensitive characters, so a narrow attribute string check
+  # is enough to prevent uploading an appcast generated for a stale tag.
+  if ! /usr/bin/grep -Fq "url=\"$expected_zip_url\"" "$appcast" \
+    && ! /usr/bin/grep -Fq "url='$expected_zip_url'" "$appcast"; then
+    echo "ERROR: local Jarvis appcast does not target the current tagged ZIP URL." >&2
+    echo "Expected enclosure URL: $expected_zip_url" >&2
+    echo "Regenerate local release assets with --phase create-local-release-assets-only --github-release-tag $GITHUB_RELEASE_TAG before publishing." >&2
+    exit 1
+  fi
 }
 
 require_release_publish_prereqs() {
@@ -393,13 +451,16 @@ publish_release_assets() {
       exit 1
     fi
   done
+  require_local_appcast_targets_current_tag
 
   github_release_upload_preflight
 
   echo "🚀 Uploading Jarvis release assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
-  gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
-    --repo "$GITHUB_RELEASE_REPO" \
-    --clobber
+  jarvis_release_retry \
+    "gh release upload Jarvis assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
+    gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
+      --repo "$GITHUB_RELEASE_REPO" \
+      --clobber
 
   verify_public_release_assets
 }
@@ -413,12 +474,14 @@ verify_public_release_assets() {
     fi
   done
 
-  "$ROOT_DIR/scripts/verify-jarvis-release-assets.mjs" \
-    --app-path "$APP_PATH" \
-    --zip-path "$ZIP" \
-    --dmg-url "$JARVIS_DMG_PUBLIC_URL" \
-    --zip-url "$(jarvis_appcast_zip_public_url)" \
-    --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
+  jarvis_release_retry \
+    "Jarvis public release asset verification" \
+    "$ROOT_DIR/scripts/verify-jarvis-release-assets.mjs" \
+      --app-path "$APP_PATH" \
+      --zip-path "$ZIP" \
+      --dmg-url "$JARVIS_DMG_PUBLIC_URL" \
+      --zip-url "$(jarvis_appcast_zip_public_url)" \
+      --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
 }
 
 sign_dmg_if_possible() {
@@ -762,15 +825,19 @@ poll_app_notarization_only() {
   local status
 
   receipt_path="$(app_notary_receipt_path)"
-  if [[ ! -f "$receipt_path" ]]; then
-    echo "ERROR: app notarization receipt missing: $receipt_path" >&2
-    echo "Run --phase submit-app-notarization first." >&2
-    exit 1
+  if [[ -f "$receipt_path" ]]; then
+    submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+    artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
+    staple_app="$(receipt_value "$receipt_path" "NOTARY_STAPLE_APP_PATH")"
+  else
+    # The manifest is durable operator state and can outlive a receipt file.
+    # Polling app notarization does not need the original upload zip, so recover
+    # from the saved submission ID and rewrite the receipt after notarytool info.
+    echo "🧾 App notarization receipt missing; recovering poll metadata from $RELEASE_MANIFEST_PATH"
+    submission_id="$(manifest_value "JARVIS_APP_NOTARY_SUBMISSION_ID")"
+    artifact="$NOTARY_ZIP"
+    staple_app="$APP_PATH"
   fi
-
-  submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
-  artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
-  staple_app="$(receipt_value "$receipt_path" "NOTARY_STAPLE_APP_PATH")"
   if [[ -z "$submission_id" ]]; then
     echo "ERROR: app notarization receipt lacks NOTARY_SUBMISSION_ID: $receipt_path" >&2
     exit 1
@@ -834,14 +901,17 @@ poll_dmg_notarization_only() {
   local status
 
   receipt_path="$(dmg_notary_receipt_path)"
-  if [[ ! -f "$receipt_path" ]]; then
-    echo "ERROR: DMG notarization receipt missing: $receipt_path" >&2
-    echo "Run --phase submit-dmg-notarization first." >&2
-    exit 1
+  if [[ -f "$receipt_path" ]]; then
+    submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+    artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
+  else
+    # Unlike the app upload zip, the DMG itself must exist when Accepted so
+    # stapler can attach and validate the ticket. Use the manifest submission ID
+    # only when the local DMG artifact is still present.
+    echo "🧾 DMG notarization receipt missing; recovering poll metadata from $RELEASE_MANIFEST_PATH"
+    submission_id="$(manifest_value "JARVIS_DMG_NOTARY_SUBMISSION_ID")"
+    artifact="$DMG"
   fi
-
-  submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
-  artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
   if [[ -z "$submission_id" ]]; then
     echo "ERROR: DMG notarization receipt lacks NOTARY_SUBMISSION_ID: $receipt_path" >&2
     exit 1
@@ -1018,6 +1088,7 @@ fi
 case "$PACKAGE_PHASE" in
   create-local-release-assets-only)
     require_local_release_asset_phase_inputs
+    require_latest_release_tag_for_appcast
     ;;
   publish-assets-only)
     require_notarized_manifest_before_publish

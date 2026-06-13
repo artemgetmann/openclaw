@@ -220,6 +220,12 @@ For a real update to existing installations, bump `APP_VERSION` and/or
 `CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
 same-build upload is just a republish and will not trigger an update.
 
+The public release acceleration spec lives at
+`docs/consumer/jarvis-public-release-acceleration-spec.md`. It captures the
+full plan: one-command resume, bounded GitHub retries, timing, read-only size
+inventory, later safe parallelism, and bundle diet only after compatibility
+proof.
+
 The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public
 appcast, and only declares the package sendable after Sparkle is live.
@@ -297,6 +303,40 @@ notary receipt exists. The script records release state in
 `dist/Jarvis.app.notary.env`, and DMG notarization in
 `dist/Jarvis.dmg.notary.env`. The manifest is operator metadata only; do not
 store credentials there.
+
+For normal operator recovery, use the public release wrapper instead of choosing
+the phase by hand:
+
+```bash
+bash scripts/jarvis-public-release.sh --dry-run
+bash scripts/jarvis-public-release.sh
+```
+
+The wrapper inspects existing `dist/` artifacts, receipts, and the release
+manifest, chooses the next safe package phase, and delegates to
+`scripts/package-openclaw-mac-dist.sh`. If it selects
+`create-local-release-assets-only`, pass the latest release tag so the Sparkle
+appcast signs an immutable tagged `Jarvis.zip` URL:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+When local notarized assets are ready, publishing still requires the explicit
+latest tag:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Wrapper runs write `dist/jarvis-public-release-summary.env`; timed package
+substeps append to `dist/jarvis-release-timing.tsv`. GitHub release view,
+upload, and public verification get bounded retries only for obvious transient
+network or GitHub service failures. Authentication, permission, missing release,
+wrong tag, and non-latest tag failures remain fast failures.
 
 Build/package the app once and stop before notarization:
 
@@ -441,17 +481,7 @@ Before removing anything to shrink artifacts, inspect the built app and record
 what actually dominates size. This is read-only:
 
 ```bash
-APP="dist/Jarvis.app"
-du -sh "$APP" "$APP/Contents"/* 2>/dev/null | sort -h
-find "$APP" \( \
-  -path "*/node_modules/*" -o \
-  -name "node" -o \
-  -name "uv" -o \
-  -name "*.node" -o \
-  -path "*/extensions/*" -o \
-  -path "*/skills/*" -o \
-  -path "*/templates/*" \
-\) -print0 | xargs -0 du -sh 2>/dev/null | sort -h | tail -50
+bash scripts/report-jarvis-release-size.sh --app dist/Jarvis.app
 ```
 
 Do not delete bundled files in the release lane without proof that Intel
