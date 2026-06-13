@@ -155,6 +155,7 @@ test_wrapper_dry_run() {
   local verify_root="$TMP_DIR/wrapper-verify-assets"
   local verify_out="$TMP_DIR/wrapper-verify-assets.out"
   local verify_err="$TMP_DIR/wrapper-verify-assets.err"
+  local verify_summary="$TMP_DIR/wrapper-verify-summary.env"
   local status
 
   mkdir -p "$root/dist/Jarvis.app"
@@ -224,6 +225,7 @@ test_wrapper_dry_run() {
 
   set +e
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$verify_root" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$verify_summary" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --verify-public-assets >"$verify_out" 2>"$verify_err"
   status=$?
   set -e
@@ -234,6 +236,10 @@ test_wrapper_dry_run() {
   if ! grep -q -- 'verify-public-assets-only requires --github-release-tag' "$verify_err"; then
     cat "$verify_err" >&2
     fail "wrapper verify tag failure did not mention --github-release-tag"
+  fi
+  if ! grep -q 'JARVIS_PUBLIC_RELEASE_STATUS=2' "$verify_summary"; then
+    cat "$verify_summary" >&2
+    fail "wrapper verify tag failure did not write durable failure summary"
   fi
   pass "wrapper verify execution requires tag"
 }

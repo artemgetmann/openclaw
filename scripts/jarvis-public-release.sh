@@ -94,6 +94,27 @@ write_summary_report() {
   } >"$SUMMARY_REPORT"
 }
 
+fail_before_execute() {
+  local status="$1"
+  shift
+  local now
+  now="$(iso_now)"
+
+  local line
+  for line in "$@"; do
+    echo "$line" >&2
+  done
+
+  write_summary_report "$SELECTED_PHASE" "$status" "$now" "$now" "0" "$COMMAND_TEXT"
+  echo "Jarvis public release summary:" >&2
+  echo "  phase=$SELECTED_PHASE" >&2
+  echo "  status=$status" >&2
+  echo "  elapsed_seconds=0" >&2
+  echo "  summary=$SUMMARY_REPORT" >&2
+  echo "  timing_report=$TIMING_REPORT" >&2
+  exit "$status"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
@@ -145,11 +166,6 @@ if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && "$VERIFY_PUBLIC_ASSETS" == "1" ]]; the
   exit 1
 fi
 
-if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && -z "$GITHUB_RELEASE_TAG" ]]; then
-  echo "ERROR: --publish-release-assets requires --github-release-tag <latest-tag>." >&2
-  exit 1
-fi
-
 case "$FORCED_PHASE" in
   auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only)
     ;;
@@ -176,23 +192,6 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   exit 0
 fi
 
-if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
-  echo "ERROR: create-local-release-assets-only requires --github-release-tag <latest-tag>." >&2
-  echo "The Sparkle appcast must sign an immutable tagged Jarvis.zip URL before any public upload." >&2
-  exit 1
-fi
-
-if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
-  echo "ERROR: verify-public-assets-only requires --github-release-tag <latest-tag>." >&2
-  echo "The public verifier must compare the appcast enclosure against the immutable tagged Jarvis.zip URL." >&2
-  exit 1
-fi
-
-if [[ "$SELECTED_PHASE" == "publish-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
-  echo "ERROR: publish-assets-only requires --github-release-tag <latest-tag>." >&2
-  exit 1
-fi
-
 CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")
 case "$SELECTED_PHASE" in
   full|post-app-build)
@@ -214,6 +213,24 @@ case "$SELECTED_PHASE" in
 esac
 
 COMMAND_TEXT="$(quote_cmd "${CMD[@]}")"
+
+if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  fail_before_execute 2 \
+    "ERROR: create-local-release-assets-only requires --github-release-tag <latest-tag>." \
+    "The Sparkle appcast must sign an immutable tagged Jarvis.zip URL before any public upload."
+fi
+
+if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  fail_before_execute 2 \
+    "ERROR: verify-public-assets-only requires --github-release-tag <latest-tag>." \
+    "The public verifier must compare the appcast enclosure against the immutable tagged Jarvis.zip URL."
+fi
+
+if [[ "$DRY_RUN" != "1" && "$PUBLISH_RELEASE_ASSETS" == "1" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  fail_before_execute 2 \
+    "ERROR: --publish-release-assets requires --github-release-tag <latest-tag>."
+fi
+
 echo "Jarvis public release orchestration:"
 echo "  selected_phase=$SELECTED_PHASE"
 echo "  state_root=$STATE_ROOT"
@@ -224,6 +241,9 @@ if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "create-local-release-assets-onl
   echo "  required_before_execute=--github-release-tag <latest-tag>"
 fi
 if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  echo "  required_before_execute=--github-release-tag <latest-tag>"
+fi
+if [[ "$DRY_RUN" == "1" && "$PUBLISH_RELEASE_ASSETS" == "1" && -z "$GITHUB_RELEASE_TAG" ]]; then
   echo "  required_before_execute=--github-release-tag <latest-tag>"
 fi
 
