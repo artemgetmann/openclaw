@@ -1306,6 +1306,16 @@ describe("runGuiBenchmark", () => {
         async press() {
           throw new Error("OCU no-focus path must not use press_key.");
         },
+        async getVirtualPointerEvidence() {
+          return {
+            present: true,
+            source: "open-computer-use-visual-cursor-observation-file",
+            evidencePath: "/tmp/ocu-visual-cursor.json",
+            phase: "idle",
+            notes:
+              'OpenComputerUse visual cursor observation recorded phase "idle" with machine-readable cursor geometry.',
+          };
+        },
       },
     });
 
@@ -1319,11 +1329,96 @@ describe("runGuiBenchmark", () => {
     expect(result.workspace.frontmostAfterTask).toBe("Terminal");
     expect(result.workspace.frontmostRestored).toBe(true);
     expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
+    expect(result.virtualPointer.present).toBe(true);
+    expect(result.virtualPointer.evidencePath).toBe("/tmp/ocu-visual-cursor.json");
+    expect(result.qualityGate.codexComputerUseParity).toBe("pass");
+    expect(result.qualityGate.onParWithCodexComputerUse).toBe(true);
+    expect(result.qualityGate.blockers).toEqual([]);
     expect(result.qualityGate.blockers).not.toContain(
       "Stage Manager/workspace preservation was not proven true.",
     );
     expect(result.qualityGate.blockers).not.toContain(
       "Frontmost app restoration was not proven true.",
+    );
+  });
+
+  it("keeps OCU as functional debt when virtual pointer proof is missing", async () => {
+    const messageValues: string[] = [];
+    let submitted = false;
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Terminal", frontmost: true },
+            { appName: "Claude", frontmost: false },
+          ];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          if (submitted) {
+            const replyToken = replyTokenFromMessage(messageValues[0] ?? "");
+            return benchmarkSnapshot({
+              id: "claude-after-click",
+              appName: "Claude",
+              visibleText: [
+                `Claude reply summary acknowledged visible X Home timeline context. ${replyToken}`,
+              ],
+              elements: [],
+            });
+          }
+          return benchmarkSnapshot({
+            id: messageValues.length ? "claude-written" : "claude-input",
+            appName: "Claude",
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: messageValues[0] ?? "Write a message…",
+              },
+              ...(messageValues.length ? [{ ref: "@send", role: "button", label: "Send" }] : []),
+            ],
+          });
+        },
+        async setValue(_target: ElementRef, value: string) {
+          messageValues.push(value);
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async click() {
+          submitted = true;
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async getVirtualPointerEvidence() {
+          return {
+            present: false,
+            source: "open-computer-use-visual-cursor-observation-file",
+            evidencePath: "/tmp/missing-ocu-visual-cursor.json",
+            notes: "OpenComputerUse visual cursor observation file was not readable: ENOENT.",
+          };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.virtualPointer.present).toBe(false);
+    expect(result.qualityGate.codexComputerUseParity).toBe("functional-pass-with-debt");
+    expect(result.qualityGate.onParWithCodexComputerUse).toBe(false);
+    expect(result.qualityGate.blockers).toContain(
+      "No Codex-style virtual pointer or equivalent visible intent overlay was proven.",
     );
   });
 

@@ -7,6 +7,7 @@ import {
   parseOpenComputerUseActionResult,
   parseOpenComputerUseApps,
   parseOpenComputerUseSnapshot,
+  parseOpenComputerUseVirtualPointerEvidence,
   parseOpenComputerUseWindows,
 } from "./open-computer-use-runtime.js";
 
@@ -280,6 +281,44 @@ describe("parseOpenComputerUseActionResult", () => {
         usedClipboard: true,
         rawCoordinatesUsed: true,
         message: "element not found",
+      }),
+    );
+  });
+});
+
+describe("parseOpenComputerUseVirtualPointerEvidence", () => {
+  it("accepts non-hidden visual cursor observations with cursor geometry", () => {
+    const evidence = parseOpenComputerUseVirtualPointerEvidence(
+      {
+        phase: "idle",
+        tipPosition: { x: 120, y: 240 },
+        restingTipPosition: { x: 120, y: 240 },
+        rotation: 0.02,
+      },
+      "/tmp/ocu-visual-cursor.json",
+    );
+
+    expect(evidence).toEqual(
+      expect.objectContaining({
+        present: true,
+        source: "open-computer-use-visual-cursor-observation-file",
+        evidencePath: "/tmp/ocu-visual-cursor.json",
+        phase: "idle",
+      }),
+    );
+  });
+
+  it("fails closed for hidden or geometry-free observations", () => {
+    expect(
+      parseOpenComputerUseVirtualPointerEvidence({
+        phase: "hidden",
+        tipPosition: null,
+        restingTipPosition: null,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        present: false,
+        source: "open-computer-use-visual-cursor-observation-file",
       }),
     );
   });

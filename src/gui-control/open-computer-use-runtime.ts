@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type {
   ActionResult,
@@ -6,6 +7,7 @@ import type {
   ElementRef,
   GuiRuntime,
   GuiSnapshot,
+  VirtualPointerEvidence,
   WindowState,
 } from "./types.js";
 
@@ -13,6 +15,7 @@ type OpenComputerUseRuntimeOptions = {
   command?: string;
   baseArgs?: string[];
   timeoutMs?: number;
+  visualCursorObservationFile?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -38,6 +41,37 @@ function firstNumber(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function hasFinitePoint(value: unknown): boolean {
+  const point = asRecord(value);
+  return firstNumber(point.x) !== undefined && firstNumber(point.y) !== undefined;
+}
+
+export function parseOpenComputerUseVirtualPointerEvidence(
+  raw: unknown,
+  evidencePath?: string,
+): VirtualPointerEvidence {
+  const observation = asRecord(raw);
+  const phase = firstString(observation.phase, undefined);
+  const hasTip = hasFinitePoint(observation.tipPosition);
+  const hasRestingTip = hasFinitePoint(observation.restingTipPosition);
+  const present =
+    Boolean(phase && !/^hidden$/i.test(phase)) &&
+    (hasTip || hasRestingTip || firstNumber(observation.rotation) !== undefined);
+
+  return {
+    present,
+    source: "open-computer-use-visual-cursor-observation-file",
+    ...(evidencePath ? { evidencePath } : {}),
+    ...(phase ? { phase } : {}),
+    notes: present
+      ? `OpenComputerUse visual cursor observation recorded phase "${phase}" with machine-readable cursor geometry.`
+      : phase
+        ? `OpenComputerUse visual cursor observation existed but did not prove a visible cursor phase; phase="${phase}".`
+        : "OpenComputerUse visual cursor observation did not include a cursor phase.",
+    raw,
+  };
 }
 
 function firstStringLike(value: unknown, fallback: string | undefined): string | undefined {
@@ -538,11 +572,13 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   private readonly command: string;
   private readonly baseArgs: string[];
   private readonly timeoutMs: number;
+  private readonly visualCursorObservationFile?: string;
 
   constructor(options: OpenComputerUseRuntimeOptions = {}) {
     this.command = options.command ?? "open-computer-use";
     this.baseArgs = options.baseArgs ?? [];
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.visualCursorObservationFile = options.visualCursorObservationFile;
   }
 
   private async runJson(args: string[]): Promise<unknown> {
@@ -557,6 +593,15 @@ export class OpenComputerUseRuntime implements GuiRuntime {
     const result = await runCommandWithTimeout([this.command, ...this.baseArgs, ...args], {
       timeoutMs: this.timeoutMs,
       noOutputTimeoutMs: this.timeoutMs,
+      env: this.visualCursorObservationFile
+        ? {
+            // OCU writes this debug-only JSON file whenever its software cursor
+            // overlay paints. Treat the file as proof of visible intent only
+            // after parsing a non-hidden phase with cursor geometry.
+            OPEN_COMPUTER_USE_VISUAL_CURSOR: "1",
+            OPEN_COMPUTER_USE_VISUAL_CURSOR_OBSERVATION_FILE: this.visualCursorObservationFile,
+          }
+        : undefined,
     });
     return {
       ok: result.code === 0,
@@ -574,6 +619,30 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   ): Promise<ActionResult> {
     const result = await this.runActionJson(["call", tool, "--args", JSON.stringify(args)]);
     return parseOpenComputerUseActionResult(result.raw, result.ok);
+  }
+
+  async getVirtualPointerEvidence(): Promise<VirtualPointerEvidence> {
+    if (!this.visualCursorObservationFile) {
+      return {
+        present: false,
+        source: "open-computer-use-visual-cursor-observation-file",
+        notes: "OpenComputerUse visual cursor observation file was not configured.",
+      };
+    }
+
+    try {
+      const raw = JSON.parse(await fs.readFile(this.visualCursorObservationFile, "utf8"));
+      return parseOpenComputerUseVirtualPointerEvidence(raw, this.visualCursorObservationFile);
+    } catch (error) {
+      return {
+        present: false,
+        source: "open-computer-use-visual-cursor-observation-file",
+        evidencePath: this.visualCursorObservationFile,
+        notes: `OpenComputerUse visual cursor observation file was not readable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
   }
 
   async listApps(): Promise<AppState[]> {

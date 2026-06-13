@@ -15,6 +15,7 @@ import type {
   GuiSnapshot,
   GuiVerifierStats,
   ElementRef,
+  VirtualPointerEvidence,
   WindowState,
 } from "./types.js";
 import { performVerifiedAction } from "./verifier.js";
@@ -106,6 +107,7 @@ export type GuiBenchmarkResult = {
   virtualPointer: {
     present: boolean | null;
     notes: string;
+    evidencePath?: string;
   };
   audit: GuiAuditRecord[];
   markdownSummary: string;
@@ -195,16 +197,24 @@ function createDryRunRuntime(): GuiRuntime {
   };
 }
 
-function createBenchmarkRuntime(runtimeName: GuiRuntimeName, dryRun: boolean): GuiRuntime {
+function createBenchmarkRuntime(
+  options: Pick<GuiBenchmarkOptions, "runtime" | "dryRun" | "reportDir">,
+): GuiRuntime {
+  const dryRun = Boolean(options.dryRun);
   if (dryRun) {
     return createDryRunRuntime();
   }
-  if (runtimeName === "agent-desktop") {
+  if (options.runtime === "agent-desktop") {
     return new AgentDesktopRuntime();
   }
-  if (runtimeName === "open-computer-use") {
+  if (options.runtime === "open-computer-use") {
+    const reportDir = options.reportDir ?? path.join(process.cwd(), "artifacts", "gui-benchmark");
     return new OpenComputerUseRuntime({
       command: process.env.OPENCLAW_OPEN_COMPUTER_USE_BIN,
+      visualCursorObservationFile: path.join(
+        reportDir,
+        "open-computer-use-visual-cursor-observation.json",
+      ),
     });
   }
   throw new Error("Unsupported GUI runtime.");
@@ -1184,6 +1194,37 @@ function scoreStageManagerPreservation(
   return stageManager;
 }
 
+async function scoreVirtualPointerProof(
+  virtualPointer: GuiBenchmarkResultBase["virtualPointer"],
+  input: { runtime: GuiRuntime; dryRun: boolean },
+): Promise<GuiBenchmarkResultBase["virtualPointer"]> {
+  if (input.dryRun || !input.runtime.getVirtualPointerEvidence) {
+    return virtualPointer;
+  }
+
+  const evidence: VirtualPointerEvidence = await input.runtime.getVirtualPointerEvidence();
+  if (evidence.present) {
+    return {
+      present: true,
+      notes: evidence.notes,
+      ...(evidence.evidencePath ? { evidencePath: evidence.evidencePath } : {}),
+    };
+  }
+
+  // Missing proof must fail closed. A successful GUI task is still only
+  // functional-with-debt unless the report carries machine-readable pointer
+  // evidence, because human sighting alone is not rerunnable proof.
+  if (virtualPointer.present !== true) {
+    return {
+      present: false,
+      notes: evidence.notes,
+      ...(evidence.evidencePath ? { evidencePath: evidence.evidencePath } : {}),
+    };
+  }
+
+  return virtualPointer;
+}
+
 async function finalizeBenchmarkResult(
   base: GuiBenchmarkResultBase,
   input: {
@@ -1208,9 +1249,14 @@ async function finalizeBenchmarkResult(
     dryRun: base.dryRun,
     runtimeMovedFocus: base.movedFocus,
   });
+  const virtualPointer = await scoreVirtualPointerProof(base.virtualPointer, {
+    runtime: input.runtime,
+    dryRun: base.dryRun,
+  });
   const resultWithWorkspace: GuiBenchmarkResultWithWorkspace = {
     ...base,
     stageManager: scoreStageManagerPreservation(base.stageManager, workspace),
+    virtualPointer,
     actionCount: base.actionCount + workspace.restoreActionCount,
     workspace,
   };
@@ -1249,8 +1295,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
     throw new Error("Unsupported GUI benchmark task.");
   }
 
-  const runtime =
-    options.runtimeImpl ?? createBenchmarkRuntime(options.runtime, Boolean(options.dryRun));
+  const runtime = options.runtimeImpl ?? createBenchmarkRuntime(options);
   const claudeTarget: AppTarget = { appName: "Claude" };
   const assistantSendPolicy = getGuiTaskPolicyProfile("send_message_to_approved_assistant");
   const workspaceBefore = await captureWorkspace(runtime);

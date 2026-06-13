@@ -73,6 +73,15 @@ export type ActionResult = {
   raw?: unknown;
 };
 
+export type VirtualPointerEvidence = {
+  present: boolean;
+  source: string;
+  evidencePath?: string;
+  phase?: string;
+  notes: string;
+  raw?: unknown;
+};
+
 export interface GuiRuntime {
   readonly name: GuiRuntimeName;
   listApps(): Promise<AppState[]>;
@@ -90,6 +99,7 @@ export interface GuiRuntime {
   openUrl?(target: AppTarget, url: string): Promise<ActionResult>;
   readClipboard?(): Promise<{ ok: boolean; text?: string; raw?: unknown }>;
   writeClipboard?(text: string): Promise<ActionResult>;
+  getVirtualPointerEvidence?(): Promise<VirtualPointerEvidence>;
 }
 
 export type GuiAuditRecord = {
