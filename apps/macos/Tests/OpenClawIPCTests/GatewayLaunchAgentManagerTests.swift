@@ -402,6 +402,66 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @MainActor
+    @Test func `packaged daemon commands execute from resolved bundled runtime root`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let bundled = try self.makeBundledRuntime()
+        let staleSourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        defer {
+            ConsumerBundledRuntime._clearTestingResourceURL()
+            GatewayLaunchAgentManager._clearTestingHooks()
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: bundled.resourceRoot.deletingLastPathComponent())
+            try? FileManager().removeItem(at: staleSourceRoot)
+        }
+
+        var observedCommand: [String] = []
+        var observedCwd: String?
+        var observedEnv: [String: String] = [:]
+        GatewayLaunchAgentManager._setTestingHooks(
+            launchAgentWriteDisabled: { false },
+            readDaemonLoaded: { false },
+            shellExecution: { command, cwd, env, _ in
+                observedCommand = command
+                observedCwd = cwd
+                observedEnv = env
+                return ShellExecutor.ShellResult(
+                    stdout: #"{"ok":true}"#,
+                    stderr: "",
+                    exitCode: 0,
+                    timedOut: false,
+                    success: true,
+                    errorMessage: nil)
+            })
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
+            ])
+        {
+            ConsumerBundledRuntime._setTestingResourceURL(bundled.resourceRoot)
+            let seededRoot = try self.makeRepoRoot(at: ConsumerBundledRuntime.installedProjectRoot())
+            let identity = RuntimeIdentity.current
+
+            let error = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/Jarvis.app",
+                port: identity.gatewayPort)
+
+            #expect(error == nil)
+            #expect(observedCwd == seededRoot.path)
+            #expect(observedCommand.contains(seededRoot.appendingPathComponent("dist/index.js").path))
+            #expect(observedEnv["OPENCLAW_FORK_ROOT"] == seededRoot.path)
+        }
+    }
+
+    @MainActor
     @Test func `isolated consumer install uses current worktree entrypoint`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
