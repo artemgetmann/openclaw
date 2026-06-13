@@ -13,6 +13,7 @@ source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
@@ -29,6 +30,7 @@ JARVIS_DMG_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
 JARVIS_ZIP_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.zip"
 JARVIS_APPCAST_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/jarvis-appcast.xml"
 RELEASE_MANIFEST_PATH="${OPENCLAW_JARVIS_RELEASE_MANIFEST:-$ROOT_DIR/dist/jarvis-release-manifest.env}"
+RELEASE_TIMING_REPORT_PATH="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 
 usage() {
   cat <<'EOF'
@@ -130,14 +132,22 @@ release_phase_log_elapsed() {
   local label="$2"
   local finished_ms
   local elapsed_ms
+  local phase_status="${3:-ok}"
 
-  if [[ "${PACKAGE_TIMING:-0}" != "1" ]]; then
+  if [[ "${PACKAGE_TIMING:-0}" != "1" && -z "${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-}" ]]; then
     return 0
   fi
 
   finished_ms="$(release_phase_now_ms)"
   elapsed_ms=$((finished_ms - started_ms))
   printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
+  mkdir -p "$(dirname "$RELEASE_TIMING_REPORT_PATH")"
+  if [[ ! -f "$RELEASE_TIMING_REPORT_PATH" ]]; then
+    printf 'phase\tlabel\tstatus\tstarted_ms\tfinished_ms\telapsed_ms\n' >"$RELEASE_TIMING_REPORT_PATH"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$PACKAGE_PHASE" "$label" "$phase_status" "$started_ms" "$finished_ms" "$elapsed_ms" \
+    >>"$RELEASE_TIMING_REPORT_PATH"
 }
 
 verify_app_bundle() {
@@ -187,7 +197,11 @@ bundle_signing_authority() {
 
 github_latest_release_tag() {
   local latest_json latest_tag
-  latest_json="$(gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName,url)"
+  latest_json="$(
+    jarvis_release_retry \
+      "gh release view latest for $GITHUB_RELEASE_REPO" \
+      gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName,url
+  )"
   latest_tag="$(
     printf '%s\n' "$latest_json" \
       | /usr/bin/sed -n 's/.*"tagName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -397,9 +411,11 @@ publish_release_assets() {
   github_release_upload_preflight
 
   echo "🚀 Uploading Jarvis release assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
-  gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
-    --repo "$GITHUB_RELEASE_REPO" \
-    --clobber
+  jarvis_release_retry \
+    "gh release upload Jarvis assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
+    gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
+      --repo "$GITHUB_RELEASE_REPO" \
+      --clobber
 
   verify_public_release_assets
 }
@@ -413,12 +429,14 @@ verify_public_release_assets() {
     fi
   done
 
-  "$ROOT_DIR/scripts/verify-jarvis-release-assets.mjs" \
-    --app-path "$APP_PATH" \
-    --zip-path "$ZIP" \
-    --dmg-url "$JARVIS_DMG_PUBLIC_URL" \
-    --zip-url "$(jarvis_appcast_zip_public_url)" \
-    --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
+  jarvis_release_retry \
+    "Jarvis public release asset verification" \
+    "$ROOT_DIR/scripts/verify-jarvis-release-assets.mjs" \
+      --app-path "$APP_PATH" \
+      --zip-path "$ZIP" \
+      --dmg-url "$JARVIS_DMG_PUBLIC_URL" \
+      --zip-url "$(jarvis_appcast_zip_public_url)" \
+      --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
 }
 
 sign_dmg_if_possible() {
