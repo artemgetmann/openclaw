@@ -20,7 +20,9 @@ function extractBetween(
   return { text: input.slice(start, end), found: true };
 }
 
-function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
+function parseSkillBlocks(
+  skillsPrompt: string,
+): Array<{ name: string; blockChars: number; location?: string }> {
   const prompt = skillsPrompt.trim();
   if (!prompt) {
     return [];
@@ -31,7 +33,14 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   return blocks
     .map((block) => {
       const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
-      return { name, blockChars: block.length };
+      const location = block.match(/<location>\s*([^<]+?)\s*<\/location>/i)?.[1]?.trim();
+      // Persist the prompt-advertised source path so incident review can verify
+      // which SKILL.md the model was told to read before it touched tools.
+      return {
+        name,
+        blockChars: block.length,
+        ...(location ? { location } : {}),
+      };
     })
     .filter((b) => b.blockChars > 0);
 }
@@ -94,6 +103,7 @@ export function buildSystemPromptReport(params: {
   injectedFiles: EmbeddedContextFile[];
   skillsPrompt: string;
   tools: AgentTool[];
+  runtime?: SessionSystemPromptReport["runtime"];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
   const projectContext = extractBetween(
@@ -116,6 +126,7 @@ export function buildSystemPromptReport(params: {
     provider: params.provider,
     model: params.model,
     workspaceDir: params.workspaceDir,
+    ...(params.runtime ? { runtime: params.runtime } : {}),
     bootstrapMaxChars: params.bootstrapMaxChars,
     bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
     ...(params.bootstrapTruncation ? { bootstrapTruncation: params.bootstrapTruncation } : {}),

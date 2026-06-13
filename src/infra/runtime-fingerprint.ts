@@ -6,6 +6,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveGitHeadPath } from "./git-root.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
@@ -15,6 +16,7 @@ export type RuntimeFingerprint = {
   stateDir: string;
   configPath: string;
   serviceLabel: string;
+  openClawVersion?: string;
 };
 
 export function resolveRuntimeFingerprint(
@@ -44,6 +46,7 @@ export function resolveRuntimeFingerprint(
     stateDir,
     configPath,
     serviceLabel: params.serviceLabel ?? resolveGatewayServiceLabel(env, params.platform),
+    openClawVersion: resolveRuntimeServiceVersion(env),
   };
 }
 
@@ -57,7 +60,10 @@ export function formatRuntimeFingerprint(
     `stateDir=${formatPath(fingerprint.stateDir)}`,
     `configPath=${formatPath(fingerprint.configPath)}`,
     `serviceLabel=${fingerprint.serviceLabel}`,
-  ].join(" ");
+    fingerprint.openClawVersion ? `openClawVersion=${fingerprint.openClawVersion}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function resolveBranchName(searchDir: string): string {
