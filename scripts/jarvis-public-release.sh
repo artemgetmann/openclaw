@@ -38,6 +38,8 @@ Options:
       the publish flags through to package-openclaw-mac-dist.sh.
   --verify-public-assets
       Choose verify-public-assets-only once local notarized assets are ready.
+      Real verification requires --github-release-tag because the appcast ZIP
+      enclosure is pinned to an immutable tagged release URL.
   --github-release-tag <tag>
       Required before any publish phase. Must be the latest release tag because
       Sparkle uses releases/latest/download/jarvis-appcast.xml.
@@ -174,9 +176,15 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   exit 0
 fi
 
-if [[ "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
   echo "ERROR: create-local-release-assets-only requires --github-release-tag <latest-tag>." >&2
   echo "The Sparkle appcast must sign an immutable tagged Jarvis.zip URL before any public upload." >&2
+  exit 1
+fi
+
+if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  echo "ERROR: verify-public-assets-only requires --github-release-tag <latest-tag>." >&2
+  echo "The public verifier must compare the appcast enclosure against the immutable tagged Jarvis.zip URL." >&2
   exit 1
 fi
 
@@ -212,6 +220,12 @@ echo "  state_root=$STATE_ROOT"
 echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
 echo "  command=$COMMAND_TEXT"
 echo "  appcast_upload_remains_last=true"
+if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  echo "  required_before_execute=--github-release-tag <latest-tag>"
+fi
+if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  echo "  required_before_execute=--github-release-tag <latest-tag>"
+fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "dry_run=true"

@@ -152,6 +152,9 @@ test_wrapper_dry_run() {
   local asset_root="$TMP_DIR/wrapper-local-assets"
   local asset_out="$TMP_DIR/wrapper-local-assets.out"
   local asset_err="$TMP_DIR/wrapper-local-assets.err"
+  local verify_root="$TMP_DIR/wrapper-verify-assets"
+  local verify_out="$TMP_DIR/wrapper-verify-assets.out"
+  local verify_err="$TMP_DIR/wrapper-verify-assets.err"
   local status
 
   mkdir -p "$root/dist/Jarvis.app"
@@ -179,15 +182,15 @@ test_wrapper_dry_run() {
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$asset_out" 2>"$asset_err"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]]; then
-    cat "$asset_out" >&2
-    fail "wrapper local asset dry run should require github release tag"
-  fi
-  if ! grep -q -- '--github-release-tag' "$asset_err"; then
+  if [[ "$status" -ne 0 ]]; then
     cat "$asset_err" >&2
-    fail "wrapper local asset tag failure did not mention --github-release-tag"
+    fail "wrapper local asset dry run should inspect state without github release tag"
   fi
-  pass "wrapper local assets require tag"
+  if ! grep -q -- 'required_before_execute=--github-release-tag <latest-tag>' "$asset_out"; then
+    cat "$asset_out" >&2
+    fail "wrapper local asset dry run did not report required github release tag"
+  fi
+  pass "wrapper local assets dry run reports required tag"
 
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --github-release-tag v-test >"$asset_out"
@@ -200,6 +203,39 @@ test_wrapper_dry_run() {
     fail "wrapper tagged local asset command did not forward github release tag"
   fi
   pass "wrapper local assets forward tag"
+
+  mkdir -p "$verify_root/dist/Jarvis.app"
+  : >"$verify_root/dist/Jarvis.dmg"
+  : >"$verify_root/dist/Jarvis.zip"
+  : >"$verify_root/dist/jarvis-appcast.xml"
+  write_manifest_status "$verify_root" "Accepted" "Accepted"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --verify-public-assets >"$verify_out"
+  if ! grep -q 'selected_phase=verify-public-assets-only' "$verify_out"; then
+    cat "$verify_out" >&2
+    fail "wrapper verify dry run selected wrong phase"
+  fi
+  if ! grep -q -- 'required_before_execute=--github-release-tag <latest-tag>' "$verify_out"; then
+    cat "$verify_out" >&2
+    fail "wrapper verify dry run did not report required github release tag"
+  fi
+  pass "wrapper verify dry run reports required tag"
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --verify-public-assets >"$verify_out" 2>"$verify_err"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    cat "$verify_out" >&2
+    fail "wrapper public verification should require github release tag"
+  fi
+  if ! grep -q -- 'verify-public-assets-only requires --github-release-tag' "$verify_err"; then
+    cat "$verify_err" >&2
+    fail "wrapper verify tag failure did not mention --github-release-tag"
+  fi
+  pass "wrapper verify execution requires tag"
 }
 
 test_package_create_assets_rejects_stale_tag() {
