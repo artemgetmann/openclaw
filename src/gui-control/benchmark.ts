@@ -648,6 +648,52 @@ function visibleReplyTextCandidates(snapshot: GuiSnapshot): string[] {
   return candidates;
 }
 
+function claudeTextDumpAssistantHasToken(
+  snapshot: GuiSnapshot,
+  replyToken: string,
+): boolean | null {
+  const summary = snapshot.summary;
+  if (!summary || !summary.includes('Window: "Claude"') || !/^\s*\d+\s+/m.test(summary)) {
+    return null;
+  }
+
+  const lines = summary.split(/\r?\n/);
+  let insideAssistantBlock = false;
+
+  for (const line of lines) {
+    if (/^\s*\d+\s+heading\s+You said:/i.test(line)) {
+      insideAssistantBlock = false;
+    }
+    if (/^\s*\d+\s+heading\s+Claude responded:/i.test(line)) {
+      insideAssistantBlock = true;
+    }
+    if (/^\s*\d+\s+container\s+Message actions\b/i.test(line)) {
+      insideAssistantBlock = false;
+    }
+
+    if (!textIncludesVisible(line, replyToken)) {
+      continue;
+    }
+
+    const normalized = normalizeVisibleText(line);
+    const promptEcho =
+      normalized.includes("you said:") ||
+      normalized.includes("jarvis gui benchmark x-to-claude") ||
+      normalized.includes("when you respond, include the reply token") ||
+      normalized.includes("write your prompt to claude") ||
+      normalized.includes("text entry area");
+
+    // In OCU's text dump, current-token proof is only decision-grade when the
+    // token is in Claude's assistant response block. Tokens in "You said" or
+    // composer rows are prompt echoes, even if adjacent visible text looks rich.
+    if (insideAssistantBlock && !promptEcho) {
+      return true;
+    }
+  }
+
+  return summary.includes(replyToken) ? false : null;
+}
+
 function extractReplyText(
   snapshot: GuiSnapshot,
   sentMessage: string,
@@ -684,6 +730,10 @@ function extractReplyText(
   ]);
 
   if (composerContains(snapshot, replyToken)) {
+    return undefined;
+  }
+
+  if (claudeTextDumpAssistantHasToken(snapshot, replyToken) === false) {
     return undefined;
   }
 

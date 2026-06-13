@@ -1148,6 +1148,97 @@ describe("runGuiBenchmark", () => {
     );
   });
 
+  it("does not treat an OCU You-said prompt token as a Claude reply", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot(message, replyToken) {
+          return benchmarkSnapshot({
+            id: "claude-after-sent-prompt-only",
+            appName: "Claude",
+            summary: [
+              'Window: "Claude", App: Claude.',
+              `129 heading You said: Jarvis GUI benchmark x-to-claude Reply token: ${replyToken.replaceAll(
+                "_",
+                "",
+              )} When you respond, include the reply token exactly once so Jarvis can verify this run.`,
+              `134 text ${message}`,
+              "186 container Message actions",
+            ].join("\n"),
+            visibleText: [
+              "text ) 76 button Grok actions",
+              "77 pop up button More",
+              "78 text visible X post body",
+              `110 button Reload this page text 3:09 PM text ${replyToken}`,
+            ],
+            elements: [
+              {
+                ref: "@451",
+                role: "text entry area (settable, string)",
+                label: "text entry area (settable, string)",
+                description: "Write your prompt to Claude Write a message…",
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.replyTextExtracted).toBe(false);
+    expect(result.replyExtractionMethod).toBe("none");
+    expect(result.failureReason).toContain("reply text was not extracted");
+  });
+
+  it("extracts an OCU Claude responded block with the current token", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot(_message, replyToken) {
+          return benchmarkSnapshot({
+            id: "claude-after-assistant-reply",
+            appName: "Claude",
+            summary: [
+              'Window: "Claude", App: Claude.',
+              `411 heading Claude responded: ${replyToken.replaceAll("_", "")} Value: 2`,
+              `414 text ${replyToken}`,
+              "415 text I read the visible X Home state and verified the benchmark token.",
+              "441 container Message actions",
+            ].join("\n"),
+            visibleText: [
+              "Claude responded:",
+              replyToken,
+              "I read the visible X Home state and verified the benchmark token.",
+            ],
+            elements: [
+              {
+                ref: "@451",
+                role: "text entry area (settable, string)",
+                label: "text entry area (settable, string)",
+                description: "Write your prompt to Claude Write a message…",
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(result.replyExtractionMethod).toBe("ax-visible-text");
+    expect(result.replyText).toContain("verified the benchmark token");
+  });
+
   it("extracts Claude reply through copy fallback and restores clipboard", async () => {
     const messageValues: string[] = [];
     let clipboard = "original clipboard";
