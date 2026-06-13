@@ -233,13 +233,13 @@ final class ConsumerModelSetupModel {
     private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
     private let restartGateway: RestartGateway
     private let restartGatewayTimeoutSeconds: Double
-    private let gatewayRecoveryProbeDelaysMs: [UInt64]
-    private let gatewayRecoverySleep: RecoverySleep
+    private let recoveryProbeDelaysMs: [UInt64]
+    private let recoverySleep: RecoverySleep
     private let readinessProbeTimeoutSeconds: Double
     private let postAuthReconnectProbeDelaysMs: [UInt64]
     private var lastReadiness: ConsumerModelsReadinessPayload?
-    private var gatewayRecoveryTask: Task<Void, Never>?
-    private var gatewayRecoveryAttempt = 0
+    private var recoveryTask: Task<Void, Never>?
+    private var recoveryAttempt = 0
 
     init(
         probeReadiness: ReadinessProbe? = nil,
@@ -292,8 +292,8 @@ final class ConsumerModelSetupModel {
         // macOS device/network prompts can resolve while onboarding stays active,
         // so NSApplication.didBecomeActive may never fire. Quietly re-probe
         // transient gateway failures instead of trapping the user on stale copy.
-        self.gatewayRecoveryProbeDelaysMs = gatewayRecoveryProbeDelaysMs ?? [1_000, 2_000, 4_000, 8_000, 12_000]
-        self.gatewayRecoverySleep = gatewayRecoverySleep ?? { nanoseconds in
+        self.recoveryProbeDelaysMs = gatewayRecoveryProbeDelaysMs ?? [1_000, 2_000, 4_000, 8_000, 12_000]
+        self.recoverySleep = gatewayRecoverySleep ?? { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
         }
         self.postAuthReconnectProbeDelaysMs = postAuthReconnectProbeDelaysMs ?? [150, 400, 900, 1_500]
@@ -575,7 +575,7 @@ final class ConsumerModelSetupModel {
         allowRuntimeOwnershipRepair: Bool = true) async
     {
         if !automaticGatewayRecovery {
-            self.cancelGatewayRecoveryProbe()
+            self.cancelRecoveryProbe(resetAttempt: true)
         }
 
         // Passive probes come from view re-appearance or app activation. They
@@ -611,9 +611,9 @@ final class ConsumerModelSetupModel {
                 // unsupported when the gateway can still answer the cheaper
                 // auth-options request.
                 await self.loadAuthOptionsIfNeeded(suppressError: true)
-                self.scheduleGatewayRecoveryProbeIfNeeded()
+                self.scheduleRecoveryProbeIfNeeded()
             } else {
-                self.cancelGatewayRecoveryProbe(resetAttempt: true)
+                self.cancelRecoveryProbe(resetAttempt: true)
                 await self.loadAuthOptionsIfNeeded()
             }
         }
@@ -835,7 +835,7 @@ final class ConsumerModelSetupModel {
         // helper. Repair launchd first, then re-run the same blocker gate before
         // any AI readiness/auth check is allowed to claim success.
         Self.logger.warning("AI access runtime helper repair needed: \(blockerDetail, privacy: .public)")
-        self.cancelGatewayRecoveryProbe(resetAttempt: true)
+        self.cancelRecoveryProbe()
         guard allowRepair else {
             self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
             return false
@@ -870,10 +870,11 @@ final class ConsumerModelSetupModel {
         self.failureKind = .runtimeUpdateBlocked
         self.activeModelId = nil
         self.authSectionExpanded = true
+        self.scheduleRecoveryProbeIfNeeded()
     }
 
     private func enterGatewayReconnectState(_ statusLine: String) {
-        self.cancelGatewayRecoveryProbe()
+        self.cancelRecoveryProbe()
         self.phase = .checking
         self.statusLine = statusLine
         self.failureKind = nil
@@ -909,7 +910,7 @@ final class ConsumerModelSetupModel {
 
     private func restoreGatewayRestartFailureState() {
         let statusLine = Self.gatewayRestartFailureStatusLine()
-        self.cancelGatewayRecoveryProbe(resetAttempt: true)
+        self.cancelRecoveryProbe(resetAttempt: true)
         self.phase = .failed(statusLine)
         self.statusLine = statusLine
         self.failureKind = .gatewayUnreachable
@@ -918,7 +919,7 @@ final class ConsumerModelSetupModel {
     }
 
     private func applyReadiness(_ payload: ConsumerModelsReadinessPayload) {
-        self.cancelGatewayRecoveryProbe(resetAttempt: true)
+        self.cancelRecoveryProbe(resetAttempt: true)
         self.lastReadiness = payload
         if payload.status == "ready" {
             self.clearChatGPTSignInState()
@@ -951,37 +952,46 @@ final class ConsumerModelSetupModel {
         self.signInHelpExpanded = false
     }
 
-    private func scheduleGatewayRecoveryProbeIfNeeded() {
-        guard self.failureKind == .gatewayUnreachable else { return }
-        guard self.gatewayRecoveryTask == nil else { return }
-        guard self.gatewayRecoveryAttempt < self.gatewayRecoveryProbeDelaysMs.count else { return }
+    private var shouldRetryRecoverableFailure: Bool {
+        self.failureKind == .gatewayUnreachable || self.failureKind == .runtimeUpdateBlocked
+    }
 
-        let delayMs = self.gatewayRecoveryProbeDelaysMs[self.gatewayRecoveryAttempt]
-        self.gatewayRecoveryAttempt += 1
-        let sleep = self.gatewayRecoverySleep
-        self.gatewayRecoveryTask = Task { [weak self] in
+    private func scheduleRecoveryProbeIfNeeded() {
+        guard self.shouldRetryRecoverableFailure else { return }
+        guard self.recoveryTask == nil else { return }
+        guard self.recoveryAttempt < self.recoveryProbeDelaysMs.count else { return }
+
+        let delayMs = self.recoveryProbeDelaysMs[self.recoveryAttempt]
+        self.recoveryAttempt += 1
+        let sleep = self.recoverySleep
+        self.recoveryTask = Task { [weak self] in
             await sleep(delayMs * 1_000_000)
             guard !Task.isCancelled else { return }
-            await self?.runGatewayRecoveryProbe()
+            await self?.runRecoveryProbe()
         }
     }
 
-    private func runGatewayRecoveryProbe() async {
-        self.gatewayRecoveryTask = nil
-        guard self.failureKind == .gatewayUnreachable else { return }
+    private func runRecoveryProbe() async {
+        self.recoveryTask = nil
+        guard self.shouldRetryRecoverableFailure else { return }
         guard !self.isApplyingAuth else { return }
         guard !self.isApplyingModel else { return }
         guard !self.isRestartingOperator else { return }
+        // A runtime-update failure may be stale launchd metadata after the
+        // user-triggered restart. Re-check that blocker quietly, but do not
+        // perform another hidden launchd restart from the background probe.
+        let allowRuntimeOwnershipRepair = self.failureKind != .runtimeUpdateBlocked
         await self.refresh(
             preservingDisplayedResult: self.hasDisplayedReadinessResult,
-            automaticGatewayRecovery: true)
+            automaticGatewayRecovery: true,
+            allowRuntimeOwnershipRepair: allowRuntimeOwnershipRepair)
     }
 
-    private func cancelGatewayRecoveryProbe(resetAttempt: Bool = false) {
-        self.gatewayRecoveryTask?.cancel()
-        self.gatewayRecoveryTask = nil
+    private func cancelRecoveryProbe(resetAttempt: Bool = false) {
+        self.recoveryTask?.cancel()
+        self.recoveryTask = nil
         if resetAttempt {
-            self.gatewayRecoveryAttempt = 0
+            self.recoveryAttempt = 0
         }
     }
 
