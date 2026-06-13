@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runGuiBenchmark } from "./benchmark.js";
-import type { AppTarget, ElementRef, GuiSnapshot } from "./types.js";
+import type { AppTarget, ElementRef, GuiRuntime, GuiSnapshot } from "./types.js";
 
 function benchmarkSnapshot(params: Partial<GuiSnapshot>): GuiSnapshot {
   return {
@@ -10,6 +10,75 @@ function benchmarkSnapshot(params: Partial<GuiSnapshot>): GuiSnapshot {
     summary: params.summary,
     visibleText: params.visibleText,
     elements: params.elements ?? [],
+  };
+}
+
+function replyTokenFromMessage(message: string): string {
+  return message.match(/Reply token: (JARVIS_GUI_[A-Z0-9_]+)/)?.[1] ?? "";
+}
+
+function createReplyExtractionRuntime(input: {
+  afterSubmitSnapshot: (message: string, replyToken: string) => GuiSnapshot;
+}): GuiRuntime {
+  const messageValues: string[] = [];
+
+  return {
+    name: "agent-desktop",
+    async listApps() {
+      return [];
+    },
+    async observe(target: AppTarget) {
+      if (target.appName === "Safari") {
+        return benchmarkSnapshot({
+          id: "safari",
+          appName: "Safari",
+          windowTitle: "Home / X",
+          visibleText: ["Home / X", "For you", "Visible timeline item"],
+        });
+      }
+      if (messageValues.length === 0) {
+        return benchmarkSnapshot({
+          id: "claude-input",
+          appName: "Claude",
+          elements: [
+            {
+              ref: "@input",
+              role: "textfield",
+              label: "Write your prompt to Claude",
+              value: "Write a message…",
+            },
+          ],
+        });
+      }
+      if (messageValues.length === 1) {
+        return benchmarkSnapshot({
+          id: "claude-written",
+          appName: "Claude",
+          elements: [
+            {
+              ref: "@input",
+              role: "textfield",
+              label: "Write your prompt to Claude",
+              value: messageValues[0],
+            },
+          ],
+        });
+      }
+
+      const sentMessage = messageValues[0] ?? "";
+      return input.afterSubmitSnapshot(sentMessage, replyTokenFromMessage(sentMessage));
+    },
+    async setValue(_target: ElementRef, value: string) {
+      messageValues.push(value);
+      return { ok: true, actionCount: 1 };
+    },
+    async click() {
+      return { ok: true };
+    },
+    async press() {
+      messageValues.push("submitted");
+      return { ok: true, actionCount: 1, movedFocus: true };
+    },
   };
 }
 
@@ -574,6 +643,153 @@ describe("runGuiBenchmark", () => {
     expect(result.replyTextExtracted).toBe(false);
     expect(result.replyExtractionMethod).toBe("none");
     expect(result.failureReason).toContain("reply text was not extracted");
+  });
+
+  it("does not count a split benchmark prompt echo token label as extracted reply text", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot(_message, replyToken) {
+          return benchmarkSnapshot({
+            id: "claude-after-press",
+            appName: "Claude",
+            visibleText: [
+              "text Jarvis GUI benchmark x-to-claude",
+              `Reply token: ${replyToken}`,
+              "When you respond, include the reply token exactly once",
+              "Visible X/Home summary: App=com.apple.Safari Window: Home / X",
+            ],
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: "Write a message…",
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.replyTextExtracted).toBe(false);
+    expect(result.replyExtractionMethod).toBe("none");
+    expect(result.failureReason).toContain("reply text was not extracted");
+  });
+
+  it("extracts assistant-visible reply text with the current token without keyword coupling", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot(_message, replyToken) {
+          return benchmarkSnapshot({
+            id: "claude-after-press",
+            appName: "Claude",
+            visibleText: [
+              `Done. I inspected the visible page and here is the marker: ${replyToken}`,
+            ],
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: "Write a message…",
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(result.replyExtractionMethod).toBe("ax-visible-text");
+    expect(result.replyText).toContain("I inspected the visible page");
+  });
+
+  it("does not count a previous-run assistant reply with an old token", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot() {
+          return benchmarkSnapshot({
+            id: "claude-after-press",
+            appName: "Claude",
+            visibleText: [
+              "Previous assistant reply completed with token JARVIS_GUI_OLD_RUN_TOKEN.",
+            ],
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: "Write a message…",
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.replyTextExtracted).toBe(false);
+    expect(result.replyExtractionMethod).toBe("none");
+    expect(result.failureReason).toContain("reply text was not extracted");
+  });
+
+  it("extracts the current assistant reply when AX splits it across adjacent text nodes", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: createReplyExtractionRuntime({
+        afterSubmitSnapshot(_message, replyToken) {
+          return benchmarkSnapshot({
+            id: "claude-after-press",
+            appName: "Claude",
+            visibleText: [
+              "Claude",
+              "Done.",
+              "I inspected the visible page.",
+              `Marker: ${replyToken}`,
+              "Write your prompt to Claude",
+            ],
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: "Write a message…",
+              },
+            ],
+          });
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(result.replyExtractionMethod).toBe("ax-visible-text");
+    expect(result.replyText).toContain("I inspected the visible page");
   });
 
   it("verifies Claude writes when the composer text is exposed as visible text", async () => {

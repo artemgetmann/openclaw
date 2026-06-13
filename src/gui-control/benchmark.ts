@@ -602,6 +602,35 @@ function snapshotContainsText(snapshot: GuiSnapshot, text: string): boolean {
   );
 }
 
+function visibleReplyTextCandidates(snapshot: GuiSnapshot): string[] {
+  const visibleText = visibleSnapshotText(snapshot);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  function addCandidate(text: string) {
+    const trimmed = text.replace(/\s+/g, " ").trim();
+    const normalized = normalizeVisibleText(trimmed);
+    if (!trimmed || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    candidates.push(trimmed);
+  }
+
+  for (let start = 0; start < visibleText.length; start += 1) {
+    addCandidate(visibleText[start] ?? "");
+
+    // AX often exposes one visual assistant message as adjacent text runs. Keep
+    // reconstruction deterministic and bounded so unrelated page chrome is not
+    // accidentally stitched into a "reply".
+    for (let end = start + 1; end < Math.min(visibleText.length, start + 4); end += 1) {
+      addCandidate(visibleText.slice(start, end + 1).join(" "));
+    }
+  }
+
+  return candidates;
+}
+
 function extractReplyText(
   snapshot: GuiSnapshot,
   sentMessage: string,
@@ -636,21 +665,33 @@ function extractReplyText(
     "settings",
     "use voice mode",
   ]);
-  return visibleSnapshotText(snapshot)
+
+  if (composerContains(snapshot, replyToken)) {
+    return undefined;
+  }
+
+  return visibleReplyTextCandidates(snapshot)
     .find((text) => {
       const normalized = normalizeVisibleText(text);
       const looksLikeBenchmarkPrompt =
         normalized.includes("jarvis gui benchmark x-to-claude") ||
         normalized.includes("when you respond, include the reply token");
+      const contextWithoutToken = normalizeVisibleText(
+        text.replace(new RegExp(replyToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " "),
+      );
+      const tokenOnlyOrInstructionLabel = /^(reply token|marker)\s*:?\s*$/i.test(
+        contextWithoutToken,
+      );
+
       return (
-        normalized.length >= 40 &&
+        normalized.length >= 20 &&
         !chromeText.has(normalized) &&
         !looksLikeBenchmarkPrompt &&
+        !tokenOnlyOrInstructionLabel &&
         !normalized.includes("more options for") &&
         !normalized.includes("claude is ai and can make mistakes") &&
         textIncludesVisible(text, replyToken) &&
-        !textIncludesVisible(text, sentMessage) &&
-        /reply|acknowledg|summary|visible|home|timeline|x\/home/i.test(text)
+        !textIncludesVisible(text, sentMessage)
       );
     })
     ?.slice(0, 1000);
