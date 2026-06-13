@@ -112,16 +112,19 @@ mkdir -p "$(dirname "$OUTPUT_PATH")" "$(dirname "$TOP_OUTPUT_PATH")"
 } >"$OUTPUT_PATH"
 
 if [[ -d "$RUNTIME_DIR" ]]; then
+  TOP_SORTED_PATH="$(mktemp "${TMPDIR:-/tmp}/jarvis-release-size-top.XXXXXX")"
+  trap 'rm -f "${TOP_SORTED_PATH:-}"' EXIT
+  while IFS= read -r -d '' entry; do
+    bytes="$(jarvis_release_size_bytes "$entry")"
+    [[ -n "$bytes" ]] || continue
+    printf '%s\t%s\n' "$bytes" "$entry"
+  done < <(find "$RUNTIME_DIR" -mindepth 1 -maxdepth 4 -print0 2>/dev/null) \
+    | sort -nr >"$TOP_SORTED_PATH"
+
   {
     printf 'Largest Jarvis runtime entries for %s\n' "$APP_DIR"
     printf 'bytes\tpath\n'
-    while IFS= read -r -d '' entry; do
-      bytes="$(jarvis_release_size_bytes "$entry")"
-      [[ -n "$bytes" ]] || continue
-      printf '%s\t%s\n' "$bytes" "$entry"
-    done < <(find "$RUNTIME_DIR" -mindepth 1 -maxdepth 4 -print0 2>/dev/null) \
-      | sort -nr \
-      | head -50
+    head -50 "$TOP_SORTED_PATH"
   } >"$TOP_OUTPUT_PATH"
 else
   {
