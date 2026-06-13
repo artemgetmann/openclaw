@@ -250,7 +250,7 @@ needs a human decision.
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Done for trusted testers   | Jarvis visible branding, public `v2026.3.23` DMG/ZIP/appcast assets, local installed-app proof, separate-user public-DMG install proof, account/trial backend, managed utility backend, Managed Bots-first Telegram path, and Gate2 clean-user proof. |
 | Next tester ring           | Send the `v2026.3.23` DMG, watch first real install/use feedback, and keep package secret-safety plus release-asset verification on every new build.                                                                                                  |
-| Before broad public launch | Identity/update-path decision, fuller Sparkle update-cycle proof, onboarding copy/friction fixes from tester feedback, and Telegram settings/model cleanup if tester feedback shows confusion.                                                        |
+| Before broad public launch | Identity/update-path decision, fuller Sparkle update-cycle proof, onboarding copy/friction fixes from tester feedback, `/visibility` command cleanup, and Telegram settings/model cleanup if tester feedback shows confusion.                         |
 | Deferred                   | Maintenance work that has no tester evidence yet.                                                                                                                                                                                                     |
 
 ## Launch Copy

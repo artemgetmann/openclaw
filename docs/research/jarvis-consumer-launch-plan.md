@@ -70,6 +70,7 @@ Current identity stance:
 | Onboarding copy/friction fixes         | No, unless tester feedback exposes a hard stop | Yes                                  | Patch only specific confusion found by testers.                                                                     |
 | Full Sparkle update-cycle proof        | No                                             | Yes                                  | Prove download, signature verification, install, relaunch, and state preservation from older build to latest build. |
 | Identity/update-path decision          | No                                             | Yes                                  | Choose `ai.jarvis.mac` migration before broad launch or document one more beta on `ai.openclaw.consumer.mac`.       |
+| `/visibility` command cleanup          | No                                             | Yes                                  | Replace stale `/verbose` naming with `/visibility off/on/full`; prove command list and behavior with a tester bot.  |
 | Telegram settings/model cleanup        | No                                             | Maybe                                | Do only if tester feedback shows confusion; avoid speculative command-menu churn.                                   |
 
 ## Next Actions
@@ -88,6 +89,20 @@ Current identity stance:
    - migrate to `ai.jarvis.mac` for cleaner brand and update continuity, or
    - ship one more public-ish beta on `ai.openclaw.consumer.mac` and document
      the identity debt.
+
+## Deferred Product Backlog
+
+These are still real product tasks. They are not blockers for sending
+`v2026.3.23` to trusted testers.
+
+- Replace developer-facing `/verbose` language with `/visibility off|on|full`.
+  Normal users should see visibility controls, not debug jargon. Before merging
+  that work, inspect current command/visibility behavior and prove the Telegram
+  command list plus `/visibility` behavior with a tester bot.
+- Expose Claude Code as a consumer-facing model lane only after more founder use
+  of the Claude CLI backend. Before broad public launch, the model picker should
+  make normal choices obvious and hide developer/legacy providers unless the
+  local prerequisites exist.
 
 ## Deferred / Not Now
 
