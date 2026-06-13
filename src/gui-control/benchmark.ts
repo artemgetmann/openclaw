@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 import { performVerifiedAction } from "./verifier.js";
 
-export type GuiBenchmarkTask = "x-to-claude";
+export type GuiBenchmarkTask = "x-to-claude" | "safari-notes-claude";
 
 export type GuiBenchmarkOptions = {
   runtime: GuiRuntimeName;
@@ -30,6 +30,7 @@ export type GuiBenchmarkOptions = {
   writeReport?: boolean;
   reportDir?: string;
   approveClaudeSend?: boolean;
+  approveNotesWrite?: boolean;
   openXHome?: boolean;
   claudeInputRef?: string;
   replyExtractionTimeoutMs?: number;
@@ -142,13 +143,14 @@ function uniqueBenchmarkToken(): string {
   return randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
 }
 
-function createDryRunRuntime(): GuiRuntime {
+function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
   let claudeValue = "";
   let claudeReply = "";
+  let notesValue = "";
   return {
-    name: "agent-desktop",
+    name,
     async listApps() {
-      return [{ appName: "Safari" }, { appName: "Claude" }];
+      return [{ appName: "Safari" }, { appName: "Notes" }, { appName: "Claude" }];
     },
     async observe(target: AppTarget) {
       if (target.appName === "Safari") {
@@ -158,6 +160,27 @@ function createDryRunRuntime(): GuiRuntime {
           windowTitle: "X / Home",
           summary: "Dry-run X Home snapshot: visible feed content only; no X mutation planned.",
           elements: [{ ref: "@x-feed", role: "group", label: "Home feed" }],
+        };
+      }
+      if (target.appName === "Notes") {
+        return {
+          id: "dry-notes",
+          appName: "Notes",
+          windowTitle: "Notes",
+          summary: notesValue
+            ? `Dry-run Apple Notes body contains ${notesValue}`
+            : "Dry-run Apple Notes body ready.",
+          visibleText: notesValue ? [notesValue] : ["Notes"],
+          elements: [
+            {
+              ref: "@notes-body",
+              role: "textArea",
+              label: "Note body",
+              value: notesValue || "Start typing",
+              appName: "Notes",
+              windowTitle: "Notes",
+            },
+          ],
         };
       }
       return {
@@ -176,16 +199,32 @@ function createDryRunRuntime(): GuiRuntime {
             role: "textArea",
             label: "Message Claude composer",
             value: claudeValue || "Write a message…",
+            appName: "Claude",
+            windowTitle: "Claude",
           },
-          { ref: "@claude-send", role: "button", label: "Send" },
+          { ref: "@claude-send", role: "button", label: "Send", appName: "Claude" },
         ],
       };
     },
-    async setValue(_target, value) {
-      claudeValue = value;
+    async setValue(target, value) {
+      if (target.appName === "Notes") {
+        notesValue = value;
+      } else {
+        claudeValue = value;
+      }
       return { ok: true, actionCount: 1 };
     },
-    async click() {
+    async click(target) {
+      if (target.appName === "Claude" || target.ref === "@claude-send") {
+        const replyToken = claudeValue.match(/Reply token: (JARVIS_GUI_[A-Z0-9_]+)/)?.[1] ?? "";
+        claudeReply = [
+          "Claude dry-run reply acknowledged the visible benchmark context.",
+          replyToken,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        claudeValue = "";
+      }
       return { ok: true, actionCount: 1 };
     },
     async openUrl() {
@@ -207,7 +246,7 @@ function createBenchmarkRuntime(
 ): GuiRuntime {
   const dryRun = Boolean(options.dryRun);
   if (dryRun) {
-    return createDryRunRuntime();
+    return createDryRunRuntime(options.runtime);
   }
   if (options.runtime === "agent-desktop") {
     return new AgentDesktopRuntime();
@@ -283,6 +322,20 @@ function resolveClaudeComposer(snapshot: GuiSnapshot, ref?: string) {
   return resolveElementRef(snapshot, {
     intent: "text-input",
     labelIncludes: "Write your prompt to Claude",
+  });
+}
+
+function resolveNotesBody(snapshot: GuiSnapshot) {
+  const bodyResolution = resolveElementRef(snapshot, {
+    intent: "text-input",
+    labelIncludes: "body",
+  });
+  if (bodyResolution.ok) {
+    return bodyResolution;
+  }
+  return resolveElementRef(snapshot, {
+    intent: "text-input",
+    labelIncludes: "note",
   });
 }
 
@@ -824,6 +877,7 @@ function claudeTextDumpAssistantHasToken(
     const promptEcho =
       normalized.includes("you said:") ||
       normalized.includes("jarvis gui benchmark x-to-claude") ||
+      normalized.includes("jarvis gui benchmark safari-notes-claude") ||
       normalized.includes("when you respond, include the reply token") ||
       normalized.includes("write your prompt to claude") ||
       normalized.includes("text entry area");
@@ -887,6 +941,7 @@ function extractReplyText(
       const normalized = normalizeVisibleText(text);
       const looksLikeBenchmarkPrompt =
         normalized.includes("jarvis gui benchmark x-to-claude") ||
+        normalized.includes("jarvis gui benchmark safari-notes-claude") ||
         normalized.includes("when you respond, include the reply token");
       const contextWithoutToken = normalizeVisibleText(
         text.replace(new RegExp(replyToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " "),
@@ -1277,6 +1332,18 @@ async function finalizeBenchmarkResult(
   return result;
 }
 
+function visibleTextContaining(
+  snapshot: GuiSnapshot | undefined,
+  token: string,
+): string | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  return visibleSnapshotText(snapshot)
+    .find((text) => textIncludesVisible(text, token))
+    ?.slice(0, 2000);
+}
+
 async function maybeWriteReport(
   result: GuiBenchmarkResult,
   options: Pick<GuiBenchmarkOptions, "writeReport" | "reportDir">,
@@ -1291,10 +1358,344 @@ async function maybeWriteReport(
   return reportPath;
 }
 
+async function runSafariNotesClaudeBenchmark(
+  options: GuiBenchmarkOptions,
+): Promise<GuiBenchmarkResult> {
+  const started = Date.now();
+  const progress = options.progress ?? (() => undefined);
+  const audit: GuiAuditRecord[] = [];
+  const runtime = options.runtimeImpl ?? createBenchmarkRuntime(options);
+  const claudeTarget: AppTarget = { appName: "Claude" };
+  const notesTarget: AppTarget = { appName: "Notes" };
+  const notesPolicy = getGuiTaskPolicyProfile("notes_write");
+  const assistantSendPolicy = getGuiTaskPolicyProfile("send_message_to_approved_assistant");
+  const workspaceBefore = await captureWorkspace(runtime);
+
+  const fail = async (input: {
+    failureReason: string;
+    stats: GuiVerifierStats;
+    xWindow: GuiBenchmarkResult["xWindow"];
+    stageNotes: string;
+    virtualPointerPresent?: boolean | null;
+  }) => {
+    const elapsedSeconds = (Date.now() - started) / 1000;
+    const base = {
+      ok: false,
+      runtime: options.runtime,
+      task: options.task,
+      dryRun: Boolean(options.dryRun),
+      elapsedSeconds,
+      ...input.stats,
+      directRuntimeEscape: false,
+      replyTextExtracted: false,
+      replyExtractionMethod: "none" as const,
+      xWindow: input.xWindow,
+      stageManager: {
+        sameStageOrBackgroundSafe: null,
+        notes: input.stageNotes,
+      },
+      virtualPointer: {
+        present: input.virtualPointerPresent ?? false,
+        notes: "No virtual pointer surfaced by v0 agent-desktop adapter.",
+      },
+      audit,
+      failureReason: input.failureReason,
+    };
+    return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+  };
+
+  if (options.openXHome) {
+    progress("Opening X");
+  }
+  const safariPreparation = await prepareBenchmarkSafariTarget({
+    runtime,
+    openXHome: Boolean(options.openXHome),
+    dryRun: Boolean(options.dryRun),
+  });
+  if (!safariPreparation.ok) {
+    return fail({
+      failureReason: safariPreparation.failureReason,
+      stats: safariPreparation.stats,
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because the Safari/X window could not be selected exactly.",
+    });
+  }
+
+  progress("Reading X");
+  const xObservation = await observeBenchmarkSafariSnapshot({
+    runtime,
+    target: safariPreparation.target,
+    allowSettleRetry: Boolean(options.openXHome),
+    dryRun: Boolean(options.dryRun),
+    stats: safariPreparation.stats,
+  });
+  if (!xObservation.ok) {
+    return fail({
+      failureReason: xObservation.failureReason,
+      stats: safariPreparation.stats,
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because the Safari/X read target did not match.",
+    });
+  }
+
+  const visibleSummary = summarizeVisibleX(xObservation.snapshot);
+  const replyToken = `JARVIS_GUI_${Date.now()}_${uniqueBenchmarkToken()}`;
+  const notesContent = [
+    "Jarvis GUI benchmark safari-notes-claude",
+    `Visible token: ${replyToken}`,
+    "Safari/X visible summary:",
+    visibleSummary,
+  ].join("\n");
+
+  if (!options.dryRun && !options.approveNotesWrite) {
+    return fail({
+      failureReason: "Live benchmark requires --approve-notes-write before writing Apple Notes.",
+      stats: safariPreparation.stats,
+      xWindow: safariPreparation.xWindow,
+      stageNotes:
+        "Live run stopped before mutation because Notes write was not explicitly approved.",
+      virtualPointerPresent: null,
+    });
+  }
+
+  progress("Writing Notes");
+  const notesWriteSnapshot = await runtime.observe(notesTarget);
+  const notesResolution = resolveNotesBody(notesWriteSnapshot);
+  if (!notesResolution.ok) {
+    return fail({
+      failureReason: notesResolution.summary,
+      stats: safariPreparation.stats,
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because Notes body resolution failed.",
+    });
+  }
+
+  const notesWrite = await performVerifiedAction({
+    runtime,
+    target: notesTarget,
+    element: notesResolution.element,
+    actionType: "setValue",
+    value: notesContent,
+    reason: "Write labelled GUI benchmark content into Apple Notes.",
+    approvedPolicyRisk: Boolean(options.dryRun || options.approveNotesWrite),
+    taskPolicy: notesPolicy,
+    verificationTimeoutMs: options.dryRun ? 0 : 25_000,
+    verificationIntervalMs: 1_000,
+    verify: (snapshot) => {
+      const visibleProof = visibleTextContaining(snapshot, replyToken);
+      return {
+        ok: Boolean(visibleProof),
+        summary: visibleProof
+          ? "Apple Notes visible AX text contains labelled benchmark token."
+          : "Apple Notes token was not visible after write.",
+      };
+    },
+  });
+  audit.push(notesWrite.audit);
+  if (!notesWrite.ok) {
+    return fail({
+      failureReason: notesWrite.failureReason ?? "Apple Notes write verification failed.",
+      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because benchmark stopped during Notes write verification.",
+    });
+  }
+
+  const notesVisibleProof = visibleTextContaining(notesWrite.snapshot, replyToken);
+  if (!notesVisibleProof) {
+    return fail({
+      failureReason: "Apple Notes token was not extracted from visible AX text after write.",
+      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because Notes visible-token proof was missing.",
+    });
+  }
+
+  if (!options.dryRun && !options.approveClaudeSend) {
+    return fail({
+      failureReason: "Live benchmark requires --approve-claude-send before writing Claude.",
+      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes:
+        "Live run stopped before Claude mutation because Claude send was not explicitly approved.",
+      virtualPointerPresent: null,
+    });
+  }
+
+  progress("Writing Claude");
+  const claudeMessage = [
+    "Jarvis GUI benchmark safari-notes-claude",
+    `Reply token: ${replyToken}`,
+    "Summarize the Apple Notes content below in one concise paragraph.",
+    "When you respond, include the reply token exactly once so Jarvis can verify this run.",
+    "",
+    "Apple Notes visible AX text:",
+    notesVisibleProof,
+  ].join("\n");
+  const claudeWriteSnapshot = await runtime.observe(claudeTarget);
+  const inputResolution = resolveClaudeComposer(claudeWriteSnapshot, options.claudeInputRef);
+  if (!inputResolution.ok) {
+    return fail({
+      failureReason: inputResolution.summary,
+      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because Claude composer resolution failed.",
+    });
+  }
+
+  const claudeWrite = await performVerifiedAction({
+    runtime,
+    target: claudeTarget,
+    element: inputResolution.element,
+    actionType: "setValue",
+    value: claudeMessage,
+    reason: "Write Notes summarization request into Claude.",
+    approvedPolicyRisk: Boolean(options.dryRun || options.approveClaudeSend),
+    taskPolicy: assistantSendPolicy,
+    verificationTimeoutMs: options.dryRun ? 0 : 25_000,
+    verificationIntervalMs: 1_000,
+    verify: (snapshot) => {
+      const found = composerContains(snapshot, replyToken);
+      const visible = snapshotContainsText(snapshot, replyToken);
+      return {
+        ok: found || visible,
+        summary:
+          found || visible
+            ? "Claude composer contains Notes summarization token."
+            : "Claude message not visible after write.",
+      };
+    },
+  });
+  audit.push(claudeWrite.audit);
+  if (!claudeWrite.ok) {
+    return fail({
+      failureReason: claudeWrite.failureReason ?? "Claude write verification failed.",
+      stats: mergeStats([safariPreparation.stats, notesWrite.stats, claudeWrite.stats]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because benchmark stopped during Claude write verification.",
+    });
+  }
+
+  progress("Verifying the reply");
+  const verifySubmit = (snapshot: GuiSnapshot) => {
+    const replyText = extractReplyText(snapshot, claudeMessage, replyToken);
+    return {
+      ok: !composerContains(snapshot, replyToken) || Boolean(replyText),
+      summary: replyText
+        ? "Claude Notes summary text is visible after scoped submit."
+        : "Claude composer cleared after scoped submit.",
+    };
+  };
+  let submitPromise: ReturnType<typeof performVerifiedAction> | undefined;
+  let failedSendResolution: Extract<ClaudeSubmitResolution, { ok: false }> | undefined;
+  if (runtime.name === "open-computer-use") {
+    const sendResolution = resolveClaudeSubmitControl(claudeWrite.snapshot ?? claudeWriteSnapshot);
+    if (sendResolution.ok) {
+      submitPromise = performVerifiedAction({
+        runtime,
+        target: claudeTarget,
+        element: sendResolution.element,
+        actionType: sendResolution.actionType,
+        secondaryAction: sendResolution.secondaryAction,
+        reason: "Submit the Notes summarization request via Claude's verified Send control.",
+        approvedPolicyRisk: Boolean(options.dryRun || options.approveClaudeSend),
+        taskPolicy: assistantSendPolicy,
+        verify: verifySubmit,
+      });
+    } else {
+      failedSendResolution = sendResolution;
+    }
+  } else {
+    submitPromise = performVerifiedAction({
+      runtime,
+      target: claudeTarget,
+      actionType: "press",
+      keys: ["cmd+return"],
+      reason: "Submit the Notes summarization request to Claude with a scoped key combo.",
+      approvedPolicyRisk: Boolean(options.dryRun || options.approveClaudeSend),
+      taskPolicy: assistantSendPolicy,
+      verify: verifySubmit,
+    });
+  }
+
+  if (failedSendResolution) {
+    return fail({
+      failureReason: failedSendResolution.summary,
+      stats: mergeStats([safariPreparation.stats, notesWrite.stats, claudeWrite.stats]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because benchmark stopped before Claude submit.",
+    });
+  }
+  if (!submitPromise) {
+    throw new Error("Claude submit path was not initialized.");
+  }
+
+  const verifiedSubmit = await submitPromise;
+  audit.push(verifiedSubmit.audit);
+  const stats = mergeStats([
+    safariPreparation.stats,
+    notesWrite.stats,
+    claudeWrite.stats,
+    verifiedSubmit.stats,
+  ]);
+  let replyText: string | undefined;
+  let replyExtractionMethod: GuiBenchmarkResult["replyExtractionMethod"] = "none";
+  if (verifiedSubmit.ok) {
+    const replyExtraction = await extractReplyAfterSubmit({
+      runtime,
+      target: claudeTarget,
+      initialSnapshot: verifiedSubmit.snapshot,
+      sentMessage: claudeMessage,
+      replyToken,
+      allowClipboardFallback: false,
+      timeoutMs: options.replyExtractionTimeoutMs ?? (options.dryRun ? 0 : 60_000),
+      intervalMs: options.replyExtractionIntervalMs ?? 2_000,
+    });
+    replyText = replyExtraction.replyText;
+    replyExtractionMethod = replyExtraction.method;
+    stats.actionCount += replyExtraction.actionCount;
+    stats.usedClipboard ||= replyExtraction.usedClipboard;
+  }
+
+  const elapsedSeconds = (Date.now() - started) / 1000;
+  const base = {
+    ok: verifiedSubmit.ok && Boolean(replyText),
+    runtime: options.runtime,
+    task: options.task,
+    dryRun: Boolean(options.dryRun),
+    elapsedSeconds,
+    ...stats,
+    directRuntimeEscape: false,
+    replyTextExtracted: Boolean(replyText),
+    replyExtractionMethod,
+    xWindow: safariPreparation.xWindow,
+    stageManager: {
+      sameStageOrBackgroundSafe: options.dryRun ? true : null,
+      notes: options.dryRun
+        ? "Dry-run simulates same-stage/background-safe behavior."
+        : "Live Stage Manager preservation must be scored from user-visible proof.",
+    },
+    virtualPointer: {
+      present: options.dryRun ? false : null,
+      notes: "v0 agent-desktop adapter logs intent; native overlay remains a scored gap.",
+    },
+    audit,
+    replyText,
+    failureReason:
+      verifiedSubmit.failureReason ??
+      (replyText ? undefined : "Claude reply text was not extracted after submit."),
+  };
+  return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+}
+
 export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<GuiBenchmarkResult> {
   const started = Date.now();
   const progress = options.progress ?? (() => undefined);
   const audit: GuiAuditRecord[] = [];
+
+  if (options.task === "safari-notes-claude") {
+    return runSafariNotesClaudeBenchmark(options);
+  }
 
   if (options.task !== "x-to-claude") {
     throw new Error("Unsupported GUI benchmark task.");

@@ -109,6 +109,220 @@ describe("runGuiBenchmark", () => {
     expect(result.markdownSummary).toContain("GUI Benchmark: x-to-claude");
   });
 
+  it("runs safari-notes-claude in dry-run mode without real GUI mutation", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "safari-notes-claude",
+      dryRun: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.runtime).toBe("open-computer-use");
+    expect(result.task).toBe("safari-notes-claude");
+    expect(result.dryRun).toBe(true);
+    expect(result.actionCount).toBe(3);
+    expect(result.usedClipboard).toBe(false);
+    expect(result.movedFocus).toBe(false);
+    expect(result.directRuntimeEscape).toBe(false);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(result.replyExtractionMethod).toBe("ax-visible-text");
+    expect(result.audit.map((record) => record.appName)).toEqual(["Notes", "Claude", "Claude"]);
+    expect(result.audit.map((record) => record.actionType)).toEqual([
+      "setValue",
+      "setValue",
+      "click",
+    ]);
+    expect(result.audit.every((record) => record.elementRef?.startsWith("@"))).toBe(true);
+    expect(result.replyText).toContain("JARVIS_GUI_");
+    expect(progress).toEqual([
+      "Reading X",
+      "Writing Notes",
+      "Writing Claude",
+      "Verifying the reply",
+    ]);
+    expect(result.markdownSummary).toContain("GUI Benchmark: safari-notes-claude");
+  });
+
+  it("runs safari-notes-claude with semantic Notes and Claude actions plus pointer proof", async () => {
+    let notesValue = "";
+    let claudeValue = "";
+    let claudeReply = "";
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "safari-notes-claude",
+      dryRun: false,
+      approveNotesWrite: true,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Terminal", frontmost: true },
+            { appName: "Safari", frontmost: false },
+            { appName: "Notes", frontmost: false },
+            { appName: "Claude", frontmost: false },
+          ];
+        },
+        async listWindows() {
+          return [
+            { id: "w-terminal", appName: "Terminal", title: "tmux", focused: true },
+            { id: "w-x", appName: "Safari", title: "Home / X", focused: false },
+          ];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowId: target.windowId,
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          if (target.appName === "Notes") {
+            return benchmarkSnapshot({
+              id: "notes",
+              appName: "Notes",
+              windowTitle: "Notes",
+              summary: notesValue ? `Apple Notes visible text: ${notesValue}` : "Note body ready",
+              visibleText: notesValue ? [notesValue] : ["Notes"],
+              elements: [
+                {
+                  ref: "@notes-body",
+                  role: "textArea",
+                  label: "Note body",
+                  value: notesValue || "Start typing",
+                  appName: "Notes",
+                  windowTitle: "Notes",
+                },
+              ],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "claude",
+            appName: "Claude",
+            windowTitle: "Claude",
+            summary:
+              claudeReply || (claudeValue ? `Composer contains ${claudeValue}` : "Composer ready"),
+            visibleText: claudeReply ? [claudeReply] : undefined,
+            elements: [
+              {
+                ref: "@claude-input",
+                role: "textArea",
+                label: "Write your prompt to Claude",
+                value: claudeValue || "Write a message…",
+                appName: "Claude",
+                windowTitle: "Claude",
+              },
+              {
+                ref: "@claude-send",
+                role: "button",
+                label: "Send",
+                appName: "Claude",
+                windowTitle: "Claude",
+              },
+            ],
+          });
+        },
+        async setValue(target: ElementRef, value: string) {
+          if (target.appName === "Notes") {
+            notesValue = value;
+          } else {
+            claudeValue = value;
+          }
+          return { ok: true, actionCount: 1 };
+        },
+        async click(target: ElementRef) {
+          expect(target.ref).toBe("@claude-send");
+          const replyToken = replyTokenFromMessage(claudeValue);
+          claudeReply = `Claude summarized the Apple Notes content and included ${replyToken}.`;
+          claudeValue = "";
+          return { ok: true, actionCount: 1 };
+        },
+        async getVirtualPointerEvidence() {
+          return {
+            present: true,
+            source: "fixture",
+            evidencePath: "/tmp/ocu-pointer-proof.json",
+            notes: "Fixture pointer proof for semantic OCU action.",
+          };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.usedClipboard).toBe(false);
+    expect(result.movedFocus).toBe(false);
+    expect(result.virtualPointer).toMatchObject({
+      present: true,
+      evidencePath: "/tmp/ocu-pointer-proof.json",
+    });
+    expect(result.workspace.workspaceMeasurement).toBe("clean");
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
+    expect(
+      result.audit.map((record) => [record.appName, record.actionType, record.elementRef]),
+    ).toEqual([
+      ["Notes", "setValue", "@notes-body"],
+      ["Claude", "setValue", "@claude-input"],
+      ["Claude", "click", "@claude-send"],
+    ]);
+    expect(notesValue).toContain("Jarvis GUI benchmark safari-notes-claude");
+    expect(notesValue).toContain("Visible token: JARVIS_GUI_");
+    expect(claudeValue).toBe("");
+    expect(result.replyText).toContain("JARVIS_GUI_");
+  });
+
+  it("fails safari-notes-claude before live Notes mutation unless explicitly approved", async () => {
+    let notesWrites = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "safari-notes-claude",
+      dryRun: false,
+      runtimeImpl: {
+        name: "agent-desktop",
+        async listApps() {
+          return [];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "notes",
+            appName: "Notes",
+            windowTitle: "Notes",
+            elements: [{ ref: "@notes-body", role: "textArea", label: "Note body" }],
+          });
+        },
+        async setValue() {
+          notesWrites += 1;
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("--approve-notes-write");
+    expect(result.actionCount).toBe(0);
+    expect(result.audit).toHaveLength(0);
+    expect(notesWrites).toBe(0);
+  });
+
   it("fails closed before a live Claude send unless explicitly approved", async () => {
     const result = await runGuiBenchmark({
       runtime: "agent-desktop",
