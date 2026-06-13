@@ -50,7 +50,7 @@
   - `docs/consumer/project-status.md`
   - `docs/research/jarvis-consumer-launch-plan.md`
   - `docs/consumer/jarvis-launch-package.md`
-  - `docs/consumer/openclaw-consumer-execution-spec.md`
+  - Historical launch/package details live under `docs/consumer/archive/`
 - Branching, PR targets, commits, GitHub footguns:
   - `docs/agent-guides/workflow.md`
 - Fork maintenance and upstream intake:

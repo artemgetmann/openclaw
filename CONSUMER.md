@@ -39,6 +39,9 @@ Read this before doing consumer-product work in this repo.
   - `docs/research/jarvis-consumer-launch-plan.md`
 - Launch package:
   - `docs/consumer/jarvis-launch-package.md`
+- Historical launch package and long-form launch strategy:
+  - `docs/consumer/archive/jarvis-launch-package-history-20260613.md`
+  - `docs/consumer/archive/jarvis-consumer-launch-plan-history-20260613.md`
 - Historical consolidation proof, not active task boards:
   - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
   - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
