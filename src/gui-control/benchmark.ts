@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -136,6 +137,10 @@ const CODEX_COMPUTER_USE_BASELINE = {
   elapsedSeconds: 95,
   actionCount: 10,
 } as const;
+
+function uniqueBenchmarkToken(): string {
+  return randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
+}
 
 function createDryRunRuntime(): GuiRuntime {
   let claudeValue = "";
@@ -1371,10 +1376,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
   }
   const xSnapshot = xObservation.snapshot;
   const visibleSummary = summarizeVisibleX(xSnapshot);
-  const replyToken = `JARVIS_GUI_${Date.now()}_${Math.random()
-    .toString(36)
-    .slice(2, 8)
-    .toUpperCase()}`;
+  const replyToken = `JARVIS_GUI_${Date.now()}_${uniqueBenchmarkToken()}`;
   const labelledMessage = [
     "Jarvis GUI benchmark x-to-claude",
     `Reply token: ${replyToken}`,

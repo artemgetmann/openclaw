@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { evaluateGuiPolicy, type GuiTaskPolicy } from "./policy.js";
 import { describeGuiTargetMismatch, guiTargetMatchesSnapshot } from "./targeting.js";
@@ -105,7 +106,7 @@ function createAudit(params: {
   failureReason?: string;
 }): GuiAuditRecord {
   return {
-    id: `gui-audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `gui-audit-${randomUUID()}`,
     timestamp: new Date().toISOString(),
     appName: params.target.appName,
     windowTitle: params.target.windowTitle ?? params.pre?.windowTitle,
