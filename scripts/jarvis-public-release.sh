@@ -174,12 +174,26 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   exit 0
 fi
 
+if [[ "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  echo "ERROR: create-local-release-assets-only requires --github-release-tag <latest-tag>." >&2
+  echo "The Sparkle appcast must sign an immutable tagged Jarvis.zip URL before any public upload." >&2
+  exit 1
+fi
+
+if [[ "$SELECTED_PHASE" == "publish-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+  echo "ERROR: publish-assets-only requires --github-release-tag <latest-tag>." >&2
+  exit 1
+fi
+
 CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")
 case "$SELECTED_PHASE" in
   full|post-app-build)
     if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
       CMD+=(--publish-release-assets --github-release-tag "$GITHUB_RELEASE_TAG")
     fi
+    ;;
+  create-local-release-assets-only)
+    CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
     ;;
   publish-assets-only)
     CMD+=(--publish-release-assets --github-release-tag "$GITHUB_RELEASE_TAG")

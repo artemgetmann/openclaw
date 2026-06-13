@@ -314,8 +314,17 @@ bash scripts/jarvis-public-release.sh
 
 The wrapper inspects existing `dist/` artifacts, receipts, and the release
 manifest, chooses the next safe package phase, and delegates to
-`scripts/package-openclaw-mac-dist.sh`. When local notarized assets are ready,
-publishing still requires an explicit latest tag:
+`scripts/package-openclaw-mac-dist.sh`. If it selects
+`create-local-release-assets-only`, pass the latest release tag so the Sparkle
+appcast signs an immutable tagged `Jarvis.zip` URL:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+When local notarized assets are ready, publishing still requires the explicit
+latest tag:
 
 ```bash
 bash scripts/jarvis-public-release.sh \

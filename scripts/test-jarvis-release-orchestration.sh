@@ -149,6 +149,10 @@ test_retry_classification() {
 test_wrapper_dry_run() {
   local root="$TMP_DIR/wrapper-dry-run"
   local out="$TMP_DIR/wrapper-dry-run.out"
+  local asset_root="$TMP_DIR/wrapper-local-assets"
+  local asset_out="$TMP_DIR/wrapper-local-assets.out"
+  local asset_err="$TMP_DIR/wrapper-local-assets.err"
+  local status
 
   mkdir -p "$root/dist/Jarvis.app"
   write_receipt "$(jarvis_release_app_notary_receipt_path "$root")" "app-submission"
@@ -165,6 +169,37 @@ test_wrapper_dry_run() {
     fail "wrapper dry run did not stay dry"
   fi
   pass "wrapper dry run synthetic state"
+
+  mkdir -p "$asset_root/dist/Jarvis.app"
+  : >"$asset_root/dist/Jarvis.dmg"
+  write_manifest_status "$asset_root" "Accepted" "Accepted"
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$asset_out" 2>"$asset_err"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    cat "$asset_out" >&2
+    fail "wrapper local asset dry run should require github release tag"
+  fi
+  if ! grep -q -- '--github-release-tag' "$asset_err"; then
+    cat "$asset_err" >&2
+    fail "wrapper local asset tag failure did not mention --github-release-tag"
+  fi
+  pass "wrapper local assets require tag"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --github-release-tag v-test >"$asset_out"
+  if ! grep -q 'selected_phase=create-local-release-assets-only' "$asset_out"; then
+    cat "$asset_out" >&2
+    fail "wrapper tagged local asset dry run selected wrong phase"
+  fi
+  if ! grep -q -- '--github-release-tag v-test' "$asset_out"; then
+    cat "$asset_out" >&2
+    fail "wrapper tagged local asset command did not forward github release tag"
+  fi
+  pass "wrapper local assets forward tag"
 }
 
 test_phase_selection
