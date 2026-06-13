@@ -234,6 +234,7 @@ final class ConsumerModelSetupModel {
     private let restartGateway: RestartGateway
     private let restartGatewayTimeoutSeconds: Double
     private let recoveryProbeDelaysMs: [UInt64]
+    private let runtimeOwnershipBypassProbeDelaysMs: [UInt64]
     private let recoverySleep: RecoverySleep
     private let readinessProbeTimeoutSeconds: Double
     private let postAuthReconnectProbeDelaysMs: [UInt64]
@@ -252,6 +253,7 @@ final class ConsumerModelSetupModel {
         restartGatewayTimeoutSeconds: Double? = nil,
         readinessProbeTimeoutSeconds: Double? = nil,
         gatewayRecoveryProbeDelaysMs: [UInt64]? = nil,
+        runtimeOwnershipBypassProbeDelaysMs: [UInt64]? = nil,
         gatewayRecoverySleep: RecoverySleep? = nil,
         postAuthReconnectProbeDelaysMs: [UInt64]? = nil)
     {
@@ -293,6 +295,11 @@ final class ConsumerModelSetupModel {
         // so NSApplication.didBecomeActive may never fire. Quietly re-probe
         // transient gateway failures instead of trapping the user on stale copy.
         self.recoveryProbeDelaysMs = gatewayRecoveryProbeDelaysMs ?? [1_000, 2_000, 4_000, 8_000, 12_000]
+        // Runtime ownership repair restarts launchd, so the socket can be
+        // temporarily closed even when the packaged helper is about to become
+        // ready. Give the live readiness override its own short reconnect
+        // window before pinning Settings to the manual repair callout.
+        self.runtimeOwnershipBypassProbeDelaysMs = runtimeOwnershipBypassProbeDelaysMs ?? [0, 500, 1_500, 3_000, 6_000, 10_000]
         self.recoverySleep = gatewayRecoverySleep ?? { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
         }
@@ -877,18 +884,38 @@ final class ConsumerModelSetupModel {
         // probe as ready, keeping Settings stuck on helper repair is worse than
         // trusting the working runtime. Non-ready or failed probes still leave
         // the repair blocker in control.
-        do {
-            let payload = try await self.probeReadinessWithTimeout()
-            guard payload.status == "ready" else {
-                Self.logger.warning("AI access runtime helper repair blocker stayed active after non-ready live readiness: \(blockerDetail, privacy: .public)")
-                return false
+        let delays: [UInt64] = self.runtimeOwnershipBypassProbeDelaysMs.isEmpty
+            ? [UInt64(0)]
+            : self.runtimeOwnershipBypassProbeDelaysMs
+        for (index, delayMs) in delays.enumerated() {
+            if delayMs > 0 {
+                await self.recoverySleep(delayMs * 1_000_000)
             }
-            Self.logger.info("AI access live readiness passed despite runtime helper repair blocker: \(blockerDetail, privacy: .public)")
-            return true
-        } catch {
-            Self.logger.warning("AI access live readiness could not bypass runtime helper repair blocker: \(error.localizedDescription, privacy: .public)")
-            return false
+
+            do {
+                let payload = try await self.probeReadinessWithTimeout()
+                guard payload.status == "ready" else {
+                    Self.logger.warning("AI access runtime helper repair blocker stayed active after non-ready live readiness: \(blockerDetail, privacy: .public)")
+                    return false
+                }
+                Self.logger.info("AI access live readiness passed despite runtime helper repair blocker: \(blockerDetail, privacy: .public)")
+                return true
+            } catch {
+                guard Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable else {
+                    Self.logger.warning("AI access live readiness could not bypass runtime helper repair blocker: \(error.localizedDescription, privacy: .public)")
+                    return false
+                }
+
+                if index == delays.count - 1 {
+                    Self.logger.warning("AI access live readiness could not bypass runtime helper repair blocker after reconnect retries: \(error.localizedDescription, privacy: .public)")
+                    return false
+                }
+
+                Self.logger.info("AI access live readiness retrying while runtime helper socket reconnects: \(error.localizedDescription, privacy: .public)")
+            }
         }
+
+        return false
     }
 
     private func applyRuntimeOwnershipRepairFailure(blockerDetail: String) {

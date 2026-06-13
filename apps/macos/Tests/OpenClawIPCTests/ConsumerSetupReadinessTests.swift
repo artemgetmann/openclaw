@@ -350,6 +350,48 @@ struct ConsumerSetupReadinessTests {
         #expect(!model.isAuthChoiceInteractionBlocked)
     }
 
+    @Test func `consumer model retries live readiness while stale runtime blocker socket reconnects`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let reconnectSleeps = SendableCounter()
+        let blockerDetail = "stale launchd service metadata"
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    throw gatewayUnreachableError()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerDetail
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0, 1],
+            gatewayRecoverySleep: { _ in
+                reconnectSleeps.value += 1
+            })
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 3)
+        #expect(reconnectSleeps.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(!model.canRestartOperator)
+        #expect(!model.isAuthChoiceInteractionBlocked)
+    }
+
     @Test func `consumer model runtime ownership repair failure stays consumer safe when live readiness is unavailable`() async {
         let restartCalls = SendableCounter()
         let probeCalls = SendableCounter()
@@ -373,7 +415,8 @@ struct ConsumerSetupReadinessTests {
             },
             restartGateway: {
                 restartCalls.value += 1
-            })
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0])
 
         await model.refresh()
 
@@ -414,7 +457,8 @@ struct ConsumerSetupReadinessTests {
             },
             restartGateway: {
                 restartCalls.value += 1
-            })
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0])
 
         await model.refresh()
         #expect(model.failureKind == .runtimeUpdateBlocked)
@@ -460,6 +504,7 @@ struct ConsumerSetupReadinessTests {
                 restartCalls.value += 1
             },
             gatewayRecoveryProbeDelaysMs: [1],
+            runtimeOwnershipBypassProbeDelaysMs: [0],
             gatewayRecoverySleep: { _ in
                 recoverySleepCalls.value += 1
                 await withCheckedContinuation { continuation in
@@ -517,7 +562,8 @@ struct ConsumerSetupReadinessTests {
                 blockerActive.value ? "stale launchd service metadata" : nil
             },
             restartGateway: {
-            })
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0])
 
         await model.refresh()
         #expect(model.phase == .failed(expectedMessage))
