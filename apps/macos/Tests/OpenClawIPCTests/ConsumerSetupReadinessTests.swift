@@ -394,6 +394,66 @@ struct ConsumerSetupReadinessTests {
         #expect(!model.canRestartOperator)
     }
 
+    @Test func `consumer model retries runtime ownership blocker after launchd metadata settles`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerChecks = SendableCounter()
+        let recoverySleepCalls = SendableCounter()
+        let pendingRecoverySleep = SleepContinuationBox()
+        let blockerDetail = "stale launchd helper at /Users/user/Programming_Projects/openclaw/.worktrees/stale/dist/index.js"
+        let expectedMessage = "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerChecks.value += 1
+                return blockerChecks.value < 3 ? blockerDetail : nil
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            },
+            gatewayRecoveryProbeDelaysMs: [1],
+            gatewayRecoverySleep: { _ in
+                recoverySleepCalls.value += 1
+                await withCheckedContinuation { continuation in
+                    pendingRecoverySleep.continuation = continuation
+                }
+            })
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(blockerChecks.value == 2)
+        #expect(probeCalls.value == 0)
+        #expect(model.phase == .failed(expectedMessage))
+        #expect(model.failureKind == .runtimeUpdateBlocked)
+
+        while pendingRecoverySleep.continuation == nil {
+            await Task.yield()
+        }
+        pendingRecoverySleep.continuation?.resume()
+
+        for _ in 0..<1_000 where model.phase != .ready("openai-codex/gpt-5.5") {
+            await Task.yield()
+        }
+
+        #expect(restartCalls.value == 1)
+        #expect(blockerChecks.value == 3)
+        #expect(probeCalls.value == 1)
+        #expect(recoverySleepCalls.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+    }
+
     @Test func `consumer model refresh clears runtime ownership blocker after repair`() async {
         let probeCalls = SendableCounter()
         let blockerActive = SendableFlag(true)
