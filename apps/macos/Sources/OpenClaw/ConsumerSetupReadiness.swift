@@ -837,6 +837,9 @@ final class ConsumerModelSetupModel {
         Self.logger.warning("AI access runtime helper repair needed: \(blockerDetail, privacy: .public)")
         self.cancelRecoveryProbe()
         guard allowRepair else {
+            if await self.liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: blockerDetail) {
+                return true
+            }
             self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
             return false
         }
@@ -848,18 +851,44 @@ final class ConsumerModelSetupModel {
         self.authSectionExpanded = true
 
         guard await self.waitForRestartGateway() else {
+            if await self.liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: blockerDetail) {
+                return true
+            }
             self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
             return false
         }
 
         if let remainingBlocker = self.runtimeOwnershipBlocker() {
             Self.logger.warning("AI access runtime helper repair did not clear blocker: \(remainingBlocker, privacy: .public)")
+            if await self.liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: remainingBlocker) {
+                return true
+            }
             self.applyRuntimeOwnershipRepairFailure(blockerDetail: remainingBlocker)
             return false
         }
 
         Self.logger.info("AI access runtime helper repair cleared ownership blocker")
         return true
+    }
+
+    private func liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: String) async -> Bool {
+        // The launchd/plist blocker is a local safety check, but real readiness
+        // is the product truth. If the packaged gateway can answer a live model
+        // probe as ready, keeping Settings stuck on helper repair is worse than
+        // trusting the working runtime. Non-ready or failed probes still leave
+        // the repair blocker in control.
+        do {
+            let payload = try await self.probeReadinessWithTimeout()
+            guard payload.status == "ready" else {
+                Self.logger.warning("AI access runtime helper repair blocker stayed active after non-ready live readiness: \(blockerDetail, privacy: .public)")
+                return false
+            }
+            Self.logger.info("AI access live readiness passed despite runtime helper repair blocker: \(blockerDetail, privacy: .public)")
+            return true
+        } catch {
+            Self.logger.warning("AI access live readiness could not bypass runtime helper repair blocker: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     private func applyRuntimeOwnershipRepairFailure(blockerDetail: String) {
