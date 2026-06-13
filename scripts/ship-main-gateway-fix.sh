@@ -213,6 +213,24 @@ gateway_status_summary() {
   '
 }
 
+extract_json_line() {
+  local raw="$1"
+  local line=""
+  # Some status paths emit human config warnings before the machine JSON.
+  # Keep the ship wrapper tolerant so proof parsing does not fail after a
+  # successful deploy/restart.
+  while IFS= read -r line; do
+    if printf '%s\n' "${line}" | jq -e . >/dev/null 2>&1; then
+      printf '%s\n' "${line}"
+      return 0
+    fi
+  done <<<"${raw}"
+
+  log "expected JSON output but gateway status printed no parseable JSON object" >&2
+  printf '%s\n' "${raw}" >&2
+  return 1
+}
+
 print_closeout() {
   local pr_url="$1"
   local commit_sha="$2"
@@ -257,7 +275,7 @@ main() {
   if (( DRY_RUN == 1 )); then
     status_proof="dry-run"
   else
-    status_proof="$(gateway_status_summary "$(run_in_main_or_print pnpm openclaw:local gateway status --deep --require-rpc --json)")"
+    status_proof="$(gateway_status_summary "$(extract_json_line "$(run_in_main_or_print pnpm openclaw:local gateway status --deep --require-rpc --json)")")"
   fi
 
   local live_line="skipped"

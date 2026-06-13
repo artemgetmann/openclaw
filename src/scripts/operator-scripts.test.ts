@@ -182,6 +182,87 @@ esac
     expect(result.stdout).toContain("Rollback:");
   });
 
+  it("ship wrapper extracts gateway status JSON when warnings precede it", () => {
+    const root = makeTempRoot();
+    const mainRepo = path.join(root, "main");
+    initMainRepo(mainRepo);
+    const originRepo = path.join(root, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", originRepo]);
+    execFileSync("git", ["remote", "add", "origin", originRepo], { cwd: mainRepo });
+    execFileSync("git", ["push", "-q", "-u", "origin", "main"], { cwd: mainRepo });
+    const binDir = path.join(root, "bin");
+    fs.mkdirSync(binDir);
+    const gh = path.join(binDir, "gh");
+    writeExecutable(
+      gh,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "pr view 89 --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeCommit,title,url")
+    printf '%s\\n' '{"number":89,"state":"MERGED","isDraft":false,"baseRefName":"main","headRefName":"x","headRefOid":"abc","title":"Fix gateway","url":"https://example.test/pr/89"}'
+    ;;
+  "pr view 89 --json files --jq .files[].path")
+    printf '%s\\n' 'scripts/ship-main-gateway-fix.sh'
+    ;;
+  *)
+    exit 9
+    ;;
+esac
+`,
+    );
+    writeExecutable(
+      path.join(binDir, "pnpm"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "openclaw:local gateway status --deep --require-rpc --json" ]]; then
+  printf '%s\\n' 'Config warnings:\\n- plugins.entries.voice-call: plugin disabled'
+  printf '%s\\n' '{"ok":true,"runtimeFingerprint":{"branch":"main","worktree":"${mainRepo}"},"service":{"runtime":{"status":"running","pid":4242}},"rpc":{"ok":true}}'
+  exit 0
+fi
+exit 0
+`,
+    );
+    fs.mkdirSync(path.join(mainRepo, "scripts"));
+    writeExecutable(
+      path.join(mainRepo, "scripts", "build-shared-runtime.sh"),
+      "#!/usr/bin/env bash\nset -euo pipefail\n",
+    );
+    writeExecutable(
+      path.join(mainRepo, "scripts", "gateway-recover-main.sh"),
+      "#!/usr/bin/env bash\nset -euo pipefail\n",
+    );
+    execFileSync(
+      "git",
+      ["add", "scripts/build-shared-runtime.sh", "scripts/gateway-recover-main.sh"],
+      {
+        cwd: mainRepo,
+      },
+    );
+    execFileSync("git", ["commit", "-q", "-m", "add ship fixtures"], {
+      cwd: mainRepo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    execFileSync("git", ["push", "-q"], { cwd: mainRepo });
+
+    const result = runScript("scripts/ship-main-gateway-fix.sh", ["--pr", "89", "--skip-live"], {
+      OPENCLAW_GH_BIN: gh,
+      OPENCLAW_MAIN_REPO: mainRepo,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("PR: https://example.test/pr/89");
+    expect(result.stdout).toContain('status={"ok":true,"branch":"main","worktree":"' + mainRepo);
+    expect(result.stdout).toContain('"pid":4242,"rpc":true}');
+    expect(result.stdout).toContain("Live proof: skipped by --skip-live");
+  });
+
   it("smoke restart dry-run validates preflight and emits proof JSON", () => {
     const root = makeTempRoot();
     const mainRepo = path.join(root, "main");
