@@ -124,7 +124,7 @@ jarvis_release_next_phase() {
       "$dmg_notary_receipt" "$manifest_path" "JARVIS_DMG_NOTARY_SUBMISSION_ID"
   )"
   if [[ "$dmg_notary_status" != "Accepted" ]]; then
-    if [[ -n "$dmg_submission_id" ]]; then
+    if [[ -n "$dmg_submission_id" && -f "$dmg_path" ]]; then
       printf '%s\n' "poll-dmg-notarization"
     else
       printf '%s\n' "submit-dmg-notarization"

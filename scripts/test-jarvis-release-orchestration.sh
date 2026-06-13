@@ -74,6 +74,15 @@ test_phase_selection() {
   write_receipt "$(jarvis_release_app_notary_receipt_path "$root")" "app-submission"
   assert_eq "app submission selects poll app" "$(jarvis_release_next_phase "$root" 0 0)" "poll-app-notarization"
 
+  root="$(make_state_root app-submitted-manifest-only)"
+  mkdir -p "$root/dist/Jarvis.app"
+  mkdir -p "$root/dist"
+  {
+    printf 'JARVIS_APP_NOTARY_SUBMISSION_ID=%q\n' "app-submission"
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "submitted"
+  } >"$(jarvis_release_manifest_path "$root")"
+  assert_eq "manifest-only app submission selects poll app" "$(jarvis_release_next_phase "$root" 0 0)" "poll-app-notarization"
+
   root="$(make_state_root app-accepted)"
   mkdir -p "$root/dist/Jarvis.app"
   write_manifest_status "$root" "Accepted" ""
@@ -81,9 +90,29 @@ test_phase_selection() {
 
   root="$(make_state_root dmg-submitted)"
   mkdir -p "$root/dist/Jarvis.app"
+  : >"$root/dist/Jarvis.dmg"
   write_manifest_status "$root" "Accepted" ""
   write_receipt "$(jarvis_release_dmg_notary_receipt_path "$root")" "dmg-submission"
   assert_eq "dmg submission selects poll dmg" "$(jarvis_release_next_phase "$root" 0 0)" "poll-dmg-notarization"
+
+  root="$(make_state_root dmg-submitted-manifest-only)"
+  mkdir -p "$root/dist/Jarvis.app"
+  : >"$root/dist/Jarvis.dmg"
+  {
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
+    printf 'JARVIS_DMG_NOTARY_SUBMISSION_ID=%q\n' "dmg-submission"
+    printf 'JARVIS_DMG_NOTARY_STATUS=%q\n' "submitted"
+  } >"$(jarvis_release_manifest_path "$root")"
+  assert_eq "manifest-only dmg submission with dmg selects poll dmg" "$(jarvis_release_next_phase "$root" 0 0)" "poll-dmg-notarization"
+
+  root="$(make_state_root dmg-submitted-manifest-only-missing-dmg)"
+  mkdir -p "$root/dist/Jarvis.app"
+  {
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
+    printf 'JARVIS_DMG_NOTARY_SUBMISSION_ID=%q\n' "dmg-submission"
+    printf 'JARVIS_DMG_NOTARY_STATUS=%q\n' "submitted"
+  } >"$(jarvis_release_manifest_path "$root")"
+  assert_eq "manifest-only dmg submission without dmg selects submit dmg" "$(jarvis_release_next_phase "$root" 0 0)" "submit-dmg-notarization"
 
   root="$(make_state_root accepted-no-assets)"
   mkdir -p "$root/dist/Jarvis.app"

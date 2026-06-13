@@ -780,15 +780,19 @@ poll_app_notarization_only() {
   local status
 
   receipt_path="$(app_notary_receipt_path)"
-  if [[ ! -f "$receipt_path" ]]; then
-    echo "ERROR: app notarization receipt missing: $receipt_path" >&2
-    echo "Run --phase submit-app-notarization first." >&2
-    exit 1
+  if [[ -f "$receipt_path" ]]; then
+    submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+    artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
+    staple_app="$(receipt_value "$receipt_path" "NOTARY_STAPLE_APP_PATH")"
+  else
+    # The manifest is durable operator state and can outlive a receipt file.
+    # Polling app notarization does not need the original upload zip, so recover
+    # from the saved submission ID and rewrite the receipt after notarytool info.
+    echo "🧾 App notarization receipt missing; recovering poll metadata from $RELEASE_MANIFEST_PATH"
+    submission_id="$(manifest_value "JARVIS_APP_NOTARY_SUBMISSION_ID")"
+    artifact="$NOTARY_ZIP"
+    staple_app="$APP_PATH"
   fi
-
-  submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
-  artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
-  staple_app="$(receipt_value "$receipt_path" "NOTARY_STAPLE_APP_PATH")"
   if [[ -z "$submission_id" ]]; then
     echo "ERROR: app notarization receipt lacks NOTARY_SUBMISSION_ID: $receipt_path" >&2
     exit 1
@@ -852,14 +856,17 @@ poll_dmg_notarization_only() {
   local status
 
   receipt_path="$(dmg_notary_receipt_path)"
-  if [[ ! -f "$receipt_path" ]]; then
-    echo "ERROR: DMG notarization receipt missing: $receipt_path" >&2
-    echo "Run --phase submit-dmg-notarization first." >&2
-    exit 1
+  if [[ -f "$receipt_path" ]]; then
+    submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+    artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
+  else
+    # Unlike the app upload zip, the DMG itself must exist when Accepted so
+    # stapler can attach and validate the ticket. Use the manifest submission ID
+    # only when the local DMG artifact is still present.
+    echo "🧾 DMG notarization receipt missing; recovering poll metadata from $RELEASE_MANIFEST_PATH"
+    submission_id="$(manifest_value "JARVIS_DMG_NOTARY_SUBMISSION_ID")"
+    artifact="$DMG"
   fi
-
-  submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
-  artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
   if [[ -z "$submission_id" ]]; then
     echo "ERROR: DMG notarization receipt lacks NOTARY_SUBMISSION_ID: $receipt_path" >&2
     exit 1
