@@ -202,6 +202,54 @@ test_wrapper_dry_run() {
   pass "wrapper local assets forward tag"
 }
 
+test_package_create_assets_rejects_stale_tag() {
+  local app_name="JarvisTagGuardTest-$$"
+  local app_path="$ROOT_DIR/dist/${app_name}.app"
+  local fake_bin="$TMP_DIR/fake-bin"
+  local manifest="$TMP_DIR/package-tag-guard-manifest.env"
+  local out="$TMP_DIR/package-tag-guard.out"
+  local err="$TMP_DIR/package-tag-guard.err"
+  local status
+
+  mkdir -p "$app_path" "$fake_bin"
+  {
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
+  } >"$manifest"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [[ "$1" == "release" && "$2" == "view" ]]; then\n'
+    printf '  printf '"'"'{"tagName":"v-current","url":"https://github.com/artemgetmann/openclaw/releases/tag/v-current"}\\n'"'"'\n'
+    printf '  exit 0\n'
+    printf 'fi\n'
+    printf 'echo "unexpected gh invocation: $*" >&2\n'
+    printf 'exit 99\n'
+  } >"$fake_bin/gh"
+  chmod +x "$fake_bin/gh"
+
+  set +e
+  PATH="$fake_bin:$PATH" \
+  APP_NAME="$app_name" \
+  OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
+    bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase create-local-release-assets-only \
+      --github-release-tag v-stale \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  rm -rf "$app_path"
+
+  if [[ "$status" -eq 0 ]]; then
+    cat "$out" >&2
+    fail "package create-local-release-assets-only should reject stale github release tag"
+  fi
+  if ! grep -q -- '--github-release-tag must match the latest release' "$err"; then
+    cat "$err" >&2
+    fail "package stale tag failure did not mention latest release requirement"
+  fi
+  pass "package local appcast assets reject stale tag"
+}
+
 test_phase_selection
 test_retry_classification
 test_wrapper_dry_run
+test_package_create_assets_rejects_stale_tag

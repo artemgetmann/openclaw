@@ -229,6 +229,24 @@ require_latest_release_tag() {
   fi
 }
 
+require_latest_release_tag_for_appcast() {
+  if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
+    echo "ERROR: creating Jarvis public Sparkle assets requires --github-release-tag <latest-tag>." >&2
+    echo "The appcast must sign an immutable tagged Jarvis.zip URL before any public upload." >&2
+    exit 1
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "ERROR: validating the Jarvis appcast tag requires the GitHub CLI (gh)." >&2
+    exit 1
+  fi
+
+  # A stale enclosure URL is worse than a missing appcast: Sparkle would see a
+  # live feed that points at bytes from the wrong release. Validate before
+  # signing local assets, then validate the generated XML again before upload.
+  require_latest_release_tag
+}
+
 jarvis_tagged_release_download_base() {
   if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
     echo "ERROR: a tagged Jarvis release URL requires --github-release-tag." >&2
@@ -243,6 +261,32 @@ jarvis_appcast_zip_public_url() {
     return 0
   fi
   printf '%s\n' "$JARVIS_ZIP_PUBLIC_URL"
+}
+
+require_local_appcast_targets_current_tag() {
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  local expected_zip_url
+
+  if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
+    echo "ERROR: local appcast upload validation requires --github-release-tag <latest-tag>." >&2
+    exit 1
+  fi
+
+  expected_zip_url="$(jarvis_appcast_zip_public_url)"
+  if [[ ! -f "$appcast" ]]; then
+    echo "ERROR: local Jarvis appcast is missing before upload: $appcast" >&2
+    exit 1
+  fi
+
+  # The URL has no XML-sensitive characters, so a narrow attribute string check
+  # is enough to prevent uploading an appcast generated for a stale tag.
+  if ! /usr/bin/grep -Fq "url=\"$expected_zip_url\"" "$appcast" \
+    && ! /usr/bin/grep -Fq "url='$expected_zip_url'" "$appcast"; then
+    echo "ERROR: local Jarvis appcast does not target the current tagged ZIP URL." >&2
+    echo "Expected enclosure URL: $expected_zip_url" >&2
+    echo "Regenerate local release assets with --phase create-local-release-assets-only --github-release-tag $GITHUB_RELEASE_TAG before publishing." >&2
+    exit 1
+  fi
 }
 
 require_release_publish_prereqs() {
@@ -407,6 +451,7 @@ publish_release_assets() {
       exit 1
     fi
   done
+  require_local_appcast_targets_current_tag
 
   github_release_upload_preflight
 
@@ -1043,6 +1088,7 @@ fi
 case "$PACKAGE_PHASE" in
   create-local-release-assets-only)
     require_local_release_asset_phase_inputs
+    require_latest_release_tag_for_appcast
     ;;
   publish-assets-only)
     require_notarized_manifest_before_publish
