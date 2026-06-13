@@ -11,6 +11,11 @@ enum GatewayLaunchAgentManager {
         _ args: [String],
         _ timeout: Double,
         _ quiet: Bool) async -> String?)?
+    private nonisolated(unsafe) static var testShellExecutionHook: ((
+        _ command: [String],
+        _ cwd: String?,
+        _ env: [String: String],
+        _ timeout: Double) async -> ShellExecutor.ShellResult)?
     private nonisolated(unsafe) static var testCurrentServiceVersionHook: (() -> String?)?
     private nonisolated(unsafe) static var testCurrentServiceBuildHook: (() -> String?)?
     #endif
@@ -269,12 +274,18 @@ extension GatewayLaunchAgentManager {
         launchAgentWriteDisabled: (() -> Bool)? = nil,
         readDaemonLoaded: (() async -> Bool?)? = nil,
         runDaemonCommand: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)? = nil,
+        shellExecution: ((
+            _ command: [String],
+            _ cwd: String?,
+            _ env: [String: String],
+            _ timeout: Double) async -> ShellExecutor.ShellResult)? = nil,
         currentServiceVersion: (() -> String?)? = nil,
         currentServiceBuild: (() -> String?)? = nil)
     {
         self.testLaunchAgentWriteDisabledHook = launchAgentWriteDisabled
         self.testReadDaemonLoadedHook = readDaemonLoaded
         self.testRunDaemonCommandHook = runDaemonCommand
+        self.testShellExecutionHook = shellExecution
         self.testCurrentServiceVersionHook = currentServiceVersion
         self.testCurrentServiceBuildHook = currentServiceBuild
     }
@@ -283,6 +294,7 @@ extension GatewayLaunchAgentManager {
         self.testLaunchAgentWriteDisabledHook = nil
         self.testReadDaemonLoadedHook = nil
         self.testRunDaemonCommandHook = nil
+        self.testShellExecutionHook = nil
         self.testCurrentServiceVersionHook = nil
         self.testCurrentServiceBuildHook = nil
     }
@@ -541,7 +553,20 @@ extension GatewayLaunchAgentManager {
             projectRoot: gatewayRoot)
         let env = self.daemonCommandEnvironment(
             base: ProcessInfo.processInfo.environment)
-        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
+        // The daemon CLI enforces LaunchAgent ownership from process.cwd().
+        // Run it from the same runtime root used to resolve the command so a
+        // packaged Jarvis repair is recognized as app-owned instead of being
+        // mistaken for an arbitrary non-canonical launcher directory.
+        #if DEBUG
+        let response: ShellExecutor.ShellResult
+        if let shellExecution = self.testShellExecutionHook {
+            response = await shellExecution(command, gatewayRoot.path, env, timeout)
+        } else {
+            response = await ShellExecutor.runDetailed(command: command, cwd: gatewayRoot.path, env: env, timeout: timeout)
+        }
+        #else
+        let response = await ShellExecutor.runDetailed(command: command, cwd: gatewayRoot.path, env: env, timeout: timeout)
+        #endif
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
         let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
