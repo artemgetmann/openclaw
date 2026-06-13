@@ -406,6 +406,35 @@ async function prepareBenchmarkSafariTarget(input: {
   }
 }
 
+async function observeBenchmarkSafariSnapshot(input: {
+  runtime: GuiRuntime;
+  target: AppTarget;
+  allowSettleRetry: boolean;
+  dryRun: boolean;
+  stats: GuiVerifierStats;
+}): Promise<{ ok: true; snapshot: GuiSnapshot } | { ok: false; failureReason: string }> {
+  const deadline = Date.now() + (input.allowSettleRetry && !input.dryRun ? 15_000 : 0);
+  let lastFailureReason = "";
+
+  for (;;) {
+    const snapshot = await input.runtime.observe(input.target);
+    if (guiTargetMatchesSnapshot(input.target, snapshot)) {
+      return { ok: true, snapshot };
+    }
+
+    // Opening a URL can briefly expose Safari before AX reports the final tab
+    // title/window state. Retry only in that post-open settle window; an
+    // unstabilized or genuinely wrong target still fails before Claude is touched.
+    lastFailureReason = describeGuiTargetMismatch(input.target, snapshot);
+    if (Date.now() >= deadline) {
+      return { ok: false, failureReason: lastFailureReason };
+    }
+
+    input.stats.retries += 1;
+    await sleep(750);
+  }
+}
+
 function frontmostAppName(apps: AppState[]): string | undefined {
   return apps.find((app) => app.frontmost)?.appName;
 }
@@ -610,9 +639,13 @@ function extractReplyText(
   return visibleSnapshotText(snapshot)
     .find((text) => {
       const normalized = normalizeVisibleText(text);
+      const looksLikeBenchmarkPrompt =
+        normalized.includes("jarvis gui benchmark x-to-claude") ||
+        normalized.includes("when you respond, include the reply token");
       return (
         normalized.length >= 40 &&
         !chromeText.has(normalized) &&
+        !looksLikeBenchmarkPrompt &&
         !normalized.includes("more options for") &&
         !normalized.includes("claude is ai and can make mistakes") &&
         textIncludesVisible(text, replyToken) &&
@@ -991,10 +1024,15 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
   }
   progress("Reading X");
   const safariTarget = safariPreparation.target;
-  const xSnapshot = await runtime.observe(safariTarget);
-  if (!guiTargetMatchesSnapshot(safariTarget, xSnapshot)) {
+  const xObservation = await observeBenchmarkSafariSnapshot({
+    runtime,
+    target: safariTarget,
+    allowSettleRetry: Boolean(options.openXHome),
+    dryRun: Boolean(options.dryRun),
+    stats: safariPreparation.stats,
+  });
+  if (!xObservation.ok) {
     const elapsedSeconds = (Date.now() - started) / 1000;
-    const failureReason = describeGuiTargetMismatch(safariTarget, xSnapshot);
     const base = {
       ok: false,
       runtime: options.runtime,
@@ -1015,10 +1053,11 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
         notes: "No virtual pointer surfaced by v0 agent-desktop adapter.",
       },
       audit,
-      failureReason,
+      failureReason: xObservation.failureReason,
     };
     return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
   }
+  const xSnapshot = xObservation.snapshot;
   const visibleSummary = summarizeVisibleX(xSnapshot);
   const replyToken = `JARVIS_GUI_${Date.now()}_${Math.random()
     .toString(36)

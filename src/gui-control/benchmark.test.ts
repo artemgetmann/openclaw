@@ -310,6 +310,65 @@ describe("runGuiBenchmark", () => {
     expect(result.failureReason).toContain("No text-input element matched");
   });
 
+  it("waits for the opened Safari X snapshot to settle before touching Claude", async () => {
+    const observedTargets: AppTarget[] = [];
+    let safariObserves = 0;
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      openXHome: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [];
+        },
+        async openUrl() {
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async observe(target: AppTarget) {
+          observedTargets.push(target);
+          if (target.appName === "Safari") {
+            safariObserves += 1;
+            return safariObserves === 1
+              ? benchmarkSnapshot({
+                  id: "safari-loading",
+                  appName: "Safari",
+                  windowId: "SafariWindow?IsSecure=false&UUID=fixture",
+                  windowTitle: "Safari",
+                  visibleText: ["Loading x.com"],
+                })
+              : benchmarkSnapshot({
+                  id: "safari-ready",
+                  appName: "Safari",
+                  windowId: "SafariWindow?IsSecure=true&UUID=fixture",
+                  windowTitle: "Home / X",
+                  visibleText: ["Home / X", "For you", "Visible timeline item"],
+                });
+          }
+          return benchmarkSnapshot({
+            id: "claude-input-missing",
+            appName: "Claude",
+            elements: [],
+          });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(safariObserves).toBe(2);
+    expect(result.retries).toBe(1);
+    expect(observedTargets.at(-1)).toMatchObject({ appName: "Claude" });
+    expect(result.failureReason).toContain("No text-input element matched");
+  });
+
   it("fails closed when multiple Safari Home / X windows are available", async () => {
     const result = await runGuiBenchmark({
       runtime: "agent-desktop",
@@ -429,6 +488,92 @@ describe("runGuiBenchmark", () => {
     expect(result.replyText).toBeUndefined();
     expect(result.failureReason).toContain("reply text was not extracted");
     expect(result.qualityGate.codexComputerUseParity).toBe("fail");
+  });
+
+  it("does not count a truncated benchmark prompt echo as extracted reply text", async () => {
+    const messageValues: string[] = [];
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: {
+        name: "agent-desktop",
+        async listApps() {
+          return [];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          if (messageValues.length === 0) {
+            return benchmarkSnapshot({
+              id: "claude-input",
+              appName: "Claude",
+              elements: [
+                {
+                  ref: "@input",
+                  role: "textfield",
+                  label: "Write your prompt to Claude",
+                  value: "Write a message…",
+                },
+              ],
+            });
+          }
+          const replyToken = messageValues[0].match(/Reply token: (JARVIS_GUI_[A-Z0-9_]+)/)?.[1];
+          if (messageValues.length === 1) {
+            return benchmarkSnapshot({
+              id: "claude-written",
+              appName: "Claude",
+              elements: [
+                {
+                  ref: "@input",
+                  role: "textfield",
+                  label: "Write your prompt to Claude",
+                  value: messageValues[0],
+                },
+              ],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "claude-after-press",
+            appName: "Claude",
+            visibleText: [
+              [
+                "text Jarvis GUI benchmark x-to-claude",
+                `Reply token: ${replyToken}`,
+                "When you respond, include the reply token exactly once",
+                "Visible X/Home summary: App=com.apple.Safari Window: Home / X",
+              ].join(" "),
+            ],
+            elements: [],
+          });
+        },
+        async setValue(_target: ElementRef, value: string) {
+          messageValues.push(value);
+          return { ok: true, actionCount: 1 };
+        },
+        async click() {
+          return { ok: true };
+        },
+        async press() {
+          messageValues.push("submitted");
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.replyTextExtracted).toBe(false);
+    expect(result.replyExtractionMethod).toBe("none");
+    expect(result.failureReason).toContain("reply text was not extracted");
   });
 
   it("verifies Claude writes when the composer text is exposed as visible text", async () => {

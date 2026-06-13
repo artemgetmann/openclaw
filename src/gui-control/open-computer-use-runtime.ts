@@ -540,16 +540,25 @@ export class OpenComputerUseRuntime implements GuiRuntime {
     return parseOpenComputerUseApps(await this.callTool("list_apps"));
   }
 
-  async listWindows(): Promise<WindowState[]> {
-    const apps = await this.listApps();
-    return apps.flatMap((app) => app.windows ?? []);
-  }
-
   async observe(target: AppTarget): Promise<GuiSnapshot> {
     return parseOpenComputerUseSnapshot(
       await this.callTool("get_app_state", { app: target.appName }),
       target,
     );
+  }
+
+  async openUrl(target: AppTarget, url: string): Promise<ActionResult> {
+    const result = await runCommandWithTimeout(["open", "-a", target.appName, url], {
+      timeoutMs: this.timeoutMs,
+      noOutputTimeoutMs: this.timeoutMs,
+    });
+    return {
+      ok: result.code === 0,
+      actionCount: 1,
+      movedFocus: true,
+      message: result.stderr.trim() || result.stdout.trim() || undefined,
+      raw: { stdout: result.stdout, stderr: result.stderr, code: result.code },
+    };
   }
 
   async setValue(target: ElementRef, value: string): Promise<ActionResult> {
