@@ -75,6 +75,20 @@ Setup routing
 - If setup is missing, do not dump raw CLI setup commands back to a consumer.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 
+Email fallback policy
+
+- For Gmail read/search/send tasks, use `gog` when the task is clearly
+  Google/Gmail-specific.
+- If `gog` fails because Google auth is expired/revoked, the provider is
+  unavailable, or the tool is missing, try `himalaya` only after confirming its
+  configured account is the same mailbox the user intended.
+- For sends, never silently fall back to a different sender identity. If the
+  same-mailbox identity is unclear, stop and ask the user which account to use.
+- If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
+  report the blocker clearly and ask whether the user wants to reconnect Google.
+- For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
+  Himalaya as a fallback. Himalaya is email-only.
+
 Setup Routing
 
 - If `gog` is missing OAuth credentials, has no authorized account, or the
