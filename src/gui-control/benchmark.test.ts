@@ -438,6 +438,124 @@ describe("runGuiBenchmark", () => {
     expect(result.failureReason).toContain("No text-input element matched");
   });
 
+  it("lets open-computer-use prove opened X Home through observed Safari state", async () => {
+    const observedTargets: AppTarget[] = [];
+    let opened = false;
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      openXHome: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: opened ? "Safari" : "Terminal", frontmost: true },
+            { appName: opened ? "Terminal" : "Safari", frontmost: false },
+          ];
+        },
+        async listWindows() {
+          return [
+            { appName: opened ? "Safari" : "Terminal", focused: true },
+            { appName: opened ? "Terminal" : "Safari", focused: false },
+          ];
+        },
+        async openUrl() {
+          opened = true;
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async observe(target: AppTarget) {
+          observedTargets.push(target);
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari-ready",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "claude-input-missing",
+            appName: "Claude",
+            elements: [],
+          });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(observedTargets[0]).toMatchObject({ appName: "Safari", windowTitle: "Home / X" });
+    expect(result.xWindow).toMatchObject({
+      openAttempted: true,
+      openSucceeded: true,
+      selectedWindowTitle: "Home / X",
+    });
+    expect(result.failureReason).toContain("No text-input element matched");
+  });
+
+  it("lets open-computer-use prove an existing X Home tab through observed Safari state", async () => {
+    const observedTargets: AppTarget[] = [];
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Terminal", frontmost: true },
+            { appName: "Safari", frontmost: false },
+          ];
+        },
+        async listWindows() {
+          return [
+            { appName: "Terminal", focused: true },
+            { appName: "Safari", focused: false },
+          ];
+        },
+        async observe(target: AppTarget) {
+          observedTargets.push(target);
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari-ready",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "claude-input-missing",
+            appName: "Claude",
+            elements: [],
+          });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(observedTargets[0]).toMatchObject({ appName: "Safari", windowTitle: "Home / X" });
+    expect(result.xWindow).toMatchObject({
+      openAttempted: false,
+      openSucceeded: null,
+      selectedWindowTitle: "Home / X",
+    });
+    expect(result.failureReason).toContain("No text-input element matched");
+  });
+
   it("fails closed when multiple Safari Home / X windows are available", async () => {
     const result = await runGuiBenchmark({
       runtime: "agent-desktop",
@@ -1106,6 +1224,164 @@ describe("runGuiBenchmark", () => {
     expect(result.audit[1]?.postStateVerification).toBe(
       "Claude composer cleared after scoped submit.",
     );
+  });
+
+  it("submits open-computer-use via semantic Send click without pressing Return", async () => {
+    const messageValues: string[] = [];
+    let clickedRef = "";
+    let submitted = false;
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Terminal", frontmost: true },
+            { appName: "Claude", frontmost: false },
+          ];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          if (submitted) {
+            const replyToken =
+              messageValues[0]?.match(/Reply token: (JARVIS_GUI_[A-Z0-9_]+)/)?.[1] ?? "";
+            return benchmarkSnapshot({
+              id: "claude-after-click",
+              appName: "Claude",
+              visibleText: [
+                `Claude reply summary acknowledged visible X Home timeline context. ${replyToken}`,
+              ],
+              elements: [],
+            });
+          }
+          if (messageValues.length === 0) {
+            return benchmarkSnapshot({
+              id: "claude-input",
+              appName: "Claude",
+              elements: [
+                {
+                  ref: "@input",
+                  role: "textfield",
+                  label: "Write your prompt to Claude",
+                  value: "Write a message…",
+                },
+              ],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "claude-written",
+            appName: "Claude",
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: messageValues[0],
+              },
+              { ref: "@send", role: "button", label: "Send" },
+            ],
+          });
+        },
+        async setValue(_target: ElementRef, value: string) {
+          messageValues.push(value);
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async click(target: ElementRef) {
+          clickedRef = target.ref;
+          submitted = true;
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async press() {
+          throw new Error("OCU no-focus path must not use press_key.");
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(clickedRef).toBe("@send");
+    expect(result.audit[1]?.actionType).toBe("click");
+    expect(result.movedFocus).toBe(false);
+    expect(result.usedClipboard).toBe(false);
+    expect(result.replyExtractionMethod).toBe("ax-visible-text");
+    expect(result.workspace.frontmostBefore).toBe("Terminal");
+    expect(result.workspace.frontmostAfterTask).toBe("Terminal");
+    expect(result.workspace.frontmostRestored).toBe(true);
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
+    expect(result.qualityGate.blockers).not.toContain(
+      "Stage Manager/workspace preservation was not proven true.",
+    );
+    expect(result.qualityGate.blockers).not.toContain(
+      "Frontmost app restoration was not proven true.",
+    );
+  });
+
+  it("fails closed for open-computer-use when no semantic Send target exists", async () => {
+    const messageValues: string[] = [];
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "x-to-claude",
+      dryRun: false,
+      approveClaudeSend: true,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "Terminal", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          return benchmarkSnapshot({
+            id: messageValues.length ? "claude-written-no-send" : "claude-input",
+            appName: "Claude",
+            elements: [
+              {
+                ref: "@input",
+                role: "textfield",
+                label: "Write your prompt to Claude",
+                value: messageValues[0] ?? "Write a message…",
+              },
+            ],
+          });
+        },
+        async setValue(_target: ElementRef, value: string) {
+          messageValues.push(value);
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async click() {
+          throw new Error("OCU no-focus path must not click without a Send target.");
+        },
+        async press() {
+          throw new Error("OCU no-focus path must not fall back to press_key.");
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.actionCount).toBe(1);
+    expect(result.replyExtractionMethod).toBe("none");
+    expect(result.failureReason).toBe(
+      "No semantic Claude Send control was present after writing the benchmark message.",
+    );
+    expect(result.audit).toHaveLength(1);
   });
 
   it("does not treat an OCU AX description composer echo as a Claude reply", async () => {

@@ -1,6 +1,12 @@
 export type GuiRuntimeName = "agent-desktop" | "open-computer-use";
 
-export type GuiActionType = "observe" | "setValue" | "click" | "press" | "scroll";
+export type GuiActionType =
+  | "observe"
+  | "setValue"
+  | "click"
+  | "secondaryAction"
+  | "press"
+  | "scroll";
 
 export type GuiMutationRisk = "read-only" | "allowed-mutation" | "blocked";
 
@@ -40,6 +46,7 @@ export type ElementRef = {
     width: number;
     height: number;
   };
+  secondaryActions?: string[];
   appName?: string;
   windowTitle?: string;
 };
@@ -72,6 +79,7 @@ export interface GuiRuntime {
   observe(target: AppTarget): Promise<GuiSnapshot>;
   setValue(target: ElementRef, value: string): Promise<ActionResult>;
   click(target: ElementRef): Promise<ActionResult>;
+  performSecondaryAction?(target: ElementRef, action: string): Promise<ActionResult>;
   press?(target: AppTarget, keys: string[]): Promise<ActionResult>;
   scroll?(
     target: ElementRef,

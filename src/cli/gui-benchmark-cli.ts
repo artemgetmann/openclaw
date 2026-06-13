@@ -18,6 +18,17 @@ function parseTask(value: string): GuiBenchmarkTask {
   throw new Error(`Unsupported GUI benchmark task: ${value}`);
 }
 
+function parsePositiveIntegerOption(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${name} value: ${value}`);
+  }
+  return Math.trunc(parsed);
+}
+
 export function registerGuiBenchmarkCli(program: Command) {
   program
     .command("gui-benchmark")
@@ -45,6 +56,8 @@ export function registerGuiBenchmarkCli(program: Command) {
     )
     .option("--no-clipboard-fallback", "Disable clipboard-based Claude reply extraction fallback")
     .option("--claude-input-ref <ref>", "Claude composer element ref from a fresh snapshot")
+    .option("--reply-extraction-timeout-ms <ms>", "How long to wait for Claude reply extraction")
+    .option("--reply-extraction-interval-ms <ms>", "Polling interval for Claude reply extraction")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runGuiBenchmark({
@@ -59,6 +72,14 @@ export function registerGuiBenchmarkCli(program: Command) {
             ? false
             : opts.clipboardFallback !== false,
           claudeInputRef: typeof opts.claudeInputRef === "string" ? opts.claudeInputRef : undefined,
+          replyExtractionTimeoutMs: parsePositiveIntegerOption(
+            opts.replyExtractionTimeoutMs,
+            "--reply-extraction-timeout-ms",
+          ),
+          replyExtractionIntervalMs: parsePositiveIntegerOption(
+            opts.replyExtractionIntervalMs,
+            "--reply-extraction-interval-ms",
+          ),
           progress: (message) => defaultRuntime.error(message),
         });
         defaultRuntime.log(opts.json ? JSON.stringify(result, null, 2) : result.markdownSummary);

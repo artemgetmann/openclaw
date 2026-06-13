@@ -283,6 +283,63 @@ describe("performVerifiedAction", () => {
     expect(result.stats.movedFocus).toBe(true);
   });
 
+  it("runs approved semantic Send button clicks and verifies post-state", async () => {
+    const sendButton = { ref: "@send", role: "button", label: "Send" };
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({ id: "pre", elements: [sendButton] }),
+        snapshot({ id: "post", summary: "Claude reply visible", elements: [] }),
+      ],
+      actions: [{ ok: true, actionCount: 1, movedFocus: false }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Claude" },
+      element: sendButton,
+      actionType: "click",
+      reason: "Submit a Claude message.",
+      approvedPolicyRisk: true,
+      taskPolicy: assistantSendPolicy,
+      verify: (post) => ({
+        ok: post.summary === "Claude reply visible",
+        summary: "reply appeared",
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.audit.actionType).toBe("click");
+    expect(result.stats.actionCount).toBe(1);
+    expect(result.stats.movedFocus).toBe(false);
+  });
+
+  it("re-resolves a uniquely matching semantic Send button when refs churn", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({ id: "pre", elements: [{ ref: "@send-new", role: "button", label: "Send" }] }),
+        snapshot({ id: "post", summary: "Claude reply visible", elements: [] }),
+      ],
+      actions: [{ ok: true, actionCount: 1, movedFocus: false }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Claude" },
+      element: { ref: "@send-old", role: "button", label: "Send" },
+      actionType: "click",
+      reason: "Submit a Claude message.",
+      approvedPolicyRisk: true,
+      taskPolicy: assistantSendPolicy,
+      verify: (post) => ({
+        ok: post.summary === "Claude reply visible",
+        summary: "reply appeared",
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.audit.elementRef).toBe("@send-new");
+  });
+
   it("fails closed before acting when the observed app/window is wrong", async () => {
     const runtime = new MockGuiRuntime({
       observations: [snapshot({ appName: "Telegram", windowTitle: "Telegram" })],

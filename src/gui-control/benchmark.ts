@@ -14,6 +14,7 @@ import type {
   GuiRuntimeName,
   GuiSnapshot,
   GuiVerifierStats,
+  ElementRef,
   WindowState,
 } from "./types.js";
 import { performVerifiedAction } from "./verifier.js";
@@ -270,6 +271,106 @@ function resolveClaudeComposer(snapshot: GuiSnapshot, ref?: string) {
   });
 }
 
+type ClaudeSubmitResolution =
+  | {
+      ok: true;
+      actionType: "click" | "secondaryAction";
+      element: ElementRef;
+      secondaryAction?: string;
+      summary: string;
+    }
+  | {
+      ok: false;
+      candidates: ElementRef[];
+      summary: string;
+    };
+
+function elementSemanticText(element: ElementRef): string {
+  return [
+    element.role,
+    element.label,
+    element.name,
+    element.title,
+    element.description,
+    element.value,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+}
+
+function matchingPressAction(element: ElementRef): string | undefined {
+  return element.secondaryActions?.find((action) => /^(?:AX)?Press$/i.test(action.trim()));
+}
+
+function isClaudeSendControl(element: ElementRef): boolean {
+  const text = normalizeVisibleText(elementSemanticText(element));
+  const role = normalizeVisibleText(element.role ?? "");
+  const hasSendLabel =
+    /(^|[^a-z0-9])send([^a-z0-9]|$)/i.test(text) ||
+    text.includes("send message") ||
+    text.includes("send prompt");
+  const looksDangerousOrWrong =
+    text.includes("send later") ||
+    text.includes("resend") ||
+    text.includes("unsend") ||
+    text.includes("copy");
+
+  return (
+    hasSendLabel &&
+    !looksDangerousOrWrong &&
+    (role.includes("button") || Boolean(matchingPressAction(element)))
+  );
+}
+
+function resolveClaudeSubmitControl(snapshot: GuiSnapshot): ClaudeSubmitResolution {
+  // OCU no-focus submit must target a real Send affordance. A keyboard fallback
+  // can work visibly while still stealing the user's Stage Manager/frontmost app.
+  const candidates = snapshot.elements.filter(isClaudeSendControl);
+  if (candidates.length !== 1) {
+    return {
+      ok: false,
+      candidates,
+      summary:
+        candidates.length === 0
+          ? "No semantic Claude Send control was present after writing the benchmark message."
+          : `Found ${candidates.length} possible Claude Send controls; refusing to guess.`,
+    };
+  }
+
+  const element = candidates[0];
+  if (!element) {
+    return {
+      ok: false,
+      candidates,
+      summary: "No semantic Claude Send control was present after writing the benchmark message.",
+    };
+  }
+
+  if (normalizeVisibleText(element.role ?? "").includes("button")) {
+    return {
+      ok: true,
+      actionType: "click",
+      element,
+      summary: `Resolved semantic Claude Send click target ${element.ref}.`,
+    };
+  }
+
+  const secondaryAction = matchingPressAction(element);
+  return secondaryAction
+    ? {
+        ok: true,
+        actionType: "secondaryAction",
+        element,
+        secondaryAction,
+        summary: `Resolved semantic Claude Send secondary action ${secondaryAction} on ${element.ref}.`,
+      }
+    : {
+        ok: false,
+        candidates,
+        summary: "Claude Send control did not expose a click or Press action.",
+      };
+}
+
 function emptyStats(): GuiVerifierStats {
   return {
     actionCount: 0,
@@ -284,6 +385,7 @@ function emptyStats(): GuiVerifierStats {
 
 async function resolveBenchmarkSafariTarget(
   runtime: GuiRuntime,
+  options: { allowObservedOpenComputerUseTarget?: boolean } = {},
 ): Promise<
   { ok: true; target: AppTarget } | { ok: false; failureReason: string; candidates: WindowState[] }
 > {
@@ -301,6 +403,15 @@ async function resolveBenchmarkSafariTarget(
         windowTitle: window.title ?? "Home / X",
         windowId: window.id,
       },
+    };
+  }
+  if (candidates.length === 0 && options.allowObservedOpenComputerUseTarget) {
+    // OCU currently exposes `list_apps` but not real window inventory. After
+    // opening X Home, let the following `get_app_state` title check prove the
+    // Safari target instead of failing on missing list-window metadata.
+    return {
+      ok: true,
+      target: { appName: "Safari", windowTitle: "Home / X" },
     };
   }
 
@@ -373,7 +484,9 @@ async function prepareBenchmarkSafariTarget(input: {
 
   const deadline = Date.now() + (input.openXHome && !input.dryRun ? 15_000 : 0);
   for (;;) {
-    const resolution = await resolveBenchmarkSafariTarget(input.runtime);
+    const resolution = await resolveBenchmarkSafariTarget(input.runtime, {
+      allowObservedOpenComputerUseTarget: input.runtime.name === "open-computer-use",
+    });
     if (resolution.ok) {
       return {
         ok: true,
@@ -486,6 +599,23 @@ async function restoreWorkspace(input: {
     actionCount: result.actionCount ?? 1,
     failureReason: result.ok ? undefined : (result.message ?? "Failed to restore focused window."),
   };
+}
+
+function workspaceChanged(
+  before: Awaited<ReturnType<typeof captureWorkspace>>,
+  afterTask: Awaited<ReturnType<typeof captureWorkspace>>,
+): boolean {
+  if (before.frontmostApp && afterTask.frontmostApp) {
+    return before.frontmostApp !== afterTask.frontmostApp;
+  }
+  if (before.focusedWindow && afterTask.focusedWindow) {
+    return (
+      before.focusedWindow.id !== afterTask.focusedWindow.id ||
+      before.focusedWindow.appName !== afterTask.focusedWindow.appName ||
+      before.focusedWindow.title !== afterTask.focusedWindow.title
+    );
+  }
+  return false;
 }
 
 function summarizeWindow(window: WindowState | undefined):
@@ -1029,6 +1159,31 @@ function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): str
     .join("\n");
 }
 
+function scoreStageManagerPreservation(
+  stageManager: GuiBenchmarkResultBase["stageManager"],
+  workspace: GuiBenchmarkResult["workspace"],
+): GuiBenchmarkResultBase["stageManager"] {
+  if (stageManager.sameStageOrBackgroundSafe !== null) {
+    return stageManager;
+  }
+  if (workspace.workspaceMeasurement === "clean" && workspace.frontmostRestored === true) {
+    // No-focus success is stronger than restore success: the user's workspace
+    // never left the original frontmost app, so there is nothing to repair.
+    return {
+      sameStageOrBackgroundSafe: true,
+      notes: "Frontmost app did not change during the measured task; no restore was needed.",
+    };
+  }
+  if (workspace.workspaceMeasurement === "changed-by-runtime") {
+    return {
+      sameStageOrBackgroundSafe: false,
+      notes:
+        "Frontmost app changed during the measured task; restore result is reported separately.",
+    };
+  }
+  return stageManager;
+}
+
 async function finalizeBenchmarkResult(
   base: GuiBenchmarkResultBase,
   input: {
@@ -1037,21 +1192,25 @@ async function finalizeBenchmarkResult(
     options: Pick<GuiBenchmarkOptions, "writeReport" | "reportDir">;
   },
 ): Promise<GuiBenchmarkResult> {
+  const afterTask = await captureWorkspace(input.runtime);
+  const restore = await restoreWorkspace({
+    runtime: input.runtime,
+    workspaceBefore: input.workspaceBefore,
+    dryRun: base.dryRun,
+    allowRestore: base.movedFocus && workspaceChanged(input.workspaceBefore, afterTask),
+  });
+  const afterRestore = await captureWorkspace(input.runtime);
   const workspace = buildWorkspaceTelemetry({
     before: input.workspaceBefore,
-    afterTask: await captureWorkspace(input.runtime),
-    restore: await restoreWorkspace({
-      runtime: input.runtime,
-      workspaceBefore: input.workspaceBefore,
-      dryRun: base.dryRun,
-      allowRestore: base.movedFocus,
-    }),
-    afterRestore: await captureWorkspace(input.runtime),
+    afterTask,
+    restore,
+    afterRestore,
     dryRun: base.dryRun,
     runtimeMovedFocus: base.movedFocus,
   });
   const resultWithWorkspace: GuiBenchmarkResultWithWorkspace = {
     ...base,
+    stageManager: scoreStageManagerPreservation(base.stageManager, workspace),
     actionCount: base.actionCount + workspace.restoreActionCount,
     workspace,
   };
@@ -1288,34 +1447,88 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
   }
 
   progress("Verifying the reply");
-  const pressResult = await performVerifiedAction({
-    runtime,
-    target: claudeTarget,
-    actionType: "press",
-    keys: ["cmd+return"],
-    reason: "Submit the already-labelled benchmark message to Claude with a scoped key combo.",
-    approvedPolicyRisk: Boolean(options.dryRun || options.approveClaudeSend),
-    taskPolicy: assistantSendPolicy,
-    verify: (snapshot) => {
-      const replyText = extractReplyText(snapshot, labelledMessage, replyToken);
-      return {
-        ok: !composerContains(snapshot, replyToken) || Boolean(replyText),
-        summary: replyText
-          ? "Claude reply text is visible after scoped submit."
-          : "Claude composer cleared after scoped submit.",
-      };
-    },
-  });
-  audit.push(pressResult.audit);
+  const verifySubmit = (snapshot: GuiSnapshot) => {
+    const replyText = extractReplyText(snapshot, labelledMessage, replyToken);
+    return {
+      ok: !composerContains(snapshot, replyToken) || Boolean(replyText),
+      summary: replyText
+        ? "Claude reply text is visible after scoped submit."
+        : "Claude composer cleared after scoped submit.",
+    };
+  };
+  let submitPromise: ReturnType<typeof performVerifiedAction> | undefined;
+  let failedSendResolution: Extract<ClaudeSubmitResolution, { ok: false }> | undefined;
+  if (runtime.name === "open-computer-use") {
+    const sendResolution = resolveClaudeSubmitControl(writeResult.snapshot ?? claudeWriteSnapshot);
+    if (sendResolution.ok) {
+      submitPromise = performVerifiedAction({
+        runtime,
+        target: claudeTarget,
+        element: sendResolution.element,
+        actionType: sendResolution.actionType,
+        secondaryAction: sendResolution.secondaryAction,
+        reason: "Submit the already-labelled benchmark message via Claude's verified Send control.",
+        approvedPolicyRisk: Boolean(options.dryRun || options.approveClaudeSend),
+        taskPolicy: assistantSendPolicy,
+        verify: verifySubmit,
+      });
+    } else {
+      failedSendResolution = sendResolution;
+    }
+  } else {
+    submitPromise = performVerifiedAction({
+      runtime,
+      target: claudeTarget,
+      actionType: "press",
+      keys: ["cmd+return"],
+      reason: "Submit the already-labelled benchmark message to Claude with a scoped key combo.",
+      approvedPolicyRisk: Boolean(options.dryRun || options.approveClaudeSend),
+      taskPolicy: assistantSendPolicy,
+      verify: verifySubmit,
+    });
+  }
 
-  const stats = mergeStats([safariPreparation.stats, writeResult.stats, pressResult.stats]);
+  if (failedSendResolution) {
+    const elapsedSeconds = (Date.now() - started) / 1000;
+    const base = {
+      ok: false,
+      runtime: options.runtime,
+      task: options.task,
+      dryRun: Boolean(options.dryRun),
+      elapsedSeconds,
+      ...mergeStats([safariPreparation.stats, writeResult.stats]),
+      directRuntimeEscape: false,
+      replyTextExtracted: false,
+      replyExtractionMethod: "none" as const,
+      xWindow: safariPreparation.xWindow,
+      stageManager: {
+        sameStageOrBackgroundSafe: null,
+        notes: "Not measured because benchmark stopped before Claude submit.",
+      },
+      virtualPointer: {
+        present: false,
+        notes: "No virtual pointer surfaced by v0 agent-desktop adapter.",
+      },
+      audit,
+      failureReason: failedSendResolution.summary,
+    };
+    return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+  }
+  if (!submitPromise) {
+    throw new Error("Claude submit path was not initialized.");
+  }
+
+  const verifiedSubmit = await submitPromise;
+  audit.push(verifiedSubmit.audit);
+
+  const stats = mergeStats([safariPreparation.stats, writeResult.stats, verifiedSubmit.stats]);
   let replyText: string | undefined;
   let replyExtractionMethod: GuiBenchmarkResult["replyExtractionMethod"] = "none";
-  if (pressResult.ok) {
+  if (verifiedSubmit.ok) {
     const replyExtraction = await extractReplyAfterSubmit({
       runtime,
       target: claudeTarget,
-      initialSnapshot: pressResult.snapshot,
+      initialSnapshot: verifiedSubmit.snapshot,
       sentMessage: labelledMessage,
       replyToken,
       allowClipboardFallback: options.allowClipboardFallback !== false,
@@ -1329,7 +1542,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
   }
   const elapsedSeconds = (Date.now() - started) / 1000;
   const base = {
-    ok: pressResult.ok && Boolean(replyText),
+    ok: verifiedSubmit.ok && Boolean(replyText),
     runtime: options.runtime,
     task: options.task,
     dryRun: Boolean(options.dryRun),
@@ -1352,7 +1565,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
     audit,
     replyText,
     failureReason:
-      pressResult.failureReason ??
+      verifiedSubmit.failureReason ??
       (replyText ? undefined : "Claude reply text was not extracted after submit."),
   };
   return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });

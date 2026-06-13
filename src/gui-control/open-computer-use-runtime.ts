@@ -50,6 +50,18 @@ function firstStringLike(value: unknown, fallback: string | undefined): string |
   return fallback;
 }
 
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  }
+  return typeof value === "string" && value.trim()
+    ? value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [];
+}
+
 function parseJsonOutput(stdout: string, stderr: string): unknown {
   const raw = stdout.trim() || stderr.trim();
   if (!raw) {
@@ -270,7 +282,10 @@ function stripTextMetadata(line: string): string {
   return (metadataIndex === undefined ? line : line.slice(0, metadataIndex)).trim();
 }
 
-function readTextMetadata(line: string, key: "Value" | "Description"): string | undefined {
+function readTextMetadata(
+  line: string,
+  key: "Value" | "Description" | "Secondary Actions",
+): string | undefined {
   const match = new RegExp(
     `${key}:\\s*(?<value>.*?)(?:\\s+(?:ID|Value|Description|Secondary Actions|Frame):|$)`,
   ).exec(line);
@@ -318,6 +333,7 @@ function parseSnapshotTextElements(text: string | undefined, target: AppTarget):
         label: roleAndLabel,
         description: readTextMetadata(body, "Description"),
         value: readTextMetadata(body, "Value"),
+        secondaryActions: stringList(readTextMetadata(body, "Secondary Actions")),
         bounds: readFrameFromText(body),
         appName: target.appName,
         windowTitle: target.windowTitle,
@@ -403,6 +419,13 @@ export function parseOpenComputerUseSnapshot(raw: unknown, target: AppTarget): G
         description,
         value: firstString(record.value ?? record.text, undefined),
         bounds: readBounds(record.bounds ?? record.frame ?? record.rect),
+        secondaryActions: stringList(
+          record.secondaryActions ??
+            record.secondary_actions ??
+            record.actions ??
+            record.axActions ??
+            record.ax_actions,
+        ),
         appName: target.appName,
         windowTitle: target.windowTitle,
       });
@@ -604,6 +627,10 @@ export class OpenComputerUseRuntime implements GuiRuntime {
 
   async click(target: ElementRef): Promise<ActionResult> {
     return this.callAction("click", elementArgs(target));
+  }
+
+  async performSecondaryAction(target: ElementRef, action: string): Promise<ActionResult> {
+    return this.callAction("perform_secondary_action", { ...elementArgs(target), action });
   }
 
   async press(target: AppTarget, keys: string[]): Promise<ActionResult> {

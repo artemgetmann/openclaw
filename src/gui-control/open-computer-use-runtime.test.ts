@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   OpenComputerUseRuntime,
@@ -147,6 +150,7 @@ describe("parseOpenComputerUseSnapshot", () => {
               {
                 role: "button",
                 name: "Send",
+                actions: ["AXPress"],
                 bounds: { left: 320, top: 20, right: 352, bottom: 52 },
               },
             ],
@@ -173,6 +177,7 @@ describe("parseOpenComputerUseSnapshot", () => {
           ref: "@1",
           role: "button",
           name: "Send",
+          secondaryActions: ["AXPress"],
           bounds: { x: 320, y: 20, width: 32, height: 32 },
         }),
       ]),
@@ -213,7 +218,7 @@ describe("parseOpenComputerUseSnapshot", () => {
               'Window: "Claude", App: Claude.',
               "0 standard window Claude, Secondary Actions: Raise",
               "\t121 text entry area (settable, string) Description: Write your prompt to Claude Write a message…",
-              "\t124 button Copy Frame: x=320, y=20, w=32, h=32",
+              "\t124 button Send Secondary Actions: AXPress Frame: x=320, y=20, w=32, h=32",
               "\t130 text Claude reply token JARVIS_OPEN_CU_TEST",
             ].join("\n"),
           },
@@ -233,6 +238,7 @@ describe("parseOpenComputerUseSnapshot", () => {
         }),
         expect.objectContaining({
           ref: "@124",
+          secondaryActions: ["AXPress"],
           bounds: { x: 320, y: 20, width: 32, height: 32 },
         }),
       ]),
@@ -280,6 +286,77 @@ describe("parseOpenComputerUseActionResult", () => {
 });
 
 describe("OpenComputerUseRuntime", () => {
+  it("clicks element-index targets through OCU click without raw coordinates", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
+    const argsPath = path.join(tempDir, "argv.json");
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(1)));`,
+          "console.log(JSON.stringify({ isError: false, content: [{ type: 'text', text: 'ok' }] }));",
+        ].join(""),
+      ],
+    });
+
+    const result = await runtime.click({
+      ref: "@123",
+      appName: "Claude",
+      windowTitle: "Claude",
+    });
+    const argv = JSON.parse(await fs.readFile(argsPath, "utf8"));
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        usedClipboard: false,
+        rawCoordinatesUsed: false,
+      }),
+    );
+    expect(argv).toEqual([
+      "call",
+      "click",
+      "--args",
+      JSON.stringify({ app: "Claude", window: "Claude", element_index: 123 }),
+    ]);
+  });
+
+  it("maps secondary actions to OCU perform_secondary_action", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
+    const argsPath = path.join(tempDir, "argv.json");
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(1)));`,
+          "console.log(JSON.stringify({ isError: false, content: [{ type: 'text', text: 'ok' }] }));",
+        ].join(""),
+      ],
+    });
+
+    await runtime.performSecondaryAction(
+      { ref: "@124", appName: "Claude", windowTitle: "Claude" },
+      "AXPress",
+    );
+    const argv = JSON.parse(await fs.readFile(argsPath, "utf8"));
+
+    expect(argv).toEqual([
+      "call",
+      "perform_secondary_action",
+      "--args",
+      JSON.stringify({
+        app: "Claude",
+        window: "Claude",
+        element_index: 124,
+        action: "AXPress",
+      }),
+    ]);
+  });
+
   it("reports focusWindow as unsupported without shelling out", async () => {
     const runtime = new OpenComputerUseRuntime({ command: "unused-open-computer-use" });
 

@@ -213,9 +213,9 @@ function actionRequiresCapability(input: GuiPolicyInput): GuiCapability {
     return "submit_message_to_target";
   }
 
-  // Clicks are ambiguous by design. Treat obvious send/submit intents as a
-  // message submission capability; everything else is a verified-button click.
-  // Sensitive or destructive labels are still blocked before this mapping.
+  // Element activations are ambiguous by design. Treat obvious send/submit
+  // intents as a message submission capability; everything else is a verified
+  // button action. Sensitive or destructive labels are blocked before this map.
   const actionText = intendedActionText(input);
   return hasAnyTerm(actionText, ["send", "submit", "message"])
     ? "submit_message_to_target"

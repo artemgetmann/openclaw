@@ -20,6 +20,7 @@ export type VerifiedActionInput = {
   element?: ElementRef;
   actionType: Exclude<GuiActionType, "observe">;
   value?: string;
+  secondaryAction?: string;
   keys?: string[];
   scroll?: { direction?: "up" | "down" | "left" | "right"; amount?: number };
   reason: string;
@@ -59,8 +60,37 @@ function boundedVerificationIntervalMs(value: number | undefined): number {
   return Math.max(100, Math.min(2_000, Math.trunc(value)));
 }
 
+function elementSemanticSignature(element: ElementRef): string {
+  return [
+    element.role,
+    element.label,
+    element.name,
+    element.title,
+    element.description,
+    element.appName,
+    element.windowTitle,
+  ]
+    .map((value) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase())
+    .join("\n");
+}
+
 function findElement(snapshot: GuiSnapshot, element: ElementRef): ElementRef | undefined {
-  return snapshot.elements.find((candidate) => candidate.ref === element.ref);
+  const exact = snapshot.elements.find((candidate) => candidate.ref === element.ref);
+  if (exact) {
+    return exact;
+  }
+
+  // OCU element indexes are snapshot-local. If a fresh observe renumbers a
+  // stable Send button, allow exactly one semantic match instead of failing
+  // before the verified action can run.
+  const signature = elementSemanticSignature(element);
+  if (!signature.trim()) {
+    return undefined;
+  }
+  const semanticMatches = snapshot.elements.filter(
+    (candidate) => elementSemanticSignature(candidate) === signature,
+  );
+  return semanticMatches.length === 1 ? semanticMatches[0] : undefined;
 }
 
 function createAudit(params: {
@@ -131,6 +161,18 @@ async function executeRuntimeAction(input: VerifiedActionInput, element?: Elemen
     }
     return input.runtime.click(element);
   }
+  if (input.actionType === "secondaryAction") {
+    if (!input.runtime.performSecondaryAction) {
+      throw new Error("Runtime does not support secondary actions.");
+    }
+    if (!element) {
+      throw new Error("secondaryAction requires an element.");
+    }
+    if (!input.secondaryAction) {
+      throw new Error("secondaryAction requires an action name.");
+    }
+    return input.runtime.performSecondaryAction(element, input.secondaryAction);
+  }
   if (input.actionType === "press") {
     if (!input.runtime.press) {
       throw new Error("Runtime does not support press.");
@@ -165,9 +207,9 @@ export async function performVerifiedAction(
     });
   }
 
-  let element =
-    input.actionType === "press" || !input.element ? undefined : findElement(pre, input.element);
-  if (input.actionType !== "press" && !element) {
+  const elementlessAction = input.actionType === "press";
+  let element = elementlessAction || !input.element ? undefined : findElement(pre, input.element);
+  if (!elementlessAction && !element) {
     return failedResult({
       input,
       risk: "blocked",
@@ -217,13 +259,8 @@ export async function performVerifiedAction(
     stats.retries += 1;
     const refreshed = await input.runtime.observe(input.target);
     element =
-      input.actionType === "press" || !input.element
-        ? undefined
-        : findElement(refreshed, input.element);
-    if (
-      (input.actionType !== "press" && !element) ||
-      !guiTargetMatchesSnapshot(input.target, refreshed)
-    ) {
+      elementlessAction || !input.element ? undefined : findElement(refreshed, input.element);
+    if ((!elementlessAction && !element) || !guiTargetMatchesSnapshot(input.target, refreshed)) {
       return failedResult({
         input,
         risk: policy.risk,
