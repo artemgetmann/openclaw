@@ -169,6 +169,29 @@ describe("runGuiBenchmark", () => {
     expect(result.markdownSummary).toContain("GUI Benchmark: safari-notes-claude");
   });
 
+  it("prepares a fresh Claude chat for safari-notes-claude when requested", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "safari-notes-claude",
+      dryRun: true,
+      openClaudeNew: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.actionCount).toBe(4);
+    expect(result.movedFocus).toBe(true);
+    expect(progress).toEqual([
+      "Reading X",
+      "Writing Notes",
+      "Opening Claude",
+      "Writing Claude",
+      "Verifying the reply",
+    ]);
+  });
+
   it("runs safari-notes-claude with semantic Notes and Claude actions plus pointer proof", async () => {
     let notesValue = "";
     let claudeValue = "";

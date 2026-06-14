@@ -1736,6 +1736,26 @@ async function runSafariNotesClaudeBenchmark(
     });
   }
 
+  const claudePreparation = await prepareBenchmarkClaudeTarget({
+    runtime,
+    openClaudeNew: Boolean(options.openClaudeNew),
+    dryRun: Boolean(options.dryRun),
+    progress,
+  });
+  if (!claudePreparation.ok) {
+    return fail({
+      failureReason: claudePreparation.failureReason,
+      stats: mergeStats([
+        safariPreparation.stats,
+        notesPreparationStats,
+        notesWrite.stats,
+        claudePreparation.stats,
+      ]),
+      xWindow: safariPreparation.xWindow,
+      stageNotes: "Not measured because Claude fresh-chat preparation failed.",
+    });
+  }
+
   progress("Writing Claude");
   const claudeMessage = [
     "Jarvis GUI benchmark safari-notes-claude",
@@ -1751,7 +1771,12 @@ async function runSafariNotesClaudeBenchmark(
   if (!inputResolution.ok) {
     return fail({
       failureReason: inputResolution.summary,
-      stats: mergeStats([safariPreparation.stats, notesPreparationStats, notesWrite.stats]),
+      stats: mergeStats([
+        safariPreparation.stats,
+        notesPreparationStats,
+        notesWrite.stats,
+        claudePreparation.stats,
+      ]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because Claude composer resolution failed.",
     });
@@ -1788,6 +1813,7 @@ async function runSafariNotesClaudeBenchmark(
         safariPreparation.stats,
         notesPreparationStats,
         notesWrite.stats,
+        claudePreparation.stats,
         claudeWrite.stats,
       ]),
       xWindow: safariPreparation.xWindow,
@@ -1844,6 +1870,7 @@ async function runSafariNotesClaudeBenchmark(
         safariPreparation.stats,
         notesPreparationStats,
         notesWrite.stats,
+        claudePreparation.stats,
         claudeWrite.stats,
       ]),
       xWindow: safariPreparation.xWindow,
@@ -1860,6 +1887,7 @@ async function runSafariNotesClaudeBenchmark(
     safariPreparation.stats,
     notesPreparationStats,
     notesWrite.stats,
+    claudePreparation.stats,
     claudeWrite.stats,
     verifiedSubmit.stats,
   ]);
