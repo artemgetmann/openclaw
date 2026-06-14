@@ -36,6 +36,19 @@ Do not use AppleScript/JXA, raw coordinates, clipboard fallback, or macOS focus
 hacks as acceptance proof. If one is used for diagnosis, mark the run
 diagnostic-only.
 
+## Adjacent Tooling
+
+`macos-automator-mcp` is installed locally and can be reached through
+`mcporter call macos-automator.*`. It is useful for deterministic operational
+fallbacks, scripted app setup, or comparison diagnostics because it ships a
+large AppleScript/JXA knowledge base.
+
+Do not use it as acceptance proof for this OCU parity slice. The project is
+explicitly AppleScript/JXA over MCP, so using it to focus apps, create Notes
+content, read Safari tabs, or repair workspace state would violate the semantic
+OpenComputerUse-only acceptance boundary. Use it only when the run is labelled
+diagnostic-only or when the task is outside GUI-control parity validation.
+
 ## Repeat Benchmark Checklist
 
 Command shape:
