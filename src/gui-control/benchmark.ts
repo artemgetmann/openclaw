@@ -371,6 +371,51 @@ function resolveClaudeNewChatButton(snapshot: GuiSnapshot) {
 }
 
 function resolveNotesBody(snapshot: GuiSnapshot) {
+  const scoredCandidates = snapshot.elements
+    .map((element) => {
+      const role = normalizeVisibleText(element.role ?? "");
+      const text = normalizeVisibleText(elementSemanticText(element));
+      const editableTextArea =
+        role.includes("text entry area") ||
+        role.includes("textarea") ||
+        role.includes("text area") ||
+        role.includes("text view") ||
+        role.includes("edit") ||
+        role.includes("input");
+      if (!editableTextArea || role.includes("button") || role.includes("search")) {
+        return { element, score: 0 };
+      }
+
+      // Apple Notes exposes many static strings containing "note"; only an
+      // editable text view should be treated as the note body.
+      let score = 10;
+      if (role.includes("text entry area") || role.includes("textarea")) {
+        score += 30;
+      }
+      if (text.includes("note body text view")) {
+        score += 70;
+      } else if (text.includes("note body")) {
+        score += 60;
+      } else if (text.includes("body")) {
+        score += 40;
+      } else if (text.includes("note")) {
+        score += 15;
+      }
+      return { element, score };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .toSorted((left, right) => right.score - left.score);
+
+  const [best, secondBest] = scoredCandidates;
+  if (best && (!secondBest || best.score > secondBest.score)) {
+    return {
+      ok: true,
+      element: best.element,
+      candidates: scoredCandidates.map((candidate) => candidate.element),
+      summary: `Resolved Apple Notes body element ${best.element.ref} role=${best.element.role ?? ""}.`,
+    };
+  }
+
   const bodyResolution = resolveElementRef(snapshot, {
     intent: "text-input",
     labelIncludes: "body",
@@ -378,9 +423,19 @@ function resolveNotesBody(snapshot: GuiSnapshot) {
   if (bodyResolution.ok) {
     return bodyResolution;
   }
+  return {
+    ok: false,
+    candidates: scoredCandidates.map((candidate) => candidate.element),
+    summary: best
+      ? `Found ${scoredCandidates.length} possible Apple Notes body elements; refusing to guess.`
+      : "No editable Apple Notes body element matched the latest Notes snapshot.",
+  };
+}
+
+function resolveNotesNewNoteButton(snapshot: GuiSnapshot) {
   return resolveElementRef(snapshot, {
-    intent: "text-input",
-    labelIncludes: "note",
+    intent: "button",
+    labelIncludes: "New Note",
   });
 }
 
@@ -1591,13 +1646,39 @@ async function runSafariNotesClaudeBenchmark(
     });
   }
 
+  let notesPreparationStats = emptyGuiVerifierStats();
+  if (!options.dryRun) {
+    progress("Creating Notes note");
+    const notesPreparationSnapshot = await runtime.observe(notesTarget);
+    const newNoteResolution = resolveNotesNewNoteButton(notesPreparationSnapshot);
+    if (!newNoteResolution.ok) {
+      return fail({
+        failureReason: newNoteResolution.summary,
+        stats: safariPreparation.stats,
+        xWindow: safariPreparation.xWindow,
+        stageNotes: "Not measured because Notes new-note resolution failed.",
+      });
+    }
+    const newNoteClick = await runtime.click(newNoteResolution.element);
+    notesPreparationStats = statsFromActionResult(newNoteClick);
+    if (!newNoteClick.ok) {
+      return fail({
+        failureReason: newNoteClick.message ?? "Apple Notes new-note click failed.",
+        stats: mergeStats([safariPreparation.stats, notesPreparationStats]),
+        xWindow: safariPreparation.xWindow,
+        stageNotes: "Not measured because Notes fresh-note preparation failed.",
+      });
+    }
+    await sleep(1_000);
+  }
+
   progress("Writing Notes");
   const notesWriteSnapshot = await runtime.observe(notesTarget);
   const notesResolution = resolveNotesBody(notesWriteSnapshot);
   if (!notesResolution.ok) {
     return fail({
       failureReason: notesResolution.summary,
-      stats: safariPreparation.stats,
+      stats: mergeStats([safariPreparation.stats, notesPreparationStats]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because Notes body resolution failed.",
     });
@@ -1628,7 +1709,7 @@ async function runSafariNotesClaudeBenchmark(
   if (!notesWrite.ok) {
     return fail({
       failureReason: notesWrite.failureReason ?? "Apple Notes write verification failed.",
-      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      stats: mergeStats([safariPreparation.stats, notesPreparationStats, notesWrite.stats]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because benchmark stopped during Notes write verification.",
     });
@@ -1638,7 +1719,7 @@ async function runSafariNotesClaudeBenchmark(
   if (!notesVisibleProof) {
     return fail({
       failureReason: "Apple Notes token was not extracted from visible AX text after write.",
-      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      stats: mergeStats([safariPreparation.stats, notesPreparationStats, notesWrite.stats]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because Notes visible-token proof was missing.",
     });
@@ -1647,7 +1728,7 @@ async function runSafariNotesClaudeBenchmark(
   if (!options.dryRun && !options.approveClaudeSend) {
     return fail({
       failureReason: "Live benchmark requires --approve-claude-send before writing Claude.",
-      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      stats: mergeStats([safariPreparation.stats, notesPreparationStats, notesWrite.stats]),
       xWindow: safariPreparation.xWindow,
       stageNotes:
         "Live run stopped before Claude mutation because Claude send was not explicitly approved.",
@@ -1670,7 +1751,7 @@ async function runSafariNotesClaudeBenchmark(
   if (!inputResolution.ok) {
     return fail({
       failureReason: inputResolution.summary,
-      stats: mergeStats([safariPreparation.stats, notesWrite.stats]),
+      stats: mergeStats([safariPreparation.stats, notesPreparationStats, notesWrite.stats]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because Claude composer resolution failed.",
     });
@@ -1703,7 +1784,12 @@ async function runSafariNotesClaudeBenchmark(
   if (!claudeWrite.ok) {
     return fail({
       failureReason: claudeWrite.failureReason ?? "Claude write verification failed.",
-      stats: mergeStats([safariPreparation.stats, notesWrite.stats, claudeWrite.stats]),
+      stats: mergeStats([
+        safariPreparation.stats,
+        notesPreparationStats,
+        notesWrite.stats,
+        claudeWrite.stats,
+      ]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because benchmark stopped during Claude write verification.",
     });
@@ -1754,7 +1840,12 @@ async function runSafariNotesClaudeBenchmark(
   if (failedSendResolution) {
     return fail({
       failureReason: failedSendResolution.summary,
-      stats: mergeStats([safariPreparation.stats, notesWrite.stats, claudeWrite.stats]),
+      stats: mergeStats([
+        safariPreparation.stats,
+        notesPreparationStats,
+        notesWrite.stats,
+        claudeWrite.stats,
+      ]),
       xWindow: safariPreparation.xWindow,
       stageNotes: "Not measured because benchmark stopped before Claude submit.",
     });
@@ -1767,6 +1858,7 @@ async function runSafariNotesClaudeBenchmark(
   audit.push(verifiedSubmit.audit);
   const stats = mergeStats([
     safariPreparation.stats,
+    notesPreparationStats,
     notesWrite.stats,
     claudeWrite.stats,
     verifiedSubmit.stats,

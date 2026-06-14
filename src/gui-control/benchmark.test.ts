@@ -173,6 +173,7 @@ describe("runGuiBenchmark", () => {
     let notesValue = "";
     let claudeValue = "";
     let claudeReply = "";
+    let notesNewClicked = false;
 
     const result = await runGuiBenchmark({
       runtime: "open-computer-use",
@@ -217,10 +218,25 @@ describe("runGuiBenchmark", () => {
               visibleText: notesValue ? [notesValue] : ["Notes"],
               elements: [
                 {
+                  ref: "@notes-new",
+                  role: "button",
+                  label: "New Note",
+                  appName: "Notes",
+                  windowTitle: "Notes",
+                },
+                {
                   ref: "@notes-body",
-                  role: "textArea",
-                  label: "Note body",
+                  role: "text entry area (settable)",
+                  label: "text entry area (settable)",
                   value: notesValue || "Start typing",
+                  appName: "Notes",
+                  windowTitle: "Notes",
+                },
+                {
+                  ref: "@notes-count",
+                  role: "text",
+                  label: "450 notes",
+                  value: "450 notes",
                   appName: "Notes",
                   windowTitle: "Notes",
                 },
@@ -262,6 +278,12 @@ describe("runGuiBenchmark", () => {
           return { ok: true, actionCount: 1 };
         },
         async click(target: ElementRef) {
+          if (target.appName === "Notes") {
+            expect(target.ref).toBe("@notes-new");
+            notesNewClicked = true;
+            notesValue = "";
+            return { ok: true, actionCount: 1, movedFocus: false };
+          }
           expect(target.ref).toBe("@claude-send");
           const replyToken = replyTokenFromMessage(claudeValue);
           claudeReply = `Claude summarized the Apple Notes content and included ${replyToken}.`;
@@ -297,6 +319,7 @@ describe("runGuiBenchmark", () => {
     ]);
     expect(notesValue).toContain("Jarvis GUI benchmark safari-notes-claude");
     expect(notesValue).toContain("Visible token: JARVIS_GUI_");
+    expect(notesNewClicked).toBe(true);
     expect(claudeValue).toBe("");
     expect(result.replyText).toContain("JARVIS_GUI_");
   });
