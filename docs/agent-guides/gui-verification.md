@@ -3,6 +3,10 @@
 Use this when a change has a visual acceptance condition that terminal output
 cannot prove by itself.
 
+For OpenComputerUse-backed Jarvis GUI-control benchmark work, use
+`docs/agent-guides/gui-control-ocu-stability.md` as the active checklist and
+methodology.
+
 ## Principle
 
 GUI evidence proves what the operator could see. It does not replace structured
