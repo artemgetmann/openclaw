@@ -32,6 +32,7 @@ export type GuiBenchmarkOptions = {
   approveClaudeSend?: boolean;
   approveNotesWrite?: boolean;
   openXHome?: boolean;
+  openClaudeNew?: boolean;
   claudeInputRef?: string;
   replyExtractionTimeoutMs?: number;
   replyExtractionIntervalMs?: number;
@@ -287,6 +288,43 @@ function mergeStats(stats: GuiVerifierStats[]): GuiVerifierStats {
   );
 }
 
+function emptyGuiVerifierStats(): GuiVerifierStats {
+  return {
+    actionCount: 0,
+    retries: 0,
+    staleRefs: 0,
+    usedClipboard: false,
+    movedFocus: false,
+    falseSuccesses: 0,
+    falseFailures: 0,
+  };
+}
+
+function statsFromActionResult(result: {
+  actionCount?: number;
+  staleRef?: boolean;
+  usedClipboard?: boolean;
+  movedFocus?: boolean;
+}): GuiVerifierStats {
+  return {
+    ...emptyGuiVerifierStats(),
+    actionCount: result.actionCount ?? 0,
+    staleRefs: result.staleRef ? 1 : 0,
+    usedClipboard: Boolean(result.usedClipboard),
+    movedFocus: Boolean(result.movedFocus),
+  };
+}
+
+function addStats(target: GuiVerifierStats, extra: GuiVerifierStats) {
+  target.actionCount += extra.actionCount;
+  target.retries += extra.retries;
+  target.staleRefs += extra.staleRefs;
+  target.usedClipboard ||= extra.usedClipboard;
+  target.movedFocus ||= extra.movedFocus;
+  target.falseSuccesses += extra.falseSuccesses;
+  target.falseFailures += extra.falseFailures;
+}
+
 function visibleSnapshotText(snapshot: { summary?: string; visibleText?: string[] }): string[] {
   return [snapshot.summary, ...(snapshot.visibleText ?? [])].filter((value): value is string =>
     Boolean(value?.trim()),
@@ -322,6 +360,13 @@ function resolveClaudeComposer(snapshot: GuiSnapshot, ref?: string) {
   return resolveElementRef(snapshot, {
     intent: "text-input",
     labelIncludes: "Write your prompt to Claude",
+  });
+}
+
+function resolveClaudeNewChatButton(snapshot: GuiSnapshot) {
+  return resolveElementRef(snapshot, {
+    intent: "button",
+    labelIncludes: "New chat",
   });
 }
 
@@ -613,6 +658,94 @@ async function observeBenchmarkSafariSnapshot(input: {
 
     input.stats.retries += 1;
     await sleep(750);
+  }
+}
+
+async function prepareBenchmarkClaudeTarget(input: {
+  runtime: GuiRuntime;
+  openClaudeNew: boolean;
+  dryRun: boolean;
+  progress: (message: string) => void;
+}): Promise<
+  | { ok: true; stats: GuiVerifierStats }
+  | { ok: false; failureReason: string; stats: GuiVerifierStats }
+> {
+  if (!input.openClaudeNew) {
+    return { ok: true, stats: emptyGuiVerifierStats() };
+  }
+  if (!input.runtime.openUrl) {
+    return {
+      ok: false,
+      failureReason: "Selected GUI runtime cannot open a fresh Claude chat.",
+      stats: emptyGuiVerifierStats(),
+    };
+  }
+
+  input.progress("Opening Claude");
+  const opened = await input.runtime.openUrl({ appName: "Claude" }, "https://claude.ai/new");
+  const stats = statsFromActionResult(opened);
+  if (!opened.ok) {
+    return {
+      ok: false,
+      failureReason: opened.message ?? "Claude fresh-chat open failed.",
+      stats,
+    };
+  }
+
+  const deadline = Date.now() + (input.dryRun ? 0 : 20_000);
+  let lastFailureReason = "";
+  let attemptedReload = false;
+  let clickedNewChat = false;
+  for (;;) {
+    const snapshot = await input.runtime.observe({ appName: "Claude" });
+    if (!clickedNewChat && !input.dryRun) {
+      const newChat = resolveClaudeNewChatButton(snapshot);
+      if (newChat.ok) {
+        input.progress("Opening Claude new chat");
+        const clicked = await input.runtime.click(newChat.element);
+        addStats(stats, statsFromActionResult(clicked));
+        if (!clicked.ok) {
+          return {
+            ok: false,
+            failureReason: clicked.message ?? "Claude New chat click failed.",
+            stats,
+          };
+        }
+        clickedNewChat = true;
+        await sleep(3_000);
+        continue;
+      }
+      lastFailureReason = newChat.summary;
+    }
+    const composer = resolveClaudeComposer(snapshot);
+    if (composer.ok) {
+      return { ok: true, stats };
+    }
+    lastFailureReason = composer.summary;
+    if (!attemptedReload && !input.dryRun && input.runtime.press) {
+      attemptedReload = true;
+      input.progress("Reloading Claude");
+      const reload = await input.runtime.press({ appName: "Claude" }, ["cmd+r"]);
+      addStats(stats, statsFromActionResult(reload));
+      if (!reload.ok) {
+        return {
+          ok: false,
+          failureReason: reload.message ?? "Claude fresh-chat reload failed.",
+          stats,
+        };
+      }
+      await sleep(8_000);
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      return {
+        ok: false,
+        failureReason: `Claude fresh-chat composer was not available: ${lastFailureReason}`,
+        stats,
+      };
+    }
+    stats.retries += 1;
+    await sleep(1_000);
   }
 }
 
@@ -1814,6 +1947,39 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
     return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
   }
 
+  const claudePreparation = await prepareBenchmarkClaudeTarget({
+    runtime,
+    openClaudeNew: Boolean(options.openClaudeNew),
+    dryRun: Boolean(options.dryRun),
+    progress,
+  });
+  if (!claudePreparation.ok) {
+    const elapsedSeconds = (Date.now() - started) / 1000;
+    const base = {
+      ok: false,
+      runtime: options.runtime,
+      task: options.task,
+      dryRun: Boolean(options.dryRun),
+      elapsedSeconds,
+      ...mergeStats([safariPreparation.stats, claudePreparation.stats]),
+      directRuntimeEscape: false,
+      replyTextExtracted: false,
+      replyExtractionMethod: "none" as const,
+      xWindow: safariPreparation.xWindow,
+      stageManager: {
+        sameStageOrBackgroundSafe: null,
+        notes: "Not measured because Claude fresh-chat preparation failed.",
+      },
+      virtualPointer: {
+        present: false,
+        notes: "No virtual pointer surfaced by v0 agent-desktop adapter.",
+      },
+      audit,
+      failureReason: claudePreparation.failureReason,
+    };
+    return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+  }
+
   progress("Writing Claude");
   const claudeWriteSnapshot = await runtime.observe(claudeTarget);
   const inputResolution = resolveClaudeComposer(claudeWriteSnapshot, options.claudeInputRef);
@@ -1825,7 +1991,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
       task: options.task,
       dryRun: Boolean(options.dryRun),
       elapsedSeconds,
-      ...safariPreparation.stats,
+      ...mergeStats([safariPreparation.stats, claudePreparation.stats]),
       directRuntimeEscape: false,
       replyTextExtracted: false,
       replyExtractionMethod: "none" as const,
@@ -1875,7 +2041,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
       task: options.task,
       dryRun: Boolean(options.dryRun),
       elapsedSeconds,
-      ...mergeStats([safariPreparation.stats, writeResult.stats]),
+      ...mergeStats([safariPreparation.stats, claudePreparation.stats, writeResult.stats]),
       directRuntimeEscape: false,
       replyTextExtracted: false,
       replyExtractionMethod: "none" as const,
@@ -1944,7 +2110,7 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
       task: options.task,
       dryRun: Boolean(options.dryRun),
       elapsedSeconds,
-      ...mergeStats([safariPreparation.stats, writeResult.stats]),
+      ...mergeStats([safariPreparation.stats, claudePreparation.stats, writeResult.stats]),
       directRuntimeEscape: false,
       replyTextExtracted: false,
       replyExtractionMethod: "none" as const,
@@ -1969,7 +2135,12 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
   const verifiedSubmit = await submitPromise;
   audit.push(verifiedSubmit.audit);
 
-  const stats = mergeStats([safariPreparation.stats, writeResult.stats, verifiedSubmit.stats]);
+  const stats = mergeStats([
+    safariPreparation.stats,
+    claudePreparation.stats,
+    writeResult.stats,
+    verifiedSubmit.stats,
+  ]);
   let replyText: string | undefined;
   let replyExtractionMethod: GuiBenchmarkResult["replyExtractionMethod"] = "none";
   if (verifiedSubmit.ok) {

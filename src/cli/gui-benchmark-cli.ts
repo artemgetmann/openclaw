@@ -56,6 +56,11 @@ export function registerGuiBenchmarkCli(program: Command) {
       false,
     )
     .option(
+      "--open-claude-new",
+      "Open https://claude.ai/new in Claude before resolving the composer",
+      false,
+    )
+    .option(
       "--require-codex-parity",
       "Exit nonzero unless the benchmark passes the Codex Computer Use parity gate",
       false,
@@ -76,6 +81,7 @@ export function registerGuiBenchmarkCli(program: Command) {
           approveClaudeSend: Boolean(opts.approveClaudeSend),
           approveNotesWrite: Boolean(opts.approveNotesWrite),
           openXHome: Boolean(opts.openXHome),
+          openClaudeNew: Boolean(opts.openClaudeNew),
           allowClipboardFallback: opts.requireCodexParity
             ? false
             : opts.clipboardFallback !== false,

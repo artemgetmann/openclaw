@@ -109,6 +109,29 @@ describe("runGuiBenchmark", () => {
     expect(result.markdownSummary).toContain("GUI Benchmark: x-to-claude");
   });
 
+  it("can prepare a fresh Claude chat before x-to-claude writes", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: true,
+      openClaudeNew: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.actionCount).toBe(3);
+    expect(result.movedFocus).toBe(true);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(progress).toEqual([
+      "Reading X",
+      "Opening Claude",
+      "Writing Claude",
+      "Verifying the reply",
+    ]);
+  });
+
   it("runs safari-notes-claude in dry-run mode without real GUI mutation", async () => {
     const progress: string[] = [];
 
