@@ -52,6 +52,7 @@ describe("runtime-fingerprint", () => {
           stateDir: path.join(root, ".state"),
           configPath: path.join(root, "config", "openclaw.json"),
           serviceLabel: "ai.openclaw.ops",
+          openClawVersion: expect.any(String),
         });
       },
     );
@@ -81,9 +82,10 @@ describe("runtime-fingerprint", () => {
         stateDir: "/state",
         configPath: "/state/openclaw.json",
         serviceLabel: "ai.openclaw.gateway",
+        openClawVersion: "1.2.3",
       }),
     ).toBe(
-      "branch=main worktree=/repo stateDir=/state configPath=/state/openclaw.json serviceLabel=ai.openclaw.gateway",
+      "branch=main worktree=/repo stateDir=/state configPath=/state/openclaw.json serviceLabel=ai.openclaw.gateway openClawVersion=1.2.3",
     );
   });
 });

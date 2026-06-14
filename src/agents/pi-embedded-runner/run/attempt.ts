@@ -11,11 +11,13 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveGatewayPort } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { resolveRuntimeFingerprint } from "../../../infra/runtime-fingerprint.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk-internal/signal.js";
 import {
@@ -1810,6 +1812,18 @@ export async function runEmbeddedAttempt(
       injectedFiles: contextFiles,
       skillsPrompt,
       tools,
+      runtime: (() => {
+        const fingerprint = resolveRuntimeFingerprint({ cwd: effectiveWorkspace });
+        return {
+          ...(fingerprint.openClawVersion ? { openClawVersion: fingerprint.openClawVersion } : {}),
+          branch: fingerprint.branch,
+          worktree: fingerprint.worktree,
+          stateDir: fingerprint.stateDir,
+          configPath: fingerprint.configPath,
+          serviceLabel: fingerprint.serviceLabel,
+          gatewayPort: resolveGatewayPort(params.config),
+        };
+      })(),
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();

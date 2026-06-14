@@ -409,6 +409,15 @@ export type SessionSystemPromptReport = {
   provider?: string;
   model?: string;
   workspaceDir?: string;
+  runtime?: {
+    openClawVersion?: string;
+    branch?: string;
+    worktree?: string;
+    stateDir?: string;
+    configPath?: string;
+    serviceLabel?: string;
+    gatewayPort?: number;
+  };
   bootstrapMaxChars?: number;
   bootstrapTotalMaxChars?: number;
   bootstrapTruncation?: {
@@ -439,7 +448,7 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
-    entries: Array<{ name: string; blockChars: number }>;
+    entries: Array<{ name: string; blockChars: number; location?: string }>;
   };
   tools: {
     listChars: number;
