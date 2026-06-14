@@ -192,6 +192,98 @@ describe("runGuiBenchmark", () => {
     ]);
   });
 
+  it("runs workspace-restore in dry-run mode without real focus changes", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "workspace-restore",
+      dryRun: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task).toBe("workspace-restore");
+    expect(result.dryRun).toBe(true);
+    expect(result.restoreDiagnostics).toHaveLength(3);
+    expect(result.restoreDiagnostics?.map((diagnostic) => diagnostic.name)).toEqual([
+      "Terminal->Claude->Terminal",
+      "Safari->Claude->Safari",
+      "Notes->Claude->Notes",
+    ]);
+    expect(result.restoreDiagnostics?.every((diagnostic) => diagnostic.restoreAttempted)).toBe(
+      false,
+    );
+    expect(result.qualityGate.codexComputerUseParity).toBe("not-measured");
+    expect(progress).toEqual([]);
+  });
+
+  it("records workspace restore diagnostics for each source app", async () => {
+    const progress: string[] = [];
+    let frontmost = "Terminal";
+    let focusCalls = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "workspace-restore",
+      dryRun: false,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return ["Terminal", "Safari", "Notes", "Claude"].map((appName) => ({
+            appName,
+            frontmost: appName === frontmost,
+          }));
+        },
+        async listWindows() {
+          return ["Terminal", "Safari", "Notes", "Claude"].map((appName) => ({
+            id: `${appName.toLowerCase()}-window`,
+            appName,
+            title: `${appName} Window`,
+            focused: appName === frontmost,
+          }));
+        },
+        async focusWindow(target) {
+          focusCalls += 1;
+          frontmost = target.appName;
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async observe() {
+          return benchmarkSnapshot({ appName: frontmost });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.restoreDiagnostics).toHaveLength(3);
+    expect(result.restoreDiagnostics?.map((diagnostic) => diagnostic.restoredFrontmost)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(result.restoreDiagnostics?.map((diagnostic) => diagnostic.frontmostAfterTask)).toEqual([
+      "Claude",
+      "Claude",
+      "Claude",
+    ]);
+    expect(result.qualityGate.codexComputerUseParity).toBe("pass");
+    expect(result.qualityGate.blockers).toEqual([]);
+    expect(result.workspace.frontmostAfter).toBe("Terminal");
+    expect(focusCalls).toBe(10);
+    expect(progress).toEqual([
+      "Testing Terminal restore",
+      "Testing Safari restore",
+      "Testing Notes restore",
+    ]);
+  });
+
   it("runs safari-notes-claude with semantic Notes and Claude actions plus pointer proof", async () => {
     let notesValue = "";
     let claudeValue = "";

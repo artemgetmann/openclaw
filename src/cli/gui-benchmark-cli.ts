@@ -13,7 +13,7 @@ function parseRuntime(value: string): GuiRuntimeName {
 }
 
 function parseTask(value: string): GuiBenchmarkTask {
-  if (value === "x-to-claude" || value === "safari-notes-claude") {
+  if (value === "x-to-claude" || value === "safari-notes-claude" || value === "workspace-restore") {
     return value;
   }
   throw new Error(`Unsupported GUI benchmark task: ${value}`);
@@ -35,7 +35,10 @@ export function registerGuiBenchmarkCli(program: Command) {
     .command("gui-benchmark")
     .description("Experimental dev-only Jarvis GUI-control benchmark harness")
     .requiredOption("--runtime <runtime>", "Runtime adapter: agent-desktop, open-computer-use")
-    .requiredOption("--task <task>", "Benchmark task: x-to-claude, safari-notes-claude")
+    .requiredOption(
+      "--task <task>",
+      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore",
+    )
     .option("--dry-run", "Simulate the benchmark without touching real apps", false)
     .option("--write-report", "Write structured JSON report under artifacts/gui-benchmark", false)
     .option("--report-dir <path>", "Directory for --write-report output")

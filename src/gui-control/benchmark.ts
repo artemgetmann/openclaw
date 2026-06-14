@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 import { performVerifiedAction } from "./verifier.js";
 
-export type GuiBenchmarkTask = "x-to-claude" | "safari-notes-claude";
+export type GuiBenchmarkTask = "x-to-claude" | "safari-notes-claude" | "workspace-restore";
 
 export type GuiBenchmarkOptions = {
   runtime: GuiRuntimeName;
@@ -115,7 +115,34 @@ export type GuiBenchmarkResult = {
   audit: GuiAuditRecord[];
   markdownSummary: string;
   replyText?: string;
+  restoreDiagnostics?: GuiWorkspaceRestoreDiagnostic[];
   reportPath?: string;
+  failureReason?: string;
+};
+
+export type GuiWorkspaceRestoreDiagnostic = {
+  name: string;
+  sourceApp: string;
+  destinationApp: string;
+  sourceWindow?: {
+    id?: string;
+    title?: string;
+  };
+  destinationWindow?: {
+    id?: string;
+    title?: string;
+  };
+  setupAttempted: boolean;
+  setupSucceeded: boolean | null;
+  taskFocusAttempted: boolean;
+  taskFocusSucceeded: boolean | null;
+  restoreAttempted: boolean;
+  restoreSucceeded: boolean | null;
+  frontmostBefore?: string;
+  frontmostAfterTask?: string;
+  frontmostAfterRestore?: string;
+  restoredFrontmost: boolean | null;
+  actionCount: number;
   failureReason?: string;
 };
 
@@ -828,6 +855,136 @@ async function captureWorkspace(runtime: GuiRuntime): Promise<{
   }
 }
 
+function windowForApp(windows: WindowState[], appName: string): WindowState | undefined {
+  return (
+    windows.find(
+      (window) =>
+        window.focused && normalizeVisibleText(window.appName) === normalizeVisibleText(appName),
+    ) ??
+    windows.find((window) => normalizeVisibleText(window.appName) === normalizeVisibleText(appName))
+  );
+}
+
+function summarizeDiagnosticWindow(window: WindowState | undefined):
+  | {
+      id?: string;
+      title?: string;
+    }
+  | undefined {
+  return window
+    ? {
+        id: window.id,
+        title: window.title,
+      }
+    : undefined;
+}
+
+async function runWorkspaceRestoreCase(input: {
+  runtime: GuiRuntime;
+  sourceApp: string;
+  destinationApp: string;
+}): Promise<GuiWorkspaceRestoreDiagnostic> {
+  const name = `${input.sourceApp}->${input.destinationApp}->${input.sourceApp}`;
+  const windows = input.runtime.listWindows ? await input.runtime.listWindows() : [];
+  const sourceWindow = windowForApp(windows, input.sourceApp);
+  const destinationWindow = windowForApp(windows, input.destinationApp);
+  let actionCount = 0;
+
+  if (!input.runtime.focusWindow || !input.runtime.listWindows) {
+    return {
+      name,
+      sourceApp: input.sourceApp,
+      destinationApp: input.destinationApp,
+      sourceWindow: summarizeDiagnosticWindow(sourceWindow),
+      destinationWindow: summarizeDiagnosticWindow(destinationWindow),
+      setupAttempted: false,
+      setupSucceeded: null,
+      taskFocusAttempted: false,
+      taskFocusSucceeded: null,
+      restoreAttempted: false,
+      restoreSucceeded: null,
+      restoredFrontmost: null,
+      actionCount,
+      failureReason: "Runtime does not expose listWindows and focusWindow.",
+    };
+  }
+
+  if (!sourceWindow || !destinationWindow) {
+    return {
+      name,
+      sourceApp: input.sourceApp,
+      destinationApp: input.destinationApp,
+      sourceWindow: summarizeDiagnosticWindow(sourceWindow),
+      destinationWindow: summarizeDiagnosticWindow(destinationWindow),
+      setupAttempted: false,
+      setupSucceeded: null,
+      taskFocusAttempted: false,
+      taskFocusSucceeded: null,
+      restoreAttempted: false,
+      restoreSucceeded: null,
+      restoredFrontmost: null,
+      actionCount,
+      failureReason: `Missing diagnostic window: ${sourceWindow ? "" : input.sourceApp}${
+        !sourceWindow && !destinationWindow ? ", " : ""
+      }${destinationWindow ? "" : input.destinationApp}.`,
+    };
+  }
+
+  const setup = await input.runtime.focusWindow(sourceWindow);
+  actionCount += setup.actionCount ?? 1;
+  await sleep(500);
+  const before = await captureWorkspace(input.runtime);
+
+  const taskFocus = await input.runtime.focusWindow(destinationWindow);
+  actionCount += taskFocus.actionCount ?? 1;
+  await sleep(500);
+  const afterTask = await captureWorkspace(input.runtime);
+
+  const restore = await input.runtime.focusWindow(sourceWindow);
+  actionCount += restore.actionCount ?? 1;
+  await sleep(500);
+  const afterRestore = await captureWorkspace(input.runtime);
+
+  const restoredFrontmost =
+    afterRestore.frontmostApp && input.sourceApp
+      ? normalizeVisibleText(afterRestore.frontmostApp) === normalizeVisibleText(input.sourceApp)
+      : null;
+  const failureReason =
+    before.error ??
+    afterTask.error ??
+    afterRestore.error ??
+    (setup.ok ? undefined : (setup.message ?? `Could not focus ${input.sourceApp} for setup.`)) ??
+    (taskFocus.ok
+      ? undefined
+      : (taskFocus.message ?? `Could not focus ${input.destinationApp} for task step.`)) ??
+    (restore.ok ? undefined : (restore.message ?? `Could not restore ${input.sourceApp}.`)) ??
+    (restoredFrontmost === true
+      ? undefined
+      : `Expected ${input.sourceApp} frontmost after restore, saw ${
+          afterRestore.frontmostApp ?? "unknown"
+        }.`);
+
+  return {
+    name,
+    sourceApp: input.sourceApp,
+    destinationApp: input.destinationApp,
+    sourceWindow: summarizeDiagnosticWindow(sourceWindow),
+    destinationWindow: summarizeDiagnosticWindow(destinationWindow),
+    setupAttempted: true,
+    setupSucceeded: setup.ok,
+    taskFocusAttempted: true,
+    taskFocusSucceeded: taskFocus.ok,
+    restoreAttempted: true,
+    restoreSucceeded: restore.ok,
+    frontmostBefore: before.frontmostApp,
+    frontmostAfterTask: afterTask.frontmostApp,
+    frontmostAfterRestore: afterRestore.frontmostApp,
+    restoredFrontmost,
+    actionCount,
+    failureReason,
+  };
+}
+
 async function restoreWorkspace(input: {
   runtime: GuiRuntime;
   workspaceBefore: Awaited<ReturnType<typeof captureWorkspace>>;
@@ -1322,6 +1479,23 @@ function evaluateQualityGate(
     };
   }
 
+  if (result.task === "workspace-restore") {
+    const failedDiagnostics =
+      result.restoreDiagnostics?.filter((diagnostic) => diagnostic.restoredFrontmost !== true) ??
+      [];
+    const blockers = failedDiagnostics.map(
+      (diagnostic) =>
+        `${diagnostic.name}: ${diagnostic.failureReason ?? "frontmost restore was not proven."}`,
+    );
+    return {
+      codexComputerUseParity: blockers.length ? "functional-pass-with-debt" : "pass",
+      onParWithCodexComputerUse: !blockers.length,
+      baselineElapsedSeconds,
+      baselineActionCount,
+      blockers,
+    };
+  }
+
   // A functional pass is not automatically product parity. Codex Computer Use
   // is the reference because it completed the task quickly, visibly, without
   // clipboard recovery, and with less user-workspace disruption.
@@ -1410,6 +1584,13 @@ function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): str
     `- virtual pointer/intent: ${result.virtualPointer.present ?? "unknown"}`,
     result.qualityGate.blockers.length
       ? `- parity blockers: ${result.qualityGate.blockers.join(" | ")}`
+      : "",
+    result.restoreDiagnostics?.length
+      ? `- restore diagnostics: ${result.restoreDiagnostics
+          .map(
+            (diagnostic) => `${diagnostic.name}=${diagnostic.restoredFrontmost ? "pass" : "fail"}`,
+          )
+          .join(", ")}`
       : "",
     result.failureReason ? `- failure: ${result.failureReason}` : "",
   ]
@@ -1941,10 +2122,126 @@ async function runSafariNotesClaudeBenchmark(
   return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
 }
 
+async function runWorkspaceRestoreBenchmark(
+  options: GuiBenchmarkOptions,
+): Promise<GuiBenchmarkResult> {
+  const started = Date.now();
+  const progress = options.progress ?? (() => undefined);
+  const runtime = options.runtimeImpl ?? createBenchmarkRuntime(options);
+  const workspaceBefore = await captureWorkspace(runtime);
+
+  if (options.dryRun) {
+    const elapsedSeconds = (Date.now() - started) / 1000;
+    const diagnostics: GuiWorkspaceRestoreDiagnostic[] = ["Terminal", "Safari", "Notes"].map(
+      (sourceApp) => ({
+        name: `${sourceApp}->Claude->${sourceApp}`,
+        sourceApp,
+        destinationApp: "Claude",
+        setupAttempted: false,
+        setupSucceeded: null,
+        taskFocusAttempted: false,
+        taskFocusSucceeded: null,
+        restoreAttempted: false,
+        restoreSucceeded: null,
+        restoredFrontmost: null,
+        actionCount: 0,
+        failureReason: "Dry-run does not move real macOS focus.",
+      }),
+    );
+    const base = {
+      ok: true,
+      runtime: options.runtime,
+      task: options.task,
+      dryRun: true,
+      elapsedSeconds,
+      ...emptyGuiVerifierStats(),
+      directRuntimeEscape: false,
+      replyTextExtracted: false,
+      replyExtractionMethod: "none" as const,
+      xWindow: {
+        openAttempted: false,
+        openSucceeded: null,
+      },
+      stageManager: {
+        sameStageOrBackgroundSafe: null,
+        notes: "Dry-run does not measure real workspace restore.",
+      },
+      virtualPointer: {
+        present: false,
+        notes: "Dry-run does not measure OpenComputerUse pointer evidence.",
+      },
+      audit: [],
+      restoreDiagnostics: diagnostics,
+    };
+    return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+  }
+
+  const cases = ["Terminal", "Safari", "Notes"].map((sourceApp) => ({
+    sourceApp,
+    destinationApp: "Claude",
+  }));
+  const diagnostics: GuiWorkspaceRestoreDiagnostic[] = [];
+
+  for (const diagnosticCase of cases) {
+    progress(`Testing ${diagnosticCase.sourceApp} restore`);
+    diagnostics.push(await runWorkspaceRestoreCase({ runtime, ...diagnosticCase }));
+  }
+
+  const elapsedSeconds = (Date.now() - started) / 1000;
+  const actionCount = diagnostics.reduce((sum, diagnostic) => sum + diagnostic.actionCount, 0);
+  const allRestored = diagnostics.every((diagnostic) => diagnostic.restoredFrontmost === true);
+  const base = {
+    ok: diagnostics.every(
+      (diagnostic) =>
+        diagnostic.setupSucceeded === true &&
+        diagnostic.taskFocusSucceeded === true &&
+        diagnostic.restoreSucceeded === true &&
+        diagnostic.restoredFrontmost === true,
+    ),
+    runtime: options.runtime,
+    task: options.task,
+    dryRun: false,
+    elapsedSeconds,
+    ...emptyGuiVerifierStats(),
+    actionCount,
+    movedFocus: true,
+    directRuntimeEscape: false,
+    replyTextExtracted: false,
+    replyExtractionMethod: "none" as const,
+    xWindow: {
+      openAttempted: false,
+      openSucceeded: null,
+    },
+    stageManager: {
+      sameStageOrBackgroundSafe: allRestored,
+      notes: allRestored
+        ? "Restore-only diagnostic returned each source app to frontmost."
+        : "Restore-only diagnostic found at least one unrestored source app.",
+    },
+    virtualPointer: {
+      present: null,
+      notes: "OpenComputerUse pointer evidence is scored if the runtime reports it.",
+    },
+    audit: [],
+    restoreDiagnostics: diagnostics,
+    failureReason: allRestored
+      ? undefined
+      : diagnostics
+          .filter((diagnostic) => diagnostic.restoredFrontmost !== true)
+          .map((diagnostic) => `${diagnostic.name}: ${diagnostic.failureReason}`)
+          .join(" | "),
+  };
+  return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+}
+
 export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<GuiBenchmarkResult> {
   const started = Date.now();
   const progress = options.progress ?? (() => undefined);
   const audit: GuiAuditRecord[] = [];
+
+  if (options.task === "workspace-restore") {
+    return runWorkspaceRestoreBenchmark(options);
+  }
 
   if (options.task === "safari-notes-claude") {
     return runSafariNotesClaudeBenchmark(options);
