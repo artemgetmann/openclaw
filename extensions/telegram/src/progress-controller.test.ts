@@ -23,7 +23,7 @@ function createProgressControllerHarness() {
 }
 
 describe("createTelegramProgressController", () => {
-  it("serializes pending first send, edits cumulative progress, then deletes the same message", async () => {
+  it("serializes pending first send, cancels pending cleanup edit, then deletes the same message", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
     controller.update("Opening example.com");
@@ -38,12 +38,26 @@ describe("createTelegramProgressController", () => {
     await clearPromise;
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.editMessageText).toHaveBeenCalledWith(
-      123,
-      77,
-      "Opening example.com\n\nReading IANA example domains",
-    );
+    expect(api.editMessageText).not.toHaveBeenCalled();
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
+  });
+
+  it("edits cumulative progress while work is still active", async () => {
+    const { api, controller, resolveFirstSend } = createProgressControllerHarness();
+
+    controller.update("Opening example.com");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    resolveFirstSend?.({ message_id: 77 });
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    controller.update("Reading IANA example domains");
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenCalledWith(
+        123,
+        77,
+        "Opening example.com\n\nReading IANA example domains",
+      ),
+    );
   });
 
   it("dedupes repeated progress entries while preserving first-seen order", async () => {
@@ -56,17 +70,24 @@ describe("createTelegramProgressController", () => {
 
     controller.update("Opening example.com");
     controller.update("Reading IANA example domains\nOpening example.com");
-    await controller.clear();
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        77,
+        "Opening example.com\n\nReading IANA example domains",
+      ),
+    );
 
     expect(api.editMessageText).toHaveBeenLastCalledWith(
       123,
       77,
       "Opening example.com\n\nReading IANA example domains",
     );
+    await controller.clear();
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
-  it("caps cumulative progress by dropping oldest entries before Telegram rejects edits", async () => {
+  it("caps cumulative progress by dropping oldest entries without leaking an omitted marker", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
       editMessageText: vi.fn().mockResolvedValue(true),
@@ -84,13 +105,13 @@ describe("createTelegramProgressController", () => {
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
     controller.update("Second progress entry that should remain visible.");
     controller.update("Third progress entry that should remain visible.");
-    await controller.clear();
+    await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalled());
 
     const latestEditText = String(api.editMessageText.mock.lastCall?.[2] ?? "");
     expect(latestEditText.length).toBeLessThanOrEqual(80);
-    expect(latestEditText).toContain("earlier progress omitted");
     expect(latestEditText).toContain("Third progress entry");
     expect(latestEditText).not.toContain("First progress entry");
+    expect(latestEditText).not.toContain("earlier progress omitted");
   });
 
   it("keeps the newest progress entry visible when that entry alone needs truncation", async () => {
@@ -110,7 +131,7 @@ describe("createTelegramProgressController", () => {
     controller.update("Short old status.");
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
     controller.update("Newest status must remain visible even when it is too long to fit fully.");
-    await controller.clear();
+    await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalled());
 
     const latestEditText = String(api.editMessageText.mock.lastCall?.[2] ?? "");
     expect(latestEditText.length).toBeLessThanOrEqual(56);

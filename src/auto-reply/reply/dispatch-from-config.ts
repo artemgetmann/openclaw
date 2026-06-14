@@ -24,6 +24,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { logInfo } from "../../logger.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -41,7 +42,16 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
-import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
+import { parseTtsDirectives } from "../../tts/tts-core.js";
+import {
+  getLastTtsAttempt,
+  maybeApplyTtsToPayload,
+  normalizeTtsAutoMode,
+  type ResolvedTtsModelOverrides,
+  resolveTtsAutoMode,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+} from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { maybeResolveTextAlias, normalizeCommandBody } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
@@ -55,6 +65,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -64,6 +75,39 @@ const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINES = 6;
 const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINE_CHARS = 180;
 const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_LINES = 3;
 const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_CHARS = 240;
+
+function hasTtsDirective(text: string): boolean {
+  return /\[\[tts(?::|\]|\s)/i.test(text);
+}
+
+function shouldExpectFinalTtsAttempt(params: {
+  cfg: OpenClawConfig;
+  inboundAudio: boolean;
+  sessionTtsAuto?: string;
+  text: string;
+}): boolean {
+  const text = params.text.trim();
+  if (text.length < 10) {
+    return false;
+  }
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const autoMode = resolveTtsAutoMode({
+    config,
+    prefsPath,
+    ...(params.sessionTtsAuto ? { sessionAuto: params.sessionTtsAuto } : {}),
+  });
+  if (autoMode === "always") {
+    return true;
+  }
+  if (autoMode === "inbound") {
+    return params.inboundAudio;
+  }
+  if (autoMode === "tagged") {
+    return hasTtsDirective(text);
+  }
+  return false;
+}
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -236,6 +280,31 @@ function stripTelegramInternalToolSummaryLines(text: string): string {
       return !previousStripped && !nextStripped;
     })
     .join("\n");
+}
+
+function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        finalTtsSupplement: true,
+      },
+    },
+  };
 }
 
 const resolveSessionStoreLookup = (
@@ -412,6 +481,8 @@ export async function dispatchReplyFromConfig(params: {
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+  const shouldCaptionFinalTtsSupplement = ttsChannel === "telegram";
+  const shouldMarkFinalTtsSupplement = shouldCaptionFinalTtsSupplement && !shouldRouteToOriginating;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -867,16 +938,87 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (replies.length === 0 && durableBlockFinalText.trim()) {
+      const durableBlockFinalTextTrimmed = durableBlockFinalText.trim();
+      if (shouldCaptionFinalTtsSupplement && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+        const resolvedTtsConfig = resolveTtsConfig(cfg);
+        const fallbackDirectivePolicy: ResolvedTtsModelOverrides = {
+          enabled: true,
+          allowText: true,
+          allowProvider: false,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        };
+        const visibleDurableText = parseTtsDirectives(
+          durableBlockFinalTextTrimmed,
+          resolvedTtsConfig.modelOverrides ?? fallbackDirectivePolicy,
+          resolvedTtsConfig.openai?.baseUrl,
+        ).cleanedText.trim();
+        const durableFinalPayload = sanitizeTelegramVisiblePayload({
+          text: visibleDurableText || durableBlockFinalTextTrimmed,
+          channelData: {
+            openclaw: {
+              assistantPhase: "final_answer",
+            },
+          },
+        });
+        // Telegram block streams use mutable previews while the model is still
+        // speaking. Once the resolver returns with no separate final payload,
+        // promote the accumulated block text to a durable final immediately so
+        // preview cleanup is not delayed by slower TTS synthesis.
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const result = await routeReply({
+            payload: durableFinalPayload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            isGroup,
+            groupId,
+          });
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (block-final-text) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+          queuedFinal = result.ok || queuedFinal;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(durableFinalPayload) || queuedFinal;
+        }
+      }
+      logInfo(
+        `telegram: block-stream final text ready; finalizing block preview before tts textLength=${durableBlockFinalTextTrimmed.length}`,
+      );
+      await dispatcher.finalizeBlockReply?.();
+      logInfo(
+        `telegram: block-stream final preview finalized before tts textLength=${durableBlockFinalTextTrimmed.length}`,
+      );
+      const ttsAttemptStartedAt = Date.now();
+      logInfo(
+        `tts: final supplement synthesis start path=block-stream textLength=${durableBlockFinalTextTrimmed.length} channel=${ttsChannel ?? "unknown"}`,
+      );
       const ttsReply = await maybeApplyAutomaticTts(
-        { text: durableBlockFinalText.trim() },
+        { text: durableBlockFinalTextTrimmed },
         "final",
       );
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
-        const ttsSupplement = sanitizeTelegramVisiblePayload({
+        const ttsPayload = {
           ...ttsReply,
-          text: undefined,
-        });
+          text: shouldCaptionFinalTtsSupplement
+            ? buildFinalTtsCaptionPreview(ttsReply.text ?? "")
+            : undefined,
+        };
+        const ttsSupplement = sanitizeTelegramVisiblePayload(
+          shouldMarkFinalTtsSupplement ? markFinalTtsSupplement(ttsPayload) : ttsPayload,
+        );
         if (shouldRouteToOriginating && originatingChannel && originatingTo) {
           const result = await routeReply({
             payload: ttsSupplement,
@@ -901,12 +1043,198 @@ export async function dispatchReplyFromConfig(params: {
         } else {
           queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
         }
+        logInfo(
+          `tts: final supplement media send queued path=block-stream textLength=${durableBlockFinalText.trim().length}`,
+        );
+      } else if (
+        shouldCaptionFinalTtsSupplement &&
+        !sourceReplyPolicy.suppressAutomaticSourceDelivery
+      ) {
+        const lastAttempt = getLastTtsAttempt();
+        const failedThisAttempt =
+          lastAttempt && lastAttempt.timestamp >= ttsAttemptStartedAt && !lastAttempt.success;
+        const expectedThisAttempt = shouldExpectFinalTtsAttempt({
+          cfg,
+          inboundAudio,
+          sessionTtsAuto: turnTtsAuto,
+          text: durableBlockFinalText,
+        });
+        logInfo(
+          `tts: final supplement synthesis ${failedThisAttempt ? "failed" : "skipped"} path=block-stream textLength=${durableBlockFinalText.trim().length} expected=${String(expectedThisAttempt)} error=${failedThisAttempt ? (lastAttempt.error ?? "unknown") : "none"}`,
+        );
+        if (failedThisAttempt || expectedThisAttempt) {
+          const failurePayload = markFinalTtsSupplement({
+            text: "Voice note failed. Final text is above.",
+            channelData: {
+              openclaw: {
+                ttsFailureStatus: true,
+              },
+            },
+          });
+          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const result = await routeReply({
+              payload: failurePayload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: ctx.SessionKey,
+              accountId: ctx.AccountId,
+              threadId: routeThreadId,
+              cfg,
+              isGroup,
+              groupId,
+            });
+            queuedFinal = result.ok || queuedFinal;
+            if (result.ok) {
+              routedFinalCount += 1;
+            }
+          } else {
+            queuedFinal = dispatcher.sendFinalReply(failurePayload) || queuedFinal;
+          }
+        }
       }
     }
     for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (shouldSuppressReasoningPayload(reply)) {
+        continue;
+      }
+      const replyFinalText = reply.text?.trim();
+      const shouldPreDeliverTelegramFinalText =
+        shouldCaptionFinalTtsSupplement &&
+        !sourceReplyPolicy.suppressAutomaticSourceDelivery &&
+        Boolean(replyFinalText) &&
+        !isControlCommandReplyPayload(reply) &&
+        shouldExpectFinalTtsAttempt({
+          cfg,
+          inboundAudio,
+          sessionTtsAuto: turnTtsAuto,
+          text: replyFinalText ?? "",
+        }) &&
+        !reply.mediaUrl &&
+        !(reply.mediaUrls?.length ?? 0);
+      if (shouldPreDeliverTelegramFinalText && replyFinalText) {
+        const durableFinalPayload = sanitizeTelegramVisiblePayload({
+          ...reply,
+          text: replyFinalText,
+          channelData: {
+            ...reply.channelData,
+            openclaw: {
+              ...((reply.channelData?.openclaw &&
+              typeof reply.channelData.openclaw === "object" &&
+              !Array.isArray(reply.channelData.openclaw)
+                ? reply.channelData.openclaw
+                : {}) as Record<string, unknown>),
+              assistantPhase: "final_answer",
+            },
+          },
+        });
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const result = await routeReply({
+            payload: durableFinalPayload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            isGroup,
+            groupId,
+          });
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (final-text-before-tts) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+          queuedFinal = result.ok || queuedFinal;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(durableFinalPayload) || queuedFinal;
+        }
+        logInfo(
+          `telegram: final text ready; finalizing preview before tts textLength=${replyFinalText.length}`,
+        );
+        await dispatcher.finalizeBlockReply?.();
+        logInfo(`telegram: final preview finalized before tts textLength=${replyFinalText.length}`);
+
+        const ttsAttemptStartedAt = Date.now();
+        const ttsReply = await maybeApplyAutomaticTts(reply, "final");
+        const hasFinalTtsMedia =
+          Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
+        if (hasFinalTtsMedia) {
+          const ttsPayload = {
+            ...ttsReply,
+            text: buildFinalTtsCaptionPreview(ttsReply.text ?? replyFinalText),
+          };
+          const ttsSupplement = sanitizeTelegramVisiblePayload(
+            shouldMarkFinalTtsSupplement ? markFinalTtsSupplement(ttsPayload) : ttsPayload,
+          );
+          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const result = await routeReply({
+              payload: ttsSupplement,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: ctx.SessionKey,
+              accountId: ctx.AccountId,
+              threadId: routeThreadId,
+              cfg,
+              isGroup,
+              groupId,
+            });
+            if (!result.ok) {
+              logVerbose(
+                `dispatch-from-config: route-reply (final-tts-supplement) failed: ${result.error ?? "unknown error"}`,
+              );
+            }
+            queuedFinal = result.ok || queuedFinal;
+            if (result.ok) {
+              routedFinalCount += 1;
+            }
+          } else {
+            queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
+          }
+        } else {
+          const lastAttempt = getLastTtsAttempt();
+          const failedThisAttempt =
+            lastAttempt && lastAttempt.timestamp >= ttsAttemptStartedAt && !lastAttempt.success;
+          const expectedThisAttempt = shouldExpectFinalTtsAttempt({
+            cfg,
+            inboundAudio,
+            sessionTtsAuto: turnTtsAuto,
+            text: replyFinalText,
+          });
+          if (failedThisAttempt || expectedThisAttempt) {
+            const failurePayload = markFinalTtsSupplement({
+              text: "Voice note failed. Final text is above.",
+              channelData: {
+                openclaw: {
+                  ttsFailureStatus: true,
+                },
+              },
+            });
+            if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+              const result = await routeReply({
+                payload: failurePayload,
+                channel: originatingChannel,
+                to: originatingTo,
+                sessionKey: ctx.SessionKey,
+                accountId: ctx.AccountId,
+                threadId: routeThreadId,
+                cfg,
+                isGroup,
+                groupId,
+              });
+              queuedFinal = result.ok || queuedFinal;
+              if (result.ok) {
+                routedFinalCount += 1;
+              }
+            } else {
+              queuedFinal = dispatcher.sendFinalReply(failurePayload) || queuedFinal;
+            }
+          }
+        }
         continue;
       }
       const ttsReply = await maybeApplyAutomaticTts(reply, "final");

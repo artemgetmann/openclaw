@@ -2,6 +2,7 @@ import { parseExecArgvToken } from "./exec-approvals-analysis.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
+  type SafeBinCommandFamilyOptions,
   type SafeBinValueGuard,
   type SafeBinProfile,
 } from "./exec-safe-bin-policy-profiles.js";
@@ -66,6 +67,54 @@ function matchesCommandFamily(
       family.length <= positional.length &&
       family.every((token, index) => positional[index]?.toLowerCase() === token),
   );
+}
+
+function collectPotentialPositionals(args: readonly string[]): string[] {
+  const positional: string[] = [];
+  for (const raw of args) {
+    const token = parseExecArgvToken(raw);
+    if (token.kind === "positional" && isSafeLiteralToken(token.raw)) {
+      positional.push(token.raw);
+    }
+  }
+  return positional;
+}
+
+function resolveCommandFamilyOptions(
+  args: readonly string[],
+  options: readonly SafeBinCommandFamilyOptions[] | undefined,
+): SafeBinCommandFamilyOptions | null {
+  if (!options || options.length === 0) {
+    return null;
+  }
+  const positional = collectPotentialPositionals(args);
+  return (
+    options.find(
+      (entry) =>
+        entry.family.length <= positional.length &&
+        entry.family.every((token, index) => positional[index]?.toLowerCase() === token),
+    ) ?? null
+  );
+}
+
+function mergeFlagSets(
+  base: ReadonlySet<string>,
+  extra: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  if (!extra || extra.size === 0) {
+    return base;
+  }
+  return new Set([...base, ...extra]);
+}
+
+function mergeGuardedValueFlags(
+  base: ReadonlyMap<string, SafeBinValueGuard>,
+  extra: ReadonlyMap<string, SafeBinValueGuard> | undefined,
+): ReadonlyMap<string, SafeBinValueGuard> {
+  if (!extra || extra.size === 0) {
+    return base;
+  }
+  return new Map([...base, ...extra]);
 }
 
 function isPotentialOptionValueToken(value: string | undefined): value is string {
@@ -190,10 +239,20 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
 }
 
 export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
-  const allowedFlags = profile.allowedFlags ?? NO_FLAGS;
-  const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
+  const commandFamilyOptions = resolveCommandFamilyOptions(args, profile.commandFamilyOptions);
+  const allowedFlags = mergeFlagSets(
+    profile.allowedFlags ?? NO_FLAGS,
+    commandFamilyOptions?.allowedFlags,
+  );
+  const allowedValueFlags = mergeFlagSets(
+    profile.allowedValueFlags ?? NO_FLAGS,
+    commandFamilyOptions?.allowedValueFlags,
+  );
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
-  const guardedValueFlags = profile.guardedValueFlags ?? NO_GUARDED_VALUE_FLAGS;
+  const guardedValueFlags = mergeGuardedValueFlags(
+    profile.guardedValueFlags ?? NO_GUARDED_VALUE_FLAGS,
+    commandFamilyOptions?.guardedValueFlags,
+  );
   const commandFamilies = profile.commandFamilies ?? [];
   const allowUnknownOptions = profile.allowUnknownOptions === true && commandFamilies.length > 0;
   const knownLongFlags =

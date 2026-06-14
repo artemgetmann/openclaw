@@ -9,6 +9,7 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserLogout: vi.fn(),
   runTelegramUserPrecheck: vi.fn(),
   runTelegramUserRead: vi.fn(),
+  runTelegramUserDownload: vi.fn(),
   runTelegramUserSend: vi.fn(),
   runTelegramUserStatus: vi.fn(),
   runTelegramUserTopicCreate: vi.fn(),
@@ -36,6 +37,7 @@ const {
   telegramUserLogoutCommand,
   telegramUserPrecheckCommand,
   telegramUserReadCommand,
+  telegramUserDownloadCommand,
   telegramUserSendCommand,
   telegramUserStatusCommand,
   telegramUserTopicCreateCommand,
@@ -332,11 +334,108 @@ describe("telegram-user commands", () => {
       ],
     });
 
-    await telegramUserReadCommand({ chat: "@jarvis_tester_1_bot", limit: "5" }, runtime);
+    await telegramUserReadCommand(
+      { chat: "@jarvis_tester_1_bot", contains: "reply", limit: "5" },
+      runtime,
+    );
 
+    expect(backendMocks.runTelegramUserRead).toHaveBeenCalledWith({
+      afterId: undefined,
+      beforeId: undefined,
+      chat: "@jarvis_tester_1_bot",
+      contains: "reply",
+      envFile: undefined,
+      limit: 5,
+      session: undefined,
+    });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
+  });
+
+  it("downloads message media by chat and message id", async () => {
+    backendMocks.runTelegramUserDownload.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: "@jarvis_tester_1_bot",
+      media_kind: "voice",
+      message: {
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: "2026-03-24T00:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: "voice",
+        message_id: 52830,
+        out: false,
+        reply_to_msg_id: null,
+        reply_to_top_id: null,
+        sender_id: 555,
+        text: "",
+        thread_anchor: null,
+      },
+      message_id: 52830,
+      path: "/tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga",
+      size_bytes: 1234,
+    });
+
+    await telegramUserDownloadCommand(
+      {
+        chat: "@jarvis_tester_1_bot",
+        messageId: "52830",
+        output: "/tmp/openclaw-media",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserDownload).toHaveBeenCalledWith({
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      messageId: 52830,
+      output: "/tmp/openclaw-media",
+      session: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("download ok"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("media_kind=voice"));
+  });
+
+  it("renders media download JSON output", async () => {
+    backendMocks.runTelegramUserDownload.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: "@jarvis_tester_1_bot",
+      media_kind: "voice",
+      message: {
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: null,
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: "voice",
+        message_id: 52830,
+        out: false,
+        reply_to_msg_id: null,
+        reply_to_top_id: null,
+        sender_id: 555,
+        text: "",
+        thread_anchor: null,
+      },
+      message_id: 52830,
+      path: "/tmp/voice.oga",
+      size_bytes: 1234,
+    });
+
+    await telegramUserDownloadCommand(
+      {
+        chat: "@jarvis_tester_1_bot",
+        json: true,
+        messageId: 52830,
+        output: "/tmp/voice.oga",
+      },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"path": "/tmp/voice.oga"'));
   });
 
   it("renders inbox JSON output with unread DM filters", async () => {
@@ -378,9 +477,13 @@ describe("telegram-user commands", () => {
       ],
     });
 
-    await telegramUserInboxCommand({ dmOnly: true, json: true, limit: "5", unread: true }, runtime);
+    await telegramUserInboxCommand(
+      { contains: "attention", dmOnly: true, json: true, limit: "5", unread: true },
+      runtime,
+    );
 
     expect(backendMocks.runTelegramUserInbox).toHaveBeenCalledWith({
+      contains: "attention",
       dmOnly: true,
       envFile: undefined,
       limit: 5,

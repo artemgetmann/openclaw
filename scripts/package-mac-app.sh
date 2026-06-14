@@ -60,6 +60,7 @@ CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
 OPENCLAW_CONSUMER_REUSE_RUNTIME="${OPENCLAW_CONSUMER_REUSE_RUNTIME:-0}"
+OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE:-0}"
 OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
@@ -891,6 +892,51 @@ consumer_runtime_cache_key() {
   consumer_runtime_input_key
 }
 
+consumer_clean_git_runtime_input_key() {
+  local head_commit=""
+  local dirty=""
+
+  head_commit="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")"
+  dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  if [[ -n "$dirty" ]]; then
+    echo "ERROR: clean-git runtime cache mode requires a clean tracked worktree." >&2
+    echo "$dirty" >&2
+    return 1
+  fi
+
+  # The release wrapper already enforces a clean tracked tree before packaging.
+  # In that mode HEAD is a stronger and cheaper runtime-input identity than
+  # walking generated dist/ files that can churn between equivalent rebuilds.
+  (
+    printf 'clean-git-runtime-cache-v1\n'
+    printf 'head=%s\n' "$head_commit"
+    printf 'node=%s\n' "$(openclaw_validated_node_version "$ROOT_DIR")"
+    printf 'uv=%s\n' "$UV_VERSION"
+    printf 'archs=%s\n' "$BUILD_ARCHS_VALUE"
+    printf 'app_version=%s\n' "$APP_VERSION"
+    printf 'app_build=%s\n' "$APP_BUILD"
+  ) | shasum -a 256 | awk '{print $1}'
+}
+
+hash_consumer_build_info_stable_fields() {
+  local build_info_path="$ROOT_DIR/dist/build-info.json"
+
+  if [[ ! -f "$build_info_path" ]]; then
+    printf 'MISSING dist/build-info.json\n'
+    return 0
+  fi
+
+  # build-info.json contains builtAt, which changes on every JS build even when
+  # the packaged runtime code did not change. Cache identity should follow the
+  # version and source commit, not the wall-clock time of an equivalent rebuild.
+  "$VALIDATED_NODE_BIN" -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    const info = JSON.parse(fs.readFileSync(file, "utf8"));
+    process.stdout.write(`BUILD_INFO version=${info.version ?? ""} commit=${info.commit ?? ""}\n`);
+  ' "$build_info_path"
+}
+
 hash_consumer_runtime_path() {
   local runtime_path="$1"
   local absolute_path="$ROOT_DIR/$runtime_path"
@@ -907,7 +953,18 @@ hash_consumer_runtime_path() {
   fi
 
   (cd "$ROOT_DIR" && find "$runtime_path" \
-    \( -name '*.app' -o -name '*.dmg' -o -name '*.zip' -o -name '*appcast*.xml' \) -prune \
+    \( \
+      -name '*.app' \
+      -o -name '*.dmg' \
+      -o -name '*.zip' \
+      -o -name '*appcast*.xml' \
+      -o -name '*.notary.env' \
+      -o -name '*.release.env' \
+      -o -name 'jarvis-release-manifest.env' \
+      -o -name 'consumer-handoff' \
+      -o -name 'node_modules' \
+      -o -path 'dist/build-info.json' \
+    \) -prune \
     -o -type f -print | LC_ALL=C sort | while IFS= read -r file_path; do
       printf 'FILE %s\n' "$file_path"
       shasum -a 256 "$file_path"
@@ -918,6 +975,11 @@ consumer_runtime_input_key() {
   local node_version=""
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
 
+  if [[ "$OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE" == "1" ]]; then
+    consumer_clean_git_runtime_input_key
+    return $?
+  fi
+
   # Shell-only smoke reuse must ignore unrelated Swift/app-shell edits while
   # refusing stale runtime payloads. Hash the exact runtime inputs that get
   # copied into Contents/Resources/OpenClawRuntime, plus Node/uv/arch selection.
@@ -926,6 +988,7 @@ consumer_runtime_input_key() {
       printf '%s\n' "$node_version"
       printf '%s\n' "$UV_VERSION"
       printf '%s\n' "$BUILD_ARCHS_VALUE"
+      hash_consumer_build_info_stable_fields
       hash_consumer_runtime_path "openclaw.mjs"
       hash_consumer_runtime_path "package.json"
       hash_consumer_runtime_path "pnpm-lock.yaml"
@@ -937,6 +1000,68 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "apps/macos/Sources/OpenClaw/Resources/DeviceModels"
     } | shasum -a 256 | awk '{print $1}'
   )
+}
+
+refresh_bundled_runtime_build_info() {
+  local source_build_info="$ROOT_DIR/dist/build-info.json"
+  local runtime_build_info="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/build-info.json"
+
+  if [[ ! -f "$source_build_info" || ! -d "$(dirname "$runtime_build_info")" ]]; then
+    return 0
+  fi
+
+  # Cached runtime payloads intentionally ignore build-info's volatile builtAt
+  # field for cache identity. After a cache hit, copy the freshly generated file
+  # back into the bundle so diagnostics still report the current build metadata.
+  cp "$source_build_info" "$runtime_build_info"
+}
+
+sync_bundled_runtime_package_version() {
+  local runtime_package_json="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/package.json"
+
+  if [[ "$APP_VARIANT" != "consumer" || ! -f "$runtime_package_json" ]]; then
+    return 0
+  fi
+
+  # Consumer app releases are versioned by APP_VERSION/Sparkle, while the
+  # bundled runtime starts from the repo root package.json. Update only the
+  # package metadata version so `openclaw --version` and app update metadata do
+  # not drift across cache/reuse packaging paths.
+  "$VALIDATED_NODE_BIN" --input-type=module - "$runtime_package_json" "$APP_VERSION" <<'NODE'
+import fs from "node:fs";
+
+const [packagePath, appVersion] = process.argv.slice(2);
+const source = fs.readFileSync(packagePath, "utf8");
+const parsed = JSON.parse(source);
+
+if (typeof parsed.version !== "string") {
+  throw new Error(`Bundled runtime package.json has no string version: ${packagePath}`);
+}
+
+if (parsed.version === appVersion) {
+  process.exit(0);
+}
+
+const oldVersionLiteral = JSON.stringify(parsed.version);
+const newVersionLiteral = JSON.stringify(appVersion);
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const versionPattern = new RegExp(
+  `(^\\s*"version"\\s*:\\s*)${escapeRegExp(oldVersionLiteral)}`,
+  "m",
+);
+const next = source.replace(versionPattern, `$1${newVersionLiteral}`);
+
+if (next === source) {
+  throw new Error(`Unable to update bundled runtime package.json version in ${packagePath}`);
+}
+
+fs.writeFileSync(packagePath, next);
+NODE
+}
+
+refresh_bundled_runtime_metadata() {
+  refresh_bundled_runtime_build_info
+  sync_bundled_runtime_package_version
 }
 
 prepare_bundled_consumer_runtime() {
@@ -957,8 +1082,8 @@ prepare_bundled_consumer_runtime() {
   local runtime_input_key=""
 
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
-  cache_key="$(consumer_runtime_cache_key)"
   runtime_input_key="$(consumer_runtime_input_key)"
+  cache_key="$runtime_input_key"
   cache_root="${BUNDLED_RUNTIME_CACHE_ROOT}/${cache_key}"
   cache_templates_dir="${cache_root}/openclaw/docs/reference/templates"
 
@@ -968,6 +1093,7 @@ prepare_bundled_consumer_runtime() {
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
       rsync -a "$REUSABLE_RUNTIME_STAGE_DIR/" "$BUNDLED_RUNTIME_RESOURCE_DIR/"
+      refresh_bundled_runtime_metadata
       return 0
     fi
 
@@ -981,6 +1107,7 @@ prepare_bundled_consumer_runtime() {
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
       rsync -a "$cache_root/" "$BUNDLED_RUNTIME_RESOURCE_DIR/"
+      refresh_bundled_runtime_metadata
       return 0
     fi
 
@@ -1003,6 +1130,10 @@ prepare_bundled_consumer_runtime() {
     --exclude '*.dmg' \
     --exclude '*.zip' \
     --exclude '*appcast*.xml' \
+    --exclude '*.notary.env' \
+    --exclude '*.release.env' \
+    --exclude 'jarvis-release-manifest.env' \
+    --exclude 'consumer-handoff' \
     "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
 
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
@@ -1068,6 +1199,8 @@ prepare_bundled_consumer_runtime() {
   cat > "$manifest_path" <<EOF
 {"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}","runtimeInputKey":"${runtime_input_key}"}
 EOF
+
+  sync_bundled_runtime_package_version
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
     local cache_stage_root=""

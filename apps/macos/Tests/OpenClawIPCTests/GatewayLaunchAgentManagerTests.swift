@@ -49,11 +49,167 @@ struct GatewayLaunchAgentManagerTests {
             launchAgentMatchesCurrentServiceVersion: false) == .install)
     }
 
-    @Test func `restart reinstalls loaded launch agent when service version is stale`() {
+    @Test func `service identity requires matching version and build when version marker exists`() throws {
+        let currentVersion = "2026.3.22"
+        let currentBuild = "2026061103"
+        GatewayLaunchAgentManager._setTestingCurrentServiceVersion(currentVersion)
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild(currentBuild)
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let matching = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [
+                "OPENCLAW_SERVICE_VERSION": currentVersion,
+                "OPENCLAW_SERVICE_BUILD": currentBuild,
+            ],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let missingBuild = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [
+                "OPENCLAW_SERVICE_VERSION": currentVersion,
+            ],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let staleBuild = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [
+                "OPENCLAW_SERVICE_VERSION": currentVersion,
+                "OPENCLAW_SERVICE_BUILD": "\(currentBuild)-stale",
+            ],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: nil)
+
+        #expect(GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: matching))
+        #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: missingBuild))
+        #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: staleBuild))
+    }
+
+    @Test func `restart reinstalls loaded launch agent when service version or runtime is stale`() {
         #expect(GatewayLaunchAgentManager._testDesiredRestartAction(
             loaded: true,
             hasPlist: true,
             launchAgentMatchesCurrentServiceVersion: false) == .install)
+        #expect(GatewayLaunchAgentManager._testDesiredRestartAction(
+            loaded: true,
+            hasPlist: true,
+            launchAgentMatchesCurrentRuntime: false) == .install)
+    }
+
+    @MainActor
+    @Test func `default consumer treats missing launchd service identity as stale`() async throws {
+        GatewayLaunchAgentManager._setTestingCurrentServiceVersion("2026.3.18")
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild("2026061001")
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(env: [
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            let identity = RuntimeIdentity.current
+            let snapshot = LaunchAgentPlistSnapshot(
+                programArguments: [],
+                environment: [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
+                ],
+                stdoutPath: nil,
+                stderrPath: nil,
+                port: identity.gatewayPort,
+                bind: identity.gatewayBind,
+                token: nil,
+                password: nil)
+
+            #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: snapshot))
+            #expect(GatewayLaunchAgentManager._testDesiredEnableAction(
+                loaded: true,
+                hasPlist: true,
+                launchAgentMatchesCurrentRuntime: true,
+                launchAgentMatchesCurrentEntrypoint: true,
+                launchAgentMatchesCurrentServiceVersion: false) == .install)
+        }
+    }
+
+    @MainActor
+    @Test func `installed app build rejects stale source checkout launch agent`() async throws {
+        GatewayLaunchAgentManager._setTestingCurrentServiceVersion("2026.3.18")
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild("2026061001")
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let installedRoot = try self.makeRepoRoot(named: "Application Support/OpenClaw/.openclaw/lib/openclaw-bundled")
+        let sourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: installedRoot)
+            try? FileManager().removeItem(at: sourceRoot)
+        }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": installedRoot.path,
+            ])
+        {
+            let identity = RuntimeIdentity.current
+            let sourceEntrypoint = sourceRoot.appendingPathComponent("dist/index.js").path
+            let snapshot = LaunchAgentPlistSnapshot(
+                programArguments: ["/usr/bin/node", sourceEntrypoint, "gateway"],
+                environment: [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_SERVICE_VERSION": "2026.3.16",
+                    "PATH": self.consumerLaunchdPath(for: identity),
+                ],
+                stdoutPath: nil,
+                stderrPath: nil,
+                port: identity.gatewayPort,
+                bind: identity.gatewayBind,
+                token: nil,
+                password: nil)
+
+            let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
+
+            #expect(ownership.expectedEntrypoint == installedRoot.appendingPathComponent("dist/index.js").path)
+            #expect(ownership.actualEntrypoint == sourceEntrypoint)
+            #expect(!ownership.matchesCurrentEntrypoint)
+            #expect(!GatewayLaunchAgentManager.launchAgentMatchesCurrentServiceVersion(snapshot: snapshot))
+            #expect(GatewayLaunchAgentManager._testDesiredEnableAction(
+                loaded: true,
+                hasPlist: true,
+                launchAgentMatchesCurrentRuntime: true,
+                launchAgentMatchesCurrentEntrypoint: ownership.matchesCurrentEntrypoint,
+                launchAgentMatchesCurrentServiceVersion: false) == .install)
+        }
     }
 
     @MainActor
@@ -242,6 +398,66 @@ struct GatewayLaunchAgentManagerTests {
                 "--runtime",
                 "node",
             ]])
+        }
+    }
+
+    @MainActor
+    @Test func `packaged daemon commands execute from resolved bundled runtime root`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let bundled = try self.makeBundledRuntime()
+        let staleSourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        defer {
+            ConsumerBundledRuntime._clearTestingResourceURL()
+            GatewayLaunchAgentManager._clearTestingHooks()
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: bundled.resourceRoot.deletingLastPathComponent())
+            try? FileManager().removeItem(at: staleSourceRoot)
+        }
+
+        var observedCommand: [String] = []
+        var observedCwd: String?
+        var observedEnv: [String: String] = [:]
+        GatewayLaunchAgentManager._setTestingHooks(
+            launchAgentWriteDisabled: { false },
+            readDaemonLoaded: { false },
+            shellExecution: { command, cwd, env, _ in
+                observedCommand = command
+                observedCwd = cwd
+                observedEnv = env
+                return ShellExecutor.ShellResult(
+                    stdout: #"{"ok":true}"#,
+                    stderr: "",
+                    exitCode: 0,
+                    timedOut: false,
+                    success: true,
+                    errorMessage: nil)
+            })
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
+            ])
+        {
+            ConsumerBundledRuntime._setTestingResourceURL(bundled.resourceRoot)
+            let seededRoot = try self.makeRepoRoot(at: ConsumerBundledRuntime.installedProjectRoot())
+            let identity = RuntimeIdentity.current
+
+            let error = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/Jarvis.app",
+                port: identity.gatewayPort)
+
+            #expect(error == nil)
+            #expect(observedCwd == seededRoot.path)
+            #expect(observedCommand.contains(seededRoot.appendingPathComponent("dist/index.js").path))
+            #expect(observedEnv["OPENCLAW_FORK_ROOT"] == seededRoot.path)
         }
     }
 
@@ -648,7 +864,7 @@ struct GatewayLaunchAgentManagerTests {
             })
         defer { GatewayLaunchAgentManager._clearTestingHooks() }
 
-        let error = try await TestIsolation.withIsolatedState(
+        let error = await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_APP_VARIANT": "standard",
                 ConsumerInstance.envKey: nil,
@@ -719,6 +935,7 @@ struct GatewayLaunchAgentManagerTests {
 
     @Test func `daemon command environment persists app bundle version for service ownership`() async {
         GatewayLaunchAgentManager._setTestingCurrentServiceVersion(" 2026.3.17 ")
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild(" 2026052201 ")
         defer { GatewayLaunchAgentManager._clearTestingHooks() }
 
         await TestIsolation.withEnvValues([ConsumerInstance.envKey: nil]) {
@@ -728,6 +945,7 @@ struct GatewayLaunchAgentManagerTests {
 
             #expect(env["OPENCLAW_VERSION"] == "2026.3.17")
             #expect(env["OPENCLAW_SERVICE_VERSION"] == "2026.3.17")
+            #expect(env["OPENCLAW_SERVICE_BUILD"] == "2026052201")
         }
     }
 
@@ -1429,7 +1647,7 @@ extension GatewayLaunchAgentManagerTests {
         let stateDir = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir.deletingLastPathComponent()) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
             _ = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(
                 true,
                 source: "GatewayLaunchAgentManagerTests",

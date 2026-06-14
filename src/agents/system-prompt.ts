@@ -36,12 +36,13 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
-    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it before any generic discovery.`,
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
+    "- When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
     "",
   ];
 }
@@ -273,7 +274,7 @@ export function buildAgentSystemPrompt(params: {
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser:
-      'Control web browser; prefer profile="signed-in" for logged-in or hostile real-world browsing, prefer profile="openclaw" for isolated public tasks and fallback, use profile="user-live" only when the task explicitly needs the operator\'s real live browser session/logins/extensions, and do not silently switch lanes when session semantics would change',
+      'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks or last-resort non-session fallback, and profile="user-live" only when actual live Chrome state is explicitly needed; never switch lanes when session semantics matter',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
@@ -476,12 +477,8 @@ export function buildAgentSystemPrompt(params: {
     "For monitor-related replies or status questions, use the monitor-router skill. Before answering a status question about a watched person/task, call monitor list/get when the monitor tool is available; answer from monitor state before old chat memory. Act only on one clear monitor, and ask a short clarification before ambiguous external actions.",
     "When creating a monitor, encode deterministic wake instructions. If a skill names a default helper/check command, pin that exact command (or a tiny wrapper around it) into the cron job instead of leaving the waking run to improvise sync/list/search steps.",
     "For any monitor that needs baseline/state comparison, create the tiny check script during monitor setup and have the cron payload run that exact script with pinned args. Do not author wake instructions that rediscover the monitor procedure from scratch.",
-    "Concrete anti-pattern: do not author a WhatsApp reply monitor around raw `wacli sync --once` plus `wacli messages list --chat ...` when the skill already provides `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json` for that check.",
-    "Concrete anti-pattern: do not retry raw `wacli send ...` against a locked store when the WhatsApp skill already provides `skills/wacli/scripts/wacli-send-safe.sh` to pause the recorded sync owner, send, and restore it automatically.",
-    "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends, the send path should be `skills/wacli/scripts/wacli-send-safe.sh`, not a hand-rolled kill/send/restart loop around `wacli sync --follow`.",
-    "For Telegram-as-me messaging, use the `telegram-user` path (`login`, `status`, `precheck`, `send`, `read`, `wait`) and keep it separate from the bot-account Telegram channel.",
-    "Concrete anti-pattern: do not fake Telegram-as-me replies through the bot channel when the real-account `telegram-user` path is available and already carries session and thread metadata.",
-    "If a shared `~/.wacli` owner is live, do not stop it manually unless the safe helper is unavailable or demonstrably broken.",
+    "For WhatsApp or Telegram-as-me jobs, route through the matching skill (`wacli` or `telegram-user`) and keep those channel-specific procedures there instead of copying command playbooks into the prompt.",
+    "For a standalone local audio file the user wants transcribed, use `media transcribe --file <path> --json` when that command is available; channel-specific voice-note retrieval belongs in the matching channel skill.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed

@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../../../src/channels/draft-stream-controls.js";
 import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { guardedTelegramDeleteMessage, type TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -109,6 +110,13 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /** Audit fields for conservative delete suppression and opt-in delete attempts. */
+  deleteAudit?: Partial<
+    Pick<
+      TelegramDeleteAuditMetadata,
+      "accountId" | "callsite" | "classification" | "lane" | "reason" | "sessionId" | "topicId"
+    >
+  >;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
@@ -160,6 +168,7 @@ export function createTelegramDraftStream(params: {
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
+  let previewStoppedBecauseLength = false;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -286,6 +295,24 @@ export function createTelegramDraftStream(params: {
     );
     return true;
   };
+  const clearNativeDraftPreview = async (opts?: { usedThreadParams?: boolean }): Promise<void> => {
+    if (previewTransport !== "draft" || resolvedDraftApi == null || streamDraftId == null) {
+      return;
+    }
+    const clearDraftId = streamDraftId;
+    const clearThreadParams =
+      opts?.usedThreadParams !== false && threadParams?.message_thread_id != null
+        ? { message_thread_id: threadParams.message_thread_id }
+        : undefined;
+    try {
+      await resolvedDraftApi(chatId, clearDraftId, "", clearThreadParams);
+      params.log?.(`telegram stream draft preview cleared (chat=${chatId}, draft=${clearDraftId})`);
+    } catch (err) {
+      params.warn?.(
+        `telegram stream draft preview clear failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     // Allow final flush even if stopped (e.g., after clear()).
@@ -306,6 +333,7 @@ export function createTelegramDraftStream(params: {
       // Telegram text messages/edits cap at 4096 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
+      previewStoppedBecauseLength = true;
       params.warn?.(
         `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
       );
@@ -381,7 +409,26 @@ export function createTelegramDraftStream(params: {
     isValidMessageId: (value): value is number =>
       typeof value === "number" && Number.isFinite(value),
     deleteMessage: async (messageId) => {
-      await params.api.deleteMessage(chatId, messageId);
+      // The final-vs-preview classifier is useful for UX, but it is not a
+      // deletion safety boundary. All Telegram deletes go through the central
+      // guard so cleanup is audited and suppressed unless the operator opts in.
+      const result = await guardedTelegramDeleteMessage({
+        api: params.api,
+        chatId,
+        messageId,
+        audit: {
+          callsite: params.deleteAudit?.callsite ?? "telegram-draft-stream-clear",
+          reason: params.deleteAudit?.reason ?? "stream_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
+          accountId: params.deleteAudit?.accountId,
+          lane: params.deleteAudit?.lane,
+          classification: params.deleteAudit?.classification,
+          sessionId: params.deleteAudit?.sessionId,
+          topicId: params.deleteAudit?.topicId,
+          thread: params.thread,
+        },
+      });
+      return result.deleted;
     },
     onDeleteSuccess: (messageId) => {
       params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
@@ -402,6 +449,7 @@ export function createTelegramDraftStream(params: {
     }
     lastSentText = "";
     lastSentParseMode = undefined;
+    previewStoppedBecauseLength = false;
     loop.resetPending();
     loop.resetThrottleWindow();
   };
@@ -414,6 +462,13 @@ export function createTelegramDraftStream(params: {
    */
   const materialize = async (): Promise<number | undefined> => {
     await stop();
+    if (previewStoppedBecauseLength) {
+      params.warn?.(
+        "telegram stream preview materialize skipped after over-limit preview; using durable final send",
+      );
+      await clearNativeDraftPreview();
+      return undefined;
+    }
     // If using message transport, the streamMessageId is already a real message.
     if (previewTransport === "message" && typeof streamMessageId === "number") {
       return streamMessageId;
@@ -444,18 +499,7 @@ export function createTelegramDraftStream(params: {
         });
         // Clear the draft so Telegram's input area doesn't briefly show a
         // stale copy alongside the newly materialized real message.
-        if (resolvedDraftApi != null && streamDraftId != null) {
-          const clearDraftId = streamDraftId;
-          const clearThreadParams =
-            usedThreadParams && threadParams?.message_thread_id != null
-              ? { message_thread_id: threadParams.message_thread_id }
-              : undefined;
-          try {
-            await resolvedDraftApi(chatId, clearDraftId, "", clearThreadParams);
-          } catch {
-            // Best-effort cleanup; draft clear failure is cosmetic.
-          }
-        }
+        await clearNativeDraftPreview({ usedThreadParams });
         return streamMessageId;
       }
     } catch (err) {
@@ -475,7 +519,10 @@ export function createTelegramDraftStream(params: {
     previewMode: () => previewTransport,
     previewRevision: () => previewRevision,
     lastDeliveredText: () => lastDeliveredText,
-    clear,
+    clear: async () => {
+      await clear();
+      await clearNativeDraftPreview();
+    },
     stop,
     materialize,
     forceNewMessage,

@@ -51,6 +51,7 @@ import {
   type AuthProbeSummary,
 } from "./list.probe.js";
 import { loadModelsConfig } from "./load-config.js";
+import { resolveServiceAuthStoreProbeWarning } from "./service-auth-store-warning.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -113,6 +114,13 @@ export async function modelsStatusCommand(
   );
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
+  const authStorePath = resolveAuthStorePathForDisplay(agentDir);
+  const serviceAuthStoreProbeWarning = resolveServiceAuthStoreProbeWarning({
+    probe: Boolean(opts.probe),
+    agentId,
+    configPath,
+    authStorePath,
+  });
   const store = ensureAuthProfileStore(agentDir);
   const modelsPath = path.join(agentDir, "models.json");
 
@@ -346,7 +354,8 @@ export async function modelsStatusCommand(
           aliases,
           allowed,
           auth: {
-            storePath: resolveAuthStorePathForDisplay(agentDir),
+            storePath: authStorePath,
+            serviceStoreProbeWarning: serviceAuthStoreProbeWarning ?? null,
             shellEnvFallback: {
               enabled: shellFallbackEnabled,
               appliedKeys: applied,
@@ -462,9 +471,21 @@ export async function modelsStatusCommand(
     `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       theme.info,
-      shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
+      shortenHomePath(authStorePath),
     )}`,
   );
+  if (serviceAuthStoreProbeWarning) {
+    runtime.log(colorize(rich, theme.warn, `Warning: ${serviceAuthStoreProbeWarning.message}`));
+    if (serviceAuthStoreProbeWarning.service.configPath) {
+      runtime.log(
+        colorize(
+          rich,
+          theme.muted,
+          `Service config: ${shortenHomePath(serviceAuthStoreProbeWarning.service.configPath)}`,
+        ),
+      );
+    }
+  }
   runtime.log(
     `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,

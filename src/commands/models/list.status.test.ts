@@ -69,6 +69,13 @@ const mocks = vi.hoisted(() => {
     createConfigIO: vi.fn().mockReturnValue({
       configPath: "/tmp/openclaw-dev/openclaw.json",
     }),
+    resolveServiceAuthStoreProbeWarning: vi.fn().mockReturnValue(undefined),
+    runAuthProbes: vi.fn().mockResolvedValue({
+      ok: 0,
+      failed: 0,
+      skipped: 0,
+      results: [],
+    }),
     loadConfig: vi.fn().mockReturnValue({
       agents: {
         defaults: {
@@ -134,6 +141,18 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   };
 });
+
+vi.mock("./list.probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./list.probe.js")>();
+  return {
+    ...actual,
+    runAuthProbes: mocks.runAuthProbes,
+  };
+});
+
+vi.mock("./service-auth-store-warning.js", () => ({
+  resolveServiceAuthStoreProbeWarning: mocks.resolveServiceAuthStoreProbeWarning,
+}));
 
 import { modelsStatusCommand } from "./list.status-command.js";
 
@@ -236,6 +255,62 @@ describe("modelsStatusCommand auth overview", () => {
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai-codex")),
     ).toBe(true);
+  });
+
+  it("includes a service-store probe warning in JSON output", async () => {
+    const localRuntime = createRuntime();
+    mocks.resolveServiceAuthStoreProbeWarning.mockReturnValueOnce({
+      message:
+        "You are not probing the active service store. This command is probing /tmp/openclaw-agent/auth-profiles.json; ai.openclaw.gateway uses /tmp/app-state/agents/main/agent/auth-profiles.json.",
+      command: {
+        configPath: "/tmp/openclaw-dev/openclaw.json",
+        authStorePath: "/tmp/openclaw-agent/auth-profiles.json",
+      },
+      service: {
+        label: "ai.openclaw.gateway",
+        plistPath: "/Users/tester/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        configPath: "/tmp/app-state/openclaw.json",
+        authStorePath: "/tmp/app-state/agents/main/agent/auth-profiles.json",
+        stateDir: "/tmp/app-state",
+      },
+    });
+
+    await modelsStatusCommand({ json: true, probe: true }, localRuntime as never);
+    const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+
+    expect(payload.auth.serviceStoreProbeWarning.message).toContain(
+      "You are not probing the active service store",
+    );
+    expect(payload.auth.serviceStoreProbeWarning.service.authStorePath).toBe(
+      "/tmp/app-state/agents/main/agent/auth-profiles.json",
+    );
+  });
+
+  it("prints a service-store probe warning in rich output", async () => {
+    const localRuntime = createRuntime();
+    mocks.resolveServiceAuthStoreProbeWarning.mockReturnValueOnce({
+      message:
+        "You are not probing the active service store. This command is probing /tmp/openclaw-agent/auth-profiles.json; ai.openclaw.gateway uses /tmp/app-state/agents/main/agent/auth-profiles.json.",
+      command: {
+        configPath: "/tmp/openclaw-dev/openclaw.json",
+        authStorePath: "/tmp/openclaw-agent/auth-profiles.json",
+      },
+      service: {
+        label: "ai.openclaw.gateway",
+        plistPath: "/Users/tester/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        configPath: "/tmp/app-state/openclaw.json",
+        authStorePath: "/tmp/app-state/agents/main/agent/auth-profiles.json",
+        stateDir: "/tmp/app-state",
+      },
+    });
+
+    await modelsStatusCommand({ probe: true }, localRuntime as never);
+    const output = (localRuntime.log as Mock).mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .join("\n");
+
+    expect(output).toContain("Warning: You are not probing the active service store");
+    expect(output).toContain("Service config: /tmp/app-state/openclaw.json");
   });
 
   it("does not emit raw short api-key values in JSON labels", async () => {

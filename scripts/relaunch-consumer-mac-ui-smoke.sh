@@ -7,6 +7,18 @@ source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 
+plist_value() {
+  # Keep the UI-smoke verifier on the shared LaunchAgent parsing helper. This
+  # script used the older local helper name while the guarded implementation now
+  # lives in scripts/lib/gateway-launchagent-guard.sh.
+  openclaw_gateway_plist_value "$@"
+}
+
+app_info_value() {
+  local key_path="$1"
+  /usr/libexec/PlistBuddy -c "Print :${key_path}" "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/Info.plist" 2>/dev/null || true
+}
+
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 OPEN_APP=1
 BUILD_APP=1
@@ -18,6 +30,10 @@ BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_PATH="$ROOT_DIR/apps/macos/.build-ui-smoke"
 GATEWAY_ENTRY="$ROOT_DIR/dist/index.js"
 STARTED_AT="$SECONDS"
+UI_SMOKE_APP_VERSION="${APP_VERSION:-${JARVIS_APP_VERSION:-$(app_info_value CFBundleShortVersionString)}}"
+UI_SMOKE_APP_BUILD="${APP_BUILD:-${JARVIS_APP_BUILD:-$(app_info_value CFBundleVersion)}}"
+UI_SMOKE_APP_VERSION="${UI_SMOKE_APP_VERSION:-0.0.0-ui-smoke}"
+UI_SMOKE_APP_BUILD="${UI_SMOKE_APP_BUILD:-1}"
 
 usage() {
   cat <<'EOF'
@@ -32,6 +48,8 @@ Fast native Jarvis UI smoke:
     gateway LaunchAgent env/port/label from the current worktree for Telegram first-task proof
   - skips /Applications installs, release packaging, DMGs, zips, npm tarballs,
     bundled Node, node_modules packaging, and default gateway restarts
+  - honors APP_VERSION/APP_BUILD so release-candidate metadata can be proven
+    locally without building a DMG or publishing a Sparkle release
 
 Cleanup:
   --clean removes generated UI-smoke build output, stopped debug .app wrappers,
@@ -268,6 +286,8 @@ verify_gateway_plist_matches_instance() {
   local actual_launchd_label=""
   local actual_consumer_instance=""
   local actual_gateway_port=""
+  local actual_service_version=""
+  local actual_service_build=""
 
   if [[ ! -f "$plist_path" ]]; then
     echo "ERROR: isolated gateway plist was not created: $plist_path" >&2
@@ -283,6 +303,8 @@ verify_gateway_plist_matches_instance() {
   actual_launchd_label="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL')"
   actual_consumer_instance="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONSUMER_INSTANCE_ID')"
   actual_gateway_port="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_GATEWAY_PORT')"
+  actual_service_version="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_SERVICE_VERSION')"
+  actual_service_build="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_SERVICE_BUILD')"
 
   if [[ "$actual_label" != "$launchd_label" ]]; then
     echo "ERROR: isolated gateway plist label mismatch: expected=$launchd_label actual=${actual_label:-missing}" >&2
@@ -314,6 +336,14 @@ verify_gateway_plist_matches_instance() {
   fi
   if [[ "$actual_consumer_instance" != "$normalized" ]]; then
     echo "ERROR: isolated gateway plist instance mismatch: expected=$normalized actual=${actual_consumer_instance:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_service_version" != "$UI_SMOKE_APP_VERSION" ]]; then
+    echo "ERROR: isolated gateway plist service version mismatch: expected=$UI_SMOKE_APP_VERSION actual=${actual_service_version:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_service_build" != "$UI_SMOKE_APP_BUILD" ]]; then
+    echo "ERROR: isolated gateway plist service build mismatch: expected=$UI_SMOKE_APP_BUILD actual=${actual_service_build:-missing}" >&2
     return 1
   fi
 }
@@ -385,6 +415,9 @@ approve_latest_device_pairing_if_pending() {
         OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
         OPENCLAW_CONSUMER_INSTANCE_ID="$normalized" \
         OPENCLAW_GATEWAY_PORT="$gateway_port" \
+        OPENCLAW_VERSION="$UI_SMOKE_APP_VERSION" \
+        OPENCLAW_SERVICE_VERSION="$UI_SMOKE_APP_VERSION" \
+        OPENCLAW_SERVICE_BUILD="$UI_SMOKE_APP_BUILD" \
         OPENCLAW_FORK_ROOT="$ROOT_DIR" \
         "$OPENCLAW_NODE_BIN" "$GATEWAY_ENTRY" devices approve --latest >/dev/null 2>&1 || true
       return 0
@@ -433,7 +466,10 @@ refresh_gateway_service_env() {
         OPENCLAW_PROFILE="$profile" \
         OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
         OPENCLAW_CONSUMER_INSTANCE_ID="$normalized" \
-      OPENCLAW_FORK_ROOT="$ROOT_DIR" \
+        OPENCLAW_VERSION="$UI_SMOKE_APP_VERSION" \
+        OPENCLAW_SERVICE_VERSION="$UI_SMOKE_APP_VERSION" \
+        OPENCLAW_SERVICE_BUILD="$UI_SMOKE_APP_BUILD" \
+        OPENCLAW_FORK_ROOT="$ROOT_DIR" \
         "$OPENCLAW_NODE_BIN" "$GATEWAY_ENTRY" gateway install \
           --force \
           --allow-shared-service-takeover \
@@ -474,6 +510,8 @@ launch_smoke_app() {
     --env "OPENCLAW_LAUNCHD_LABEL=$OPENCLAW_LAUNCHD_LABEL" \
     --env "OPENCLAW_LOG_DIR=$OPENCLAW_LOG_DIR" \
     --env "OPENCLAW_PROFILE=$OPENCLAW_PROFILE" \
+    --env "OPENCLAW_SERVICE_BUILD=$UI_SMOKE_APP_BUILD" \
+    --env "OPENCLAW_SERVICE_VERSION=$UI_SMOKE_APP_VERSION" \
     --env "OPENCLAW_STATE_DIR=$OPENCLAW_STATE_DIR" \
     "$@" \
     "$app_path" \
@@ -508,6 +546,8 @@ print_proof() {
   echo "  launch_log=$log_path"
   echo "  display_identity=Jarvis (OPENCLAW_APP_VARIANT=consumer)"
   echo "  bundle_identity=minimal debug .app wrapper; current worktree SwiftPM binary"
+  echo "  app_version=$UI_SMOKE_APP_VERSION"
+  echo "  app_build=$UI_SMOKE_APP_BUILD"
   echo "  no_applications_install=true"
   echo "  no_release_packaging=true"
   echo "  no_default_gateway_restart=true"
@@ -568,9 +608,9 @@ write_debug_app_wrapper() {
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.0.0-ui-smoke</string>
+  <string>${UI_SMOKE_APP_VERSION}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${UI_SMOKE_APP_BUILD}</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>
@@ -593,6 +633,10 @@ write_debug_app_wrapper() {
     <string>${consumer_step}</string>
     <key>OPENCLAW_PROFILE</key>
     <string>$(consumer_instance_profile "$normalized")</string>
+    <key>OPENCLAW_SERVICE_BUILD</key>
+    <string>${UI_SMOKE_APP_BUILD}</string>
+    <key>OPENCLAW_SERVICE_VERSION</key>
+    <string>${UI_SMOKE_APP_VERSION}</string>
     <key>OPENCLAW_STATE_DIR</key>
     <string>${state_dir}</string>
   </dict>

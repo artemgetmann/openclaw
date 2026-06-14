@@ -33,7 +33,7 @@ OpenClaw can use three browser lanes:
 For agent browser tool calls:
 
 - Prefer `profile="signed-in"` for signed-in browsing and hostile sites where the clean browser gets worse results.
-- Prefer `profile="openclaw"` for public browsing, clean isolated runs, or anything that does not require your real browser state.
+- Treat `profile="openclaw"` as a fallback for X/Twitter and similarly hostile/account-bound flows. Use it only after the signed-in or explicitly requested live browser lane is unavailable or proven unsuitable, and only when real login/session state does not matter.
 - Use `profile="user-live"` only when the task truly depends on your actual signed-in browser session, existing tabs, or installed extensions.
 - If `profile="user-live"` is required for the task and is unavailable, stop and report the blocker instead of silently switching to `openclaw`.
 - If you have multiple Chrome profiles, configure `signed-in.sourceProfileName` or create an explicit `existing-session` profile instead of guessing.
@@ -55,6 +55,9 @@ of having the agent guess. The default managed profile remains `openclaw`.
 
 - **Read/search/threads:** prefer the **signed-in** lane first.
 - **Post updates:** prefer **signed-in** first, escalate to **user-live** only when the site depends on your active live session or extensions.
+- **Community/account-bound posting:** do not silently switch from `signed-in` to `openclaw` when cookies, login state, or community membership matter. Report the blocker instead.
+- **OpenClaw profile:** use `openclaw` only as a last resort after the cloned signed-in lane, and any explicitly required live-browser lane, cannot do the job.
+- **Fallbacks:** macOS UI or coordinate fallback is acceptable only after the correct browser lane has been attempted or proven blocked, and critical actions still need fresh screenshot/snapshot verification.
 
 ## Sandboxing + host browser access
 
@@ -80,7 +83,7 @@ If the agent is sandboxed, the browser tool defaults to the sandbox. To allow ho
 Then target the host browser:
 
 ```bash
-openclaw browser open https://x.com --browser-profile openclaw --target host
+openclaw browser open https://x.com --browser-profile signed-in --target host
 ```
 
 Or disable sandboxing for the agent that posts updates.

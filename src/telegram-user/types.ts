@@ -88,6 +88,16 @@ export type TelegramUserReadResult = {
   messages: TelegramUserMessage[];
 };
 
+export type TelegramUserDownloadResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: string;
+  media_kind: TelegramUserMessage["media_kind"];
+  message: TelegramUserMessage;
+  message_id: number;
+  path: string;
+  size_bytes: number | null;
+};
+
 export type TelegramUserInboxDialog = {
   archived: boolean;
   chat_id: number | null;

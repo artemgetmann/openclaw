@@ -72,6 +72,9 @@ struct GatewayCommandResolution {
 enum GatewayEnvironment {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    #if DEBUG
+    private nonisolated(unsafe) static var testExpectedGatewayVersionStringHook: (() -> String?)?
+    #endif
 
     static func gatewayPort() -> Int {
         if let raw = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_PORT"] {
@@ -90,6 +93,12 @@ enum GatewayEnvironment {
     }
 
     static func expectedGatewayVersionString() -> String? {
+        #if DEBUG
+        if let hook = self.testExpectedGatewayVersionStringHook {
+            let trimmed = hook()?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (trimmed?.isEmpty == false) ? trimmed : nil
+        }
+        #endif
         let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed : nil
@@ -115,6 +124,9 @@ enum GatewayEnvironment {
 
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
+        let usesBundledConsumerRuntime = self.usesBundledConsumerRuntime(
+            projectRoot: projectRoot,
+            projectEntrypoint: projectEntrypoint)
 
         switch RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths()) {
         case let .failure(err):
@@ -125,7 +137,7 @@ enum GatewayEnvironment {
                 requiredGateway: expectedString,
                 message: RuntimeLocator.describeFailure(err))
         case let .success(runtime):
-            let gatewayBin = CommandResolver.openclawExecutable()
+            let gatewayBin = usesBundledConsumerRuntime ? nil : CommandResolver.openclawExecutable()
 
             if gatewayBin == nil, projectEntrypoint == nil {
                 return GatewayEnvironmentStatus(
@@ -139,7 +151,11 @@ enum GatewayEnvironment {
             let installed = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
                 ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
 
-            if let expected, let installed, !installed.compatible(with: expected) {
+            if !usesBundledConsumerRuntime,
+               let expected,
+               let installed,
+               !installed.compatible(with: expected)
+            {
                 let expectedText = expectedString ?? expected.description
                 return GatewayEnvironmentStatus(
                     kind: .incompatible(found: installed.description, required: expectedText),
@@ -152,10 +168,10 @@ enum GatewayEnvironment {
                     """)
             }
 
-            let gatewayLabel = gatewayBin != nil ? "global" : "local"
+            let gatewayLabel = usesBundledConsumerRuntime ? "bundled" : gatewayBin != nil ? "global" : "local"
             let gatewayVersionText = installed?.description ?? "unknown"
             // Avoid repeating "(local)" twice; if using the local entrypoint, show the path once.
-            let localPathHint = gatewayBin == nil && projectEntrypoint != nil
+            let localPathHint = gatewayBin == nil && projectEntrypoint != nil && !usesBundledConsumerRuntime
                 ? " (local: \(projectEntrypoint ?? "unknown"))"
                 : ""
             let gatewayLabelText = gatewayBin != nil
@@ -182,8 +198,11 @@ enum GatewayEnvironment {
         }
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
+        let usesBundledConsumerRuntime = self.usesBundledConsumerRuntime(
+            projectRoot: projectRoot,
+            projectEntrypoint: projectEntrypoint)
         let status = self.check()
-        let gatewayBin = CommandResolver.openclawExecutable()
+        let gatewayBin = usesBundledConsumerRuntime ? nil : CommandResolver.openclawExecutable()
         let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
 
         guard case .ok = status.kind else {
@@ -191,7 +210,7 @@ enum GatewayEnvironment {
         }
 
         let port = self.gatewayPort()
-        if let gatewayBin {
+        if !usesBundledConsumerRuntime, let gatewayBin {
             let bind = self.preferredGatewayBind() ?? "loopback"
             let cmd = [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
             return GatewayCommandResolution(status: status, command: cmd)
@@ -202,6 +221,12 @@ enum GatewayEnvironment {
         {
             let bind = self.preferredGatewayBind() ?? "loopback"
             let cmd = [resolvedRuntime.path, entry, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            return GatewayCommandResolution(status: status, command: cmd)
+        }
+
+        if let gatewayBin {
+            let bind = self.preferredGatewayBind() ?? "loopback"
+            let cmd = [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
             return GatewayCommandResolution(status: status, command: cmd)
         }
 
@@ -291,6 +316,21 @@ enum GatewayEnvironment {
 
     // MARK: - Internals
 
+    private static func usesBundledConsumerRuntime(projectRoot: URL, projectEntrypoint: String?) -> Bool {
+        guard AppFlavor.current.isConsumer,
+              projectEntrypoint != nil,
+              let bundledRoot = CommandResolver.bundledConsumerRuntimeProjectRoot()
+        else {
+            return false
+        }
+
+        // Packaged Jarvis versions are app/Sparkle versions. The bundled JS
+        // runtime can intentionally retain the repo package semver, so this path
+        // must be validated by app-owned LaunchAgent service metadata instead of
+        // blocking on the source/global CLI version.
+        return projectRoot.standardizedFileURL == bundledRoot.standardizedFileURL
+    }
+
     private static func readGatewayVersion(binary: String) -> Semver? {
         let start = Date()
         let process = Process()
@@ -342,3 +382,15 @@ enum GatewayEnvironment {
         return Semver.parse(version)
     }
 }
+
+#if DEBUG
+extension GatewayEnvironment {
+    static func _setTestingExpectedGatewayVersionString(_ version: String?) {
+        self.testExpectedGatewayVersionStringHook = { version }
+    }
+
+    static func _clearTestingHooks() {
+        self.testExpectedGatewayVersionStringHook = nil
+    }
+}
+#endif

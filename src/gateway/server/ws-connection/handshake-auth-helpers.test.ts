@@ -111,6 +111,18 @@ describe("handshake auth helpers", () => {
     expect(
       shouldAllowSilentLocalPairing({
         isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        authMethod: "token",
+        reason: "role-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
         hasBrowserOriginHeader: true,
         isControlUi: false,
         isWebchat: false,

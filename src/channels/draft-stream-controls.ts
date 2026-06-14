@@ -13,7 +13,7 @@ type StopAndClearMessageIdParams<T> = {
 
 type ClearFinalizableDraftMessageParams<T> = StopAndClearMessageIdParams<T> & {
   isValidMessageId: (value: unknown) => value is T;
-  deleteMessage: (messageId: T) => Promise<void>;
+  deleteMessage: (messageId: T) => Promise<void | boolean>;
   onDeleteSuccess?: (messageId: T) => void;
   warn?: (message: string) => void;
   warnPrefix: string;
@@ -108,8 +108,10 @@ export async function clearFinalizableDraftMessage<T>(
     return;
   }
   try {
-    await params.deleteMessage(messageId);
-    params.onDeleteSuccess?.(messageId);
+    const didDelete = await params.deleteMessage(messageId);
+    if (didDelete !== false) {
+      params.onDeleteSuccess?.(messageId);
+    }
   } catch (err) {
     params.warn?.(`${params.warnPrefix}: ${err instanceof Error ? err.message : String(err)}`);
   }

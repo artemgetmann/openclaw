@@ -131,14 +131,166 @@ notary_id() {
   json_field "id"
 }
 
+notary_submit_timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+notary_artifact_size_bytes() {
+  local artifact="$1"
+  /usr/bin/stat -f%z "$artifact" 2>/dev/null || /usr/bin/stat -c%s "$artifact" 2>/dev/null || printf '%s\n' "unknown"
+}
+
+notary_submit_route_hosts() {
+  printf '%s\n' appstoreconnect.apple.com api.appstoreconnect.apple.com
+}
+
+notary_submit_route_interface() {
+  local host="$1"
+  local output=""
+
+  if [[ -n "${OPENCLAW_NOTARY_PREFLIGHT_ROUTE_STUB:-}" ]]; then
+    output="$("$OPENCLAW_NOTARY_PREFLIGHT_ROUTE_STUB" "$host")"
+  elif command -v route >/dev/null 2>&1; then
+    output="$(route -n get "$host" 2>/dev/null || true)"
+  elif command -v ip >/dev/null 2>&1; then
+    output="$(ip route get "$host" 2>/dev/null || true)"
+  else
+    return 1
+  fi
+
+  if [[ -z "$output" ]]; then
+    return 1
+  fi
+
+  local interface=""
+  interface="$(
+    printf '%s\n' "$output" \
+      | awk '
+          $1 == "interface:" { print $2; exit }
+          {
+            for (i = 1; i < NF; i++) {
+              if ($i == "dev") {
+                print $(i + 1)
+                exit
+              }
+            }
+          }
+        '
+  )"
+
+  [[ -n "$interface" ]] || return 1
+  printf '%s\n' "$interface"
+}
+
+notary_submit_is_tunnel_interface() {
+  case "$1" in
+    utun*|wg*|ppp*|ipsec*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+warn_notary_submit_routes() {
+  local host interface
+
+  while IFS= read -r host; do
+    [[ -n "$host" ]] || continue
+
+    if ! interface="$(notary_submit_route_interface "$host")"; then
+      echo "WARN: could not determine network route for Apple notary host $host before submit." >&2
+      echo "WARN: if upload stalls, switch off VPN/tunnel routing or change networks before retrying the same artifact." >&2
+      continue
+    fi
+
+    echo "Apple notary preflight: route $host via $interface"
+    if notary_submit_is_tunnel_interface "$interface"; then
+      if [[ "${ALLOW_SLOW_NOTARY_UPLOAD:-0}" == "1" ]]; then
+        echo "WARN: $host routes through tunnel interface $interface; continuing because ALLOW_SLOW_NOTARY_UPLOAD=1." >&2
+      else
+        echo "WARN: $host routes through tunnel/VPN interface $interface; Apple notarization upload may stall." >&2
+        echo "WARN: turn off VPN/tunnel routing or rerun with ALLOW_SLOW_NOTARY_UPLOAD=1 if this path is intentional." >&2
+      fi
+    fi
+  done < <(notary_submit_route_hosts)
+}
+
+notary_submit_heartbeat_interval() {
+  local interval="${NOTARYTOOL_SUBMIT_HEARTBEAT_SECS:-30}"
+  case "$interval" in
+    ''|*[!0-9]*) interval=30 ;;
+  esac
+  if [[ "$interval" -lt 1 ]]; then
+    interval=30
+  fi
+  printf '%s\n' "$interval"
+}
+
+notary_submit_heartbeat() {
+  local started_epoch="$1"
+  local parent_pid="${2:-}"
+  local interval
+  interval="$(notary_submit_heartbeat_interval)"
+
+  while sleep "$interval"; do
+    if [[ -n "$parent_pid" ]] && ! kill -0 "$parent_pid" >/dev/null 2>&1; then
+      exit 0
+    fi
+
+    local now_epoch elapsed_secs
+    now_epoch="$(date +%s)"
+    elapsed_secs=$((now_epoch - started_epoch))
+    echo "notarytool submit command is still running (elapsed ${elapsed_secs}s); notarytool does not expose reliable byte-level upload progress." >&2
+  done
+}
+
+NOTARY_SUBMIT_OUTPUT=""
+run_notary_submit() {
+  local started_at finished_at started_epoch finished_epoch elapsed_secs
+  local heartbeat_pid submit_status
+
+  started_at="$(notary_submit_timestamp)"
+  started_epoch="$(date +%s)"
+  echo "notary_submit_started_at=$started_at"
+  echo "notary_artifact=$ARTIFACT"
+  echo "notary_artifact_size_bytes=$(notary_artifact_size_bytes "$ARTIFACT")"
+  warn_notary_submit_routes
+  notary_submit_heartbeat "$started_epoch" "$$" &
+  heartbeat_pid=$!
+
+  set +e
+  NOTARY_SUBMIT_OUTPUT="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" "$@" --output-format json 2>&1)"
+  submit_status=$?
+  set -e
+
+  kill "$heartbeat_pid" >/dev/null 2>&1 || true
+  wait "$heartbeat_pid" >/dev/null 2>&1 || true
+
+  finished_at="$(notary_submit_timestamp)"
+  finished_epoch="$(date +%s)"
+  elapsed_secs=$((finished_epoch - started_epoch))
+  echo "notary_submit_finished_at=$finished_at"
+  echo "notary_submit_elapsed_seconds=$elapsed_secs"
+  echo "notary_submit_exit_status=$submit_status"
+  return "$submit_status"
+}
+
 print_submit_retry_hint() {
+  local submission_id="${1:-}"
+
+  if [[ -n "$submission_id" ]]; then
+    cat >&2 <<EOF
+Hint: notarytool returned submission ID $submission_id before this error.
+Do not resubmit the same artifact; poll that submission instead:
+  scripts/notarize-mac-artifact.sh --poll $submission_id --artifact '$ARTIFACT'
+EOF
+    return
+  fi
+
   cat >&2 <<EOF
-Hint: if notarytool printed a submission ID before this error, poll it instead
-of rebuilding:
-  scripts/notarize-mac-artifact.sh --poll <submission-id> --artifact '$ARTIFACT'
-If no submission ID was created, retry the same artifact after Apple/network
-recovery. Receipts must contain only submission IDs, artifact paths, staple
-targets, statuses, and timestamps; keep credentials in Keychain or local env.
+Hint: no notary submission ID was returned, so there is no Apple-side job to
+poll from this output. After Apple/network recovery, retry the same artifact:
+  scripts/notarize-mac-artifact.sh --submit-only --receipt '${RECEIPT_PATH:-${ARTIFACT}.notary.env}' '$ARTIFACT'
+Receipts must contain only submission IDs, artifact paths, staple targets,
+statuses, and timestamps; keep credentials in Keychain or local env.
 EOF
 }
 
@@ -170,6 +322,7 @@ staple_outputs() {
 
 write_receipt() {
   local submission_id="$1"
+  local status="${2:-submitted}"
   local receipt_path="${RECEIPT_PATH:-${ARTIFACT}.notary.env}"
 
   mkdir -p "$(dirname "$receipt_path")"
@@ -177,6 +330,7 @@ write_receipt() {
     printf 'NOTARY_SUBMISSION_ID=%q\n' "$submission_id"
     printf 'NOTARY_ARTIFACT=%q\n' "$ARTIFACT"
     printf 'NOTARY_STAPLE_APP_PATH=%q\n' "$STAPLE_APP_PATH"
+    printf 'NOTARY_STATUS=%q\n' "$status"
     printf 'NOTARY_CREATED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   } >"$receipt_path"
 
@@ -200,6 +354,7 @@ if [[ "$MODE" == "poll" ]]; then
   fi
 
   echo "notary_status=$status"
+  write_receipt "$SUBMISSION_ID" "$status"
   case "$status" in
     Accepted)
       staple_outputs
@@ -226,13 +381,16 @@ fi
 
 echo "🧾 Notarizing: $ARTIFACT"
 if [[ "$MODE" == "submit-only" ]]; then
-  set +e
-  submit_json="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --output-format json 2>&1)"
-  submit_status=$?
-  set -e
+  submit_status=0
+  run_notary_submit || submit_status=$?
+  submit_json="$NOTARY_SUBMIT_OUTPUT"
   if [[ $submit_status -ne 0 ]]; then
+    submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
     echo "$submit_json" >&2
-    print_submit_retry_hint
+    if [[ -n "$submission_id" ]]; then
+      write_receipt "$submission_id" "submitted"
+    fi
+    print_submit_retry_hint "$submission_id"
     exit "$submit_status"
   fi
   submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
@@ -243,19 +401,28 @@ if [[ "$MODE" == "submit-only" ]]; then
   fi
 
   echo "notary_submission_id=$submission_id"
-  write_receipt "$submission_id"
+  write_receipt "$submission_id" "submitted"
   echo "Poll later with:"
   echo "  scripts/notarize-mac-artifact.sh --poll $submission_id --artifact '$ARTIFACT'"
   exit 0
 fi
 
-set +e
-xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
-submit_status=$?
-set -e
+submit_status=0
+run_notary_submit --wait || submit_status=$?
+submit_json="$NOTARY_SUBMIT_OUTPUT"
 if [[ $submit_status -ne 0 ]]; then
-  print_submit_retry_hint
+  submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
+  echo "$submit_json" >&2
+  if [[ -n "$submission_id" ]]; then
+    write_receipt "$submission_id" "submitted"
+  fi
+  print_submit_retry_hint "$submission_id"
   exit "$submit_status"
+fi
+submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
+status="$(printf '%s\n' "$submit_json" | notary_status)"
+if [[ -n "$submission_id" ]]; then
+  write_receipt "$submission_id" "${status:-Accepted}"
 fi
 staple_outputs
 

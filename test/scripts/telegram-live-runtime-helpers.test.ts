@@ -15,6 +15,12 @@ function writeAuthStore(filePath: string, store: unknown) {
   writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
 }
 
+function unsignedJwtWithExp(expSeconds: number): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url");
+  return `${header}.${payload}.`;
+}
+
 describe("summarizeTelegramTesterTokenPool", () => {
   it("reports pool exhaustion after claimed and reserved tokens are removed", () => {
     const summary = summarizeTelegramTesterTokenPool({
@@ -157,6 +163,129 @@ describe("Codex auth store inheritance", () => {
     expect(copied.profiles["openai-codex:default"].access).toBe("fake-access-token");
     expect(copied.profiles["anthropic:default"]).toBeUndefined();
     expect(statSync(targetAuthPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("selects fresher Codex auth.json over a stale copied OpenClaw profile", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-codex-freshest-"));
+    const sourceAuthPath = path.join(root, "source", "auth-profiles.json");
+    const runtimeStateDir = path.join(root, "runtime-state");
+    const codexHome = path.join(root, "codex-home");
+    const nowMs = new Date("2026-06-11T08:00:00Z").getTime();
+    const copiedExpiry = nowMs + 30 * 60 * 1000;
+    const cliExpiry = nowMs + 2 * 60 * 60 * 1000;
+    const cliAccess = unsignedJwtWithExp(Math.floor(cliExpiry / 1000));
+
+    writeAuthStore(sourceAuthPath, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "stale-copied-access",
+          refresh: "stale-copied-refresh",
+          expires: copiedExpiry,
+        },
+      },
+    });
+    writeAuthStore(path.join(codexHome, "auth.json"), {
+      tokens: {
+        access_token: cliAccess,
+        refresh_token: "fresh-cli-refresh",
+        account_id: "acct_123",
+      },
+    });
+
+    const result = bootstrapTelegramLiveCodexAuthStoreFromSources({
+      runtimeStateDir,
+      agentId: "main",
+      sourceAuthPaths: [sourceAuthPath],
+      codexHome,
+      nowMs,
+      platform: "linux",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      sourceKind: "codex_cli_auth_json",
+      accessExpiryMs: cliExpiry,
+      expirySource: "jwt_exp",
+      candidateCount: 2,
+    });
+    expect(JSON.stringify(result)).not.toContain("fresh-cli-refresh");
+    expect(JSON.stringify(result)).not.toContain("stale-copied-refresh");
+
+    const copied = JSON.parse(readFileSync(String(result.authStorePath), "utf8"));
+    expect(copied.profiles["openai-codex:default"]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: cliAccess,
+      refresh: "fresh-cli-refresh",
+      expires: cliExpiry,
+      accountId: "acct_123",
+    });
+  });
+
+  it("selects fresher Codex Keychain auth over a stale copied OpenClaw profile", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-codex-keychain-"));
+    const sourceAuthPath = path.join(root, "source", "auth-profiles.json");
+    const runtimeStateDir = path.join(root, "runtime-state");
+    const codexHome = path.join(root, "codex-home");
+    const nowMs = new Date("2026-06-11T08:00:00Z").getTime();
+    const copiedExpiry = nowMs + 30 * 60 * 1000;
+    const keychainExpiry = nowMs + 3 * 60 * 60 * 1000;
+    const keychainAccess = unsignedJwtWithExp(Math.floor(keychainExpiry / 1000));
+
+    writeAuthStore(sourceAuthPath, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "stale-copied-access",
+          refresh: "stale-copied-refresh",
+          expires: copiedExpiry,
+        },
+      },
+    });
+    mkdirSync(codexHome, { recursive: true });
+
+    const result = bootstrapTelegramLiveCodexAuthStoreFromSources({
+      runtimeStateDir,
+      agentId: "main",
+      sourceAuthPaths: [sourceAuthPath],
+      codexHome,
+      nowMs,
+      platform: "darwin",
+      execFileSync: () =>
+        JSON.stringify({
+          tokens: {
+            access_token: keychainAccess,
+            refresh_token: "fresh-keychain-refresh",
+            account_id: "acct_keychain",
+          },
+          last_refresh: "2026-06-11T08:30:00Z",
+        }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      sourceKind: "codex_cli_keychain",
+      accessExpiryMs: keychainExpiry,
+      expirySource: "jwt_exp",
+      candidateCount: 2,
+    });
+    expect(JSON.stringify(result)).not.toContain("fresh-keychain-refresh");
+    expect(JSON.stringify(result)).not.toContain("stale-copied-refresh");
+
+    const copied = JSON.parse(readFileSync(String(result.authStorePath), "utf8"));
+    expect(copied.profiles["openai-codex:default"]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: keychainAccess,
+      refresh: "fresh-keychain-refresh",
+      expires: keychainExpiry,
+      accountId: "acct_keychain",
+    });
   });
 
   it("rejects expired OpenClaw Codex profiles before tester runtime import", () => {

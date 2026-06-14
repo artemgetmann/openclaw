@@ -20,6 +20,7 @@ const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegr
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
   pinMessageTelegram,
@@ -31,6 +32,7 @@ const {
   sendStickerTelegram,
   unpinMessageTelegram,
 } = await importTelegramSendModule();
+const { TELEGRAM_DELETE_ENABLE_ENV } = await import("./delete-guard.js");
 
 async function expectChatNotFoundWithChatId(
   action: Promise<unknown>,
@@ -2236,6 +2238,52 @@ describe("sendPollTelegram", () => {
         { token: "t", api: api as unknown as Bot["api"] },
       ),
     ).rejects.toThrow(/returned no message_id/i);
+  });
+});
+
+describe("deleteMessageTelegram", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("suppresses Telegram deletes by default", async () => {
+    const api = { deleteMessage: vi.fn().mockResolvedValue(true) };
+
+    const result = await deleteMessageTelegram("123", 456, {
+      token: "tok",
+      api: api as unknown as Bot["api"],
+      accountId: "main",
+    });
+
+    expect(result).toEqual({ ok: true, deleted: false, suppressed: true });
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows Telegram deletes with explicit env opt-in", async () => {
+    vi.stubEnv(TELEGRAM_DELETE_ENABLE_ENV, "1");
+    const api = { deleteMessage: vi.fn().mockResolvedValue(true) };
+
+    const result = await deleteMessageTelegram("123", 456, {
+      token: "tok",
+      api: api as unknown as Bot["api"],
+      accountId: "main",
+    });
+
+    expect(result).toEqual({ ok: true, deleted: true });
+    expect(api.deleteMessage).toHaveBeenCalledWith("123", 456);
+  });
+
+  it("rethrows Telegram delete failures when explicitly enabled", async () => {
+    vi.stubEnv(TELEGRAM_DELETE_ENABLE_ENV, "1");
+    const api = { deleteMessage: vi.fn().mockRejectedValue(new Error("cannot delete")) };
+
+    await expect(
+      deleteMessageTelegram("123", 456, {
+        token: "tok",
+        api: api as unknown as Bot["api"],
+        accountId: "main",
+      }),
+    ).rejects.toThrow("cannot delete");
   });
 });
 

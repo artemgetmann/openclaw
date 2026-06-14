@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import {
   createTelegramDraftStream,
   type TelegramDraftDurableSendEvent,
@@ -11,7 +12,6 @@ type ProgressPreview = {
   parseMode?: "HTML";
 };
 
-const OMITTED_PROGRESS_PREFIX = "[earlier progress omitted]";
 const PROGRESS_ENTRY_SEPARATOR = "\n\n";
 const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 
@@ -26,8 +26,16 @@ export function createTelegramProgressController(params: {
   chatId: number;
   maxChars: number;
   thread?: TelegramThreadSpec | null;
+  previewTransport?: "auto" | "message" | "draft";
   replyToMessageId?: number;
+  throttleMs?: number;
   minInitialChars?: number;
+  deleteAudit?: Partial<
+    Pick<
+      TelegramDeleteAuditMetadata,
+      "accountId" | "callsite" | "classification" | "lane" | "reason" | "sessionId" | "topicId"
+    >
+  >;
   renderText: (text: string) => ProgressPreview;
   onMessageDelivered?: (messageId: number, event: TelegramDraftDurableSendEvent) => void;
   log?: (message: string) => void;
@@ -44,9 +52,19 @@ export function createTelegramProgressController(params: {
     chatId: params.chatId,
     maxChars: params.maxChars,
     thread: params.thread,
-    previewTransport: "message",
+    previewTransport: params.previewTransport ?? "auto",
     replyToMessageId: params.replyToMessageId,
+    ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
     minInitialChars: params.minInitialChars,
+    deleteAudit: {
+      callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",
+      reason: params.deleteAudit?.reason ?? "progress_cleanup",
+      accountId: params.deleteAudit?.accountId,
+      lane: params.deleteAudit?.lane ?? "answer",
+      classification: params.deleteAudit?.classification ?? "progress",
+      sessionId: params.deleteAudit?.sessionId,
+      topicId: params.deleteAudit?.topicId,
+    },
     renderText: params.renderText,
     onMessageDelivered: params.onMessageDelivered,
     log: params.log,
@@ -87,24 +105,20 @@ export function createTelegramProgressController(params: {
     }
 
     const latestEntry = progressEntries[progressEntries.length - 1] ?? "";
-    const maxEntryChars =
-      maxProgressChars - OMITTED_PROGRESS_PREFIX.length - PROGRESS_ENTRY_SEPARATOR.length;
-    if (maxEntryChars <= 0) {
-      return latestEntry.slice(0, maxProgressChars);
-    }
-
     const retained: string[] = [
-      latestEntry.length > maxEntryChars ? latestEntry.slice(0, maxEntryChars) : latestEntry,
+      latestEntry.length > maxProgressChars ? latestEntry.slice(0, maxProgressChars) : latestEntry,
     ];
     for (let index = progressEntries.length - 2; index >= 0; index -= 1) {
       const candidate = [progressEntries[index], ...retained].join(PROGRESS_ENTRY_SEPARATOR);
-      const prefixedCandidate = `${OMITTED_PROGRESS_PREFIX}${PROGRESS_ENTRY_SEPARATOR}${candidate}`;
-      if (prefixedCandidate.length > maxProgressChars) {
+      // This text is shown directly in Telegram previews/drafts. Do not add a
+      // synthetic "omitted" marker here; users can see it before cleanup, and
+      // the final answer delivery owns the durable transcript.
+      if (candidate.length > maxProgressChars) {
         continue;
       }
       retained.unshift(progressEntries[index]);
     }
-    return `${OMITTED_PROGRESS_PREFIX}${PROGRESS_ENTRY_SEPARATOR}${retained.join(PROGRESS_ENTRY_SEPARATOR)}`;
+    return retained.join(PROGRESS_ENTRY_SEPARATOR);
   };
 
   return {
@@ -131,12 +145,9 @@ export function createTelegramProgressController(params: {
         return;
       }
       cleared = true;
-      if (hasProgress || typeof stream.messageId() === "number") {
-        // Clear should leave proof of the latest visible progress state before
-        // deleting it. The draft stream's raw clear intentionally cancels pending
-        // edits; the progress controller owns the stricter finalization contract.
-        await stream.flush();
-      }
+      // Final-answer delivery owns the durable transcript. Progress cleanup
+      // should remove the current preview quickly, not force one last pending
+      // edit that can briefly duplicate the final answer before deletion.
       await stream.clear();
     },
     messageId: () => stream.messageId(),

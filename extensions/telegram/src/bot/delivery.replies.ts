@@ -1,5 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../../../src/auto-reply/chunk.js";
+import { buildFinalTtsCaptionPreview } from "../../../../src/auto-reply/reply/tts-caption-preview.js";
 import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
 import type { ReplyToMode } from "../../../../src/config/config.js";
 import type { MarkdownTableMode } from "../../../../src/config/types.base.js";
@@ -59,6 +60,18 @@ type TelegramReplyChannelData = {
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+
+function isFinalTtsSupplementPayload(reply: ReplyPayload): boolean {
+  const channelData = reply.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  const openclaw = channelData.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  return (openclaw as { finalTtsSupplement?: unknown }).finalTtsSupplement === true;
+}
 
 function buildChunkTextResolver(params: {
   textLimit: number;
@@ -377,14 +390,14 @@ async function deliverMediaReply(params: {
           await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
         } catch (voiceErr) {
           if (isVoiceMessagesForbidden(voiceErr)) {
+            if (params.voiceFallbackTextAlreadySent) {
+              logVerbose(
+                "telegram sendVoice forbidden after visible text was already delivered; skipping voice supplement",
+              );
+              continue;
+            }
             const fallbackText = params.reply.text;
             if (!fallbackText || !fallbackText.trim()) {
-              if (params.voiceFallbackTextAlreadySent) {
-                logVerbose(
-                  "telegram sendVoice forbidden after visible text was already delivered; skipping voice supplement",
-                );
-                continue;
-              }
               throw voiceErr;
             }
             logVerbose(
@@ -683,14 +696,18 @@ export async function deliverReplies(params: {
           progress,
         });
       } else {
+        const finalTtsSupplement = isFinalTtsSupplementPayload(reply);
         const shouldSplitVoiceSupplement =
+          !finalTtsSupplement &&
           reply.audioAsVoice === true &&
           typeof reply.text === "string" &&
           reply.text.trim().length > 0;
         if (shouldSplitVoiceSupplement) {
           // TTS voice is a supplement to the durable final text, not a second
-          // visible copy of that final as a media caption. Send the text first,
-          // then send the voice/audio payload without caption text.
+          // full visible copy of that final as a media caption. Send the text
+          // first, then keep only a short preview caption on the voice/audio
+          // payload so Telegram chat-list/topic previews retain context.
+          const voiceCaptionPreview = buildFinalTtsCaptionPreview(reply.text ?? "");
           firstDeliveredMessageId = await deliverTextReply({
             bot: params.bot,
             chatId: params.chatId,
@@ -708,30 +725,50 @@ export async function deliverReplies(params: {
             replyToMode: params.replyToMode,
             progress,
           });
-          reply = { ...reply, text: undefined };
+          reply = { ...reply, text: voiceCaptionPreview };
         }
-        const mediaMessageId = await deliverMediaReply({
-          reply,
-          mediaList,
-          bot: params.bot,
-          chatId: params.chatId,
-          runtime: params.runtime,
-          thread: params.thread,
-          tableMode: params.tableMode,
-          mediaLocalRoots: params.mediaLocalRoots,
-          chunkText,
-          onVoiceRecording: params.onVoiceRecording,
-          linkPreview: params.linkPreview,
-          replyQuoteMessageId: params.replyQuoteMessageId,
-          replyQuoteText: params.replyQuoteText,
-          replyQuotePosition: params.replyQuotePosition,
-          replyQuoteEntities: params.replyQuoteEntities,
-          replyMarkup,
-          replyToId,
-          replyToMode: params.replyToMode,
-          progress,
-          voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement,
-        });
+        if (finalTtsSupplement) {
+          logVerbose(
+            `telegram: final TTS supplement media send start chat=${params.chatId} thread=${params.thread?.id ?? "none"} mediaCount=${mediaList.length}`,
+          );
+        }
+        let mediaMessageId: number | undefined;
+        try {
+          mediaMessageId = await deliverMediaReply({
+            reply,
+            mediaList,
+            bot: params.bot,
+            chatId: params.chatId,
+            runtime: params.runtime,
+            thread: params.thread,
+            tableMode: params.tableMode,
+            mediaLocalRoots: params.mediaLocalRoots,
+            chunkText,
+            onVoiceRecording: params.onVoiceRecording,
+            linkPreview: params.linkPreview,
+            replyQuoteMessageId: params.replyQuoteMessageId,
+            replyQuoteText: params.replyQuoteText,
+            replyQuotePosition: params.replyQuotePosition,
+            replyQuoteEntities: params.replyQuoteEntities,
+            replyMarkup,
+            replyToId,
+            replyToMode: params.replyToMode,
+            progress,
+            voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement || finalTtsSupplement,
+          });
+          if (finalTtsSupplement) {
+            logVerbose(
+              `telegram: final TTS supplement media send end chat=${params.chatId} thread=${params.thread?.id ?? "none"} message=${mediaMessageId ?? "unknown"}`,
+            );
+          }
+        } catch (error) {
+          if (finalTtsSupplement) {
+            logVerbose(
+              `telegram: final TTS supplement media send failure chat=${params.chatId} thread=${params.thread?.id ?? "none"} error=${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          throw error;
+        }
         firstDeliveredMessageId ??= mediaMessageId;
       }
       await maybePinFirstDeliveredMessage({

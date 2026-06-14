@@ -52,6 +52,13 @@ TOKEN_BOOTSTRAP_STATUS="not-needed"
 RUNTIME_CONFIG_PRESENT="no"
 RUNTIME_CONFIG_TOKEN_PRESENT="no"
 RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
+MODEL_AUTH_PREFLIGHT_STATUS="not-run"
+MODEL_AUTH_PREFLIGHT_PROVIDER="unknown"
+MODEL_AUTH_PREFLIGHT_MODEL="unknown"
+MODEL_AUTH_PREFLIGHT_PROFILE="unknown"
+TELEGRAM_SENDER_PREFLIGHT_STATUS="not-run"
+TELEGRAM_SENDER_USER_ID="unknown"
+TELEGRAM_SENDER_ACCESS_STATUS="not-run"
 FAIL=0
 FAIL_REASONS=()
 
@@ -811,6 +818,15 @@ if (!result?.ok) {
     `ACP validation auth bootstrap failed: ${result?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
   );
 }
+console.log(`codex_auth_bootstrap=${JSON.stringify({
+  agentId: "main",
+  sourceKind: result.sourceKind ?? "unknown",
+  sourcePath: result.sourceAuthPath ?? result.codexAuthPath ?? "",
+  selectedProfileId: result.selectedProfileId ?? "",
+  accessExpiryMs: result.accessExpiryMs ?? null,
+  expirySource: result.expirySource ?? "unknown",
+  candidateCount: result.candidateCount ?? 0,
+})}`);
 NODE
     then
       add_failure "runtime_auth_bootstrap_failed"
@@ -859,6 +875,18 @@ const {
   syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
 } = await import(pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href);
+
+function emitCodexAuthBootstrapDiagnostic(agentId, bootstrap) {
+  console.log(`codex_auth_bootstrap=${JSON.stringify({
+    agentId,
+    sourceKind: bootstrap?.sourceKind ?? "unknown",
+    sourcePath: bootstrap?.sourceAuthPath ?? bootstrap?.codexAuthPath ?? "",
+    selectedProfileId: bootstrap?.selectedProfileId ?? "",
+    accessExpiryMs: bootstrap?.accessExpiryMs ?? null,
+    expirySource: bootstrap?.expirySource ?? "unknown",
+    candidateCount: bootstrap?.candidateCount ?? 0,
+  })}`);
+}
 
 let config = {};
 if (fs.existsSync(runtimeConfigPath)) {
@@ -939,6 +967,7 @@ for (const agentId of agentIds) {
           `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
         );
       }
+      emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
     }
     continue;
   }
@@ -959,6 +988,7 @@ for (const agentId of agentIds) {
           `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
         );
       }
+      emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
       continue;
     }
   }
@@ -989,6 +1019,7 @@ for (const agentId of agentIds) {
         `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
       );
     }
+    emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
     continue;
   }
 
@@ -999,6 +1030,192 @@ for (const agentId of agentIds) {
 NODE
   then
     add_failure "runtime_auth_sync_failed"
+  fi
+}
+
+probe_runtime_model_auth() {
+  MODEL_AUTH_PREFLIGHT_STATUS="not-run"
+  MODEL_AUTH_PREFLIGHT_PROVIDER="unknown"
+  MODEL_AUTH_PREFLIGHT_MODEL="unknown"
+  MODEL_AUTH_PREFLIGHT_PROFILE="unknown"
+
+  if [[ "${OPENCLAW_TELEGRAM_LIVE_SKIP_MODEL_AUTH_PREFLIGHT:-0}" == "1" ]]; then
+    MODEL_AUTH_PREFLIGHT_STATUS="skipped_disabled"
+    return
+  fi
+  if [[ -z "$RUNTIME_CONFIG_PATH" || -z "$RUNTIME_STATE_DIR" ]]; then
+    MODEL_AUTH_PREFLIGHT_STATUS="fail"
+    add_failure "model_auth_preflight_missing_runtime_paths"
+    return
+  fi
+
+  local probe_lines=""
+  if ! probe_lines="$(
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    HELPER_MODULE="$HELPER_MODULE" \
+    node --input-type=module - <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.HELPER_MODULE;
+const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
+const { resolveTelegramLiveModelAuthProbe } = await import(pathToFileURL(helperPath).href);
+const probe = resolveTelegramLiveModelAuthProbe({ runtimeConfigPath });
+process.stdout.write(`${probe.required ? "required" : "skipped"}\n`);
+process.stdout.write(`${probe.provider || "unknown"}\n`);
+process.stdout.write(`${probe.model || "unknown"}\n`);
+process.stdout.write(`${probe.profile || "unknown"}\n`);
+process.stdout.write(`${probe.reason || "unknown"}\n`);
+NODE
+  )"; then
+    MODEL_AUTH_PREFLIGHT_STATUS="fail"
+    add_failure "model_auth_preflight_probe_resolution_failed"
+    return
+  fi
+
+  local probe_requirement probe_reason
+  probe_requirement="$(printf '%s\n' "$probe_lines" | sed -n '1p')"
+  MODEL_AUTH_PREFLIGHT_PROVIDER="$(printf '%s\n' "$probe_lines" | sed -n '2p')"
+  MODEL_AUTH_PREFLIGHT_MODEL="$(printf '%s\n' "$probe_lines" | sed -n '3p')"
+  MODEL_AUTH_PREFLIGHT_PROFILE="$(printf '%s\n' "$probe_lines" | sed -n '4p')"
+  probe_reason="$(printf '%s\n' "$probe_lines" | sed -n '5p')"
+
+  if [[ "$probe_requirement" != "required" ]]; then
+    MODEL_AUTH_PREFLIGHT_STATUS="skipped_${probe_reason}"
+    return
+  fi
+
+  local probe_timeout="${OPENCLAW_TELEGRAM_LIVE_MODEL_PROBE_TIMEOUT_MS:-60000}"
+  if [[ ! "$probe_timeout" =~ ^[0-9]+$ ]]; then
+    probe_timeout=60000
+  fi
+
+  local probe_output=""
+  if OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
+    OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
+    OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1 \
+    OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-0}" \
+    node scripts/run-node.mjs models status \
+      --json \
+      --probe \
+      --probe-provider "$MODEL_AUTH_PREFLIGHT_PROVIDER" \
+      --probe-profile "$MODEL_AUTH_PREFLIGHT_PROFILE" \
+      --probe-timeout "$probe_timeout" \
+      --probe-concurrency 1 \
+      --probe-max-tokens "${OPENCLAW_TELEGRAM_LIVE_MODEL_PROBE_MAX_TOKENS:-8}" \
+      >/tmp/openclaw-telegram-live-model-probe.$$ 2>&1; then
+    MODEL_AUTH_PREFLIGHT_STATUS="ok"
+    rm -f /tmp/openclaw-telegram-live-model-probe.$$
+    return
+  fi
+
+  probe_output="$(cat /tmp/openclaw-telegram-live-model-probe.$$ 2>/dev/null || true)"
+  rm -f /tmp/openclaw-telegram-live-model-probe.$$
+  MODEL_AUTH_PREFLIGHT_STATUS="fail"
+  add_failure "model_auth_preflight_failed:${MODEL_AUTH_PREFLIGHT_PROVIDER}"
+  if [[ -n "$probe_output" ]]; then
+    echo "model_auth_preflight_error_begin" >&2
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      sanitize_runtime_log_line "$line" >&2
+    done <<< "$probe_output"
+    echo "model_auth_preflight_error_end" >&2
+  fi
+}
+
+ensure_telegram_sender_access() {
+  TELEGRAM_SENDER_PREFLIGHT_STATUS="not-run"
+  TELEGRAM_SENDER_USER_ID="unknown"
+  TELEGRAM_SENDER_ACCESS_STATUS="not-run"
+
+  if [[ "${OPENCLAW_TELEGRAM_LIVE_SKIP_SENDER_ACCESS_PREFLIGHT:-0}" == "1" ]]; then
+    TELEGRAM_SENDER_PREFLIGHT_STATUS="skipped_disabled"
+    TELEGRAM_SENDER_ACCESS_STATUS="skipped_disabled"
+    return
+  fi
+  if [[ -z "$RUNTIME_CONFIG_PATH" || -z "$RUNTIME_STATE_DIR" ]]; then
+    TELEGRAM_SENDER_PREFLIGHT_STATUS="fail"
+    TELEGRAM_SENDER_ACCESS_STATUS="fail"
+    add_failure "telegram_sender_preflight_missing_runtime_paths"
+    return
+  fi
+
+  local precheck_output=""
+  if ! precheck_output="$(
+    cd "$REPO_ROOT" && \
+      OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
+      OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+      OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
+      OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT=1 \
+      node scripts/run-node.mjs telegram-user precheck --json
+  )"; then
+    TELEGRAM_SENDER_PREFLIGHT_STATUS="fail"
+    TELEGRAM_SENDER_ACCESS_STATUS="not-run"
+    add_failure "telegram_user_preflight_failed"
+    return
+  fi
+
+  local sender_id=""
+  sender_id="$(
+    PRECHECK_JSON="$precheck_output" node --input-type=module - <<'NODE'
+const raw = process.env.PRECHECK_JSON ?? "";
+try {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  const parsed = start >= 0 && end >= start ? JSON.parse(raw.slice(start, end + 1)) : {};
+  const id = parsed?.user?.user_id;
+  if (typeof id === "number" || typeof id === "string") {
+    process.stdout.write(String(id));
+  }
+} catch {
+  process.exit(0);
+}
+NODE
+  )"
+
+  if [[ -z "$sender_id" ]]; then
+    TELEGRAM_SENDER_PREFLIGHT_STATUS="fail"
+    TELEGRAM_SENDER_ACCESS_STATUS="not-run"
+    add_failure "telegram_user_id_unresolved"
+    return
+  fi
+  TELEGRAM_SENDER_USER_ID="$sender_id"
+  TELEGRAM_SENDER_PREFLIGHT_STATUS="ok"
+
+  local access_lines=""
+  if ! access_lines="$(
+    RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    SENDER_ID="$sender_id" \
+    HELPER_MODULE="$HELPER_MODULE" \
+    STATE_ROOT="${OPENCLAW_TELEGRAM_LIVE_STATE_ROOT:-}" \
+    node --input-type=module - <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.HELPER_MODULE;
+const { ensureTelegramLiveSenderAccess } = await import(pathToFileURL(helperPath).href);
+const result = ensureTelegramLiveSenderAccess({
+  runtimeStateDir: process.env.RUNTIME_STATE_DIR,
+  runtimeConfigPath: process.env.RUNTIME_CONFIG_PATH,
+  senderId: process.env.SENDER_ID,
+  stateRoot: process.env.STATE_ROOT,
+});
+process.stdout.write(`${result.ok ? "ok" : "fail"}\n`);
+process.stdout.write(`${result.status || "unknown"}\n`);
+process.stdout.write(`${result.reason || "unknown"}\n`);
+NODE
+  )"; then
+    TELEGRAM_SENDER_ACCESS_STATUS="fail"
+    add_failure "telegram_sender_access_preflight_failed"
+    return
+  fi
+
+  local access_ok access_status access_reason
+  access_ok="$(printf '%s\n' "$access_lines" | sed -n '1p')"
+  access_status="$(printf '%s\n' "$access_lines" | sed -n '2p')"
+  access_reason="$(printf '%s\n' "$access_lines" | sed -n '3p')"
+  TELEGRAM_SENDER_ACCESS_STATUS="$access_status"
+  if [[ "$access_ok" != "ok" ]]; then
+    add_failure "telegram_sender_access_preflight_failed:${access_reason}"
   fi
 }
 
@@ -1118,6 +1335,13 @@ emit_ensure_proof_lines() {
   echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
   echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"
   echo "token_claim_count=${TOKEN_CLAIM_COUNT}"
+  echo "model_auth_preflight=${MODEL_AUTH_PREFLIGHT_STATUS}"
+  echo "model_auth_preflight_provider=${MODEL_AUTH_PREFLIGHT_PROVIDER}"
+  echo "model_auth_preflight_model=${MODEL_AUTH_PREFLIGHT_MODEL}"
+  echo "model_auth_preflight_profile=${MODEL_AUTH_PREFLIGHT_PROFILE}"
+  echo "telegram_sender_preflight=${TELEGRAM_SENDER_PREFLIGHT_STATUS}"
+  echo "telegram_sender_user_id=${TELEGRAM_SENDER_USER_ID}"
+  echo "telegram_sender_access=${TELEGRAM_SENDER_ACCESS_STATUS}"
   for claim_path in "${TOKEN_CLAIM_PATHS[@]-}"; do
     if [[ -z "$claim_path" ]]; then
       continue
@@ -1149,6 +1373,12 @@ ensure_command() {
   fi
   if [[ "$FAIL" -eq 0 ]]; then
     sync_runtime_auth_profiles
+  fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    probe_runtime_model_auth
+  fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    ensure_telegram_sender_access
   fi
 
   resolve_runtime_owner

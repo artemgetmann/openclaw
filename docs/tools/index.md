@@ -318,6 +318,7 @@ Common parameters:
 - All actions accept optional `profile` parameter for multi-instance support.
 - Omit `profile` for the configured default (`openclaw` unless changed).
 - Use `profile="signed-in"` for serious signed-in web work; it controls a cloned signed-in Chrome profile through Chrome MCP.
+- Use `profile="openclaw"` for clean public browsing. For logged-in, hostile, social posting, or account-bound flows, treat it as a last-resort fallback when session state does not matter.
 - Use `profile="user-live"` only when the task explicitly needs the user’s real live browser session, existing tabs, or installed extensions.
 - `profile="signed-in"` and `profile="user-live"` are host-only; do not combine them with sandbox/node targets.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).

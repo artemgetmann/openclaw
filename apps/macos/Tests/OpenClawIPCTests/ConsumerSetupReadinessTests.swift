@@ -51,6 +51,13 @@ private func pairingRequiredAuthError() -> GatewayConnectAuthError {
         canRetryWithDeviceToken: false)
 }
 
+private func tokenMismatchAuthError() -> GatewayConnectAuthError {
+    GatewayConnectAuthError(
+        message: "token_mismatch",
+        detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+        canRetryWithDeviceToken: false)
+}
+
 private func rawPairingRequiredGatewayError() -> NSError {
     NSError(
         domain: "gateway",
@@ -162,6 +169,14 @@ private final class SendableCounter: @unchecked Sendable {
     var value = 0
 }
 
+private final class SendableFlag: @unchecked Sendable {
+    var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+}
+
 private final class ReadinessContinuationBox: @unchecked Sendable {
     var continuation: CheckedContinuation<ConsumerModelsReadinessPayload, any Error>?
 }
@@ -265,14 +280,51 @@ struct ConsumerSetupReadinessTests {
         #expect(!model.canRestartOperator)
     }
 
-    @Test func `consumer model runtime ownership blocker stays consumer safe`() async {
+    @Test func `consumer model runtime ownership blocker repairs before readiness probe`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
         let blockerDetail = """
         Telegram runtime ownership mismatch at /Users/user/Programming_Projects/openclaw/.worktrees/onboarding-ai-access-recovery-20260519-2158/apps/macos/Sources/OpenClaw/Telegram/DM/bridge.swift
         """
-        let expectedMessage = "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
         let model = ConsumerModelSetupModel(
             probeReadiness: {
-                readyReadinessPayload()
+                probeCalls.value += 1
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                restartCalls.value == 0 ? blockerDetail : nil
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            })
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(model.statusLine?.localizedCaseInsensitiveContains("local helper") == false)
+        #expect(model.statusLine?.contains("Telegram") == false)
+        #expect(model.statusLine?.contains("DM") == false)
+        #expect(model.statusLine?.contains("/Users/") == false)
+    }
+
+    @Test func `consumer model trusts live readiness when runtime ownership blocker remains stale`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerDetail = "stale launchd service metadata"
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return readyReadinessPayload()
             },
             listAuthOptions: {
                 ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
@@ -282,10 +334,94 @@ struct ConsumerSetupReadinessTests {
             },
             runtimeOwnershipBlocker: {
                 blockerDetail
+            },
+            restartGateway: {
+                restartCalls.value += 1
             })
 
         await model.refresh()
 
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(!model.canRestartOperator)
+        #expect(!model.isAuthChoiceInteractionBlocked)
+    }
+
+    @Test func `consumer model retries live readiness while stale runtime blocker socket reconnects`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let reconnectSleeps = SendableCounter()
+        let blockerDetail = "stale launchd service metadata"
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    throw gatewayUnreachableError()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerDetail
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0, 1],
+            gatewayRecoverySleep: { _ in
+                reconnectSleeps.value += 1
+            })
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 3)
+        #expect(reconnectSleeps.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(!model.canRestartOperator)
+        #expect(!model.isAuthChoiceInteractionBlocked)
+    }
+
+    @Test func `consumer model runtime ownership repair failure stays consumer safe when live readiness is unavailable`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerDetail = """
+        Telegram runtime ownership mismatch at /Users/user/Programming_Projects/openclaw/.worktrees/onboarding-ai-access-recovery-20260519-2158/apps/macos/Sources/OpenClaw/Telegram/DM/bridge.swift
+        """
+        let expectedMessage = "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                throw gatewayUnreachableError()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerDetail
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0])
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 1)
         #expect(model.phase == .failed(expectedMessage))
         #expect(model.statusLine == expectedMessage)
         #expect(model.statusLine?.localizedCaseInsensitiveContains("local helper") == false)
@@ -296,6 +432,151 @@ struct ConsumerSetupReadinessTests {
         #expect(model.canRestartOperator)
         #expect(model.isAuthChoiceInteractionBlocked)
         #expect(!model.canChooseAnotherAccessMethod)
+    }
+
+    @Test func `consumer model restart operator refreshes after runtime ownership repair`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerDetail = "stale launchd helper at /Users/user/Programming_Projects/openclaw/.worktrees/stale/dist/index.js"
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                guard restartCalls.value >= 2 else {
+                    throw gatewayUnreachableError()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                restartCalls.value < 2 ? blockerDetail : nil
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0])
+
+        await model.refresh()
+        #expect(model.failureKind == .runtimeUpdateBlocked)
+        #expect(model.canRestartOperator)
+
+        await model.restartOperator()
+
+        #expect(restartCalls.value == 2)
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.failureKind == nil)
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(!model.canRestartOperator)
+    }
+
+    @Test func `consumer model retries runtime ownership blocker after launchd metadata settles`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let blockerChecks = SendableCounter()
+        let recoverySleepCalls = SendableCounter()
+        let pendingRecoverySleep = SleepContinuationBox()
+        let blockerDetail = "stale launchd helper at /Users/user/Programming_Projects/openclaw/.worktrees/stale/dist/index.js"
+        let expectedMessage = "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                guard blockerChecks.value >= 3 else {
+                    throw gatewayUnreachableError()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerChecks.value += 1
+                return blockerChecks.value < 3 ? blockerDetail : nil
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            },
+            gatewayRecoveryProbeDelaysMs: [1],
+            runtimeOwnershipBypassProbeDelaysMs: [0],
+            gatewayRecoverySleep: { _ in
+                recoverySleepCalls.value += 1
+                await withCheckedContinuation { continuation in
+                    pendingRecoverySleep.continuation = continuation
+                }
+            })
+
+        await model.refresh()
+
+        #expect(restartCalls.value == 1)
+        #expect(blockerChecks.value == 2)
+        #expect(probeCalls.value == 1)
+        #expect(model.phase == .failed(expectedMessage))
+        #expect(model.failureKind == .runtimeUpdateBlocked)
+
+        while pendingRecoverySleep.continuation == nil {
+            await Task.yield()
+        }
+        pendingRecoverySleep.continuation?.resume()
+
+        for _ in 0..<1_000 where model.phase != .ready("openai-codex/gpt-5.5") {
+            await Task.yield()
+        }
+
+        #expect(restartCalls.value == 1)
+        #expect(blockerChecks.value == 3)
+        #expect(probeCalls.value == 2)
+        #expect(recoverySleepCalls.value == 1)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+    }
+
+    @Test func `consumer model refresh clears runtime ownership blocker after repair`() async {
+        let probeCalls = SendableCounter()
+        let blockerActive = SendableFlag(true)
+        let expectedMessage = "\(AppFlavor.current.appName) helper needs repair. Try Restart \(AppFlavor.current.appName)."
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                guard !blockerActive.value else {
+                    throw gatewayUnreachableError()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: "openai-codex-oauth")
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            runtimeOwnershipBlocker: {
+                blockerActive.value ? "stale launchd service metadata" : nil
+            },
+            restartGateway: {
+            },
+            runtimeOwnershipBypassProbeDelaysMs: [0])
+
+        await model.refresh()
+        #expect(model.phase == .failed(expectedMessage))
+        #expect(probeCalls.value == 1)
+
+        blockerActive.value = false
+        await model.refreshOnAppActivationIfNeeded()
+
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.failureKind == nil)
+        #expect(model.authOptionsLoaded)
     }
 
     @Test func `consumer model readiness surfaces missing auth as provider auth failure`() async {
@@ -361,6 +642,28 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .failed("Jarvis-managed AI did not answer the readiness probe in time."))
         #expect(model.failureKind?.title == "AI access needs a quick reset")
         #expect(model.canRestartOperator)
+    }
+
+    @Test func `consumer model treats gateway token mismatch as restartable local runtime failure`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                throw tokenMismatchAuthError()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            gatewayRecoveryProbeDelaysMs: [])
+
+        await model.refresh()
+
+        #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
+        #expect(model.failureKind == .gatewayUnreachable)
+        #expect(model.canRestartOperator)
+        #expect(model.isAuthChoiceInteractionBlocked)
+        #expect(!model.canChooseAnotherAccessMethod)
     }
 
     @Test func `consumer model loads auth options only once after blocked readiness`() async {
@@ -509,7 +812,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
 
         await model.refreshIfNeeded()
 
@@ -572,10 +875,10 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Try again in a moment, or restart Jarvis if this keeps happening."))
+                    "Jarvis is still starting. Restart Jarvis if this keeps happening."))
         #expect(
             model.statusLine
-                == "Jarvis is still starting. Try again in a moment, or restart Jarvis if this keeps happening.")
+                == "Jarvis is still starting. Restart Jarvis if this keeps happening.")
     }
 
     @Test func `consumer model apply auth consumes returned readiness and marks ready`() async {
@@ -854,10 +1157,10 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(
             model.statusLine
-                == "Jarvis is still starting. Wait a moment, then try again.")
+                == "Jarvis is still starting. Restart Jarvis if it does not reconnect.")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
     }
@@ -879,7 +1182,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.statusLine?.contains("pairing required") == false)
         #expect(model.statusLine?.contains("gateway connect") == false)
         #expect(model.failureKind == .gatewayUnreachable)
@@ -907,7 +1210,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.statusLine?.contains("pairing required") == false)
         #expect(model.statusLine?.contains("gateway connect") == false)
         #expect(model.statusLine?.contains("Swift.CancellationError") == false)
@@ -950,7 +1253,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis is still starting. Wait a moment, then try again."))
+                    "Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.authOptionsLoaded)
         #expect(model.chatGPTSubscriptionOption?.id == "openai-codex-oauth")
         #expect(model.selectedOptionId == "openai-codex-oauth")
@@ -1257,8 +1560,8 @@ struct ConsumerSetupReadinessTests {
 
         #expect(restartCalls.value == 1)
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .failed("Jarvis is still starting. Wait a moment, then try again."))
-        #expect(model.statusLine == "Jarvis is still starting. Wait a moment, then try again.")
+        #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
+        #expect(model.statusLine == "Jarvis is still starting. Restart Jarvis if it does not reconnect.")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
         #expect(!model.isRestartingOperator)
@@ -1311,7 +1614,7 @@ struct ConsumerSetupReadinessTests {
 
         #expect(restartCalls.value == 1)
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .failed("Jarvis is still starting. Wait a moment, then try again."))
+        #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(!model.isRestartingOperator)
 

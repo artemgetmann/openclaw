@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
@@ -11,12 +13,41 @@ const routeMocks = vi.hoisted(() => ({
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
+    failFinalAudio: false,
+    autoMode: "off",
+    lastAttempt: undefined as
+      | {
+          timestamp: number;
+          success: boolean;
+          textLength: number;
+          summarized: boolean;
+          error?: string;
+        }
+      | undefined,
   };
   return {
     state,
     maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as { kind?: string; payload: Record<string, unknown> };
+      if (state.failFinalAudio && params.kind === "final") {
+        const text = typeof params.payload.text === "string" ? params.payload.text : "";
+        state.lastAttempt = {
+          timestamp: Date.now(),
+          success: false,
+          textLength: text.length,
+          summarized: false,
+          error: "synthetic tts failure",
+        };
+        return params.payload;
+      }
       if (state.synthesizeFinalAudio && params.kind === "final") {
+        const text = typeof params.payload.text === "string" ? params.payload.text : "";
+        state.lastAttempt = {
+          timestamp: Date.now(),
+          success: true,
+          textLength: text.length,
+          summarized: false,
+        };
         return {
           ...params.payload,
           mediaUrl: "https://example.com/final-tts.opus",
@@ -25,6 +56,13 @@ const ttsMocks = vi.hoisted(() => {
       }
       return params.payload;
     }),
+    getLastTtsAttempt: vi.fn(() => state.lastAttempt),
+    resolveTtsAutoMode: vi.fn((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionAuto?: string };
+      return params.sessionAuto ?? state.autoMode;
+    }),
+    resolveTtsConfig: vi.fn(() => ({ mode: "final" })),
+    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-test-tts.json"),
   };
 });
 
@@ -33,7 +71,11 @@ vi.mock("./route-reply.js", () => ({
 }));
 
 vi.mock("../../tts/tts.js", () => ({
+  getLastTtsAttempt: () => ttsMocks.getLastTtsAttempt(),
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveTtsAutoMode: (params: unknown) => ttsMocks.resolveTtsAutoMode(params),
+  resolveTtsConfig: () => ttsMocks.resolveTtsConfig(),
+  resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -83,7 +125,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
     routeMocks.routeReply.mockClear();
     ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.state.failFinalAudio = false;
+    ttsMocks.state.autoMode = "off";
+    ttsMocks.state.lastAttempt = undefined;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
+    ttsMocks.getLastTtsAttempt.mockClear();
+    ttsMocks.resolveTtsAutoMode.mockClear();
+    ttsMocks.resolveTtsConfig.mockClear();
+    ttsMocks.resolveTtsPrefsPath.mockClear();
   });
 
   it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
@@ -213,7 +262,18 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
   });
 
-  it("delivers synthesized final TTS as a media-only supplement", async () => {
+  it("builds a short deterministic caption preview for final TTS supplements", () => {
+    const preview = buildFinalTtsCaptionPreview(
+      `  ${"First sentence with   irregular whitespace. ".repeat(8)}  `,
+    );
+
+    expect(preview).toBeDefined();
+    expect(preview?.length).toBeLessThanOrEqual(160);
+    expect(preview).not.toContain("  ");
+    expect(preview?.endsWith("...")).toBe(true);
+  });
+
+  it("keeps synthesized final TTS media-only outside Telegram", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const { coordinator, dispatcher } = createCoordinator();
 
@@ -233,7 +293,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
   });
 
-  it("delivers visible final text before media-only TTS in the same Telegram thread", async () => {
+  it("delivers visible final text before captioned TTS in the same Telegram thread", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const { coordinator } = createCoordinator({
       provider: "discord",
@@ -272,15 +332,47 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         to: "telegram:thread-1",
         threadId: 777,
         payload: expect.objectContaining({
-          text: undefined,
+          text: "Final answer.",
           mediaUrl: "https://example.com/final-tts.opus",
           audioAsVoice: true,
         }),
       }),
     );
+    expect(
+      (routeMocks.routeReply.mock.calls[1]?.[0] as { payload?: ReplyPayload } | undefined)?.payload
+        ?.channelData,
+    ).toBeUndefined();
   });
 
-  it("does not send the media-only TTS supplement when visible final text fails", async () => {
+  it("builds one final TTS supplement from the complete long final text", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+    const longFinalText = "Long final sentence. ".repeat(260);
+
+    await coordinator.deliverFinalTextBeforeTts(longFinalText);
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement(longFinalText);
+
+    expect(voiceDelivered).toBe(true);
+    const finalTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls.filter(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCalls).toHaveLength(1);
+    expect(finalTtsCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        payload: { text: longFinalText.trim() },
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send the captioned TTS supplement when visible final text fails", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     routeMocks.routeReply.mockResolvedValueOnce({ ok: false, messageId: "" });
     const { coordinator } = createCoordinator({
@@ -296,5 +388,107 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(visibleDelivered).toBe(false);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a lightweight Telegram status when final TTS synthesis fails", async () => {
+    ttsMocks.state.failFinalAudio = true;
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement("Final answer.");
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(false);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "Final answer." }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Voice note failed. Final text is above.",
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+              ttsFailureStatus: true,
+            },
+          },
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a lightweight Telegram status when final TTS was expected but no attempt is recorded", async () => {
+    ttsMocks.state.autoMode = "always";
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement("Final answer.");
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(false);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Voice note failed. Final text is above.",
+          channelData: {
+            openclaw: {
+              finalTtsSupplement: true,
+              ttsFailureStatus: true,
+            },
+          },
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a lightweight direct Telegram status when final TTS was expected but no attempt is recorded", async () => {
+    ttsMocks.state.autoMode = "always";
+    const { coordinator, dispatcher } = createCoordinator({
+      provider: "telegram",
+      surface: "telegram",
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement("Final answer.");
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(false);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Final answer." }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "Voice note failed. Final text is above.",
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+            ttsFailureStatus: true,
+          },
+        },
+      }),
+    );
   });
 });

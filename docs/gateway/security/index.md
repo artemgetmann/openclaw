@@ -51,6 +51,10 @@ Start with the smallest access that still works, then widen it as you gain confi
 OpenClaw assumes the host and config boundary are trusted:
 
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
+- `~/.openclaw` is the default CLI state directory. Packaged Jarvis/macOS app
+  service deployments set `OPENCLAW_STATE_DIR`; for the shared packaged service,
+  model auth profiles live under
+  `~/Library/Application Support/OpenClaw/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
 - OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.

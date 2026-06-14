@@ -511,13 +511,20 @@ public actor GatewayChannelActor {
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
-        // Once a role-specific device token exists, prefer it over the shared
-        // gateway token. Reusing an operator/shared token for node-mode reconnects
-        // trips the gateway's role-upgrade guard and forces pairing again.
-        let preferredDeviceToken = includeDeviceIdentity && explicitPassword == nil ? storedToken : nil
+        // Explicit config/env credentials are the operator's current truth. A
+        // stale role token can outlive app updates, so never let it replace an
+        // explicit gateway token on the first attempt. If the gateway says the
+        // shared-token path can retry with device auth, send the stored role token
+        // as auth.deviceToken on the bounded retry path below.
+        let preferredDeviceToken =
+            includeDeviceIdentity &&
+                explicitPassword == nil &&
+                explicitToken == nil &&
+                explicitBootstrapToken == nil &&
+                role == "node" ? storedToken : nil
         let authToken =
-            preferredDeviceToken ??
-                explicitToken ??
+            explicitToken ??
+                preferredDeviceToken ??
                 (includeDeviceIdentity && explicitPassword == nil &&
                     explicitBootstrapToken == nil ? storedToken : nil)
         let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil

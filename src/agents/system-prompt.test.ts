@@ -154,6 +154,32 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("routes clear Telegram read requests through the injected telegram-user skill before shell discovery", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>telegram-user</name>",
+        "    <description>Read and act as the user on Telegram, including checking replies and voice notes.</description>",
+        "    <location>/tmp/openclaw/skills/telegram-user/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+    });
+
+    expect(prompt).toContain(
+      "If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it before any generic discovery.",
+    );
+    expect(prompt).toContain(
+      "do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step",
+    );
+    expect(prompt).toContain("<name>telegram-user</name>");
+    expect(prompt.indexOf("<name>telegram-user</name>")).toBeLessThan(
+      prompt.indexOf("openclaw skills list"),
+    );
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -245,17 +271,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("When creating a monitor, encode deterministic wake instructions.");
     expect(prompt).toContain("pin that exact command");
     expect(prompt).toContain("create the tiny check script during monitor setup");
-    expect(prompt).toContain("Concrete anti-pattern");
-    expect(prompt).toContain("wacli-recent-reply.sh");
     expect(prompt).toContain(
-      "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends",
+      "For WhatsApp or Telegram-as-me jobs, route through the matching skill",
     );
-    expect(prompt).toContain("wacli-send-safe.sh");
-    expect(prompt).toContain("not a hand-rolled kill/send/restart loop");
-    expect(prompt).toContain("Telegram-as-me messaging");
-    expect(prompt).toContain("telegram-user");
-    expect(prompt).toContain("keep it separate from the bot-account Telegram channel");
-    expect(prompt).toContain("do not fake Telegram-as-me replies through the bot channel");
+    expect(prompt).toContain("`wacli` or `telegram-user`");
+    expect(prompt).toContain(
+      "keep those channel-specific procedures there instead of copying command playbooks into the prompt",
+    );
+    expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
+    expect(prompt).toContain("media transcribe --file <path> --json");
+    expect(prompt).toContain(
+      "channel-specific voice-note retrieval belongs in the matching channel skill",
+    );
+    expect(prompt).not.toContain("wacli-recent-reply.sh");
+    expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
+    expect(prompt).not.toContain("do not inspect Telethon internals");
   });
 
   it("classifies cron as the default for reminders and explicit monitors", () => {
@@ -403,7 +433,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it before any generic discovery.",
     );
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -543,7 +573,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it before any generic discovery.",
     );
   });
 

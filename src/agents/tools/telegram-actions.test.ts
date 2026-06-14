@@ -17,7 +17,12 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
-const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const deleteMessageTelegram = vi.fn(
+  async (): Promise<{ ok: true; deleted: boolean; suppressed?: true }> => ({
+    ok: true,
+    deleted: true,
+  }),
+);
 const editMessageTelegram = vi.fn(async () => ({
   ok: true,
   messageId: "456",
@@ -596,7 +601,7 @@ describe("handleTelegramAction", () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
     } as OpenClawConfig;
-    await handleTelegramAction(
+    const result = await handleTelegramAction(
       {
         action: "deleteMessage",
         chatId: "123",
@@ -604,11 +609,34 @@ describe("handleTelegramAction", () => {
       },
       cfg,
     );
+    expect(result.details).toEqual({ ok: true, deleted: true, suppressed: false });
     expect(deleteMessageTelegram).toHaveBeenCalledWith(
       "123",
       456,
-      expect.objectContaining({ token: "tok" }),
+      expect.objectContaining({
+        token: "tok",
+        callsite: "telegram-actions-deleteMessage",
+        reason: "agent_tool_delete_message",
+      }),
     );
+  });
+
+  it("reports when deleteMessage is suppressed by the Telegram delete guard", async () => {
+    deleteMessageTelegram.mockResolvedValueOnce({ ok: true, deleted: false, suppressed: true });
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    const result = await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+
+    expect(result.details).toEqual({ ok: true, deleted: false, suppressed: true });
   });
 
   it("respects deleteMessage gating", async () => {

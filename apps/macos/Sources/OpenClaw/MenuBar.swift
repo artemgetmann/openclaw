@@ -155,7 +155,7 @@ struct OpenClawApp: App {
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
             if AppFlavor.current.isConsumer {
-                SettingsWindowOpener.shared.open(tab: .general)
+                SettingsWindowOpener.shared.reveal(tab: .general)
             } else {
                 self.toggleWebChatPanel()
             }

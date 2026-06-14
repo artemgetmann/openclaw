@@ -427,6 +427,42 @@ describe("exec approvals safe bins", () => {
       evaluate([
         "openclaw",
         "telegram-user",
+        "inbox",
+        "--unread",
+        "--dm-only",
+        "--limit",
+        "10",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "download",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-id",
+        "52830",
+        "--output",
+        "/tmp/openclaw-media",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "media",
+        "transcribe",
+        "--file",
+        "/tmp/openclaw-media/voice.oga",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
         "send",
         "--chat",
         "@jarvis_tester_1_bot",

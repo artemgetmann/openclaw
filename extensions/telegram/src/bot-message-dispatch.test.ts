@@ -11,6 +11,7 @@ const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
+const guardedTelegramDeleteMessage = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 
@@ -28,6 +29,10 @@ vi.mock("./bot/delivery.js", () => ({
 
 vi.mock("./send.js", () => ({
   editMessageTelegram,
+}));
+
+vi.mock("./delete-guard.js", () => ({
+  guardedTelegramDeleteMessage,
 }));
 
 vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
@@ -54,6 +59,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
     editMessageTelegram.mockClear();
+    guardedTelegramDeleteMessage.mockReset();
+    guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: false, suppressed: true });
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
@@ -160,7 +167,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   }
 
-  it("streams progress drafts in private threads and forwards thread id", async () => {
+  it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(progressStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -183,12 +190,16 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         chatId: 123,
         thread: { id: 777, scope: "dm" },
         previewTransport: "message",
+        throttleMs: 250,
         minInitialChars: 1,
       }),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Checking the page.");
-    expect(progressStream.flush).toHaveBeenCalledTimes(1);
+    expect(progressStream.flush).not.toHaveBeenCalled();
     expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      progressStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
@@ -204,6 +215,32 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not wait for a sentence before surfacing same-chat DM source previews", async () => {
+    const progressStream = createDraftStream(9004);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: "A",
+          channelData: { openclaw: { sourcePreview: true } },
+        });
+        await dispatcherOptions.deliver({ text: "Answer." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previewTransport: "message",
+        minInitialChars: 1,
+      }),
+    );
+    expect(progressStream.update).toHaveBeenCalledWith("A");
   });
 
   it("accumulates block progress in one transient bubble before the final answer", async () => {
@@ -642,9 +679,21 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
 
     expect(reasoningDraftParams?.onSupersededPreview).toBeTypeOf("function");
-    expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toContainEqual([
-      123, 4444,
-    ]);
+    expect(guardedTelegramDeleteMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: bot.api,
+        chatId: 123,
+        messageId: 4444,
+        audit: expect.objectContaining({
+          callsite: "telegram-archived-reasoning-preview-cleanup",
+          reason: "archived_reasoning_preview_cleanup",
+          safetyMode: "deterministic_cleanup",
+          accountId: "default",
+          lane: "reasoning",
+        }),
+      }),
+    );
+    expect(bot.api.deleteMessage).not.toHaveBeenCalled();
   });
 
   it.each(["block", "partial"] as const)(
@@ -717,7 +766,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     },
   );
 
-  it("uses message preview transport for DM reasoning streams while streaming is active", async () => {
+  it("uses native draft preview transport for DM reasoning streams while streaming is active", async () => {
     const reasoningDraftStream = createDraftStream(111);
     createTelegramDraftStream.mockReturnValue(reasoningDraftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -735,7 +784,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_Working on it..._");
@@ -1016,7 +1065,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("finalizes a phase-less answer block before a media-only voice supplement and does not reuse progress on the next turn", async () => {
+  it("finalizes a phase-less answer block before a captioned TTS voice supplement and does not reuse progress on the next turn", async () => {
     const leakedProgressDraftStream = createSequencedDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
     dispatchReplyWithBufferedBlockDispatcher
@@ -1031,6 +1080,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           {
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
+            text: "hi Sir. Still suspiciously operational. This caption should stay attached to the voice supplement.",
+            channelData: { openclaw: { finalTtsSupplement: true } },
           },
           { kind: "final" },
         );
@@ -1042,6 +1093,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           {
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
+            text: "Princess Fiona repeat. This caption should also stay attached to the voice supplement.",
+            channelData: { openclaw: { finalTtsSupplement: true } },
           },
           { kind: "final" },
         );
@@ -1058,9 +1111,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context });
 
     // The phase-less text block is the visible final answer when the next
-    // boundary is only the TTS media supplement. It must never enter the mutable
-    // progress controller, because that controller edits one Telegram bubble
-    // across callbacks and can be reused by the next user turn.
+    // boundary is the TTS media supplement. Even with a Telegram caption, that
+    // supplement must never make the full answer enter the mutable progress
+    // controller, because that controller edits one Telegram bubble across
+    // callbacks and can be reused by the next user turn.
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(leakedProgressDraftStream.update).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenNthCalledWith(
@@ -1080,6 +1134,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
+            text: "hi Sir. Still suspiciously operational. This caption should stay attached to the voice supplement.",
           }),
         ],
       }),
@@ -1101,6 +1156,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
+            text: "Princess Fiona repeat. This caption should also stay attached to the voice supplement.",
           }),
         ],
       }),

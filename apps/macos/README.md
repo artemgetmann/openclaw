@@ -193,14 +193,58 @@ bash scripts/verify-consumer-mac-app.sh --release "dist/Jarvis.app"
 If the user asks an agent to "build me a new application", "push an update",
 or "make a sendable Jarvis package", this is the canonical lane.
 
+Start with the persistent Jarvis release worktree launcher:
+
+```bash
+bash scripts/jarvis-release-worktree.sh
+```
+
+Use `.worktrees/jarvis-release-current` for the macOS release/update/package,
+appcast, and notarization work. Do not create an ad-hoc cold worktree for this
+lane; repeated cold bootstraps are slow and make retry evidence noisy.
+Follow the launcher's printed next steps, then run the release commands from the
+release lane.
+
+Normal app-building release phases require macOS prewarm proof. If the release
+lane is cold, the release path should fail fast and suggest:
+
+```bash
+bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+```
+
+`ALLOW_COLD_RELEASE_LANE=1` is the emergency override. If you use it, document
+that the macOS prewarm proof was skipped.
+
 For a real update to existing installations, bump `APP_VERSION` and/or
 `APP_BUILD` before packaging. Sparkle updates only when the new
 `CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
 same-build upload is just a republish and will not trigger an update.
 
+The public release acceleration spec lives at
+`docs/consumer/jarvis-public-release-acceleration-spec.md`. It captures the
+full plan: one-command resume, bounded GitHub retries, timing, read-only size
+inventory, later safe parallelism, and bundle diet only after compatibility
+proof.
+
 The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public
 appcast, and only declares the package sendable after Sparkle is live.
+
+For local Jarvis release proof, do not run the full distribution lane. Prove
+the signed app bundle first:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --local-proof
+```
+
+This builds `dist/Jarvis.app`, runs `verify-consumer-mac-app.sh` against the
+stable release identity, verifies the bundled runtime `package.json` version
+matches the app version, writes `dist/jarvis-release-manifest.env`, writes the
+app build receipt, and stops. It does not create `Jarvis.dmg`, `Jarvis.zip`, or
+`jarvis-appcast.xml`; it also does not notarize, publish GitHub assets, install
+or launch the app, touch launchd, or change the shared gateway runtime. Use this
+when the question is "does this Jarvis app build verify locally?" instead of
+"is this public distribution artifact sendable?"
 
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
@@ -210,10 +254,34 @@ bash scripts/package-openclaw-mac-dist.sh \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
-`--phase <full|post-app-build>` controls where packaging starts. The default is
-`full`: build, sign, verify, notarize, package, publish, and verify in one
-pass. Use the narrower recovery phase only after the app build/sign/verify
-steps already succeeded and `dist/Jarvis.app` is still present:
+Before the large GitHub release asset upload, the package script runs a
+GitHub-specific network preflight. It checks routes to `github.com`,
+`api.github.com`, and `uploads.github.com`, then quickly probes the GitHub API
+and upload host. If those hosts route through a tunnel/VPN interface such as
+`utun*`, `wg*`, `ppp*`, or `ipsec*`, the script fails before upload. Turn off
+VPN/tunnel routing, switch Wi-Fi/hotspot, then rerun the publish phase. If the
+slow route is intentional and known-good, rerun with:
+
+```bash
+ALLOW_SLOW_RELEASE_UPLOAD=1 bash scripts/package-openclaw-mac-dist.sh \
+  --phase publish-assets-only \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Apple notarization submit also prints route warnings for likely notary hosts,
+the artifact size, submit start/end timestamps, and elapsed-time heartbeats.
+`notarytool` does not expose reliable byte-level upload progress. If it stalls
+before returning a submission ID, fix the network and retry the same artifact.
+If it returns a submission ID, poll that ID and do not resubmit the artifact.
+VPN/tunnel routing should be off for Apple and GitHub release uploads unless the
+slow path is intentional and known-good.
+
+`--phase` controls where packaging starts. The default is `full`: build, sign,
+verify, notarize, package, publish, and verify in one pass. `--local-proof` is
+an alias for `--phase local-proof` and is the fastest app-only proof path. Use
+the broad recovery phase only after the app build/sign/verify steps already
+succeeded and `dist/Jarvis.app` is still present:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
@@ -228,6 +296,147 @@ notarizes and staples the app, creates/signs/notarizes `Jarvis.dmg`, creates
 assets when `--publish-release-assets` is present. Do not use it after changing
 source, dependencies, signing inputs, app version/build, Sparkle keys, or bundle
 metadata; run the default full phase instead.
+
+For faster failure recovery, prefer the narrow phases once a durable artifact or
+notary receipt exists. The script records release state in
+`dist/jarvis-release-manifest.env`, app notarization in
+`dist/Jarvis.app.notary.env`, and DMG notarization in
+`dist/Jarvis.dmg.notary.env`. The manifest is operator metadata only; do not
+store credentials there.
+
+For normal operator recovery, use the public release wrapper instead of choosing
+the phase by hand:
+
+```bash
+bash scripts/jarvis-public-release.sh --dry-run
+bash scripts/jarvis-public-release.sh
+```
+
+The wrapper inspects existing `dist/` artifacts, receipts, and the release
+manifest, chooses the next safe package phase, and delegates to
+`scripts/package-openclaw-mac-dist.sh`. If it selects
+`create-local-release-assets-only`, pass the latest release tag so the Sparkle
+appcast signs an immutable tagged `Jarvis.zip` URL:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+When local notarized assets are ready, publishing still requires the explicit
+latest tag:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Wrapper runs write `dist/jarvis-public-release-summary.env`; timed package
+substeps append to `dist/jarvis-release-timing.tsv`. GitHub release view,
+upload, and public verification get bounded retries only for obvious transient
+network or GitHub service failures. Authentication, permission, missing release,
+wrong tag, and non-latest tag failures remain fast failures.
+
+Build/package the app once and stop before notarization:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase build-app-only
+```
+
+For repeat local proof, prefer `--local-proof` over `--phase build-app-only`.
+It uses the same app build and verifier path, but also forces local proof
+defaults: no notarization, no dSYM, no publish, default Sparkle key allowed for
+smoke proof, and cached bundled runtime reuse from a clean tracked commit.
+
+Submit app notarization only from the existing app bundle:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase submit-app-notarization
+```
+
+Resume app notary polling from the saved submission:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase poll-app-notarization
+```
+
+Submit DMG notarization only after the app poll phase records
+`JARVIS_APP_NOTARY_STATUS=Accepted`:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase submit-dmg-notarization
+```
+
+Resume DMG notary polling from the saved submission:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase poll-dmg-notarization
+```
+
+Create only local Sparkle release assets from the existing notarized
+`dist/Jarvis.app`:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --phase create-local-release-assets-only
+```
+
+This phase creates `dist/Jarvis.zip` and `dist/jarvis-appcast.xml` only. It
+does not rebuild the app, recreate or notarize the DMG, staple anything, upload
+GitHub assets, verify public URLs, touch `/Applications/Jarvis.app`, or touch
+the shared gateway runtime. It requires `JARVIS_APP_NOTARY_STATUS=Accepted` in
+`dist/jarvis-release-manifest.env`, but it intentionally does not require
+accepted DMG notarization so the ZIP/appcast can be prepared while DMG
+notarization is still pending.
+
+Publish only from existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
+`dist/jarvis-appcast.xml` after the manifest records accepted app and DMG
+notarization:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase publish-assets-only \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Verify only against the public GitHub release URLs without uploading:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase verify-public-assets-only \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+For trusted-ring drops where Apple notarization and public GitHub release work
+are intentional overkill, use the fast lane. It still builds signed local
+artifacts under `dist/`, but forces notarization, dSYM, publish, and public URL
+verification off:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh --trusted-ring-fast
+```
+
+The trusted-ring lane also uses the local fast packaging path: it skips the
+bundled CLI npm tarball and reuses the cached bundled runtime when runtime
+inputs are unchanged. Because the distribution wrapper requires a clean tracked
+worktree, the cache follows the current commit instead of rehashing generated
+`dist/` output. Run a normal full release phase before relying on a public
+release artifact; trusted-ring output is for local proof and tester handoff.
+
+Cache and retry rules:
+
+- `SKIP_PNPM_INSTALL=1` is only for already-bootstrapped retry lanes. If
+  dependencies or `node_modules` are missing, bootstrap first instead of hiding
+  a setup problem.
+- Runtime cache is acceptable only when the clean-git runtime cache guards pass.
+  A dirty tracked worktree is not a release cache input.
+- `--reuse-runtime` remains smoke-only. Do not use it for public release
+  packaging because it can preserve stale bundled runtime code.
+- Trusted-ring fast output is separate from the public release path. It is for
+  local proof and tester handoff, not a substitute for Developer ID signing,
+  Apple notarization, Sparkle appcast signing, GitHub upload, and public URL
+  verification.
 
 Required successful ending:
 
@@ -265,6 +474,19 @@ bash scripts/notarize-mac-artifact.sh \
 Receipts and logs must not contain secrets. Keep them to the notary submission
 ID, artifact path, staple target, status, and timestamps; credentials stay in
 Keychain or local env outside the repo.
+
+### Jarvis app size inventory
+
+Before removing anything to shrink artifacts, inspect the built app and record
+what actually dominates size. This is read-only:
+
+```bash
+bash scripts/report-jarvis-release-size.sh --app dist/Jarvis.app
+```
+
+Do not delete bundled files in the release lane without proof that Intel
+support, runtime startup, onboarding templates, bundled skills, and Sparkle
+validation still work.
 
 ## Signing behavior
 

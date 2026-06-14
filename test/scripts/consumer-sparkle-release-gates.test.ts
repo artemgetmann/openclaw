@@ -104,15 +104,119 @@ describe("consumer Sparkle release gates", () => {
     );
     const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
 
-    expect(script).toContain("--phase <full|post-app-build>");
+    expect(script).toContain("build-app-only|submit-app-notarization|poll-app-notarization");
     expect(script).toContain('PACKAGE_PHASE="full"');
     expect(script).toContain("--resume-after-app-build");
     expect(script).toContain("verify_resume_app_bundle");
-    expect(script).toContain('if [[ "$PACKAGE_PHASE" == "full" ]]');
+    expect(script).toContain(
+      'if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]',
+    );
     expect(script).toContain("write_app_build_receipt");
     expect(script).toContain("Do not source this file");
     expect(readme).toContain("--phase post-app-build");
     expect(readme).toContain("resumes from the existing `dist/Jarvis.app`");
+  });
+
+  it("adds local proof packaging that exits after app verification and metadata", () => {
+    const script = fs.readFileSync(
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
+      "utf8",
+    );
+    const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
+
+    expect(script).toContain("--local-proof");
+    expect(script).toContain('PACKAGE_PHASE="local-proof"');
+    expect(script).toContain("full|local-proof|post-app-build|build-app-only");
+    expect(script).toContain('if [[ "$PACKAGE_PHASE" == "local-proof" ]]');
+    expect(script).toContain("OPENCLAW_CONSUMER_FAST_PACKAGING=1");
+    expect(script).toContain("OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE=1");
+    expect(script).toContain("Jarvis local proof app bundle ready");
+    expect(script).toContain("app_build_receipt=$(app_build_receipt_path)");
+    expect(script).toContain(
+      "local-proof stops before notarization, DMG, ZIP, appcast, publish, install, launchd, and shared runtime changes",
+    );
+    expect(script).toContain(
+      'if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]',
+    );
+
+    expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --local-proof");
+    expect(readme).toContain("It does not create `Jarvis.dmg`, `Jarvis.zip`, or");
+    expect(readme).toContain("`jarvis-appcast.xml`; it also does not notarize");
+  });
+
+  it("adds narrow resumable release phases with saved manifest and receipts", () => {
+    const script = fs.readFileSync(
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
+      "utf8",
+    );
+    const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
+
+    expect(script).toContain("RELEASE_MANIFEST_PATH");
+    expect(script).toContain("dist/jarvis-release-manifest.env");
+    expect(script).toContain("app_notary_receipt_path");
+    expect(script).toContain("dmg_notary_receipt_path");
+    expect(script).toContain("submit_app_notarization_only");
+    expect(script).toContain("poll_app_notarization_only");
+    expect(script).toContain("submit_dmg_notarization_only");
+    expect(script).toContain("poll_dmg_notarization_only");
+    expect(script).toContain("publish-assets-only");
+    expect(script).toContain("verify-public-assets-only");
+    expect(script).toContain("require_notarized_manifest_before_publish");
+    expect(script).toContain("require_app_notarized_manifest");
+    expect(script).toContain("JARVIS_DMG_SHA256");
+    expect(script).toContain("JARVIS_ZIP_SIZE_BYTES");
+    expect(script).toContain("JARVIS_APPCAST_SHA256");
+    expect(script).toContain("openclaw_build_run_root");
+    expect(script).toContain("require_clean_git_for_release_build");
+
+    expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --phase build-app-only");
+    expect(readme).toContain(
+      "bash scripts/package-openclaw-mac-dist.sh --phase poll-app-notarization",
+    );
+    expect(readme).toContain(
+      "bash scripts/package-openclaw-mac-dist.sh --phase poll-dmg-notarization",
+    );
+    expect(readme).toContain("--phase publish-assets-only");
+    expect(readme).toContain("--phase verify-public-assets-only");
+    expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --trusted-ring-fast");
+  });
+
+  it("keeps trusted-ring packaging out of notarization and public release work", () => {
+    const script = fs.readFileSync(
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
+      "utf8",
+    );
+
+    expect(script).toContain("--trusted-ring-fast");
+    expect(script).toContain('PACKAGE_PHASE="trusted-ring-fast"');
+    expect(script).toContain("SKIP_NOTARIZE=1");
+    expect(script).toContain('SKIP_DSYM="${SKIP_DSYM:-1}"');
+    expect(script).toContain("PUBLISH_RELEASE_ASSETS=0");
+    expect(script).toContain("ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE");
+    expect(script).toContain("OPENCLAW_CONSUMER_FAST_PACKAGING=1");
+    expect(script).toContain("OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE=1");
+    expect(script).toContain(
+      'OPENCLAW_CONSUMER_FAST_PACKAGING="$OPENCLAW_CONSUMER_FAST_PACKAGING"',
+    );
+    expect(script).toContain(
+      'OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="$OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE"',
+    );
+    expect(script).toContain("full|local-proof|build-app-only|post-app-build|trusted-ring-fast");
+  });
+
+  it("keeps trusted-ring runtime cache keys stable across equivalent rebuilds", () => {
+    const script = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
+
+    expect(script).toContain("consumer_clean_git_runtime_input_key");
+    expect(script).toContain("clean-git-runtime-cache-v1");
+    expect(script).toContain("clean tracked worktree");
+    expect(script).toContain("hash_consumer_build_info_stable_fields");
+    expect(script).toContain("builtAt, which changes on every JS build");
+    expect(script).toContain("-o -name '*.release.env'");
+    expect(script).toContain("-o -name 'jarvis-release-manifest.env'");
+    expect(script).toContain("-o -path 'dist/build-info.json'");
+    expect(script).toContain("refresh_bundled_runtime_build_info");
+    expect(script).toContain('cache_key="$runtime_input_key"');
   });
 
   it("keeps notarization retry guidance focused on polling or retrying artifacts", () => {
@@ -120,8 +224,11 @@ describe("consumer Sparkle release gates", () => {
     const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
 
     expect(script).toContain("print_submit_retry_hint");
-    expect(script).toContain("if notarytool printed a submission ID");
+    expect(script).toContain("notarytool returned submission ID");
     expect(script).toContain("--poll <submission-id>");
+    expect(script).toContain("NOTARY_STATUS");
+    expect(script).toContain("run_notary_submit --wait");
+    expect(script).toContain("--output-format json");
     expect(script).toContain("retry the same artifact");
     expect(readme).toContain("HTTPClientError.deadlineExceeded");
     expect(readme).toContain("instead of rebuilding the app");
