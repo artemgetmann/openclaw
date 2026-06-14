@@ -114,6 +114,8 @@ Latest live evidence for this slice:
   `/tmp/jarvis-ocu-medium-live-freshclaude-20260614/safari-notes-claude-1781434831490.json`
 - medium pointer evidence:
   `/tmp/jarvis-ocu-medium-live-freshclaude-20260614/open-computer-use-visual-cursor-observation.json`
+- restore diagnostic:
+  `/tmp/jarvis-ocu-workspace-restore-20260614/workspace-restore-1781436673214.json`
 
 Current result:
 
@@ -124,6 +126,9 @@ Current result:
 - AX-visible Claude reply extraction worked
 - Notes and Claude mutations used semantic controls
 - OpenComputerUse pointer evidence was present
+- restore-only diagnostic failed 3/3 source-app cases:
+  Terminal -> Claude -> Terminal, Safari -> Claude -> Safari, and Notes ->
+  Claude -> Notes all left Claude frontmost
 
 Current blocker:
 
