@@ -71,6 +71,17 @@ iso_now() {
   date -u '+%Y-%m-%dT%H:%M:%SZ'
 }
 
+ensure_timing_report() {
+  # The package script creates this file lazily when a phase records a timed
+  # section. Wrapper-only exits, preflight failures, and verify-only phases can
+  # still write a summary, so initialize the report before summaries reference
+  # it.
+  mkdir -p "$(dirname "$TIMING_REPORT")"
+  if [[ ! -f "$TIMING_REPORT" ]]; then
+    printf 'phase\tlabel\tstatus\tstarted_ms\tfinished_ms\telapsed_ms\n' >"$TIMING_REPORT"
+  fi
+}
+
 write_summary_report() {
   local selected_phase="$1"
   local status="$2"
@@ -80,6 +91,7 @@ write_summary_report() {
   local command_text="$6"
 
   mkdir -p "$(dirname "$SUMMARY_REPORT")"
+  ensure_timing_report
   {
     printf 'JARVIS_PUBLIC_RELEASE_SUMMARY_VERSION=%q\n' "1"
     printf 'JARVIS_PUBLIC_RELEASE_PHASE=%q\n' "$selected_phase"
@@ -275,6 +287,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+ensure_timing_report
 started_at="$(iso_now)"
 started_epoch="$(date +%s)"
 set +e
