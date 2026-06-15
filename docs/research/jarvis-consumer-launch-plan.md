@@ -1,21 +1,33 @@
 # Jarvis Consumer Launch Tracker
 
-Status: active launch tracker
+Status: active mission tracker
 Owner: Artem
-Last updated: 2026-06-13
+Last updated: 2026-06-15
 
-Purpose: current objective, done/open state, next actions, and source pointers.
+Purpose: current mission, current truth, active gates, next actions, and cold
+storage pointers.
 
 Use this document for launch execution state only. Keep beta counts in
 `docs/consumer/project-status.md`. Keep launch package, pricing, copy, and
 artifact truth in `docs/consumer/jarvis-launch-package.md`. Keep long-form
 strategy/history in `docs/consumer/archive/jarvis-consumer-launch-plan-history-20260613.md`.
 
-## Current Truth
+## Now
 
-Jarvis is in private beta. The current useful objective is simple: send
-`v2026.3.23` to trusted testers, watch real install/use feedback, and close only
-the gates that matter before broader launch.
+1. Send `v2026.3.23` to the waiting trusted testers.
+2. Collect first real install/use feedback.
+3. Fix only concrete onboarding friction found by that feedback.
+
+## Active Mission
+
+Mission: get the current Jarvis build into trusted testers' hands and learn
+where first install, AI access, Telegram setup, or first useful task breaks.
+
+Do not turn this tracker into a permanent product backlog. If a task is not
+part of this mission, not time-sensitive, and not damaging to forget, move it
+to cold storage or let it die.
+
+## Current Truth
 
 Trusted-tester send is unblocked.
 
@@ -32,17 +44,42 @@ Trusted-tester send is unblocked.
   -> AI access with `Continue with ChatGPT` selected and no helper-repair
   message.
 
-Current identity stance:
+Identity stance:
 
 - Trusted testers can use the current `ai.openclaw.consumer.mac` technical
   identity.
 - Broad public launch needs a deliberate identity/update-path decision.
-- Full migration to `ai.jarvis.mac` is recommended if the priority is clean
-  brand, permissions, LaunchAgent identity, and update continuity.
+- Full migration to `ai.jarvis.mac` is recommended for clean brand,
+  permissions, LaunchAgent identity, and update continuity.
 - The speed option is one more public-ish beta on `ai.openclaw.consumer.mac`
   with identity debt documented.
 
-## What Is Done
+## Open Gates
+
+Keep this table to 5 or fewer real gates.
+
+| Gate                                   | Blocks trusted testers? | Blocks broad public launch? | Next proof                                                                                                          |
+| -------------------------------------- | ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| First real tester install/use feedback | Yes, after sending      | Yes                         | Send `v2026.3.23`; capture setup confusion, first useful task, and failure points.                                  |
+| Onboarding copy/friction fixes         | Only if feedback blocks | Yes                         | Patch specific confusion found by testers.                                                                          |
+| Full Sparkle update-cycle proof        | No                      | Yes                         | Prove download, signature verification, install, relaunch, and state preservation from older build to latest build. |
+| Identity/update-path decision          | No                      | Yes                         | Choose `ai.jarvis.mac` migration before broad launch or document one more beta on `ai.openclaw.consumer.mac`.       |
+
+## Next Actions
+
+1. Send the `v2026.3.23` DMG to the waiting trusted testers.
+2. Capture tester feedback in a short form:
+   - install outcome
+   - AI access outcome
+   - Telegram setup outcome
+   - first useful task attempted
+   - first confusing or broken moment
+3. Fix concrete onboarding copy/friction issues found by that feedback.
+4. Run full Sparkle update-cycle proof before relying on automatic updates for
+   recovery or broader distribution.
+5. Decide identity/update path before broad public launch.
+
+## Done
 
 - Consumer-product work targets this repo's `main`; legacy `consumer` and
   `codex/consumer-openclaw-project` are not active targets.
@@ -56,74 +93,23 @@ Current identity stance:
   `2026061317`, commit `a1a094ef2a`.
 - Separate-user manual public-DMG install proof passed on 2026-06-13.
 - Gate2 clean-user proof passed for trusted-tester onboarding.
-- Non-secret Sparkle release config is expected at
-  `~/Library/Application Support/OpenClaw/release.env`.
-- App Store Connect API-key notarization lane was previously prepared on
-  Artem's machine; keep secrets outside Git.
-- Historical package/proof details are archived, not active blockers.
 
-## Open Gates
+## Cold Storage
 
-| Gate                                   | Required for trusted testers?                  | Required before broad public launch? | Current next proof                                                                                                  |
-| -------------------------------------- | ---------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| First real tester install/use feedback | Yes, after sending                             | Yes                                  | Send `v2026.3.23`; capture setup confusion, first useful task, and failure points.                                  |
-| Onboarding copy/friction fixes         | No, unless tester feedback exposes a hard stop | Yes                                  | Patch only specific confusion found by testers.                                                                     |
-| Full Sparkle update-cycle proof        | No                                             | Yes                                  | Prove download, signature verification, install, relaunch, and state preservation from older build to latest build. |
-| Identity/update-path decision          | No                                             | Yes                                  | Choose `ai.jarvis.mac` migration before broad launch or document one more beta on `ai.openclaw.consumer.mac`.       |
-| `/visibility` command cleanup          | No                                             | Yes                                  | Replace stale `/verbose` naming with `/visibility off/on/full`; prove command list and behavior with a tester bot.  |
-| Telegram settings/model cleanup        | No                                             | Maybe                                | Do only if tester feedback shows confusion; avoid speculative command-menu churn.                                   |
+Cold storage is searchable context, not an obligation list. Read it only when a
+mission needs it.
 
-## Next Actions
-
-1. Send the `v2026.3.23` DMG to the waiting trusted testers.
-2. Collect first install/use feedback in a short structured form:
-   - install outcome
-   - AI access outcome
-   - Telegram setup outcome
-   - first useful task attempted
-   - first confusing or broken moment
-3. Fix concrete onboarding copy/friction issues found by that feedback.
-4. Run a full Sparkle update-cycle proof before relying on automatic updates for
-   recovery or broader distribution.
-5. Decide identity/update path before broad public launch:
-   - migrate to `ai.jarvis.mac` for cleaner brand and update continuity, or
-   - ship one more public-ish beta on `ai.openclaw.consumer.mac` and document
-     the identity debt.
-
-## Deferred Product Backlog
-
-These are still real product tasks. They are not blockers for sending
-`v2026.3.23` to trusted testers.
-
-- Replace developer-facing `/verbose` language with `/visibility off|on|full`.
-  Normal users should see visibility controls, not debug jargon. Before merging
-  that work, inspect current command/visibility behavior and prove the Telegram
-  command list plus `/visibility` behavior with a tester bot.
-- Expose Claude Code as a consumer-facing model lane only after more founder use
-  of the Claude CLI backend. Before broad public launch, the model picker should
-  make normal choices obvious and hide developer/legacy providers unless the
-  local prerequisites exist.
-
-## Deferred / Not Now
-
-- Do not implement identity migration in this docs cleanup.
-- Do not implement Sparkle proof in this docs cleanup.
-- Do not touch release artifacts, appcast, notarization, runtime, LaunchAgents,
-  Telegram runtime, or shared services in this docs cleanup.
-- Do not write new launch strategy essays in the active tracker.
-- Do not make Claude Code/model-picker cleanup a trusted-tester blocker.
-- Do not make vague maintenance work a blocker without tester evidence.
-- Do not delete old proof; keep it archived for audit.
-
-## Archive Pointers
-
-- Launch package history:
-  `docs/consumer/archive/jarvis-launch-package-history-20260613.md`
 - Long-form launch strategy/history:
   `docs/consumer/archive/jarvis-consumer-launch-plan-history-20260613.md`
+- Launch package history:
+  `docs/consumer/archive/jarvis-launch-package-history-20260613.md`
 - Gate2 closeout details:
   `docs/consumer/jarvis-consumer-rc-closeout-20260606.md`
-- Main consumer consolidation history:
-  `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
 - Legacy execution docs:
   `docs/consumer/archive/openclaw-consumer-execution-spec.md`
+
+Examples of cold-storage items that are still useful but not active obligations:
+
+- `/visibility off|on|full` replacing developer-facing `/verbose` language
+- Claude Code/model-picker cleanup
+- Telegram group/thread/forum setup

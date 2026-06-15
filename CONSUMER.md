@@ -33,6 +33,22 @@ Read this before doing consumer-product work in this repo.
 - Keep this file to identity, branch targets, and product-level guardrails
 - Put execution plans, sprint boards, GTM, investor notes, and long-form decisions in `docs/consumer/*`
 
+## Consumer docs operating system
+
+Consumer docs should create action, not emotional debt.
+
+- No permanent product backlog. Use short-lived mission checklists.
+- Active trackers optimize for the current mission, not every possible future
+  launch concern.
+- Keep a `Now` section to 1-3 items. If it is not there, it should not
+  emotionally bother the operator this week.
+- Keep open gates to 5 or fewer. A gate must be a real blocker, timing risk,
+  human commitment, reputation risk, or current-mission dependency.
+- Put ideas, maybe-later tasks, stale strategy, and old proof in cold storage:
+  searchable archive docs, not active obligations.
+- Track non-blocking product ideas only when they become part of the current
+  mission or forgetting them would cause real damage.
+
 ## Load the right doc for the task
 
 - Active launch/main tracker:
