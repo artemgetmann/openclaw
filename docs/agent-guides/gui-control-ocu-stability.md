@@ -130,6 +130,23 @@ Latest live evidence for this slice:
 - restore diagnostic:
   `/tmp/jarvis-ocu-workspace-restore-20260614/workspace-restore-1781436673214.json`
 
+2026-06-15 native restore patch attempt:
+
+- patched local OpenComputerUse checkout:
+  `/tmp/jarvis-ocu-stability-20260614-175656/open-codex-computer-use`
+- rebuilt OpenComputerUse dev app:
+  `/tmp/jarvis-ocu-stability-20260614-175656/open-codex-computer-use/dist/Open Computer Use (Dev).app`
+- current OCU binary pointer:
+  `/tmp/jarvis-ocu-stability-bin-path.txt`
+- code proof: OpenComputerUse `swift test` passed 134 tests after changing
+  `perform_secondary_action` for `Raise` to activate the owning app through
+  native `NSRunningApplication` and verify the target PID is frontmost
+- live proof status: blocked, not passed; the rebuilt dev app reports
+  `accessibility=missing, screenRecording=missing`, while the old direct
+  SwiftPM binary can list apps but cannot produce a usable restore benchmark
+  setup because target apps expose Stage Manager-style thumbnail CG windows
+  without usable `AXWindow` state
+
 Current result:
 
 - `x-to-claude` repeated 3/3 functional pass
@@ -148,6 +165,10 @@ Current blocker:
 - OpenComputerUse workspace restore is not reliable enough for clean parity.
   The runtime can report that it raised the previous app while macOS still
   leaves Safari or Claude frontmost.
+- The current native activation patch has not been accepted by live benchmark
+  evidence yet. Before rerunning `workspace-restore`, grant Accessibility and
+  Screen Recording to the rebuilt `Open Computer Use (Dev).app` or use an
+  already authorized OCU app-agent bundle built from the same patched source.
 
 ## Next Diagnostic
 
