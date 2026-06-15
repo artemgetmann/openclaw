@@ -74,6 +74,7 @@ type JarvisBackendClientDeps = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const BACKEND_ERROR_DETAIL_MAX_BYTES = 16_000;
 const DISABLED_LICENSE_STATUS: JarvisLicenseStatus = {
   state: "disabled",
   managedServicesMode: "off",
@@ -202,6 +203,29 @@ function buildHeaders(accessToken: string | undefined): Record<string, string> {
   return headers;
 }
 
+async function readBackendErrorDetail(response: Response): Promise<string | null> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  // The backend owns provider-key redaction. The client keeps the sanitized
+  // failure body visible and bounded so operators see useful provider truth
+  // instead of a generic HTTP status.
+  try {
+    return JSON.stringify(JSON.parse(trimmed)).slice(0, BACKEND_ERROR_DETAIL_MAX_BYTES);
+  } catch {
+    return trimmed.slice(0, BACKEND_ERROR_DETAIL_MAX_BYTES);
+  }
+}
+
+async function buildBackendHttpErrorMessage(prefix: string, response: Response): Promise<string> {
+  const detail = await readBackendErrorDetail(response);
+  const base = `${prefix} with HTTP ${response.status}`;
+  return detail ? `${base}: ${detail}` : base;
+}
+
 export function createJarvisBackendClient(
   config: OpenClawConfig,
   deps: JarvisBackendClientDeps = {},
@@ -327,7 +351,9 @@ export function createJarvisBackendClient(
           },
           onResponse: async (response) => {
             if (!response.ok) {
-              throw new Error(`Jarvis managed utility failed with HTTP ${response.status}`);
+              throw new Error(
+                await buildBackendHttpErrorMessage("Jarvis managed utility failed", response),
+              );
             }
             return parseManagedUtilityResponse<T>(await response.json());
           },

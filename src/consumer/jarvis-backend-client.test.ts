@@ -203,6 +203,44 @@ describe("createJarvisBackendClient", () => {
     });
   });
 
+  it("preserves sanitized managed utility backend details on HTTP failures", async () => {
+    const fetchResponse = vi.fn(async (params) => {
+      return await params.onResponse(
+        new Response(
+          JSON.stringify({
+            detail: {
+              provider: "google_places",
+              status: 403,
+              payload: {
+                error: {
+                  code: 403,
+                  message: "The caller does not have permission",
+                  status: "PERMISSION_DENIED",
+                },
+              },
+            },
+          }),
+          { status: 502 },
+        ),
+      );
+    });
+    const client = createJarvisBackendClient(
+      {
+        jarvis: {
+          backend: { baseUrl: "https://jarvis.example", accessToken: "backend-token" },
+          managedServices: { mode: "managed" },
+        },
+      },
+      { fetchResponse },
+    );
+
+    // Provider failures are already sanitized by the backend. Keeping that JSON
+    // in the local error tells operators which upstream config is broken.
+    await expect(client.callManagedUtility({ utility: "google_places.search" })).rejects.toThrow(
+      /Jarvis managed utility failed with HTTP 502: .*google_places.*PERMISSION_DENIED/,
+    );
+  });
+
   it("uses resolved runtime SecretInput refs for managed utility auth", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: {
