@@ -195,7 +195,9 @@ For agent-run or scripted CLI sends, prefer this wrapper over raw `himalaya
 template send`. It behaves like normal Himalaya for no-attachment and
 small-attachment sends, so those still save a Sent copy. Only larger iCloud
 attachment payloads flip `message.send.save-copy = false` to avoid Himalaya's
-post-send IMAP append timeout.
+post-send IMAP append timeout. If iCloud still reports a post-send append
+failure such as `Quota Exceeded`, the wrapper treats that as ambiguous delivery
+and does not retry the whole send.
 
 Or with headers flag:
 
@@ -300,6 +302,9 @@ RUST_LOG=trace RUST_BACKTRACE=1 himalaya envelope list
   - the email was sent through Himalaya
   - the Sent-folder copy was intentionally skipped to avoid the iCloud IMAP append timeout
   - not seeing it in Sent does not mean the send failed
+- If iCloud reports `cannot add IMAP message: Quota Exceeded` after a send,
+  treat it like the same post-SMTP Sent-copy failure class. Do not retry the
+  whole email, because SMTP delivery may already have succeeded.
 - When a user asks for proof after a Sent-copy skip, prefer concrete evidence:
   - send a copy to the user's own address and verify it arrived in Inbox
   - or show that the intended recipient replied / did not bounce

@@ -33,7 +33,13 @@ except ModuleNotFoundError as exc:  # pragma: no cover - Python 3.11+ on macOS
 
 ICLOUD_IMAP_HOST = "imap.mail.me.com"
 ICLOUD_SMTP_HOST = "smtp.mail.me.com"
-SAVE_COPY_TIMEOUT_MARKER = "cannot add IMAP message: request timed out"
+# Himalaya v1 couples SMTP delivery and the IMAP Sent-copy append into one
+# command. These markers mean the failure happened in the post-send archive
+# step, so retrying the whole command can duplicate the real email delivery.
+SAVE_COPY_APPEND_FAILURE_MARKERS = (
+    "cannot add imap message: request timed out",
+    "cannot add imap message: quota exceeded",
+)
 # The bug reproduced consistently with a ~465 KiB PDF and did not reproduce with
 # a tiny PDF. Use a conservative threshold so iCloud large-attachment sends take
 # the reliable path before Himalaya reaches the post-send append timeout.
@@ -156,7 +162,10 @@ def write_stream(stream: Any, data: bytes) -> None:
 
 
 def should_retry(account: str, config_paths: list[Path], output_text: str) -> bool:
-    return is_icloud_account(account, config_paths) and SAVE_COPY_TIMEOUT_MARKER in output_text
+    normalized_output = output_text.lower()
+    return is_icloud_account(account, config_paths) and any(
+        marker in normalized_output for marker in SAVE_COPY_APPEND_FAILURE_MARKERS
+    )
 
 
 def make_overlay(account: str) -> Path:
@@ -247,7 +256,7 @@ def main() -> int:
     if result.returncode != 0 and should_retry(args.account, config_paths, combined_output):
         print(
             "Himalaya likely reached SMTP delivery before the iCloud Sent-copy "
-            "append timed out. Not retrying automatically because that can "
+            "append failed. Not retrying automatically because that can "
             "duplicate delivery.",
             file=sys.stderr,
         )
