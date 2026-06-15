@@ -1,6 +1,6 @@
 # GUI Control OCU Stability
 
-Last updated: 2026-06-14
+Last updated: 2026-06-15
 Status: active stability slice, dev-only
 
 Use this checklist when proving OpenComputerUse-backed Jarvis GUI control. The
@@ -24,13 +24,14 @@ policy risk that makes runtime failures harder to interpret.
 Run the smallest live path that proves the next claim.
 
 1. Use terminal checks first: targeted tests, typecheck, and diff hygiene.
-2. Acquire the Computer Use lease before live macOS control.
+2. Do not acquire the Codex Computer Use lease for Jarvis/OpenComputerUse
+   benchmark runs. Use that guard only when this session is directly using
+   Codex Computer Use.
 3. Run benchmarks through `pnpm jarvis gui-benchmark`, not ad hoc app scripts.
 4. Use OpenComputerUse semantic controls only.
 5. Write a report for every live run.
 6. Treat benchmark JSON as the source of truth.
 7. Post exact report paths on the PR before calling the slice proven.
-8. Release the Computer Use lease when live control is done.
 
 Do not use AppleScript/JXA, raw coordinates, clipboard fallback, or macOS focus
 hacks as acceptance proof. If one is used for diagnosis, mark the run
@@ -130,14 +131,26 @@ Latest live evidence for this slice:
 - restore diagnostic:
   `/tmp/jarvis-ocu-workspace-restore-20260614/workspace-restore-1781436673214.json`
 
-2026-06-15 native restore patch attempt:
+2026-06-15 native restore patch:
 
-- patched local OpenComputerUse checkout:
+- pinned OpenComputerUse fork:
+  `https://github.com/artemgetmann/open-codex-computer-use`
+- pinned OpenComputerUse commit:
+  `d71101e6262460a62a96463c4a3c86747e3b3fc4`
+- pinned OpenComputerUse branch:
+  `codex/raise-activates-frontmost`
+- reproducible bootstrap:
+  `bash scripts/bootstrap-open-computer-use-runtime.sh`
+- local OpenComputerUse checkout used for the first proof:
   `/tmp/jarvis-ocu-stability-20260614-175656/open-codex-computer-use`
 - rebuilt OpenComputerUse dev app copied to stable permission path:
   `/Users/user/Applications/Open Computer Use (Dev).app`
 - current OCU binary pointer:
   `/tmp/jarvis-ocu-stability-bin-path.txt`
+- permission note: after rebuilding or changing the app signature, verify
+  `$(cat /tmp/jarvis-ocu-stability-bin-path.txt) doctor`; macOS may require
+  one-time Accessibility and Screen Recording approval for the stable app or
+  executable path before live benchmarks can run
 - code proof: OpenComputerUse `swift test` passed 134 tests after changing
   `perform_secondary_action` for `Raise` to activate the owning app through
   native `NSRunningApplication` and verify the target PID is frontmost
@@ -165,16 +178,16 @@ Current result:
 
 Current blocker:
 
-- The OpenClaw wrapper now has clean local parity evidence against the patched
-  local OpenComputerUse dev app.
-- Remaining productization blocker: the OpenComputerUse native `Raise`
-  activation patch lives in the local OCU checkout and needs to be upstreamed or
-  vendored through the Jarvis/OpenClaw-owned OCU supply path before this can be
-  treated as portable outside this machine.
+- The OpenClaw wrapper has clean local parity evidence against the pinned
+  OpenComputerUse fork build.
+- Upstream OpenComputerUse has not accepted the `Raise` activation patch yet.
+  Until then, use `scripts/bootstrap-open-computer-use-runtime.sh` to rebuild
+  from the Jarvis/OpenClaw-owned fork pin.
 
-## Next Diagnostic
+## Restore Diagnostic
 
-Add a restore-only benchmark before expanding to messaging apps.
+Run this restore-only benchmark before expanding to messaging apps or changing
+the pinned OpenComputerUse ref.
 
 Minimum matrix:
 
@@ -192,6 +205,5 @@ Each run should record:
 - whether the restored app is actually frontmost
 - exact failure reason if restore lies or fails
 
-If the restore-only benchmark confirms unreliable restore without a non-hacky
-fix, keep workspace restore as explicit parity debt instead of blocking
-functional medium-chain work forever.
+If this benchmark regresses, keep workspace restore as explicit parity debt
+instead of hiding the failure inside higher-level functional runs.

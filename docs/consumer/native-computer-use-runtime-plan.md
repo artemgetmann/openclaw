@@ -304,11 +304,14 @@ Implemented in this worktree:
 - `GuiRuntimeName` now includes `open-computer-use`.
 - `OpenComputerUseRuntime` shells out to `open-computer-use call ...`.
 - The adapter parses structured JSON and MCP-style text envelopes from the
-  pinned fork commit `b753b790cace188152ffb755cd13b2ac9ff6ebf7`.
+  OpenComputerUse fork. Restore parity currently uses the pinned Jarvis fork
+  commit `d71101e6262460a62a96463c4a3c86747e3b3fc4`, which strengthens
+  `Raise` with native frontmost activation.
 - Element refs use OpenComputerUse AX indices, surfaced as Jarvis refs like
   `@121`, then mapped back to `element_index`.
 - `gui-control` and `gui-benchmark` accept `--runtime open-computer-use`.
-- `OPENCLAW_OPEN_COMPUTER_USE_BIN` can point at a pinned local fork build.
+- `scripts/bootstrap-open-computer-use-runtime.sh` builds the pinned local fork
+  and writes the executable path consumed by `OPENCLAW_OPEN_COMPUTER_USE_BIN`.
 - `GuiTaskPolicy` replaces hardcoded X/Twitter mutation logic with generic
   capabilities and denied surfaces.
 - Benchmark workspace telemetry now records `workspaceMeasurement` as `clean`,
