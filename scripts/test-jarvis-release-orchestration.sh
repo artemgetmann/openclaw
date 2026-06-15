@@ -156,6 +156,7 @@ test_wrapper_dry_run() {
   local verify_out="$TMP_DIR/wrapper-verify-assets.out"
   local verify_err="$TMP_DIR/wrapper-verify-assets.err"
   local verify_summary="$TMP_DIR/wrapper-verify-summary.env"
+  local verify_timing="$TMP_DIR/wrapper-verify-timing.tsv"
   local stale_publish_root="$TMP_DIR/wrapper-stale-publish-assets"
   local stale_publish_out="$TMP_DIR/wrapper-stale-publish-assets.out"
   local status
@@ -228,6 +229,7 @@ test_wrapper_dry_run() {
   set +e
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$verify_root" \
   OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$verify_summary" \
+  OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$verify_timing" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --verify-public-assets >"$verify_out" 2>"$verify_err"
   status=$?
   set -e
@@ -242,6 +244,11 @@ test_wrapper_dry_run() {
   if ! grep -q 'JARVIS_PUBLIC_RELEASE_STATUS=2' "$verify_summary"; then
     cat "$verify_summary" >&2
     fail "wrapper verify tag failure did not write durable failure summary"
+  fi
+  if [[ ! -f "$verify_timing" ]] \
+    || ! grep -q $'phase\tlabel\tstatus\tstarted_ms\tfinished_ms\telapsed_ms' "$verify_timing"; then
+    [[ -f "$verify_timing" ]] && cat "$verify_timing" >&2
+    fail "wrapper verify tag failure did not initialize timing report"
   fi
   pass "wrapper verify execution requires tag"
 
