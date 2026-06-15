@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +29,19 @@ export type SkillInstallOption = {
   kind: SkillInstallSpec["kind"];
   label: string;
   bins: string[];
+  toolVersions?: SkillToolVersionStatus[];
+};
+
+export type SkillToolVersionStatus = {
+  bin: string;
+  installed: boolean;
+  command: string[];
+  version?: string;
+  minVersion?: string;
+  recommendedVersion?: string;
+  satisfiesMinVersion?: boolean;
+  satisfiesRecommendedVersion?: boolean;
+  error?: string;
 };
 
 export type SkillStatusEntry = {
@@ -163,7 +177,14 @@ function normalizeInstallOptions(
         label = "Run installer";
       }
     }
-    return { id, kind: spec.kind, label, bins };
+    const toolVersions = resolveToolVersionStatuses(spec);
+    return {
+      id,
+      kind: spec.kind,
+      label,
+      bins,
+      ...(toolVersions.length > 0 ? { toolVersions } : {}),
+    };
   };
 
   const allDownloads = filtered.every((spec) => spec.kind === "download");
@@ -176,6 +197,97 @@ function normalizeInstallOptions(
     return [];
   }
   return [toOption(preferred.spec, preferred.index)];
+}
+
+function parseVersionParts(version: string): number[] {
+  return version
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = parseVersionParts(left);
+  const rightParts = parseVersionParts(right);
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart > rightPart ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+function extractVersion(output: string, versionRegex?: string): string | undefined {
+  const pattern = versionRegex
+    ? new RegExp(versionRegex)
+    : /v?(\d+(?:\.\d+)+(?:[-.][0-9A-Za-z]+)?)/;
+  const match = output.match(pattern);
+  const namedVersion = match?.groups?.version;
+  if (namedVersion) {
+    return namedVersion;
+  }
+  return match?.[1];
+}
+
+function buildVersionCommand(spec: SkillInstallSpec, bin: string): string[] {
+  const explicit = spec.versionCommand ?? [];
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  return [bin, "--version"];
+}
+
+function resolveToolVersionStatuses(spec: SkillInstallSpec): SkillToolVersionStatus[] {
+  if (!spec.minVersion && !spec.recommendedVersion && !spec.versionCommand && !spec.versionRegex) {
+    return [];
+  }
+
+  const bins =
+    spec.bins && spec.bins.length > 0
+      ? spec.bins
+      : spec.versionCommand?.[0]
+        ? [spec.versionCommand[0]]
+        : [];
+  return bins.map((bin) => {
+    const command = buildVersionCommand(spec, bin);
+    const base = {
+      bin,
+      command,
+      installed: hasBinary(bin),
+      minVersion: spec.minVersion,
+      recommendedVersion: spec.recommendedVersion,
+    };
+    if (!base.installed) {
+      return base;
+    }
+
+    const result = spawnSync(command[0], command.slice(1), {
+      encoding: "utf8",
+      timeout: 2_000,
+    });
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+    const version = output ? extractVersion(output, spec.versionRegex) : undefined;
+    if (!version) {
+      return {
+        ...base,
+        error: result.error?.message ?? "version command did not expose a parseable version",
+      };
+    }
+
+    return {
+      ...base,
+      version,
+      ...(spec.minVersion
+        ? { satisfiesMinVersion: compareVersions(version, spec.minVersion) >= 0 }
+        : {}),
+      ...(spec.recommendedVersion
+        ? { satisfiesRecommendedVersion: compareVersions(version, spec.recommendedVersion) >= 0 }
+        : {}),
+    };
+  });
 }
 
 function buildSkillStatus(

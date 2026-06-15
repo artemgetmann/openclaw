@@ -27,6 +27,9 @@ export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
 const BREW_FORMULA_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@+._/-]*$/;
 const GO_MODULE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z0-9._~+\-/]*)?$/;
 const UV_PACKAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\-[\]=<>!~+,]*$/;
+const VERSION_PATTERN = /^[0-9]+(?:\.[0-9A-Za-z-]+)*$/;
+const VERSION_COMMAND_BIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@+._/-]*$/;
+const VERSION_COMMAND_ARG_PATTERN = /^-{0,2}[A-Za-z0-9][A-Za-z0-9@+._/=-]*$/;
 
 function normalizeSafeBrewFormula(raw: unknown): string | undefined {
   if (typeof raw !== "string") {
@@ -108,6 +111,51 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   }
 }
 
+function normalizeSafeVersion(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim();
+  if (!VERSION_PATTERN.test(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeSafeVersionRegex(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim();
+  if (!value || value.length > 240) {
+    return undefined;
+  }
+  try {
+    new RegExp(value);
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeSafeVersionCommand(raw: unknown): string[] | undefined {
+  const tokens = normalizeStringList(raw);
+  if (tokens.length === 0 || tokens.length > 8) {
+    return undefined;
+  }
+  const [bin, ...args] = tokens;
+  if (
+    !bin ||
+    !VERSION_COMMAND_BIN_PATTERN.test(bin) ||
+    bin.startsWith("-") ||
+    tokens.some((token) => token.includes("..")) ||
+    args.some((token) => !VERSION_COMMAND_ARG_PATTERN.test(token))
+  ) {
+    return undefined;
+  }
+  return tokens;
+}
+
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   const parsed = parseOpenClawManifestInstallBase(input, ["brew", "node", "go", "uv", "download"]);
   if (!parsed) {
@@ -162,6 +210,22 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   }
   if (typeof raw.targetDir === "string") {
     spec.targetDir = raw.targetDir;
+  }
+  const versionCommand = normalizeSafeVersionCommand(raw.versionCommand);
+  if (versionCommand) {
+    spec.versionCommand = versionCommand;
+  }
+  const versionRegex = normalizeSafeVersionRegex(raw.versionRegex);
+  if (versionRegex) {
+    spec.versionRegex = versionRegex;
+  }
+  const minVersion = normalizeSafeVersion(raw.minVersion);
+  if (minVersion) {
+    spec.minVersion = minVersion;
+  }
+  const recommendedVersion = normalizeSafeVersion(raw.recommendedVersion);
+  if (recommendedVersion) {
+    spec.recommendedVersion = recommendedVersion;
   }
 
   if (spec.kind === "brew" && !spec.formula) {

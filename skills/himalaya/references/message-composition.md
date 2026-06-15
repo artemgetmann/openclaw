@@ -179,8 +179,13 @@ himalaya message forward 42
 ### Send from stdin
 
 ```bash
-cat message.txt | himalaya template send -a personal
+cat message.txt | python3 skills/himalaya/scripts/send_template.py --account personal
 ```
+
+For agent-run sends, use the wrapper instead of raw `himalaya template send`.
+It creates a local `.eml` proof archive, ensures a Message-ID, and writes a
+`.result.json` command receipt. That is local command proof only; do not treat
+iCloud Sent-folder presence or absence as final delivery proof.
 
 ### Prefill headers from CLI
 

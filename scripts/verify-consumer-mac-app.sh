@@ -196,6 +196,49 @@ assert_required_bundled_skills() {
   done
 }
 
+assert_bundled_skill_content_current() {
+  local skills_dir="$1"
+  local context_label="$2"
+  local manifest_path
+  local expected_manifest
+  local actual_manifest
+
+  manifest_path="$(dirname "$skills_dir")/skills.manifest.json"
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "ERROR: ${context_label} content manifest missing: $manifest_path" >&2
+    echo "Rerun packaging so the app records exact bundled skill content hashes." >&2
+    exit 1
+  fi
+
+  # Release confidence needs more than "SKILL.md exists". Hash the repo's
+  # consumer-default skill payloads and the app's bundled payloads with the same
+  # deterministic manifest generator. A mismatch means --reuse-runtime, manual
+  # copying, or stale packaging shipped old model-facing instructions.
+  if ! expected_manifest="$(
+    "$OPENCLAW_NODE_BIN" "$ROOT_DIR/scripts/skill-content-manifest.mjs" \
+      "$ROOT_DIR/skills" \
+      "${REQUIRED_BUNDLED_SKILLS[@]}"
+  )"; then
+    echo "ERROR: failed to hash source bundled skills from $ROOT_DIR/skills" >&2
+    exit 1
+  fi
+
+  if ! actual_manifest="$(
+    "$OPENCLAW_NODE_BIN" "$ROOT_DIR/scripts/skill-content-manifest.mjs" \
+      "$skills_dir" \
+      "${REQUIRED_BUNDLED_SKILLS[@]}"
+  )"; then
+    echo "ERROR: failed to hash ${context_label}: $skills_dir" >&2
+    exit 1
+  fi
+
+  if [[ "$actual_manifest" != "$expected_manifest" ]]; then
+    echo "ERROR: ${context_label} content differs from repo skills for consumer-default bundled skills." >&2
+    echo "Rerun packaging without runtime reuse after skill changes." >&2
+    exit 1
+  fi
+}
+
 load_consumer_default_bundled_skills
 
 actual_name="$(plist_print CFBundleDisplayName)"
@@ -260,6 +303,9 @@ assert_required_templates \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
   "bundled runtime workspace templates"
 assert_required_bundled_skills \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
+  "bundled runtime skills"
+assert_bundled_skill_content_current \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
 
