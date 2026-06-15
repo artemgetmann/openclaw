@@ -94,6 +94,16 @@ test_phase_selection() {
   write_manifest_status "$root" "Accepted" ""
   write_receipt "$(jarvis_release_dmg_notary_receipt_path "$root")" "dmg-submission"
   assert_eq "dmg submission selects poll dmg" "$(jarvis_release_next_phase "$root" 0 0)" "poll-dmg-notarization"
+  assert_eq "p2 dmg submission without local assets selects local assets" "$(jarvis_release_next_phase "$root" 0 0 "Jarvis" 1)" "create-local-release-assets-only"
+
+  root="$(make_state_root dmg-submitted-assets-ready)"
+  mkdir -p "$root/dist/Jarvis.app"
+  : >"$root/dist/Jarvis.dmg"
+  : >"$root/dist/Jarvis.zip"
+  : >"$root/dist/jarvis-appcast.xml"
+  write_manifest_status "$root" "Accepted" ""
+  write_receipt "$(jarvis_release_dmg_notary_receipt_path "$root")" "dmg-submission"
+  assert_eq "p2 dmg submission with local assets selects poll dmg" "$(jarvis_release_next_phase "$root" 0 0 "Jarvis" 1)" "poll-dmg-notarization"
 
   root="$(make_state_root dmg-submitted-manifest-only)"
   mkdir -p "$root/dist/Jarvis.app"
@@ -159,6 +169,10 @@ test_wrapper_dry_run() {
   local verify_timing="$TMP_DIR/wrapper-verify-timing.tsv"
   local stale_publish_root="$TMP_DIR/wrapper-stale-publish-assets"
   local stale_publish_out="$TMP_DIR/wrapper-stale-publish-assets.out"
+  local p2_asset_root="$TMP_DIR/wrapper-p2-local-assets"
+  local p2_asset_out="$TMP_DIR/wrapper-p2-local-assets.out"
+  local p2_poll_root="$TMP_DIR/wrapper-p2-poll-dmg"
+  local p2_poll_out="$TMP_DIR/wrapper-p2-poll-dmg.out"
   local status
 
   mkdir -p "$root/dist/Jarvis.app"
@@ -176,6 +190,48 @@ test_wrapper_dry_run() {
     fail "wrapper dry run did not stay dry"
   fi
   pass "wrapper dry run synthetic state"
+
+  mkdir -p "$p2_asset_root/dist/Jarvis.app"
+  : >"$p2_asset_root/dist/Jarvis.dmg"
+  write_manifest_status "$p2_asset_root" "Accepted" ""
+  write_receipt "$(jarvis_release_dmg_notary_receipt_path "$p2_asset_root")" "dmg-submission"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$p2_asset_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --parallel-safe-local-assets \
+      >"$p2_asset_out"
+  if ! grep -q 'selected_phase=create-local-release-assets-only' "$p2_asset_out"; then
+    cat "$p2_asset_out" >&2
+    fail "wrapper p2 dry run did not choose local assets while dmg is pending"
+  fi
+  if ! grep -q 'parallel_safe_local_assets=1' "$p2_asset_out"; then
+    cat "$p2_asset_out" >&2
+    fail "wrapper p2 dry run did not report enabled safe local assets mode"
+  fi
+  if ! grep -q -- 'required_before_execute=--github-release-tag <latest-tag>' "$p2_asset_out"; then
+    cat "$p2_asset_out" >&2
+    fail "wrapper p2 local asset dry run did not report required github release tag"
+  fi
+  pass "wrapper p2 local assets dry run"
+
+  mkdir -p "$p2_poll_root/dist/Jarvis.app"
+  : >"$p2_poll_root/dist/Jarvis.dmg"
+  : >"$p2_poll_root/dist/Jarvis.zip"
+  : >"$p2_poll_root/dist/jarvis-appcast.xml"
+  write_manifest_status "$p2_poll_root" "Accepted" ""
+  write_receipt "$(jarvis_release_dmg_notary_receipt_path "$p2_poll_root")" "dmg-submission"
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$p2_poll_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --parallel-safe-local-assets \
+      >"$p2_poll_out"
+  if ! grep -q 'selected_phase=poll-dmg-notarization' "$p2_poll_out"; then
+    cat "$p2_poll_out" >&2
+    fail "wrapper p2 dry run did not return to dmg polling after local assets existed"
+  fi
+  pass "wrapper p2 resumes dmg polling after local assets"
 
   mkdir -p "$asset_root/dist/Jarvis.app"
   : >"$asset_root/dist/Jarvis.dmg"

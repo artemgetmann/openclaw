@@ -21,6 +21,7 @@ GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
 TIMING_REPORT="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-public-release-summary.env}"
 RUN_SIZE_REPORT=0
+PARALLEL_SAFE_LOCAL_ASSETS=0
 
 usage() {
   cat <<'EOF'
@@ -43,6 +44,10 @@ Options:
   --github-release-tag <tag>
       Required before any publish phase. Must be the latest release tag because
       Sparkle uses releases/latest/download/jarvis-appcast.xml.
+  --parallel-safe-local-assets
+      Opt into the P2 safe overlap path. After app notarization is accepted and
+      DMG notarization has a submitted receipt, create local Jarvis.zip/appcast
+      before the separate resumable DMG polling step finishes.
   --phase <auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only>
       Override automatic phase selection. Use this only when the state report is
       correct but operator intent is narrower than the automatic next phase.
@@ -171,6 +176,10 @@ while [[ $# -gt 0 ]]; do
       FORCED_PHASE="$2"
       shift 2
       ;;
+    --parallel-safe-local-assets)
+      PARALLEL_SAFE_LOCAL_ASSETS=1
+      shift
+      ;;
     --size-report)
       RUN_SIZE_REPORT=1
       shift
@@ -203,7 +212,12 @@ esac
 
 if [[ "$FORCED_PHASE" == "auto" ]]; then
   SELECTED_PHASE="$(
-    jarvis_release_next_phase "$STATE_ROOT" "$PUBLISH_RELEASE_ASSETS" "$VERIFY_PUBLIC_ASSETS" "$APP_NAME"
+    jarvis_release_next_phase \
+      "$STATE_ROOT" \
+      "$PUBLISH_RELEASE_ASSETS" \
+      "$VERIFY_PUBLIC_ASSETS" \
+      "$APP_NAME" \
+      "$PARALLEL_SAFE_LOCAL_ASSETS"
   )"
 else
   SELECTED_PHASE="$FORCED_PHASE"
@@ -268,6 +282,7 @@ fi
 
 echo "Jarvis public release orchestration:"
 echo "  selected_phase=$SELECTED_PHASE"
+echo "  parallel_safe_local_assets=$PARALLEL_SAFE_LOCAL_ASSETS"
 echo "  state_root=$STATE_ROOT"
 echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
 echo "  command=$COMMAND_TEXT"
