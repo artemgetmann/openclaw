@@ -232,6 +232,83 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt).not.toContain("generic-bundled-00");
   });
 
+  it("keeps config-selected bundled skills ahead of managed overflow when prompt limits truncate", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const managedDir = path.join(workspaceDir, ".managed");
+
+    await writeSkill({
+      dir: path.join(bundledDir, "goplaces"),
+      name: "goplaces",
+      description:
+        "Query Google Places API for nearby restaurants, cafes, coworking spaces, maps links, and place details.",
+    });
+    await writeSkill({
+      dir: path.join(managedDir, "grabfood-search"),
+      name: "grabfood-search",
+      description: "Search GrabFood delivery menus and delivery restaurants.",
+    });
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            allowBundled: ["goplaces"],
+            limits: {
+              maxSkillsInPrompt: 1,
+              maxSkillsPromptChars: 2_000,
+            },
+          },
+        },
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: bundledDir,
+      }),
+    );
+
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(["goplaces", "grabfood-search"]),
+    );
+    expect(snapshot.prompt).toContain("<name>goplaces</name>");
+    expect(snapshot.prompt).toContain("nearby restaurants");
+    expect(snapshot.prompt).not.toContain("<name>grabfood-search</name>");
+  });
+
+  it("uses workspace skill contents when a workspace skill shadows a config-selected bundled skill", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+
+    await writeSkill({
+      dir: path.join(bundledDir, "goplaces"),
+      name: "goplaces",
+      description: "Bundled Google Places API skill.",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "goplaces"),
+      name: "goplaces",
+      description: "Workspace-specific Google Places routing policy.",
+    });
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            allowBundled: ["goplaces"],
+            limits: {
+              maxSkillsInPrompt: 1,
+              maxSkillsPromptChars: 2_000,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: bundledDir,
+      }),
+    );
+
+    expect(snapshot.prompt).toContain("<name>goplaces</name>");
+    expect(snapshot.prompt).toContain("Workspace-specific Google Places routing policy.");
+    expect(snapshot.prompt).not.toContain("Bundled Google Places API skill.");
+  });
+
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");
