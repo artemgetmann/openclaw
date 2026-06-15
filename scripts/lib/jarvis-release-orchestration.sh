@@ -77,6 +77,7 @@ jarvis_release_next_phase() {
   local publish_requested="${2:-0}"
   local verify_public_requested="${3:-0}"
   local app_name="${4:-Jarvis}"
+  local parallel_safe_local_assets="${5:-0}"
   local app_path="$root_dir/dist/${app_name}.app"
   local dmg_path="$root_dir/dist/${app_name}.dmg"
   local zip_path="$root_dir/dist/${app_name}.zip"
@@ -125,6 +126,14 @@ jarvis_release_next_phase() {
   )"
   if [[ "$dmg_notary_status" != "Accepted" ]]; then
     if [[ -n "$dmg_submission_id" && -f "$dmg_path" ]]; then
+      # P2 only overlaps independent local work. The submitted DMG keeps its
+      # own resumable polling path, while the Sparkle ZIP/appcast can be
+      # generated from the already accepted app bundle without weakening the
+      # later publish gate.
+      if [[ "$parallel_safe_local_assets" == "1" && ( ! -f "$zip_path" || ! -f "$appcast_path" ) ]]; then
+        printf '%s\n' "create-local-release-assets-only"
+        return 0
+      fi
       printf '%s\n' "poll-dmg-notarization"
     else
       printf '%s\n' "submit-dmg-notarization"

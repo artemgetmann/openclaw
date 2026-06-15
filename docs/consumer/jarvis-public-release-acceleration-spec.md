@@ -110,11 +110,16 @@ Risks:
 
 ## P2: Safe Phase Parallelism
 
-Implementation direction:
+Implementation status: implemented on 2026-06-15.
 
-- Create Sparkle ZIP and appcast after app notarization is accepted while DMG
-  notarization is still running.
-- Keep DMG notarization independent from ZIP/appcast creation when state allows.
+Implementation:
+
+- Add wrapper flag `--parallel-safe-local-assets`.
+- After app notarization is accepted and a DMG notarization submission exists,
+  the wrapper may create local `Jarvis.zip` and `jarvis-appcast.xml` while DMG
+  polling remains a separate resumable step.
+- Keep DMG polling independent from local ZIP/appcast creation when state
+  allows.
 - Upload public assets only after app notarization, DMG notarization, ZIP, and
   appcast are all ready.
 - Upload appcast last because Sparkle reads the public appcast as the update
@@ -125,6 +130,9 @@ Acceptance criteria:
 - Parallel work never publishes partial public state.
 - If one lane fails, rerun can resume from the remaining receipts and artifacts.
 - Appcast upload remains last and is explicitly visible in operator output.
+- Publishing still requires `--publish-release-assets`,
+  `--github-release-tag` set to the latest release tag, accepted app and DMG
+  notarization, and existing DMG, ZIP, and appcast files.
 
 Risks:
 
