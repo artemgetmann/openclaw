@@ -134,41 +134,43 @@ Latest live evidence for this slice:
 
 - patched local OpenComputerUse checkout:
   `/tmp/jarvis-ocu-stability-20260614-175656/open-codex-computer-use`
-- rebuilt OpenComputerUse dev app:
-  `/tmp/jarvis-ocu-stability-20260614-175656/open-codex-computer-use/dist/Open Computer Use (Dev).app`
+- rebuilt OpenComputerUse dev app copied to stable permission path:
+  `/Users/user/Applications/Open Computer Use (Dev).app`
 - current OCU binary pointer:
   `/tmp/jarvis-ocu-stability-bin-path.txt`
 - code proof: OpenComputerUse `swift test` passed 134 tests after changing
   `perform_secondary_action` for `Raise` to activate the owning app through
   native `NSRunningApplication` and verify the target PID is frontmost
-- live proof status: blocked, not passed; the rebuilt dev app reports
-  `accessibility=missing, screenRecording=missing`, while the old direct
-  SwiftPM binary can list apps but cannot produce a usable restore benchmark
-  setup because target apps expose Stage Manager-style thumbnail CG windows
-  without usable `AXWindow` state
+- restore report:
+  `/tmp/jarvis-ocu-workspace-restore-20260615-after-perms/workspace-restore-1781501791763.json`
+- repeat root:
+  `/tmp/jarvis-ocu-repeat-20260615-after-stage-score-fix/repeat-a0e1105c42d9`
+- medium report:
+  `/tmp/jarvis-ocu-medium-20260615-after-stage-score-fix/safari-notes-claude-1781502124856.json`
+- live proof status: clean after granting Accessibility and Screen Recording
+  to the stable copied dev app path
 
 Current result:
 
 - `x-to-claude` repeated 3/3 functional pass
-- `x-to-claude` repeated 2/3 clean parity pass
-- `safari-notes-claude` functional pass with fresh Claude chat
+- `x-to-claude` repeated 3/3 clean parity pass
+- `safari-notes-claude` clean parity pass with fresh Claude chat
 - no clipboard fallback in the accepted live proof
 - AX-visible Claude reply extraction worked
 - Notes and Claude mutations used semantic controls
 - OpenComputerUse pointer evidence was present
-- restore-only diagnostic failed 3/3 source-app cases:
+- restore-only diagnostic passed 3/3 source-app cases:
   Terminal -> Claude -> Terminal, Safari -> Claude -> Safari, and Notes ->
-  Claude -> Notes all left Claude frontmost
+  Claude -> Notes all restored the source app frontmost
 
 Current blocker:
 
-- OpenComputerUse workspace restore is not reliable enough for clean parity.
-  The runtime can report that it raised the previous app while macOS still
-  leaves Safari or Claude frontmost.
-- The current native activation patch has not been accepted by live benchmark
-  evidence yet. Before rerunning `workspace-restore`, grant Accessibility and
-  Screen Recording to the rebuilt `Open Computer Use (Dev).app` or use an
-  already authorized OCU app-agent bundle built from the same patched source.
+- The OpenClaw wrapper now has clean local parity evidence against the patched
+  local OpenComputerUse dev app.
+- Remaining productization blocker: the OpenComputerUse native `Raise`
+  activation patch lives in the local OCU checkout and needs to be upstreamed or
+  vendored through the Jarvis/OpenClaw-owned OCU supply path before this can be
+  treated as portable outside this machine.
 
 ## Next Diagnostic
 

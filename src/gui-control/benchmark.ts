@@ -1614,6 +1614,14 @@ function scoreStageManagerPreservation(
     };
   }
   if (workspace.workspaceMeasurement === "changed-by-runtime") {
+    if (workspace.frontmostRestored === true && workspace.restoreSucceeded === true) {
+      // Focus-moving runtimes can still preserve the user's workspace if they
+      // prove the original frontmost app was restored after the task.
+      return {
+        sameStageOrBackgroundSafe: true,
+        notes: "Frontmost app changed during the measured task and was restored after the task.",
+      };
+    }
     return {
       sameStageOrBackgroundSafe: false,
       notes:

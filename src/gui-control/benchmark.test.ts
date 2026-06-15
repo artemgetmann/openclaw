@@ -2269,8 +2269,12 @@ describe("runGuiBenchmark", () => {
     expect(result.workspace.frontmostBefore).toBe("Terminal");
     expect(result.workspace.frontmostAfter).toBe("Terminal");
     expect(result.workspace.frontmostRestored).toBe(true);
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
     expect(result.qualityGate.blockers).not.toContain(
       "Frontmost app restoration was not proven true.",
+    );
+    expect(result.qualityGate.blockers).not.toContain(
+      "Stage Manager/workspace preservation was not proven true.",
     );
   });
 
