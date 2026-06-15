@@ -14,6 +14,7 @@ import {
   parseFrontmatter,
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
+  resolveSkillKey,
 } from "./frontmatter.js";
 import { loadSkillsFromDirWithFrontmatterFallback } from "./loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -128,16 +129,42 @@ function resolvePromptSourcePriority(source?: string): number {
   }
 }
 
-function rankSkillsForPrompt(entries: SkillEntry[]): Skill[] {
-  // Prompt limits trim from the front, so user-owned skills must be ordered
-  // before generic bundled inventory. Duplicate-name precedence is handled
-  // earlier by the merge map; this ranking protects unique workspace skills.
+function isConfigSelectedSkillForPrompt(entry: SkillEntry, config?: OpenClawConfig): boolean {
+  const skillKey = resolveSkillKey(entry.skill, entry);
+  const allowBundled = config?.skills?.allowBundled ?? [];
+  return (
+    allowBundled.includes(entry.skill.name) ||
+    allowBundled.includes(skillKey) ||
+    Boolean(config?.skills?.entries?.[skillKey] ?? config?.skills?.entries?.[entry.skill.name])
+  );
+}
+
+function resolvePromptEntryPriority(entry: SkillEntry, config?: OpenClawConfig): number {
+  // A configured skill is a deliberate runtime capability. In consumer
+  // workspaces, the workspace skill folder can contain broad personal inventory,
+  // so config-selected skills must stay visible before that overflow is trimmed.
+  if (isConfigSelectedSkillForPrompt(entry, config)) {
+    return 0;
+  }
+  if (entry.skill.source === "openclaw-workspace") {
+    return 1;
+  }
+  if (entry.skill.source === "agents-skills-project") {
+    return 2;
+  }
+  return 3 + resolvePromptSourcePriority(entry.skill.source);
+}
+
+function rankSkillsForPrompt(entries: SkillEntry[], config?: OpenClawConfig): Skill[] {
+  // Prompt limits trim from the front. Config-selected capabilities must
+  // survive truncation; otherwise natural-language routing cannot choose skills
+  // the model never sees. Duplicate-name workspace overrides already win in the
+  // merge map before this ranking runs.
   return entries
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => {
       const sourceDelta =
-        resolvePromptSourcePriority(a.entry.skill.source) -
-        resolvePromptSourcePriority(b.entry.skill.source);
+        resolvePromptEntryPriority(a.entry, config) - resolvePromptEntryPriority(b.entry, config);
       if (sourceDelta !== 0) {
         return sourceDelta;
       }
@@ -669,7 +696,7 @@ function resolveWorkspaceSkillPromptState(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = rankSkillsForPrompt(promptEntries);
+  const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config);
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
