@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import type { SkillEntry } from "./skills/types.js";
@@ -39,5 +42,60 @@ describe("buildWorkspaceSkillStatus", () => {
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
     expect(report.skills).toHaveLength(1);
     expect(report.skills[0]?.install).toEqual([]);
+  });
+
+  it("surfaces advisory tool version status for install specs", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    const fakeBin = path.join(tempDir, "fakebin");
+    fs.writeFileSync(fakeBin, "#!/usr/bin/env sh\necho 'fakebin 1.1.0'\n", { mode: 0o755 });
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${tempDir}${path.delimiter}${originalPath ?? ""}`;
+
+    try {
+      const entry: SkillEntry = {
+        skill: {
+          name: "versioned",
+          description: "test",
+          source: "test",
+          filePath: "/tmp/versioned",
+          baseDir: "/tmp",
+          disableModelInvocation: false,
+        },
+        frontmatter: {},
+        metadata: {
+          requires: { bins: ["fakebin"] },
+          install: [
+            {
+              id: "brew",
+              kind: "brew",
+              formula: "fakebin",
+              bins: ["fakebin"],
+              versionCommand: ["fakebin", "--version"],
+              versionRegex: "fakebin (?<version>[0-9.]+)",
+              minVersion: "1.0.0",
+              recommendedVersion: "1.2.0",
+            },
+          ],
+        },
+      };
+
+      const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+
+      expect(report.skills[0]?.install[0]?.toolVersions).toEqual([
+        {
+          bin: "fakebin",
+          command: ["fakebin", "--version"],
+          installed: true,
+          version: "1.1.0",
+          minVersion: "1.0.0",
+          recommendedVersion: "1.2.0",
+          satisfiesMinVersion: true,
+          satisfiesRecommendedVersion: false,
+        },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 });

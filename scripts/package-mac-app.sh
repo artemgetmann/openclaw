@@ -1175,6 +1175,9 @@ prepare_bundled_consumer_runtime() {
   if [[ -d "$ROOT_DIR/skills" ]]; then
     rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
     cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
+    "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/skill-content-manifest.mjs" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills" \
+      > "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills.manifest.json"
   fi
 
   local bundled_template_src="$ROOT_DIR/docs/reference/templates"
