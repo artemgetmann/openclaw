@@ -423,6 +423,7 @@ describe("exec approvals safe bins", () => {
       ]),
     ).toBe(true);
     expect(evaluate(["openclaw", "telegram-user", "status", "--json"])).toBe(true);
+    expect(evaluate(["openclaw", "telegram-user", "doctor", "--json"])).toBe(true);
     expect(
       evaluate([
         "openclaw",

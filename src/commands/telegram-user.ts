@@ -16,6 +16,7 @@ import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
+  TelegramUserDoctorResult,
   TelegramUserDownloadResult,
   TelegramUserInboxDialog,
   TelegramUserInboxResult,
@@ -199,6 +200,104 @@ function formatAuthStatusSummary(status: TelegramUserAuthStatus): string {
     `pending_phone=${pendingPhone}`,
     `session=${status.session_path}`,
   ].join(" ");
+}
+
+function buildTelegramUserDoctorResult(status: TelegramUserAuthStatus): TelegramUserDoctorResult {
+  const meta = status.backend_meta;
+  const envFile = meta?.env_file ?? "unknown";
+  const missingApiId = meta?.api_id_source === "missing";
+  const missingApiHash = meta?.api_hash_source === "missing";
+  const missingSession = status.state === "missing_session";
+
+  // The doctor intentionally interprets status only. Setup and login stay in
+  // the existing consumer-setup/login flows so this diagnostic cannot mutate
+  // credentials, sessions, or runtime ownership by accident.
+  const stateCopy: Record<
+    TelegramUserAuthStatus["state"],
+    {
+      diagnosis: string;
+      nextStep: string;
+    }
+  > = {
+    awaiting_code: {
+      diagnosis: "Telegram-as-me login is waiting for the Telegram OTP.",
+      nextStep: "Enter the Telegram OTP through the Telegram User setup flow.",
+    },
+    awaiting_password: {
+      diagnosis: "Telegram-as-me login is waiting for Telegram 2FA.",
+      nextStep: "Complete Telegram 2FA through the secure local login prompt.",
+    },
+    missing_credentials: {
+      diagnosis: "Telegram-as-me is missing Telegram API credentials on this Mac.",
+      nextStep: "Open the Telegram User section of consumer-setup and add the API ID/hash.",
+    },
+    missing_session: {
+      diagnosis: "Telegram-as-me has API credentials but no saved real-account session.",
+      nextStep: "Open the Telegram User section of consumer-setup and complete login.",
+    },
+    needs_reauth: {
+      diagnosis: "Telegram-as-me has a saved session, but Telegram no longer accepts it.",
+      nextStep: "Reconnect Telegram-as-me through the Telegram User setup flow.",
+    },
+    ready: {
+      diagnosis: "Telegram-as-me is ready on this Mac.",
+      nextStep: status.chat
+        ? "The requested chat resolved successfully."
+        : "Use inbox/read/send commands for the requested Telegram-as-me task.",
+    },
+  };
+
+  return {
+    backend_meta: meta,
+    chat: status.chat,
+    diagnosis: stateCopy[status.state].diagnosis,
+    expected: {
+      env_file: envFile,
+      session_path: status.session_path,
+    },
+    missing: {
+      api_hash: missingApiHash,
+      api_id: missingApiId,
+      session: missingSession,
+    },
+    next_step: stateCopy[status.state].nextStep,
+    ready: status.state === "ready",
+    state: status.state,
+    user: status.user,
+  };
+}
+
+function logDoctorText(runtime: RuntimeEnv, result: TelegramUserDoctorResult) {
+  const rich = isRich();
+  const colorize =
+    result.ready && rich
+      ? theme.success
+      : !result.ready && rich
+        ? theme.warn
+        : (text: string) => text;
+  runtime.log(colorize(`Telegram-as-me doctor: state=${result.state}`));
+  runtime.log(result.diagnosis);
+  runtime.log(`Expected env file: ${result.expected.env_file}`);
+  runtime.log(`Expected session: ${result.expected.session_path}`);
+
+  if (result.state === "missing_credentials") {
+    runtime.log(`Missing API ID: ${result.missing.api_id ? "yes" : "no"}`);
+    runtime.log(`Missing API hash: ${result.missing.api_hash ? "yes" : "no"}`);
+  }
+
+  if (result.state === "ready" && result.user) {
+    runtime.log(
+      `User: id=${result.user.user_id} username=${result.user.username ?? "-"} first_name=${result.user.first_name ?? "-"}`,
+    );
+  }
+
+  if (result.chat) {
+    runtime.log(
+      `Chat: id=${result.chat.chat_id ?? "-"} peer_type=${result.chat.peer_type ?? "-"} username=${result.chat.username ?? "-"}`,
+    );
+  }
+
+  runtime.log(`Next step: ${result.next_step}`);
 }
 
 function logStatusText(runtime: RuntimeEnv, status: TelegramUserAuthStatus) {
@@ -490,6 +589,22 @@ export async function telegramUserStatusCommand(
     return;
   }
   logStatusText(runtime, result);
+}
+
+export async function telegramUserDoctorCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const status = await runTelegramUserStatus({
+    ...resolveBackendOptions(opts),
+    chat: readStringOpt(opts, "chat"),
+  });
+  const result = buildTelegramUserDoctorResult(status);
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logDoctorText(runtime, result);
 }
 
 export async function telegramUserLoginCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

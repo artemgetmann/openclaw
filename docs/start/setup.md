@@ -133,9 +133,9 @@ Use this when debugging auth or deciding what to back up:
   - This is separate from the Telegram bot channel.
   - It uses your real Telegram account, not a BotFather token.
   - First-time setup needs Telegram API credentials from `my.telegram.org/apps`, then a one-time login on this Mac with your phone number, OTP, and maybe Telegram 2FA.
-  - Fresh installs store Telegram-as-me API credentials in `~/.openclaw/telegram-user/.env.local` and the saved session in `~/.openclaw/telegram-user/userbot.session`.
-  - Repo checkouts with existing `scripts/telegram-e2e/.env.local` or `scripts/telegram-e2e/tmp/userbot.session` keep using those paths for compatibility.
-  - If a skill says Telegram-as-me is not connected yet, let OpenClaw guide that setup flow first instead of trying the bot setup path.
+  - Telegram-as-me state lives under the active `$OPENCLAW_STATE_DIR`. The packaged macOS app uses `~/Library/Application Support/OpenClaw/.openclaw/telegram-user/`; source/dev runs may use `~/.openclaw/telegram-user/` unless the state dir is overridden.
+  - `openclaw telegram-user doctor --json` reports the exact env file, session path, setup state, and next step without printing secrets or repairing anything.
+  - If Telegram-as-me is not connected yet, let OpenClaw guide the Telegram User setup flow instead of wiring repo-local E2E files into product setup.
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:

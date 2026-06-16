@@ -101,8 +101,11 @@ explicitly ask for the CLI path.
 - Use this setup guidance only for Telegram-as-me requests such as "read my
   Telegram messages" or "send this to someone from my Telegram account." Do not
   use it for BotFather, group privacy mode, or normal bot-channel setup.
-- Start with the cheapest truthful check: `openclaw telegram-user status --json`.
-- If status is `missing_credentials`, say Telegram-as-me is not connected yet
+- Start with the setup-state interpreter:
+  `openclaw telegram-user doctor --json`.
+  It reads Telegram User status and explains whether credentials, login/session,
+  reauth, or readiness is the blocker without repairing anything.
+- If doctor state is `missing_credentials`, say Telegram-as-me is not connected yet
   because this Mac still needs the user's Telegram API credentials. Explain that
   Telegram requires the user to create an app at `my.telegram.org/apps` and
   provide the resulting API ID and API hash before OpenClaw can act through
@@ -128,15 +131,15 @@ explicitly ask for the CLI path.
 - Do not ask the user to paste the Telegram account password into chat. If 2FA
   is required, prefer the product's secure prompt path; otherwise explain that
   password entry must happen locally and should not be logged or echoed.
-- If status is `missing_session`, say Telegram-as-me has credentials but is not
+- If doctor state is `missing_session`, say Telegram-as-me has credentials but is not
   logged in yet. Offer to connect it now and start
   `openclaw telegram-user login --phone <phone> --json` only after the user
   confirms.
-- If status is `awaiting_code`, ask for the Telegram OTP that was just sent to
+- If doctor state is `awaiting_code`, ask for the Telegram OTP that was just sent to
   their Telegram app/SMS, then submit it with the existing login flow.
-- If status is `awaiting_password`, explain that Telegram 2FA is still required
+- If doctor state is `awaiting_password`, explain that Telegram 2FA is still required
   before OpenClaw can use the real-account session.
-- If status is `needs_reauth`, say the saved Telegram session is no longer
+- If doctor state is `needs_reauth`, say the saved Telegram session is no longer
   accepted and offer to reconnect it.
 - Once setup succeeds, verify with a read-only check before any write action:
   `openclaw telegram-user status --json`, then preferably
