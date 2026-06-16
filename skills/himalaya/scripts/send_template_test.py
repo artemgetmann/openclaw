@@ -63,6 +63,28 @@ backend.host = "imap.mail.me.com"
             )
         )
 
+    def test_classifies_icloud_chained_quota_append_error_as_post_send_failure(self) -> None:
+        config = self.write_config(
+            """
+[accounts.icloud]
+email = "founder@icloud.com"
+backend.host = "imap.mail.me.com"
+"""
+        )
+
+        self.assertTrue(
+            send_template.should_retry(
+                "icloud",
+                [config],
+                """
+Error:
+   0: cannot add IMAP message
+   1: cannot resolve IMAP task
+   2: unexpected NO response: Quota Exceeded
+""",
+            )
+        )
+
     def test_does_not_reclassify_non_icloud_quota_errors(self) -> None:
         config = self.write_config(
             """
