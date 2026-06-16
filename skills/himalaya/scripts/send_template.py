@@ -199,7 +199,13 @@ def write_stream(stream: Any, data: bytes) -> None:
 
 def is_save_copy_append_failure(output_text: str) -> bool:
     normalized_output = output_text.lower()
-    return any(marker in normalized_output for marker in SAVE_COPY_APPEND_FAILURE_MARKERS)
+    if any(marker in normalized_output for marker in SAVE_COPY_APPEND_FAILURE_MARKERS):
+        return True
+    # Himalaya can render error chains with the operation and provider reason on
+    # separate lines, e.g. `cannot add IMAP message` followed by
+    # `unexpected NO response: Quota Exceeded`. That is still the same
+    # post-SMTP IMAP Sent-copy append class and must not trigger a resend.
+    return "cannot add imap message" in normalized_output and "quota exceeded" in normalized_output
 
 
 def should_retry(account: str, config_paths: list[Path], output_text: str) -> bool:
