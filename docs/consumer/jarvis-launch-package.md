@@ -59,7 +59,7 @@ Accepted proof:
 - Same-user onboarding and 2026-06-09 Gate2 clean-user proof are accepted for
   the trusted-tester release gate.
 - Gate2 details remain in
-  `docs/consumer/jarvis-consumer-rc-closeout-20260606.md`.
+  `docs/consumer/archive/jarvis-consumer-rc-closeout-20260606.md`.
 
 Open release proof:
 

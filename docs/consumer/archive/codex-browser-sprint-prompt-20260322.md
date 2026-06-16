@@ -1,5 +1,11 @@
 # Codex Kickoff Prompt — OpenClaw Consumer Sprint
 
+Status: archived browser-sprint prompt
+
+Archive note: preserved as historical sprint context only. Current Jarvis
+product docs live in `docs/jarvis/README.md`. Do not copy this prompt as an
+active work order.
+
 Copy and paste this into Codex to start execution.
 
 ---
