@@ -720,6 +720,37 @@ ensure_consumer_node_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+prune_bundled_node_runtime() {
+  local node_root="$1"
+  local arch="$2"
+  local header_dir="$node_root/include"
+  local bytes_before=""
+
+  if [[ ! -x "$node_root/bin/node" ]]; then
+    echo "ERROR: bundled Node runtime is missing bin/node before prune: $node_root" >&2
+    exit 1
+  fi
+
+  if [[ ! -d "$header_dir" ]]; then
+    echo "📦 Bundled Node headers already absent (${arch})"
+    return 0
+  fi
+
+  # Node's include tree contains C/C++ headers used to build native addons.
+  # Jarvis ships already-built native modules and signs them in-place, so the
+  # runtime only needs the executable and runtime libraries. Keep this prune
+  # intentionally narrow; broader Node/npm/corepack trimming needs separate
+  # compatibility proof.
+  bytes_before="$(du -sk "$header_dir" 2>/dev/null | awk '{ print $1 * 1024 }')"
+  rm -rf "$header_dir"
+  echo "📦 Pruned bundled Node headers (${arch}): ${bytes_before:-unknown} bytes"
+
+  if [[ ! -x "$node_root/bin/node" ]]; then
+    echo "ERROR: bundled Node runtime lost bin/node after prune: $node_root" >&2
+    exit 1
+  fi
+}
+
 ensure_consumer_uv_runtime() {
   local version="$1"
   local arch="$2"
@@ -1193,6 +1224,8 @@ prepare_bundled_consumer_runtime() {
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/node" "$BUNDLED_RUNTIME_RESOURCE_DIR/uv"
   cp -R "$node_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64"
   cp -R "$node_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-x64"
+  prune_bundled_node_runtime "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64" "darwin-arm64"
+  prune_bundled_node_runtime "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-x64" "darwin-x64"
 
   uv_arm64_root="$(ensure_consumer_uv_runtime "$UV_VERSION" "arm64")"
   uv_x64_root="$(ensure_consumer_uv_runtime "$UV_VERSION" "x86_64")"
