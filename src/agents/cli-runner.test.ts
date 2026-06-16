@@ -656,6 +656,9 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPrompt).toContain(
         "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
       );
+      expect(systemPrompt).toContain(
+        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+      );
       expect(systemPrompt).toContain("<available_skills>");
       expect(systemPrompt).toContain("reddit");
       expect(systemPrompt).toContain("User Reddit skill");
@@ -665,6 +668,14 @@ describe("runCliAgent with process supervisor", () => {
       expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toContain(
         "reddit",
       );
+      expect(result.meta.systemPromptReport?.skills.entries[0]?.location).toContain("SKILL.md");
+      expect(result.meta.systemPromptReport?.runtime).toMatchObject({
+        serviceLabel: expect.any(String),
+        gatewayPort: expect.any(Number),
+        worktree: expect.any(String),
+        stateDir: expect.any(String),
+        configPath: expect.any(String),
+      });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -723,6 +734,9 @@ describe("runCliAgent with process supervisor", () => {
       expect(promptArg).toContain(
         "These are OpenClaw workspace skills, not Claude Code native slash skills.",
       );
+      expect(promptArg).toContain(
+        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+      );
       expect(promptArg).toContain("<available_skills>");
       expect(promptArg).toContain("<name>reddit</name>");
       expect(promptArg).toContain("Read and summarize Reddit posts and comments from a Reddit URL");
@@ -730,6 +744,72 @@ describe("runCliAgent with process supervisor", () => {
       expect(promptArg).toContain("summarize this reddit thread");
       expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toContain(
         "reddit",
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes Telegram read requests to telegram-user from prompt inventory before CLI skill listing", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-telegram-skill-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "telegram-user"),
+      name: "telegram-user",
+      description:
+        "Read and act as the user on Telegram, including checking replies and voice notes",
+      body: "# Telegram User\n\nUse telegram-user read/download flows before generic shell discovery.\n",
+    });
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s-telegram",
+        sessionKey: "agent:main:telegram:direct:123",
+        sessionFile,
+        workspaceDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "nico/nisna replied check what he said",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-telegram-skill",
+        messageChannel: "telegram",
+      });
+
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      const systemPrompt = argv[argv.indexOf("--append-system-prompt") + 1] ?? "";
+      expect(systemPrompt).toContain("<name>telegram-user</name>");
+      expect(systemPrompt).toContain(
+        "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file before any generic discovery.",
+      );
+      expect(systemPrompt).toContain(
+        "do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step",
+      );
+      expect(systemPrompt.indexOf("<name>telegram-user</name>")).toBeLessThan(
+        systemPrompt.indexOf("openclaw skills list"),
+      );
+      expect(result.meta.systemPromptReport?.skills.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "telegram-user",
+            location: expect.stringContaining("telegram-user/SKILL.md"),
+          }),
+        ]),
       );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

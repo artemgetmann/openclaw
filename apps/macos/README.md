@@ -86,6 +86,11 @@ mode refuses to run when runtime JS, package/lockfile, Node/uv, extension,
 skill, template, device-model, or bundled dependency inputs no longer match the
 saved runtime manifest.
 
+Packaging also writes `OpenClawRuntime/openclaw/skills.manifest.json`, and
+`verify-consumer-mac-app.sh` compares consumer-default bundled skill content
+hashes against the source checkout. If a skill changes, rerun packaging without
+runtime reuse so Jarvis does not ship stale model-facing skill instructions.
+
 To remove generated UI-smoke build output without deleting a currently running
 smoke app, run:
 
@@ -220,6 +225,12 @@ For a real update to existing installations, bump `APP_VERSION` and/or
 `CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
 same-build upload is just a republish and will not trigger an update.
 
+The public release acceleration spec lives at
+`docs/consumer/jarvis-public-release-acceleration-spec.md`. It captures the
+full plan: one-command resume, bounded GitHub retries, timing, read-only size
+inventory, later safe parallelism, and bundle diet only after compatibility
+proof.
+
 The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public
 appcast, and only declares the package sendable after Sparkle is live.
@@ -233,11 +244,12 @@ bash scripts/package-openclaw-mac-dist.sh --local-proof
 
 This builds `dist/Jarvis.app`, runs `verify-consumer-mac-app.sh` against the
 stable release identity, verifies the bundled runtime `package.json` version
-matches the app version, writes `dist/jarvis-release-manifest.env`, writes the
-app build receipt, and stops. It does not create `Jarvis.dmg`, `Jarvis.zip`, or
-`jarvis-appcast.xml`; it also does not notarize, publish GitHub assets, install
-or launch the app, touch launchd, or change the shared gateway runtime. Use this
-when the question is "does this Jarvis app build verify locally?" instead of
+matches the app version, verifies bundled skill content hashes, writes
+`dist/jarvis-release-manifest.env`, writes the app build receipt, and stops. It
+does not create `Jarvis.dmg`, `Jarvis.zip`, or `jarvis-appcast.xml`; it also
+does not notarize, publish GitHub assets, install or launch the app, touch
+launchd, or change the shared gateway runtime. Use this when the question is
+"does this Jarvis app build verify locally?" instead of
 "is this public distribution artifact sendable?"
 
 ```bash
@@ -297,6 +309,48 @@ notary receipt exists. The script records release state in
 `dist/Jarvis.app.notary.env`, and DMG notarization in
 `dist/Jarvis.dmg.notary.env`. The manifest is operator metadata only; do not
 store credentials there.
+
+For normal operator recovery, use the public release wrapper instead of choosing
+the phase by hand:
+
+```bash
+bash scripts/jarvis-public-release.sh --dry-run
+bash scripts/jarvis-public-release.sh
+```
+
+The wrapper inspects existing `dist/` artifacts, receipts, and the release
+manifest, chooses the next safe package phase, and delegates to
+`scripts/package-openclaw-mac-dist.sh`. With
+`--parallel-safe-local-assets`, the wrapper may create local `Jarvis.zip` and
+`jarvis-appcast.xml` after app notarization is accepted and a DMG notary
+submission exists, while DMG polling remains a separate resumable step. This is
+local-only P2 parallelism: the appcast upload still stays last because it is the
+public go-live switch. If the wrapper selects
+`create-local-release-assets-only`, pass the latest release tag so the Sparkle
+appcast signs an immutable tagged `Jarvis.zip` URL:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --parallel-safe-local-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+When local notarized assets are ready, publishing still requires the explicit
+publish flag and latest tag. Publish only after app and DMG notarization are
+accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
+`dist/jarvis-appcast.xml` are present:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Wrapper runs write `dist/jarvis-public-release-summary.env`; timed package
+substeps append to `dist/jarvis-release-timing.tsv`. GitHub release view,
+upload, and public verification get bounded retries only for obvious transient
+network or GitHub service failures. Authentication, permission, missing release,
+wrong tag, and non-latest tag failures remain fast failures.
 
 Build/package the app once and stop before notarization:
 
@@ -441,17 +495,7 @@ Before removing anything to shrink artifacts, inspect the built app and record
 what actually dominates size. This is read-only:
 
 ```bash
-APP="dist/Jarvis.app"
-du -sh "$APP" "$APP/Contents"/* 2>/dev/null | sort -h
-find "$APP" \( \
-  -path "*/node_modules/*" -o \
-  -name "node" -o \
-  -name "uv" -o \
-  -name "*.node" -o \
-  -path "*/extensions/*" -o \
-  -path "*/skills/*" -o \
-  -path "*/templates/*" \
-\) -print0 | xargs -0 du -sh 2>/dev/null | sort -h | tail -50
+bash scripts/report-jarvis-release-size.sh --app dist/Jarvis.app
 ```
 
 Do not delete bundled files in the release lane without proof that Intel

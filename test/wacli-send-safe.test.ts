@@ -20,6 +20,7 @@ function makeFlags(overrides: Partial<Flags> = {}): Flags {
     to: "+15555550123",
     message: "hello",
     timeoutMs: 1_000,
+    lockWaitMs: 1_000,
     settleMs: 1_000,
     graceMs: 1_000,
     ...overrides,
@@ -36,7 +37,10 @@ async function createTempStore(): Promise<{ root: string; db: DatabaseSync }> {
       chat_jid TEXT NOT NULL,
       msg_id TEXT NOT NULL,
       from_me INTEGER NOT NULL,
-      text TEXT
+      ts INTEGER NOT NULL DEFAULT 0,
+      text TEXT,
+      display_text TEXT,
+      media_caption TEXT
     );
   `);
   return { root, db };
@@ -351,6 +355,68 @@ describe("wacli-send-safe", () => {
     expect(runCommand).toHaveBeenCalledTimes(2);
   });
 
+  it("serializes concurrent safe sends for the same store", async () => {
+    const store = await createTempStore();
+    let activeSends = 0;
+    let maxActiveSends = 0;
+    const sendStarts: number[] = [];
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === "status") {
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ownerRunning: false,
+            ownerCommandMatches: false,
+            lockHeldByOwner: false,
+            connected: false,
+          }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+
+      activeSends += 1;
+      maxActiveSends = Math.max(maxActiveSends, activeSends);
+      sendStarts.push(Date.now());
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      activeSends -= 1;
+      return {
+        ok: true,
+        exitCode: 0,
+        stdout: "Sent to 48100060180533@lid (id 3BEC123)",
+        stderr: "",
+        timedOut: false,
+      };
+    });
+    const verifySend = vi.fn(async () => ({
+      status: "verified_local" as const,
+      chatJid: "48100060180533@lid",
+      messageId: "3BEC123",
+    }));
+
+    try {
+      const [first, second] = await Promise.all([
+        runOwnerSafeSend(makeFlags({ storeDir: store.root }), {
+          runCommand,
+          verifySend,
+        }),
+        runOwnerSafeSend(makeFlags({ storeDir: store.root }), {
+          runCommand,
+          verifySend,
+        }),
+      ]);
+
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      expect(maxActiveSends).toBe(1);
+      expect(sendStarts[1] - sendStarts[0]).toBeGreaterThanOrEqual(25);
+    } finally {
+      store.db.close();
+      await fs.rm(store.root, { recursive: true, force: true });
+    }
+  });
+
   it("parses accepted send receipts from human and JSON wacli output", () => {
     expect(parseSendReceipt("Sent to 48100060180533@lid (id 3BECDEADBEEF)")).toEqual({
       chatJid: "48100060180533@lid",
@@ -385,6 +451,104 @@ describe("wacli-send-safe", () => {
         chatJid: "48100060180533@lid",
         messageId: "3BEC123",
       });
+    } finally {
+      store.db.close();
+      await fs.rm(store.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reconciles a failed raw send when one exact outbound DB row exists", async () => {
+    const store = await createTempStore();
+    const message = "please send me Marina's contact";
+    try {
+      const runCommand = vi.fn(async (_command: string, args: string[]) => {
+        if (args[0] === "status") {
+          return {
+            ok: true,
+            exitCode: 0,
+            stdout: JSON.stringify({
+              ownerRunning: false,
+              ownerCommandMatches: false,
+              lockHeldByOwner: false,
+              connected: false,
+            }),
+            stderr: "",
+            timedOut: false,
+          };
+        }
+
+        store.db
+          .prepare(
+            `INSERT INTO messages (chat_jid, msg_id, from_me, ts, text)
+             VALUES (?, ?, 1, ?, ?)`,
+          )
+          .run(
+            "41796713221@s.whatsapp.net",
+            "3EB0FALSE_NEGATIVE",
+            Math.floor(Date.now() / 1000),
+            message,
+          );
+        return {
+          ok: false,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          timedOut: true,
+        };
+      });
+
+      const report = await runOwnerSafeSend(
+        makeFlags({
+          storeDir: store.root,
+          to: "+41 79 671 32 21",
+          message,
+        }),
+        { runCommand },
+      );
+
+      expect(report.ok).toBe(true);
+      expect(report.send.timedOut).toBe(true);
+      expect(report.verification).toEqual({
+        status: "verified_local_after_failed_exit",
+        chatJid: "41796713221@s.whatsapp.net",
+        messageId: "3EB0FALSE_NEGATIVE",
+        reason:
+          "Raw wacli send failed or timed out, but exactly one matching outbound row was found in local history.",
+      });
+      expect(report.message).toContain("did not exit cleanly");
+    } finally {
+      store.db.close();
+      await fs.rm(store.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps failed raw sends unverified when local DB reconciliation is ambiguous", async () => {
+    const store = await createTempStore();
+    const message = "duplicate outbound";
+    try {
+      for (const msgId of ["first", "second"]) {
+        store.db
+          .prepare(
+            `INSERT INTO messages (chat_jid, msg_id, from_me, ts, text)
+             VALUES (?, ?, 1, ?, ?)`,
+          )
+          .run("41796713221@s.whatsapp.net", msgId, Math.floor(Date.now() / 1000), message);
+      }
+
+      const verification = await verifyAcceptedSendInLocalHistory({
+        storeDir: store.root,
+        stdout: "",
+        stderr: "",
+        to: "+41 79 671 32 21",
+        command: "text",
+        message,
+        startedAtMs: Date.now() - 1_000,
+        endedAtMs: Date.now(),
+        allowTargetTextFallback: true,
+      });
+
+      expect(verification.status).toBe("unverified");
+      expect(verification.reason).toContain("Multiple matching outbound rows");
     } finally {
       store.db.close();
       await fs.rm(store.root, { recursive: true, force: true });

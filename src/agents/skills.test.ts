@@ -285,7 +285,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(snapshot.prompt).toContain("wacli");
   });
 
-  it("drops workspace skills when a declared relative helper bin is missing", async () => {
+  it("keeps model-facing workspace skills when a declared relative helper bin is missing", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "broken-helper");
 
@@ -299,8 +299,8 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
-    expect(snapshot.skills.map((skill) => skill.name)).not.toContain("broken-helper");
-    expect(snapshot.prompt).not.toContain("broken-helper");
+    expect(snapshot.skills.map((skill) => skill.name)).toContain("broken-helper");
+    expect(snapshot.prompt).toContain("broken-helper");
   });
 });
 

@@ -16,6 +16,9 @@ metadata:
               "formula": "himalaya",
               "bins": ["himalaya"],
               "label": "Install Himalaya (brew)",
+              "versionCommand": ["himalaya", "--version"],
+              "versionRegex": "himalaya v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+              "recommendedVersion": "1.2.0",
             },
           ],
       },
@@ -192,10 +195,27 @@ EOF
 ```
 
 For agent-run or scripted CLI sends, prefer this wrapper over raw `himalaya
-template send`. It behaves like normal Himalaya for no-attachment and
-small-attachment sends, so those still save a Sent copy. Only larger iCloud
-attachment payloads flip `message.send.save-copy = false` to avoid Himalaya's
-post-send IMAP append timeout.
+template send`. It writes a local `.eml` archive plus a `.result.json` command
+receipt under `~/.local/state/openclaw/email-send-proof` by default, ensures a
+Message-ID exists, and only then runs Himalaya. If that local archive cannot be
+written, the wrapper refuses to send instead of creating an unprovable automated
+send. Set `OPENCLAW_EMAIL_PROOF_DIR` or pass `--proof-dir` for a different local
+proof directory.
+
+The local proof is command evidence, not recipient delivery confirmation. Raw
+Himalaya v1 does not expose SMTP RCPT acceptance details, so do not claim live
+recipient proof unless you verified inbox arrival, a reply, or a provider bounce
+with explicit approval. iCloud Sent is not reliable proof for this lane.
+
+The wrapper behaves like normal Himalaya for no-attachment and small-attachment
+sends, so those still attempt to save a Sent copy. Only larger iCloud attachment
+payloads flip `message.send.save-copy = false` to avoid Himalaya's post-send
+IMAP append timeout. If iCloud still reports a post-send append failure such as
+`Quota Exceeded`, the wrapper treats that as ambiguous delivery and does not
+retry the whole send.
+
+If an explicit audit copy is approved, pass one or more `--audit-bcc
+audit@example.com` flags. Never add Bcc silently.
 
 Or with headers flag:
 
@@ -296,10 +316,16 @@ RUST_LOG=trace RUST_BACKTRACE=1 himalaya envelope list
 - For composing rich emails with attachments, use MML syntax (see `references/message-composition.md`).
 - Store passwords securely using `pass`, system keyring, or a command that outputs the password.
 - For automated sends, prefer `python3 skills/himalaya/scripts/send_template.py --account <name>` over raw `himalaya template send`.
+- The wrapper records local proof before the send and result metadata after the
+  send. Treat the printed `.eml`, `.result.json`, and Message-ID as local command
+  proof only, not delivery proof.
 - If the wrapper reports that it skipped the Sent copy for a larger iCloud attachment payload, tell the user plainly:
   - the email was sent through Himalaya
   - the Sent-folder copy was intentionally skipped to avoid the iCloud IMAP append timeout
   - not seeing it in Sent does not mean the send failed
+- If iCloud reports `cannot add IMAP message: Quota Exceeded` after a send,
+  treat it like the same post-SMTP Sent-copy failure class. Do not retry the
+  whole email, because SMTP delivery may already have succeeded.
 - When a user asks for proof after a Sent-copy skip, prefer concrete evidence:
   - send a copy to the user's own address and verify it arrived in Inbox
   - or show that the intended recipient replied / did not bounce

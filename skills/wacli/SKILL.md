@@ -25,16 +25,22 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
-              "formula": "steipete/tap/wacli",
+              "formula": "openclaw/tap/wacli",
               "bins": ["wacli"],
               "label": "Install wacli (brew)",
+              "versionCommand": ["wacli", "--version"],
+              "versionRegex": "wacli v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+              "recommendedVersion": "0.11.1",
             },
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/wacli/cmd/wacli@latest",
+              "module": "github.com/openclaw/wacli/cmd/wacli@v0.11.1",
               "bins": ["wacli"],
               "label": "Install wacli (go)",
+              "versionCommand": ["wacli", "--version"],
+              "versionRegex": "wacli v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+              "recommendedVersion": "0.11.1",
             },
           ],
       },
@@ -91,6 +97,8 @@ Automation Rule
   first before sending to third parties.
 - For send actions, use `skills/wacli/scripts/wacli-send-safe.sh` as the default path whenever the main `~/.wacli` store might already have a live sync owner.
   This is especially important for monitor-driven replies, Telegram-approved follow-up sends, and any wake flow that decides to answer on WhatsApp after first reading from the shared store.
+  The helper serializes sends per store, pauses/restores the recorded sync owner
+  when needed, and reconciles failed raw-send exits against exact local history.
 - Do NOT kill the live sync owner manually, do NOT restart it by hand, and do NOT improvise raw `wacli send ...` if `skills/wacli/scripts/wacli-send-safe.sh` covers the same send.
   Manual stop/send/restart loops are a fallback-of-last-resort debug path, not the authored agent workflow.
 
@@ -162,10 +170,12 @@ Send
 - Text: `skills/wacli/scripts/wacli-send-safe.sh text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
 - Group: `skills/wacli/scripts/wacli-send-safe.sh text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
 - File: `skills/wacli/scripts/wacli-send-safe.sh file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
-- A successful safe-send means WhatsApp accepted the outbound attempt. Only call
-  it locally verified when the helper reports `verification.status` as
-  `verified_local`; otherwise open the chat or use a manual `wa.me` fallback
-  before claiming delivery or thread proof.
+- A successful safe-send means WhatsApp accepted the outbound attempt or the
+  exact outbound row was later found in local history after a failed raw-send
+  exit. Only call it locally verified when the helper reports
+  `verification.status` as `verified_local` or
+  `verified_local_after_failed_exit`; otherwise open the chat or use a manual
+  `wa.me` fallback before claiming delivery or thread proof.
 - Raw `wacli send ...` is not allowed for real external contacts after safe-send
   failure. Use it only for self-chat/test contacts or with explicit break-glass
   approval.

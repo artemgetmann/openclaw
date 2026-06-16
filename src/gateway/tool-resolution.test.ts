@@ -93,8 +93,22 @@ describe("gateway tool resolution", () => {
 
     expect(result.tools.map((tool) => tool.name)).toContain("sessions_list");
     expect(result.tools.map((tool) => tool.name)).toContain("memory_search");
+    expect(result.tools.map((tool) => tool.name)).toContain("gui_control");
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not expose GUI control outside the loopback Codex/MCP surface", async () => {
+    const workspaceDir = await createTempWorkspace();
+    loadOpenClawPluginsMock.mockReturnValueOnce({ tools: [], diagnostics: [] });
+    const result = resolveGatewayScopedTools({
+      cfg: createConfig(workspaceDir),
+      sessionKey: "agent:claude-cli-continuity:test",
+      surface: "http",
+      senderIsOwner: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("gui_control");
   });
 
   it("resolves loopback plugin tools from an initialized global registry", async () => {

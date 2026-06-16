@@ -5,6 +5,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import {
   createMcpLoopbackServerConfig,
   ensureMcpLoopbackServer,
@@ -14,6 +15,7 @@ import {
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { resolveRuntimeFingerprint } from "../infra/runtime-fingerprint.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -546,10 +548,11 @@ function buildBridgeSafeClaudeCliSkillsPrompt(params: {
     "## OpenClaw Workspace Skills (mandatory)",
     "These are OpenClaw workspace skills, not Claude Code native slash skills.",
     "Before saying a skill is missing or unavailable, inspect <available_skills> in this prompt.",
-    "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file.",
+    "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file before any generic discovery.",
     "If a matching skill exists, prefer it over generic web/search/MCP behavior unless the user explicitly asks for a different route.",
     "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
     skillsPrompt,
+    "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
   ].join("\n");
 }
 
@@ -570,9 +573,10 @@ function prependClaudeCliResumedSkillsReminder(params: {
   return [
     "OpenClaw runtime skill reminder for this resumed Claude session:",
     "These are OpenClaw workspace skills, not Claude Code native slash skills.",
-    "For a Reddit URL or any task that clearly matches one listed skill, read that skill's <location> SKILL.md with Claude's Read tool and follow it before using generic web/search behavior.",
+    "For a Reddit URL, Telegram-as-me read request, or any task that clearly matches one listed skill, read that skill's <location> SKILL.md with Claude's Read tool and follow it before using generic web/search behavior.",
     "Do not say an OpenClaw skill is missing until you have checked <available_skills> below.",
     skillsPrompt,
+    "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
     "Current user message:",
     params.prompt,
   ].join("\n\n");
@@ -631,6 +635,10 @@ async function buildCliAgentPromptStack(params: {
       injectedFiles: [],
       skillsPrompt: "",
       tools: [],
+      runtime: buildSessionRuntimeReport({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+      }),
     });
     return {
       systemPrompt: params.customSystemPrompt,
@@ -709,8 +717,25 @@ async function buildCliAgentPromptStack(params: {
     injectedFiles: contextFiles,
     skillsPrompt: "",
     tools: [],
+    runtime: buildSessionRuntimeReport({
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+    }),
   });
   return { systemPrompt, systemPromptReport };
+}
+
+function buildSessionRuntimeReport(params: { workspaceDir: string; config?: OpenClawConfig }) {
+  const fingerprint = resolveRuntimeFingerprint({ cwd: params.workspaceDir });
+  return {
+    ...(fingerprint.openClawVersion ? { openClawVersion: fingerprint.openClawVersion } : {}),
+    branch: fingerprint.branch,
+    worktree: fingerprint.worktree,
+    stateDir: fingerprint.stateDir,
+    configPath: fingerprint.configPath,
+    serviceLabel: fingerprint.serviceLabel,
+    gatewayPort: resolveGatewayPort(params.config),
+  };
 }
 
 async function persistCliTranscriptTurn(params: {
@@ -1099,6 +1124,7 @@ export async function runCliAgent(params: {
     injectedFiles: contextFiles,
     skillsPrompt,
     tools: [],
+    runtime: buildSessionRuntimeReport({ workspaceDir, config: params.config }),
   });
 
   let preparedBackendCleanupOwnedByLiveSession = false;

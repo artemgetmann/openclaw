@@ -1,50 +1,579 @@
 # Consumer GUI Control MVP Decision
 
-Last updated: 2026-03-22
-Status: deferred by default
+Last updated: 2026-06-12
+Status: deferred for launch; active bakeoff for a later Jarvis GUI-control lane
 
 ## Decision
 
-Consumer GUI control is not part of the first MVP by default.
+Consumer GUI control is still not part of the first MVP by default.
 
 Reason:
 
 - most consumer users do not need desktop GUI control on day one
-- GUI control adds extra macOS permission and setup burden
+- GUI control adds macOS Accessibility, Screen Recording, and sometimes Input
+  Monitoring permission burden
 - shipping it half-working would create more confusion than value
+- the recent Peekaboo run proved the real failure mode: raw CLI control plus
+  an LLM can click the wrong app when focus, coordinates, and provider state
+  are not wrapped by strict planning and verification
 
-## Current product rule
+## Problem Statement
 
-Treat GUI control as a later feasibility check, not a launch blocker.
+Jarvis should eventually operate desktop apps, but raw Peekaboo CLI plus a
+general LLM loop is not product-grade by itself.
 
-Keep it out of the default consumer product surface unless all of the following become true:
+The observed failure chain was concrete:
 
-- the packaged `OpenClaw Consumer` app can expose GUI control through the consumer Telegram bot
-- the setup is simple enough for non-technical users
-- one safe GUI-control action works reliably end to end
-- failures are explained clearly without developer jargon
+1. Peekaboo paste syntax changed or was misused after an update.
+2. `--analyze` failed because Peekaboo had no configured AI provider/API key.
+3. Claude launched blank or slowly, and foreground/window targeting became
+   confused.
+4. Retina screenshot pixels were manually translated into click coordinates.
+5. A final raw coordinate click omitted `--app Claude` or `--window-id` and
+   clicked Telegram instead of Claude.
 
-If that bar is not met, strip or hide GUI control from the consumer experience for now.
+That is exactly the kind of bug a consumer Jarvis product cannot treat as
+"operator error". The runtime must make wrong-target actions hard.
 
-## What to test later
+## Immediate Rule
 
-When this comes back into scope, keep the validation lane narrow:
+Use Peekaboo as a short-term capture/control primitive, not as the default
+planner or brain.
 
-1. Use the packaged consumer app, not a dev-only local shortcut.
-2. Use the existing consumer Telegram bot path, not a separate operator-only control lane.
-3. Test one safe, visible GUI action first.
-4. Verify both success and clean failure behavior.
+Rules:
 
-Recommended first smoke action:
+- the primary Jarvis/Codex model inspects screenshots, UI maps, and command
+  output itself
+- Peekaboo `--analyze` is disabled by default for Jarvis flows
+- use `--analyze` only after provider config is verified and the task
+  explicitly wants Peekaboo's own AI answer
+- every action must be scoped by app, process id, window id, or snapshot
+- prefer Accessibility API tree [structured UI map exposed by macOS] element
+  refs over coordinates
+- coordinates are last resort, must stay target-scoped, and must be verified by
+  a fresh screenshot or UI map before continuing
 
-- open or focus the consumer app window
-- or open one clearly visible, low-risk system surface
+The bundled Peekaboo skill should carry these operating rules so future agents
+do not repeat the Telegram-vs-Claude click failure.
 
-Do not start with arbitrary desktop control. Prove one stable consumer-safe action first.
+## Current Peekaboo Reality
 
-## Non-goals for the current pass
+Verified on 2026-06-11:
 
-- no full GUI-control redesign
-- no new onboarding flow just for desktop automation
-- no new public CLI surface
-- no shipping decision based on developer-only setups
+- local Homebrew install after explicit upgrade: `peekaboo` 3.4.1
+- Homebrew stable in `steipete/tap`: 3.4.1
+- upstream `openclaw/Peekaboo` latest release: `v3.4.1`, published
+  2026-06-10
+- upstream Peekaboo is MIT, Swift, macOS 15+, and now exposes capture, UI maps,
+  background-targeted input, direct accessibility actions, CLI, MCP, and an
+  agent loop
+
+Keep Homebrew-stable and upstream-release facts separate. They do not move in
+lockstep.
+
+## Evaluation Matrix
+
+| Candidate            | Fit                                                               | Strength                                                                                                                            | Main Risk                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MacosUseSDK          | Swift-native control primitive to revisit after reliability fixes | MIT Swift library; traverses macOS Accessibility trees and simulates input                                                          | Live bakeoff failed before semantic input: app open returned PID `-1`, traversal rejected the real TextEdit PID, and `ActionTool --help` launched Messages |
+| mcp-server-macos-use | Useful wrapper/reference for MacosUseSDK                          | Swift MCP server over stdio; opens apps and traverses AX trees                                                                      | License conflict: package metadata says MIT, but `LICENSE` is Business Source License; treat as BSL until clarified                                        |
+| agent-desktop        | Current leading low-level runtime candidate                       | Rust CLI, Apache-2.0, deterministic refs, structured JSON, AX-first actions, FFI artifacts                                          | Young project; still needs a broader app matrix and packaged-Jarvis integration proof                                                                      |
+| Ghost OS             | Best turnkey loop candidate if recipes matter                     | MIT Swift, AX-first, MCP tools, recipes, local vision fallback, `ghost doctor` diagnostics                                          | Heavier product surface; macOS 14+/Swift 6.2, Python vision sidecar, and multi-GB model path may be more than Jarvis needs                                 |
+| screenpipe           | Observation and memory layer only                                 | MIT main repo, with an enterprise-licensed `ee/` area; records screen/audio/app context locally; captures AX tree with OCR fallback | Not a primary click/type engine; high privacy and storage burden for consumer default                                                                      |
+| Appium Mac2 Driver   | QA harness only                                                   | Apache-2.0; XCTest/WebDriver; deterministic app-under-test model                                                                    | Xcode/Appium setup friction; designed for tests, not user desktop operation                                                                                |
+| browser-use          | Web-only adjacent option                                          | MIT Python; browser automation agent and cloud/browser harness                                                                      | Does not solve native macOS app control                                                                                                                    |
+| Skyvern              | Web-only adjacent option                                          | Browser workflows with Playwright plus LLM/vision; useful for hosted web tasks                                                      | AGPL-3.0 for OSS repo and browser-only scope make it a poor native Jarvis foundation                                                                       |
+| Peekaboo             | Short-term bridge and fallback host                               | MIT Swift; already installed path; strong capture/control surface; MCP optional                                                     | Too low-level unless wrapped by strict planner/executor discipline                                                                                         |
+
+## Scoring Criteria
+
+Score each candidate 0-2 for the first bakeoff, where 0 fails, 1 is workable
+with risk, and 2 is product-shaped.
+
+- AX-first targeting: can it identify and act on UI elements without raw
+  coordinates?
+- Deterministic refs: can a model point to stable element/window ids from a
+  snapshot?
+- Background and focus behavior: can it act on the intended app while the user
+  keeps using the Mac, without stealing focus, breaking Stage Manager grouping,
+  minimizing the user's current app, or hitting the frontmost wrong app?
+- Swift/macOS embeddability: can Jarvis call or bundle it without a fragile
+  sidecar?
+- License and commercial fit: can it ship in a consumer product without legal
+  cleanup?
+- Setup friction: can a normal user get through permissions and install?
+- Failure messages: does it fail with actionable cause and recovery?
+- Jarvis permission model fit: can we explain and request only the permissions
+  needed for the requested action?
+
+## Recommended Next Bakeoff
+
+Do not build a custom GUI-control runtime yet.
+
+First run a narrow bakeoff against MacosUseSDK and agent-desktop. Add Ghost OS
+only if the team decides it wants a turnkey MCP agent loop or recipe layer.
+Keep screenpipe for observation/memory research, Appium Mac2 for QA, and
+browser-use/Skyvern for web-only workflows.
+
+Workflow each candidate must pass:
+
+1. Open or focus a safe app, preferably TextEdit or Notes.
+2. Identify the editable input without raw coordinates.
+3. Insert a nonce string by element ref or direct set-value API.
+4. Submit or perform one simple action, such as save, search, or create note.
+5. Re-observe and verify the nonce is visible in the intended app/window.
+6. Force a focus mismatch by bringing another app forward.
+7. Retry the action and confirm it either targets the intended window or fails
+   closed before acting.
+8. Record exact permission prompts, failure messages, and recovery steps.
+
+Suggested task prompt:
+
+```text
+Open TextEdit, create a new document, insert exactly
+JARVIS_GUI_BAKEOFF_<timestamp>, save nothing, and verify the text is visible.
+If TextEdit is not the active intended target, stop before typing.
+```
+
+Candidate command sketches:
+
+```bash
+# MacosUseSDK
+git clone https://github.com/mediar-ai/MacosUseSDK /tmp/MacosUseSDK
+cd /tmp/MacosUseSDK
+swift build
+swift run AppOpenerTool TextEdit
+swift run TraversalTool --visible-only <PID>
+
+# agent-desktop
+npx agent-desktop permissions --request
+npx agent-desktop launch TextEdit
+npx agent-desktop snapshot --app TextEdit -i --compact
+npx agent-desktop type @e5 --snapshot <snapshot_id> "JARVIS_GUI_BAKEOFF_<ts>"
+npx agent-desktop snapshot --app TextEdit -i --compact
+
+# Ghost OS, only if turnkey loop is in scope
+brew install ghostwright/ghost-os/ghost-os
+ghost setup
+ghost doctor
+```
+
+## Live Bakeoff Results: 2026-06-10
+
+Environment:
+
+- macOS with Accessibility and Screen Recording already granted to the terminal
+  process path used by the tools
+- `agent-desktop` 0.2.3 via `npx --yes agent-desktop`
+- MacosUseSDK cloned from `mediar-ai/MacosUseSDK` and built from source with
+  Swift 6.2.4
+- TextEdit temp file target:
+  `/tmp/jarvis-agent-desktop-bakeoff.txt`
+
+MacosUseSDK result: fail for Jarvis runtime use today.
+
+- `swift build` succeeded.
+- `swift run AppOpenerTool TextEdit` launched TextEdit but returned PID `-1`.
+- `swift run TraversalTool --visible-only 49498` rejected the real TextEdit PID
+  from `pgrep` with `No running application found with PID 49498`.
+- `swift run ActionTool --help` was unsafe: instead of printing help only, it
+  ran a hardcoded example that launched Messages and attempted global text
+  input.
+- Verdict: useful research code, but not an immediate Jarvis control foundation
+  without a wrapper and fixes. The current CLI behavior fails the fail-closed
+  requirement.
+
+agent-desktop result: pass for the narrow TextEdit workflow.
+
+- `npx --yes agent-desktop permissions` reported Accessibility and Screen
+  Recording as `granted`.
+- `npx --yes agent-desktop launch TextEdit` returned structured window data.
+- When TextEdit opened an `Open` dialog while Safari/Terminal remained
+  frontmost, `agent-desktop snapshot --app TextEdit -i --compact` still
+  returned a TextEdit snapshot with stable refs.
+- `agent-desktop click @e66 --snapshot s4zmrng7sof8k` clicked the `Cancel`
+  button by ref, not coordinates.
+- A temp file opened in TextEdit exposed its editor as `@e1` with value
+  `initial\n` and actions `SetValue`/`SetFocus`.
+- `agent-desktop set-value` updated `@e1` to
+  `JARVIS_GUI_BAKEOFF_20260610155950` through snapshot `svh6oxight3ob` while
+  Terminal stayed frontmost.
+- Explicit focus-mismatch proof: after bringing Safari front,
+  `agent-desktop set-value` updated `@e1` to
+  `JARVIS_GUI_BAKEOFF_FOCUS_20260610160100` through snapshot `s2b8mntx6foour`
+  while Safari stayed frontmost.
+- Final snapshot `s1q8la5sktljfw` matched
+  `JARVIS_GUI_BAKEOFF_FOCUS_20260610160100` in TextEdit.
+- Backing file remained `initial`, as expected, because the test did not save.
+
+Immediate conclusion:
+
+- Promote agent-desktop to the next integration spike.
+- Do not use MacosUseSDK directly in Jarvis until its CLI/runtime path can
+  return reliable PIDs, traverse known running app PIDs, and make help/read-only
+  commands side-effect-free.
+- Keep Peekaboo as the bridge/fallback while agent-desktop gets a broader app
+  matrix and packaged-Jarvis proof.
+
+## Real Task Probe: 2026-06-11
+
+Prompt used:
+
+```text
+Using the GUI-control runtime, open Safari to my Twitter/X home/front page, inspect only what is visible on the front page, then open the Claude app and send Claude a concise context summary of what was visible. Report back with what Claude said.
+Do not post, like, repost, reply, bookmark, unbookmark, follow, DM, open settings, or mutate Twitter/X account state.
+```
+
+Scope:
+
+- read-only on Twitter/X
+- Claude app handoff allowed only because the test explicitly asked for it
+- no bookmark/unbookmark action; that still requires a separate explicit go
+- no Telegram, Messages, Jarvis, `/Applications/Jarvis.app`, shared runtime, or
+  Codex Computer Use
+
+Result: no full pass.
+
+- Peekaboo 3.4.1 opened `https://x.com/home` in Safari and observed the X home
+  page read-only, but app-scoped Safari capture drifted to a locked Private
+  Browsing password window on a later observation. The run recovered by
+  targeting the exact X Safari window id, but that drift is a safety concern.
+- agent-desktop 0.2.3 observed the same X page through Safari window `w-99`
+  with stable window/ref targeting and avoided the locked Private Browsing
+  window.
+- Both tools stopped before Claude handoff because the Claude app opened as a
+  blank window with an `MCP mypc: Server disconnected` toast and exposed no safe
+  message composer. No prompt was sent to Claude, so there was no Claude reply.
+
+Visible X context captured:
+
+- X home page was logged in and visible at `https://x.com/home`.
+- The page showed Home navigation, `For you` selected, topic tabs including
+  Following, Build in Public, Engineering, `claude code`, Startup Community,
+  X Finance, AI Builders Collective, AI MVP Builders, and OpenClaw.
+- The post composer was visible as `Post text`; it was not clicked or edited.
+- Right rail showed `Subscribe to Premium`, Today's News / What's happening,
+  trends in Indonesia, and who-to-follow suggestions.
+
+Real-task conclusion:
+
+- Partial winner: agent-desktop, because it targeted the intended Safari/X
+  window more deterministically.
+
+## Real Task Rerun: 2026-06-11
+
+Reason for rerun: the user showed Claude open on the `Greeting` conversation
+with a visible `Write a message...` composer after the earlier blocked run.
+
+Scope stayed unchanged:
+
+- read-only on Twitter/X
+- no post, like, repost, reply, bookmark, unbookmark, follow, DM, settings,
+  profile/account menu, or Twitter/X account-state mutation
+- no Telegram, Messages, Jarvis, `/Applications/Jarvis.app`, shared runtime, or
+  Codex Computer Use
+- no Peekaboo `--analyze`
+
+Result: both runtimes completed the X-to-Claude handoff, but neither is clean
+enough to ship as an unsupervised consumer GUI-control default.
+
+Peekaboo 3.4.1 result: pass for the rerun, with guardrails.
+
+- Permissions were already granted for Screen Recording and Accessibility.
+- Safari was observed through exact window id `99`, titled `(1) Home / X`.
+  The known Private Browsing window `101` was left untouched.
+- Claude window id `2592` exposed the composer only after a deeper AX capture
+  with larger depth/element limits.
+- Peekaboo clicked the `Write a message...` element ref from the Claude
+  snapshot, typed the labelled `[PEEKABOO GUI BENCHMARK RERUN]` prompt into
+  Claude, and submitted it.
+- Claude visibly replied:
+  `Confirmed - X home page shows the "For you" feed with topic tabs including OpenClaw, post composer visible, right rail with Premium upsell, WWDC/AI news items, and Indonesian trends.`
+- Safety issue: Peekaboo still needs strict exact-window targeting and deeper
+  AX limits for Claude; app-scoped Safari use remains too risky around the
+  adjacent locked Private Browsing window.
+
+agent-desktop 0.2.3 result: pass for the rerun, but with input/submit
+friction.
+
+- Permissions were already granted for Screen Recording and Accessibility.
+- Safari was observed through exact window ref `w-99`, titled `(1) Home / X`.
+- Claude composer was cleanly exposed as a real textfield ref with
+  `Write your prompt to Claude`, plus `SetValue` and `SetFocus`.
+- `type` inserted the labelled `[AGENT-DESKTOP GUI BENCHMARK RERUN]` prompt,
+  but initially duplicated text and preserved placeholder text in the composer.
+- Pressing `return` did not submit. AX-clicking the visible `Send message`
+  button reported success but did not submit. `cmd+return` targeted to Claude
+  finally submitted.
+- Claude visibly replied:
+  `Confirmed - X home shows "For you" feed, topic tabs including OpenClaw, untouched post composer, right rail with Premium upsell, news on WWDC and AI worker fatigue, Indonesian trends (Donat, #Pakuhaji, Pemuda), and Who to follow suggestions.`
+- Safety issue: no X/Twitter mutation occurred, but Claude input fidelity and
+  submit semantics need wrapper handling before this can be trusted in a
+  product loop.
+
+Rerun winner: Peekaboo, narrowly, for this specific real handoff.
+
+Reason:
+
+- both runtimes safely observed X read-only
+- both sent to Claude and captured a visible Claude reply
+- Peekaboo needed deeper AX configuration but completed the Claude handoff more
+  directly once the composer was targetable
+- agent-desktop had cleaner structured targeting overall, but its Claude
+  text-entry path duplicated input and needed a keyboard-submit workaround
+
+Current recommendation:
+
+- Keep consumer GUI control deferred from the first MVP.
+- Keep agent-desktop as the next integration spike for deterministic
+  window/ref targeting and fail-closed behavior.
+- Keep Peekaboo as the bridge/fallback runtime for capture and Claude handoff
+  proof, but only under exact app/window/snapshot targeting.
+- Treat active-user desktop use as a first-class benchmark condition. This
+  rerun happened while the Mac was in normal desktop use with Stage Manager
+  active, so it is useful product signal, but future scoring must distinguish
+  isolated-run success from background-safe success that does not disturb the
+  user's foreground work.
+- Before shipping any GUI-control lane, wrap both runtimes behind a planner that
+  verifies target window, target element, post-action state, and account-mutation
+  risk after every step.
+- The Claude-composer gate is now open for this machine state, but the
+  production gate remains closed until submit behavior and input fidelity are
+  wrapped and retested.
+- Do not treat this as proof that either runtime can complete arbitrary
+  Twitter/X-to-Claude workflows without supervision.
+
+## Codex + agent-desktop Direct Benchmark: 2026-06-11
+
+Scope:
+
+- direct Codex use of `npx --yes agent-desktop`
+- no custom wrapper glue
+- no Peekaboo, Codex Computer Use, Browser/Chrome plugins, AppleScript/JXA, or
+  `osascript`
+- same real task: inspect visible Safari/X home read-only, then send Claude a
+  labelled summary
+
+Result: pass with caveats.
+
+- `agent-desktop` 0.2.3 reported Accessibility and Screen Recording granted.
+- Codex targeted Safari window `w-99`, selected the existing `(1) Home / X`
+  tab by structured tab ref, and observed `https://x.com/home` read-only.
+- Visible X context included `For you`, topic tabs through OpenClaw, untouched
+  post composer, AI/Anthropic-related feed posts, Premium upsell, WWDC and AI
+  worker-fatigue news, Indonesia trends, and Who to follow suggestions.
+- Claude exposed the composer as a structured textfield ref. The labelled
+  `[CODEX + AGENT-DESKTOP DIRECT BENCHMARK]` message was submitted, and Claude
+  visibly replied with a confirmation summary.
+- Captured Claude reply text through AX title:
+  `Confirmed - X home shows "For you" feed, topic tabs including OpenClaw, untouched composer, AI/Anthropic posts in feed, right rail with Premium upsell, WWDC an...`
+
+Important fidelity issues:
+
+- `set-value` on Claude returned `ACTION_FAILED`, but a later snapshot showed
+  the message had actually been inserted.
+- Clicking Claude's visible `Send message` button by ref returned success but
+  did not submit.
+- Targeted `cmd+return --app Claude` submitted successfully.
+- Claude's window id changed from `w-0` to `w-2592` after submit.
+- Unfiltered `list-windows` sometimes omitted Claude while app-filtered
+  `list-windows --app Claude` found it.
+- AX and screenshot capture could prove a reply existed, but extracting the
+  exact full reply text was not reliable: AX truncated it, Copy returned an
+  empty clipboard, and the screenshot was slow and not readable enough for full
+  text recovery.
+
+Focus and desktop disturbance:
+
+- Terminal/tmux was focused before the run and again after most observations.
+- Selecting the Safari X tab by ref did not leave Safari focused.
+- Focusing Claude's composer likely stole focus briefly; later Terminal was
+  focused again.
+- No visible Stage Manager regrouping or window move/minimize was observed, but
+  Claude window ids and all-window visibility changed.
+- Clipboard was touched during reply extraction and restored.
+
+Recommendation delta:
+
+- Direct Codex can drive `agent-desktop` without wrapper glue for this bounded
+  real task.
+- Raw direct use is still not product-safe because command success/failure can
+  diverge from actual UI state.
+- Keep `agent-desktop` as the next low-level integration spike, but require a
+  thin verifier around every action: target window, target element, intended
+  value, post-action state, and mutation risk must be checked before continuing.
+- Claude needs an app-specific submit recipe before any consumer loop depends
+  on it.
+- Wrapper kill switch: if the verifier layer becomes duct tape around repeated
+  false positives, false negatives, focus theft, stale refs, or app-specific
+  hacks, stop polishing the wrapper and build native Swift/OpenClaw Computer Use
+  from scratch.
+
+Reusable real-task checklist:
+
+1. Verify tool version and permissions before the run.
+2. Confirm intended app and window before every input or click.
+3. Prefer app/window/ref/snapshot targeting over coordinates.
+4. Stop if Safari is not logged in to X or shows auth, CAPTCHA, payment,
+   permission, password, passkey, or sensitive account flows.
+5. Do not open X DMs, notifications, profile, bookmarks, settings, account
+   menus, or mutation controls unless a separate explicit approval covers that
+   exact action.
+6. For Claude, stop if login, billing, settings, permission, blank-window, or
+   no-composer states appear.
+7. Run at least one pass while the user actively uses another app with Stage
+   Manager enabled; score whether the runtime preserves the user's foreground
+   workspace and acts on the background target safely.
+8. Stage Manager same-stage preservation is a hard criterion, not a nice-to-have:
+   the runtime must either keep target windows in the user's active stage or act
+   safely in the background without kicking the user's foreground work away.
+9. Peekaboo may be used as screenshot/UI-map fallback, but not as default
+   planner or unscoped actor.
+10. Codex Computer Use may be used as a calibration benchmark for quality, but
+    stays out of scope as a reusable Jarvis backend.
+
+## Codex Computer Use Calibration Benchmark: 2026-06-11
+
+Scope:
+
+- Codex Computer Use only for GUI actions
+- same real task: inspect existing Safari/X home read-only, then send Claude a
+  labelled summary
+- `cua-guard` acquired before the first Computer Use call and released after
+  final verification
+- no Peekaboo, agent-desktop, Browser/Chrome plugin, AppleScript/JXA,
+  `osascript`, X mutation, repo edit, or commit
+
+Result: pass with caveats.
+
+- Start/end: `2026-06-11 16:17:09 WITA` to `2026-06-11 16:18:44 WITA`.
+- Elapsed GUI benchmark time: 95 seconds.
+- Approximate Computer Use calls: 10, including one refused Terminal state read
+  and one stale-state send warning/retry.
+- Safari/X was already running with an existing `(1) Home / X` tab. Computer Use
+  selected that tab, observed `https://x.com/home`, and did not mutate X.
+- Claude was already running on the benchmark thread. Computer Use set the
+  labelled `[CODEX COMPUTER USE WATCH TEST]` message directly into the composer,
+  retried after a stale-state warning, sent exactly once, and verified a visible
+  Claude reply.
+- Clipboard was not touched.
+
+Important fidelity issues:
+
+- Computer Use refused `get_app_state` for Terminal because Terminal is
+  safety-blocked. `list_apps` still established Terminal as the initial
+  frontmost app.
+- The first Claude send click returned a stale-state warning: "The user changed
+  Claude." Re-querying Claude before retry prevented a double-send.
+- Computer Use foregrounded Safari and Claude. Stage Manager state was not
+  directly exposed, and the run did not prove same-stage preservation. No visible
+  app ejection or rearrangement was observed in the screenshots, but this still
+  needs a dedicated same-stage test.
+
+Recommendation delta:
+
+- Codex Computer Use is the quality bar: fewer steps, direct value insertion,
+  no clipboard use, no duplicate paste recovery, and understandable stale-state
+  recovery.
+- It is not the reusable Jarvis backend for this plan.
+- `agent-desktop` remains the next integration spike because it is reusable and
+  deterministic enough to wrap, but the wrapper must aim for Computer Use-level
+  ergonomics and fail-closed behavior.
+- Screenshot truth corrected the earlier Stage Manager uncertainty: the user's
+  visual observation showed target apps remained usable behind or alongside
+  Terminal, with a visible virtual pointer, low command count, and clean
+  post-action proof. That makes the target behavior sharper: make
+  `agent-desktop` approach Codex Computer Use behavior, not copy raw
+  `agent-desktop` behavior as-is.
+- Peekaboo remains fallback/salvage: useful capture and backup actuation, not a
+  default product driver.
+- If the agent-desktop verifier starts growing toward Peekaboo-style duct tape,
+  stop and build native Swift/OpenClaw Computer Use instead.
+
+## Wrapper Hardening Slice: 2026-06-11
+
+The next wrapper slice promoted concrete failures into generic primitives:
+
+- AX `description`, static visible text, and bounds are preserved in snapshots.
+- `labelIncludes` searches label/name/title/description, while
+  `valueIncludes` stays for placeholders/current values.
+- `set-value` treats runtime failure as advisory and succeeds only if
+  re-observation proves the value landed.
+- `click` treats runtime success as advisory and fails if post-state proof is
+  missing or unchanged.
+- `press --app <App> --keys <combo>` is now a first-class verified action for
+  Claude-like submit flows where AX-clicking the button is unreliable.
+- `scroll` is a first-class verified action on real element refs.
+- The `x-to-claude` benchmark uses the wrapper only and records direct runtime
+  escape use plus reply-text extraction.
+- Reply extraction is now tied to a fresh benchmark reply token, so stale Claude
+  text or app chrome cannot count as success.
+- If AX-visible text cannot expose the reply, the wrapper may use a controlled
+  clipboard copy/restore fallback, but this is recorded as clipboard use and
+  remains below the Codex Computer Use no-clipboard bar.
+- The benchmark now reports `replyExtractionMethod` and `qualityGate`, so a
+  wrapper-only completion can pass functionally while still failing the stricter
+  Codex Computer Use parity gate.
+- The benchmark also records frontmost-app telemetry before and after the run;
+  leaving a different app frontmost is treated as workspace debt and blocks
+  Codex Computer Use parity.
+- When the runtime can identify the originally focused window, the benchmark now
+  attempts to restore it and counts that restore as an action.
+- The benchmark resolves Safari/X by exact `Home / X` window id when available
+  and fails closed before Claude if the X window is missing or ambiguous.
+- The benchmark can now open `https://x.com/home` with explicit `--open-x-home`
+  approval, then waits for and records the exact selected Safari window id.
+- `--require-codex-parity` is available for decision gates so a functional pass
+  with debt exits nonzero instead of being mistaken for Codex Computer Use
+  parity.
+- Parity-required runs disable clipboard fallback; explicit
+  `--no-clipboard-fallback` is available when the test must prove AX-visible
+  Claude reply extraction.
+
+This does not change the consumer-MVP decision: GUI control remains deferred
+until live proof beats the Codex Computer Use quality bar.
+
+## Recommendation
+
+Default path:
+
+1. Use agent-desktop for the next Jarvis GUI-control integration spike.
+2. Keep Peekaboo as the immediate fallback/bridge host, with strict scoped
+   actions and no default `--analyze`.
+3. Use Codex Computer Use as the benchmark for what good should feel like, not
+   as the reusable Jarvis backend.
+4. Revisit MacosUseSDK only after its direct CLI path is fail-closed and
+   reliable on known running app PIDs.
+5. Evaluate Ghost OS only if Jarvis wants a prebuilt MCP loop, recipes, and
+   local vision fallback.
+6. Treat screenpipe as optional observation/memory, not a click/type engine.
+7. Treat Appium Mac2 as QA-only.
+8. Use browser-use or Skyvern only for browser surfaces.
+
+The 80/20 next slice is not "invent computer use". It is proving whether an
+AX-first runtime can complete one safe workflow while refusing to type into the
+wrong app and preserving the user's Stage Manager workspace.
+
+Do not let that 80/20 slice become permanent duct tape. If the wrapper needs a
+growing pile of one-off repairs to paper over bad action semantics, graduate the
+work into a native Swift/OpenClaw Computer Use runtime instead of continuing to
+patch around the underlying control layer.
+
+## Sources Checked
+
+- `https://github.com/openclaw/Peekaboo`
+- `https://github.com/mediar-ai/MacosUseSDK`
+- `https://github.com/mediar-ai/mcp-server-macos-use`
+- `https://github.com/lahfir/agent-desktop`
+- `https://github.com/ghostwright/ghost-os`
+- `https://github.com/screenpipe/screenpipe`
+- `https://github.com/appium/appium-mac2-driver`
+- `https://github.com/browser-use/browser-use`
+- `https://github.com/Skyvern-AI/skyvern`
+
+## Non-Goals
+
+- no new GUI-control runtime implementation in this pass
+- no default consumer onboarding change for desktop automation yet
+- no shared gateway restart, deployment, or packaged-app mutation
+- no use of the local Codex Computer Use plugin as a reusable Jarvis backend

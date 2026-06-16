@@ -14,6 +14,10 @@ export type SkillInstallSpec = {
   extract?: boolean;
   stripComponents?: number;
   targetDir?: string;
+  versionCommand?: string[];
+  versionRegex?: string;
+  minVersion?: string;
+  recommendedVersion?: string;
 };
 
 export type OpenClawSkillMetadata = {

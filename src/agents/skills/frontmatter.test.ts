@@ -26,10 +26,17 @@ describe("resolveOpenClawMetadata install validation", () => {
   it("accepts safe install specs", () => {
     const install = resolveInstall({
       metadata:
-        '{"openclaw":{"install":[{"kind":"brew","formula":"python@3.12"},{"kind":"node","package":"@scope/pkg@1.2.3"},{"kind":"go","module":"example.com/tool/cmd@v1.2.3"},{"kind":"uv","package":"uvicorn[standard]==0.31.0"},{"kind":"download","url":"https://example.com/tool.tar.gz"}]}}',
+        '{"openclaw":{"install":[{"kind":"brew","formula":"python@3.12","versionCommand":["python3","--version"],"versionRegex":"Python (?<version>[0-9.]+)","minVersion":"3.12.0","recommendedVersion":"3.12.1"},{"kind":"node","package":"@scope/pkg@1.2.3"},{"kind":"go","module":"example.com/tool/cmd@v1.2.3"},{"kind":"uv","package":"uvicorn[standard]==0.31.0"},{"kind":"download","url":"https://example.com/tool.tar.gz"}]}}',
     });
     expect(install).toEqual([
-      { kind: "brew", formula: "python@3.12" },
+      {
+        kind: "brew",
+        formula: "python@3.12",
+        versionCommand: ["python3", "--version"],
+        versionRegex: "Python (?<version>[0-9.]+)",
+        minVersion: "3.12.0",
+        recommendedVersion: "3.12.1",
+      },
       { kind: "node", package: "@scope/pkg@1.2.3" },
       { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
       { kind: "uv", package: "uvicorn[standard]==0.31.0" },
@@ -63,5 +70,13 @@ describe("resolveOpenClawMetadata install validation", () => {
       metadata: '{"openclaw":{"install":[{"kind":"download","url":"file:///tmp/payload.tgz"}]}}',
     });
     expect(install).toBeUndefined();
+  });
+
+  it("drops unsafe version lifecycle fields but keeps the installer", () => {
+    const install = resolveInstall({
+      metadata:
+        '{"openclaw":{"install":[{"kind":"brew","formula":"wget","versionCommand":["sh","-c","wget --version"],"versionRegex":"(","minVersion":"latest"}]}}',
+    });
+    expect(install).toEqual([{ kind: "brew", formula: "wget" }]);
   });
 });
