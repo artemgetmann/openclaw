@@ -52,6 +52,25 @@ test_noops_when_koffi_absent() {
   pass "noops when Koffi is absent"
 }
 
+test_prunes_pnpm_virtual_store_koffi() {
+  local node_modules_dir="$TMP_DIR/pnpm-node-modules"
+  local koffi_pkg_dir="$node_modules_dir/.pnpm/koffi@2.15.1/node_modules"
+
+  make_koffi_triplet "$koffi_pkg_dir" darwin_arm64
+  make_koffi_triplet "$koffi_pkg_dir" darwin_x64
+  make_koffi_triplet "$koffi_pkg_dir" linux_arm64
+  make_koffi_triplet "$koffi_pkg_dir" openbsd_x64
+
+  openclaw_prune_bundled_koffi_non_macos "$node_modules_dir"
+
+  [[ -f "$koffi_pkg_dir/koffi/build/koffi/darwin_arm64/koffi.node" ]] || fail "pnpm darwin_arm64 addon was pruned"
+  [[ -f "$koffi_pkg_dir/koffi/build/koffi/darwin_x64/koffi.node" ]] || fail "pnpm darwin_x64 addon was pruned"
+  [[ ! -e "$koffi_pkg_dir/koffi/build/koffi/linux_arm64" ]] || fail "pnpm linux_arm64 addon was kept"
+  [[ ! -e "$koffi_pkg_dir/koffi/build/koffi/openbsd_x64" ]] || fail "pnpm openbsd_x64 addon was kept"
+
+  pass "prunes pnpm virtual-store Koffi triplets"
+}
+
 test_fails_when_required_macos_triplet_missing() {
   local node_modules_dir="$TMP_DIR/missing-macos-node-modules"
 
@@ -67,4 +86,5 @@ test_fails_when_required_macos_triplet_missing() {
 
 test_prunes_only_non_macos_triplets
 test_noops_when_koffi_absent
+test_prunes_pnpm_virtual_store_koffi
 test_fails_when_required_macos_triplet_missing
