@@ -9,8 +9,9 @@ storage pointers.
 
 Use this document for launch execution state only. Keep beta counts in
 `docs/consumer/project-status.md`. Keep launch package, pricing, copy, and
-artifact truth in `docs/consumer/jarvis-launch-package.md`. Keep long-form
-strategy/history in `docs/consumer/archive/jarvis-consumer-launch-plan-history-20260613.md`.
+artifact truth in `docs/consumer/jarvis-launch-package.md`. Use
+`docs/jarvis/README.md` for the product-doc map. Keep long-form
+strategy/history in `docs/consumer/archive/`.
 
 ## Now
 
@@ -104,7 +105,11 @@ mission needs it.
 - Launch package history:
   `docs/consumer/archive/jarvis-launch-package-history-20260613.md`
 - Gate2 closeout details:
-  `docs/consumer/jarvis-consumer-rc-closeout-20260606.md`
+  `docs/consumer/archive/jarvis-consumer-rc-closeout-20260606.md`
+- Local-first GTM strategy:
+  `docs/consumer/archive/openclaw-consumer-go-to-market-plan-20260422.md`
+- Historical investor framing:
+  `docs/consumer/archive/openclaw-consumer-investor-brief-20260422.md`
 - Legacy execution docs:
   `docs/consumer/archive/openclaw-consumer-execution-spec.md`
 
@@ -113,3 +118,4 @@ Examples of cold-storage items that are still useful but not active obligations:
 - `/visibility off|on|full` replacing developer-facing `/verbose` language
 - Claude Code/model-picker cleanup
 - Telegram group/thread/forum setup
+- safety profiles, confirmation gates, activity timeline, and panic pause

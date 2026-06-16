@@ -1,7 +1,12 @@
 # OpenClaw Consumer — Go-to-Market Plan
 
 Last updated: 2026-04-22
-Status: working recommendation
+Status: archived strategy reference
+
+Archive note: preserved as local-first GTM strategy context. Current launch
+mission lives in `docs/research/jarvis-consumer-launch-plan.md`; current package,
+pricing, and copy truth lives in `docs/consumer/jarvis-launch-package.md`. Do
+not use this file as an active launch tracker.
 
 ## Positioning
 

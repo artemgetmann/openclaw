@@ -3,6 +3,11 @@
 Status: historical trusted-tester proof
 Last updated: 2026-06-10
 
+Archive note: preserved as Gate2 proof history only. Current launch truth lives
+in `docs/research/jarvis-consumer-launch-plan.md` and current package truth lives
+in `docs/consumer/jarvis-launch-package.md`. Do not use this file as an active
+release tracker.
+
 Purpose: preserve the useful release-gate evidence from the old RC lane without
 copying stale scripts, package metadata, or packaging instructions.
 
@@ -43,6 +48,7 @@ Accepted non-blockers:
 Boundary:
 
 - The Gate2 proof app is not the shipped Jarvis artifact.
-- The current shipped tester package is the `v2026.3.17` Jarvis release.
+- The current trusted-tester package is tracked in
+  `docs/consumer/jarvis-launch-package.md`.
 - Broader public readiness is still gated by `ai.jarvis.mac` identity
   migration, real Sparkle update-cycle proof, and first real tester feedback.
