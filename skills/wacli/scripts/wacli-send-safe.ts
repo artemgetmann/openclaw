@@ -16,6 +16,7 @@ type Flags = {
   file?: string;
   caption?: string;
   timeoutMs: number;
+  lockWaitMs: number;
   settleMs: number;
   graceMs: number;
 };
@@ -50,7 +51,7 @@ type SendReceipt = {
 };
 
 type SendVerification = {
-  status: "verified_local" | "unverified";
+  status: "verified_local" | "verified_local_after_failed_exit" | "unverified";
   chatJid?: string;
   messageId?: string;
   reason?: string;
@@ -86,8 +87,8 @@ type Deps = {
 
 function usage() {
   console.error(`Usage:
-  wacli-send-safe.sh text --to <recipient> --message <text> [--store <dir>] [--json] [--timeout-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
-  wacli-send-safe.sh file --to <recipient> --file <path> [--caption <text>] [--store <dir>] [--json] [--timeout-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
+  wacli-send-safe.sh text --to <recipient> --message <text> [--store <dir>] [--json] [--timeout-ms <ms>] [--lock-wait-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
+  wacli-send-safe.sh file --to <recipient> --file <path> [--caption <text>] [--store <dir>] [--json] [--timeout-ms <ms>] [--lock-wait-ms <ms>] [--settle-ms <ms>] [--grace-ms <ms>]
 
 Notes:
   - If the recorded OpenClaw wacli sync owner is running, this helper pauses it, sends, then restores it.
@@ -121,7 +122,8 @@ function parseArgs(argv: string[]): Flags {
     json: false,
     storeDir: defaultStoreDir(),
     to: "",
-    timeoutMs: 15_000,
+    timeoutMs: 90_000,
+    lockWaitMs: 180_000,
     settleMs: 15_000,
     graceMs: 5_000,
   };
@@ -183,6 +185,15 @@ function parseArgs(argv: string[]): Flags {
           throw new Error("--timeout-ms requires a value");
         }
         flags.timeoutMs = parsePositiveInt(next, "--timeout-ms");
+        index += 1;
+        break;
+      }
+      case "--lock-wait-ms": {
+        const next = rest[index + 1];
+        if (!next) {
+          throw new Error("--lock-wait-ms requires a value");
+        }
+        flags.lockWaitMs = parsePositiveInt(next, "--lock-wait-ms");
         index += 1;
         break;
       }
@@ -307,6 +318,79 @@ function containsLockError(raw: string) {
   return raw.toLowerCase().includes("store is locked");
 }
 
+function sendLockDir(storeDir: string) {
+  return path.join(storeDir, ".openclaw-send-safe.lock");
+}
+
+function isPidRunning(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
+    return code === "EPERM";
+  }
+}
+
+function readLockOwner(lockDir: string): { pid?: number; acquiredAt?: string } | undefined {
+  try {
+    return parseJson<{ pid?: number; acquiredAt?: string }>(
+      fs.readFileSync(path.join(lockDir, "owner.json"), "utf8"),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+async function acquireStoreSendLock(storeDir: string, waitMs: number, deps: Pick<Deps, "sleep">) {
+  fs.mkdirSync(storeDir, { recursive: true });
+  const lockDir = sendLockDir(storeDir);
+  const deadline = Date.now() + waitMs;
+
+  while (Date.now() <= deadline) {
+    try {
+      fs.mkdirSync(lockDir);
+      fs.writeFileSync(
+        path.join(lockDir, "owner.json"),
+        JSON.stringify(
+          { pid: process.pid, acquiredAt: new Date().toISOString(), storeDir },
+          null,
+          2,
+        ),
+      );
+      return {
+        release() {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+        },
+      };
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
+      if (code !== "EEXIST") {
+        throw error;
+      }
+
+      const owner = readLockOwner(lockDir);
+      if (typeof owner?.pid === "number" && !isPidRunning(owner.pid)) {
+        // A crashed helper can leave the coordination directory behind. Only
+        // clear it when the recorded owner PID is definitely gone.
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        continue;
+      }
+
+      await deps.sleep(250);
+    }
+  }
+
+  const owner = readLockOwner(lockDir);
+  const ownerHint =
+    typeof owner?.pid === "number"
+      ? ` Current owner PID: ${String(owner.pid)}.`
+      : " Current owner is unknown.";
+  throw new Error(
+    `Timed out waiting ${String(waitMs)}ms for safe-send lock at ${lockDir}.${ownerHint}`,
+  );
+}
+
 function buildSendArgs(flags: Flags) {
   const args = ["--store", flags.storeDir, "send", flags.command, "--to", flags.to];
   if (flags.command === "text") {
@@ -412,13 +496,17 @@ async function verifyAcceptedSendInLocalHistory(params: {
   storeDir: string;
   stdout: string;
   stderr: string;
+  to?: string;
+  command?: SendCommand;
+  message?: string;
+  caption?: string;
+  startedAtMs?: number;
+  endedAtMs?: number;
+  allowTargetTextFallback?: boolean;
 }): Promise<SendVerification> {
   const receipt = parseSendReceipt(params.stdout, params.stderr);
   if (!receipt.chatJid || !receipt.messageId) {
-    return {
-      status: "unverified",
-      reason: "wacli send output did not include a chat JID and message ID to verify.",
-    };
+    return await verifyFailedSendByTargetAndText(params);
   }
 
   const dbPath = path.join(params.storeDir, "wacli.db");
@@ -464,6 +552,101 @@ async function verifyAcceptedSendInLocalHistory(params: {
   }
 }
 
+function candidateChatJids(rawTo: string | undefined) {
+  if (!rawTo) {
+    return [];
+  }
+  const candidates = new Set<string>([rawTo]);
+  const digits = rawTo.replace(/\D/g, "");
+  if (digits) {
+    candidates.add(`${digits}@s.whatsapp.net`);
+  }
+  return [...candidates];
+}
+
+function fallbackSendText(params: { command?: SendCommand; message?: string; caption?: string }) {
+  return params.command === "file" ? params.caption : params.message;
+}
+
+async function verifyFailedSendByTargetAndText(params: {
+  storeDir: string;
+  to?: string;
+  command?: SendCommand;
+  message?: string;
+  caption?: string;
+  startedAtMs?: number;
+  endedAtMs?: number;
+  allowTargetTextFallback?: boolean;
+}): Promise<SendVerification> {
+  if (!params.allowTargetTextFallback) {
+    return {
+      status: "unverified",
+      reason: "wacli send output did not include a chat JID and message ID to verify.",
+    };
+  }
+
+  const text = fallbackSendText(params);
+  const chats = candidateChatJids(params.to);
+  if (!text || chats.length === 0 || params.startedAtMs == null || params.endedAtMs == null) {
+    return {
+      status: "unverified",
+      reason:
+        "Raw wacli send failed and there was not enough target/message/time data to reconcile local history.",
+    };
+  }
+
+  const dbPath = path.join(params.storeDir, "wacli.db");
+  let db: InstanceType<typeof DatabaseSync> | undefined;
+
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    db.exec("PRAGMA busy_timeout = 1000");
+    const startSeconds = Math.floor((params.startedAtMs - 5_000) / 1000);
+    const endSeconds = Math.ceil((params.endedAtMs + 5_000) / 1000);
+    const placeholders = chats.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `SELECT chat_jid, msg_id
+         FROM messages
+         WHERE from_me = 1
+           AND ts BETWEEN ? AND ?
+           AND chat_jid IN (${placeholders})
+           AND (text = ? OR display_text = ? OR media_caption = ?)
+         ORDER BY ts DESC, rowid DESC
+         LIMIT 2`,
+      )
+      .all(startSeconds, endSeconds, ...chats, text, text, text) as Array<{
+      chat_jid: string;
+      msg_id: string;
+    }>;
+
+    if (rows.length === 1) {
+      return {
+        status: "verified_local_after_failed_exit",
+        chatJid: rows[0].chat_jid,
+        messageId: rows[0].msg_id,
+        reason:
+          "Raw wacli send failed or timed out, but exactly one matching outbound row was found in local history.",
+      };
+    }
+
+    return {
+      status: "unverified",
+      reason:
+        rows.length === 0
+          ? `No matching outbound row found in ${dbPath} after failed raw send.`
+          : `Multiple matching outbound rows found in ${dbPath}; leaving send unverified.`,
+    };
+  } catch (error) {
+    return {
+      status: "unverified",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    db?.close();
+  }
+}
+
 function buildSuccessMessage(
   flags: Flags,
   ownerPaused: boolean,
@@ -478,6 +661,9 @@ function buildSuccessMessage(
 
   if (verification.status === "verified_local") {
     return `${acceptedPrefix} and verified it in local history.`;
+  }
+  if (verification.status === "verified_local_after_failed_exit") {
+    return `Raw wacli send did not exit cleanly, but the outbound ${flags.command} was found exactly once in local history.`;
   }
 
   const reason = verification.reason ? ` Reason: ${verification.reason}` : "";
@@ -511,10 +697,6 @@ function failedPauseVerification() {
   );
 }
 
-function failedSendVerification() {
-  return unverified("Raw wacli send failed before local history verification.");
-}
-
 function missingSendResultVerification() {
   return unverified("Raw wacli send did not produce a result.");
 }
@@ -525,6 +707,15 @@ function resolveDeps(deps: Partial<Deps> | undefined): Deps {
 
 async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Promise<SendReport> {
   const deps = resolveDeps(depsOverrides);
+  const lock = await acquireStoreSendLock(flags.storeDir, flags.lockWaitMs, deps);
+  try {
+    return await runOwnerSafeSendLocked(flags, deps);
+  } finally {
+    lock.release();
+  }
+}
+
+async function runOwnerSafeSendLocked(flags: Flags, deps: Deps): Promise<SendReport> {
   const ownerBefore = await readOwnerStatus(flags, deps);
   const shouldPauseOwner =
     ownerBefore?.ownerRunning === true && ownerBefore.ownerCommandMatches === true;
@@ -534,6 +725,8 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
   let retryAttempted = false;
   let sendResult: CommandResult | undefined;
   let sendRaw = "";
+  let sendStartedAtMs: number | undefined;
+  let sendEndedAtMs: number | undefined;
   let ownerStop: LiveStatus | undefined;
   let pauseFailureReport: SendReport | undefined;
 
@@ -565,13 +758,17 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
 
   try {
     if (!pauseFailureReport) {
+      sendStartedAtMs = Date.now();
       sendResult = await sendOnce(flags, deps);
+      sendEndedAtMs = Date.now();
       sendRaw = `${sendResult.stdout}\n${sendResult.stderr}`;
 
       if (!sendResult.ok && shouldPauseOwner && containsLockError(sendRaw)) {
         retryAttempted = true;
         await waitForOwnerRelease(flags, deps, ownerStop?.stoppedPid);
+        sendStartedAtMs = Date.now();
         sendResult = await sendOnce(flags, deps);
+        sendEndedAtMs = Date.now();
         sendRaw = `${sendResult.stdout}\n${sendResult.stderr}`;
       }
     }
@@ -605,6 +802,51 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
   }
 
   if (!sendResult.ok) {
+    const verification = await deps.verifySend({
+      storeDir: flags.storeDir,
+      stdout: sendResult.stdout,
+      stderr: sendResult.stderr,
+      to: flags.to,
+      command: flags.command,
+      message: flags.message,
+      caption: flags.caption,
+      startedAtMs: sendStartedAtMs,
+      endedAtMs: sendEndedAtMs ?? Date.now(),
+      allowTargetTextFallback: true,
+    });
+
+    if (verification.status === "verified_local_after_failed_exit") {
+      const reconciledStatus: SendReport["status"] =
+        ownerPaused && ownerRestored
+          ? "sent_with_owner_restored"
+          : ownerPaused && !ownerRestored
+            ? "sent_with_restore_warning"
+            : "sent";
+      return {
+        ok: true,
+        status: reconciledStatus,
+        command: flags.command,
+        to: flags.to,
+        ownerPaused,
+        ownerRestored,
+        ownerBefore,
+        ownerStop,
+        send: {
+          exitCode: sendResult.exitCode,
+          stdout: sendResult.stdout,
+          stderr: sendResult.stderr,
+          timedOut: sendResult.timedOut,
+        },
+        verification,
+        retryAttempted,
+        message: buildSuccessMessage(flags, ownerPaused, ownerRestored, verification),
+        error:
+          sendResult.stderr.trim() ||
+          sendResult.stdout.trim() ||
+          `wacli send exited with ${String(sendResult.exitCode)}`,
+      };
+    }
+
     return {
       ok: false,
       status: "failed",
@@ -620,7 +862,7 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
         stderr: sendResult.stderr,
         timedOut: sendResult.timedOut,
       },
-      verification: failedSendVerification(),
+      verification,
       retryAttempted,
       message: containsLockError(sendRaw)
         ? "WhatsApp send failed because the store is still locked."
@@ -643,6 +885,12 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
     storeDir: flags.storeDir,
     stdout: sendResult.stdout,
     stderr: sendResult.stderr,
+    to: flags.to,
+    command: flags.command,
+    message: flags.message,
+    caption: flags.caption,
+    startedAtMs: sendStartedAtMs,
+    endedAtMs: sendEndedAtMs,
   });
 
   return {
@@ -677,6 +925,14 @@ function emit(report: SendReport, asJson: boolean) {
   console.log(`owner_paused=${String(report.ownerPaused)}`);
   console.log(`owner_restored=${String(report.ownerRestored)}`);
   console.log(`retry_attempted=${String(report.retryAttempted)}`);
+  console.log(`send_exit_code=${String(report.send.exitCode)}`);
+  console.log(`send_timed_out=${String(report.send.timedOut)}`);
+  if (report.send.stdout) {
+    console.log(`send_stdout=${JSON.stringify(report.send.stdout)}`);
+  }
+  if (report.send.stderr) {
+    console.log(`send_stderr=${JSON.stringify(report.send.stderr)}`);
+  }
   console.log(`verification_status=${report.verification.status}`);
   if (report.verification.chatJid) {
     console.log(`verification_chat_jid=${report.verification.chatJid}`);
