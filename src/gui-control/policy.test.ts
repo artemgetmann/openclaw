@@ -123,4 +123,37 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("does not allow app Telegram");
   });
+
+  it("allows approved Apple Notes writes with the Notes policy", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "Notes", windowTitle: "Notes" },
+      snapshot: snapshot({ appName: "Notes", windowTitle: "Notes", summary: "Note body ready" }),
+      element: { ref: "@note-body", role: "textArea", label: "Note body" },
+      reason: "Write approved benchmark text into Apple Notes.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("notes_write"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+    expect(decision.requiredCapability).toBe("write_text_to_target");
+  });
+
+  it("does not let the Notes policy write to assistant apps", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "Claude", windowTitle: "Claude" },
+      snapshot: snapshot({ appName: "Claude", windowTitle: "Claude", summary: "Composer ready" }),
+      element: { ref: "@input", role: "textfield", label: "Write your prompt to Claude" },
+      reason: "Write benchmark text into Claude.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("notes_write"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("does not allow app Claude");
+  });
 });
