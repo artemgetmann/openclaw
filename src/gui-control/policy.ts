@@ -33,7 +33,8 @@ export type GuiTaskPolicy = {
 export type GuiTaskPolicyProfile =
   | "read_only_web_context"
   | "send_message_to_approved_assistant"
-  | "local_fixture_write";
+  | "local_fixture_write"
+  | "notes_write";
 
 export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "login",
@@ -78,6 +79,14 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
     taskName: "Write to a local test fixture",
     allowedApps: ["Claude", "TextEdit", "Terminal"],
     grantedCapabilities: ["read_screen", "write_text_to_target", "click_verified_button"],
+    deniedSurfaceTerms: DEFAULT_DENIED_GUI_SURFACE_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  notes_write: {
+    taskId: "notes_write",
+    taskName: "Write benchmark text to Apple Notes",
+    allowedApps: ["Notes"],
+    grantedCapabilities: ["read_screen", "write_text_to_target"],
     deniedSurfaceTerms: DEFAULT_DENIED_GUI_SURFACE_TERMS,
     requiredVerificationMode: "post_state",
   },

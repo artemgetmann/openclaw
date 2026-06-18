@@ -654,17 +654,63 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   }
 
   async focusWindow(target: WindowState): Promise<ActionResult> {
+    const snapshot = await this.observe({
+      appName: target.appName,
+      ...(target.title ? { windowTitle: target.title } : {}),
+    });
+    const raiseTarget =
+      snapshot.elements.find(
+        (element) =>
+          element.secondaryActions?.some((action) => /^raise$/i.test(action)) &&
+          /window/i.test(element.role ?? element.label ?? ""),
+      ) ??
+      snapshot.elements.find((element) =>
+        element.secondaryActions?.some((action) => /^raise$/i.test(action)),
+      );
+    if (!raiseTarget) {
+      return {
+        ok: false,
+        actionCount: 0,
+        movedFocus: false,
+        usedClipboard: false,
+        rawCoordinatesUsed: false,
+        message: `OpenComputerUse did not expose a Raise secondary action for ${target.appName}.`,
+        raw: {
+          unsupported: "focusWindow",
+          reason: "missing-raise-action",
+          target,
+          snapshot,
+        },
+      };
+    }
+
+    const raised = await this.performSecondaryAction(raiseTarget, "Raise");
+    if (!raised.ok) {
+      return {
+        ...raised,
+        movedFocus: true,
+        message: raised.message ?? `OpenComputerUse failed to raise ${target.appName}.`,
+      };
+    }
+
+    const frontmost = (await this.listApps()).find((app) => app.frontmost);
+    const restored = normalizeText(frontmost?.appName) === normalizeText(target.appName);
     return {
-      ok: false,
-      actionCount: 0,
-      movedFocus: false,
-      usedClipboard: false,
-      rawCoordinatesUsed: false,
-      message:
-        "OpenComputerUse CLI does not expose a supported window or app focus tool for workspace restore.",
+      ok: restored,
+      actionCount: raised.actionCount ?? 1,
+      movedFocus: true,
+      usedClipboard: raised.usedClipboard,
+      rawCoordinatesUsed: raised.rawCoordinatesUsed,
+      message: restored
+        ? undefined
+        : `OpenComputerUse raised ${target.appName}, but frontmost app is ${
+            frontmost?.appName ?? "unknown"
+          }.`,
       raw: {
-        unsupported: "focusWindow",
         target,
+        raiseTarget,
+        raised: raised.raw,
+        frontmost,
       },
     };
   }

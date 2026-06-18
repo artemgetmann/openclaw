@@ -406,8 +406,9 @@ Code changes:
   `OpenComputerUseRuntime`.
 - `GuiRuntimeName` now includes `open-computer-use`.
 - `gui-control` and `gui-benchmark` accept `--runtime open-computer-use`.
-- `OPENCLAW_OPEN_COMPUTER_USE_BIN` can point at a pinned local fork build such
-  as `/tmp/jarvis-gui-runtime-bakeoff-20260612-181756/open-codex-computer-use/.build/debug/OpenComputerUse`.
+- `scripts/bootstrap-open-computer-use-runtime.sh` can rebuild the pinned
+  Jarvis fork commit and write the binary path consumed by
+  `OPENCLAW_OPEN_COMPUTER_USE_BIN`.
 - OpenComputerUse AX text-tree lines are normalized into Jarvis `ElementRef`
   values like `@121`, then mapped back to OpenComputerUse `element_index`.
 - Action telemetry preserves `usedClipboard=false` and

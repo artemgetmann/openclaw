@@ -109,6 +109,381 @@ describe("runGuiBenchmark", () => {
     expect(result.markdownSummary).toContain("GUI Benchmark: x-to-claude");
   });
 
+  it("can prepare a fresh Claude chat before x-to-claude writes", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "x-to-claude",
+      dryRun: true,
+      openClaudeNew: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.actionCount).toBe(3);
+    expect(result.movedFocus).toBe(true);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(progress).toEqual([
+      "Reading X",
+      "Opening Claude",
+      "Writing Claude",
+      "Verifying the reply",
+    ]);
+  });
+
+  it("runs safari-notes-claude in dry-run mode without real GUI mutation", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "safari-notes-claude",
+      dryRun: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.runtime).toBe("open-computer-use");
+    expect(result.task).toBe("safari-notes-claude");
+    expect(result.dryRun).toBe(true);
+    expect(result.actionCount).toBe(3);
+    expect(result.usedClipboard).toBe(false);
+    expect(result.movedFocus).toBe(false);
+    expect(result.directRuntimeEscape).toBe(false);
+    expect(result.replyTextExtracted).toBe(true);
+    expect(result.replyExtractionMethod).toBe("ax-visible-text");
+    expect(result.audit.map((record) => record.appName)).toEqual(["Notes", "Claude", "Claude"]);
+    expect(result.audit.map((record) => record.actionType)).toEqual([
+      "setValue",
+      "setValue",
+      "click",
+    ]);
+    expect(result.audit.every((record) => record.elementRef?.startsWith("@"))).toBe(true);
+    expect(result.replyText).toContain("JARVIS_GUI_");
+    expect(progress).toEqual([
+      "Reading X",
+      "Writing Notes",
+      "Writing Claude",
+      "Verifying the reply",
+    ]);
+    expect(result.markdownSummary).toContain("GUI Benchmark: safari-notes-claude");
+  });
+
+  it("prepares a fresh Claude chat for safari-notes-claude when requested", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "safari-notes-claude",
+      dryRun: true,
+      openClaudeNew: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.actionCount).toBe(4);
+    expect(result.movedFocus).toBe(true);
+    expect(progress).toEqual([
+      "Reading X",
+      "Writing Notes",
+      "Opening Claude",
+      "Writing Claude",
+      "Verifying the reply",
+    ]);
+  });
+
+  it("runs workspace-restore in dry-run mode without real focus changes", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "workspace-restore",
+      dryRun: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task).toBe("workspace-restore");
+    expect(result.dryRun).toBe(true);
+    expect(result.restoreDiagnostics).toHaveLength(3);
+    expect(result.restoreDiagnostics?.map((diagnostic) => diagnostic.name)).toEqual([
+      "Terminal->Claude->Terminal",
+      "Safari->Claude->Safari",
+      "Notes->Claude->Notes",
+    ]);
+    expect(result.restoreDiagnostics?.every((diagnostic) => diagnostic.restoreAttempted)).toBe(
+      false,
+    );
+    expect(result.qualityGate.codexComputerUseParity).toBe("not-measured");
+    expect(progress).toEqual([]);
+  });
+
+  it("records workspace restore diagnostics for each source app", async () => {
+    const progress: string[] = [];
+    let frontmost = "Terminal";
+    let focusCalls = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "workspace-restore",
+      dryRun: false,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return ["Terminal", "Safari", "Notes", "Claude"].map((appName) => ({
+            appName,
+            frontmost: appName === frontmost,
+          }));
+        },
+        async listWindows() {
+          return ["Terminal", "Safari", "Notes", "Claude"].map((appName) => ({
+            id: `${appName.toLowerCase()}-window`,
+            appName,
+            title: `${appName} Window`,
+            focused: appName === frontmost,
+          }));
+        },
+        async focusWindow(target) {
+          focusCalls += 1;
+          frontmost = target.appName;
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async observe() {
+          return benchmarkSnapshot({ appName: frontmost });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.restoreDiagnostics).toHaveLength(3);
+    expect(result.restoreDiagnostics?.map((diagnostic) => diagnostic.restoredFrontmost)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(result.restoreDiagnostics?.map((diagnostic) => diagnostic.frontmostAfterTask)).toEqual([
+      "Claude",
+      "Claude",
+      "Claude",
+    ]);
+    expect(result.qualityGate.codexComputerUseParity).toBe("pass");
+    expect(result.qualityGate.blockers).toEqual([]);
+    expect(result.workspace.frontmostAfter).toBe("Terminal");
+    expect(focusCalls).toBe(10);
+    expect(progress).toEqual([
+      "Testing Terminal restore",
+      "Testing Safari restore",
+      "Testing Notes restore",
+    ]);
+  });
+
+  it("runs safari-notes-claude with semantic Notes and Claude actions plus pointer proof", async () => {
+    let notesValue = "";
+    let claudeValue = "";
+    let claudeReply = "";
+    let notesNewClicked = false;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "safari-notes-claude",
+      dryRun: false,
+      approveNotesWrite: true,
+      approveClaudeSend: true,
+      allowClipboardFallback: false,
+      replyExtractionTimeoutMs: 0,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Terminal", frontmost: true },
+            { appName: "Safari", frontmost: false },
+            { appName: "Notes", frontmost: false },
+            { appName: "Claude", frontmost: false },
+          ];
+        },
+        async listWindows() {
+          return [
+            { id: "w-terminal", appName: "Terminal", title: "tmux", focused: true },
+            { id: "w-x", appName: "Safari", title: "Home / X", focused: false },
+          ];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowId: target.windowId,
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          if (target.appName === "Notes") {
+            return benchmarkSnapshot({
+              id: "notes",
+              appName: "Notes",
+              windowTitle: "Notes",
+              summary: notesValue ? `Apple Notes visible text: ${notesValue}` : "Note body ready",
+              visibleText: notesValue ? [notesValue] : ["Notes"],
+              elements: [
+                {
+                  ref: "@notes-new",
+                  role: "button",
+                  label: "New Note",
+                  appName: "Notes",
+                  windowTitle: "Notes",
+                },
+                {
+                  ref: "@notes-body",
+                  role: "text entry area (settable)",
+                  label: "text entry area (settable)",
+                  value: notesValue || "Start typing",
+                  appName: "Notes",
+                  windowTitle: "Notes",
+                },
+                {
+                  ref: "@notes-count",
+                  role: "text",
+                  label: "450 notes",
+                  value: "450 notes",
+                  appName: "Notes",
+                  windowTitle: "Notes",
+                },
+              ],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "claude",
+            appName: "Claude",
+            windowTitle: "Claude",
+            summary:
+              claudeReply || (claudeValue ? `Composer contains ${claudeValue}` : "Composer ready"),
+            visibleText: claudeReply ? [claudeReply] : undefined,
+            elements: [
+              {
+                ref: "@claude-input",
+                role: "textArea",
+                label: "Write your prompt to Claude",
+                value: claudeValue || "Write a message…",
+                appName: "Claude",
+                windowTitle: "Claude",
+              },
+              {
+                ref: "@claude-send",
+                role: "button",
+                label: "Send",
+                appName: "Claude",
+                windowTitle: "Claude",
+              },
+            ],
+          });
+        },
+        async setValue(target: ElementRef, value: string) {
+          if (target.appName === "Notes") {
+            notesValue = value;
+          } else {
+            claudeValue = value;
+          }
+          return { ok: true, actionCount: 1 };
+        },
+        async click(target: ElementRef) {
+          if (target.appName === "Notes") {
+            expect(target.ref).toBe("@notes-new");
+            notesNewClicked = true;
+            notesValue = "";
+            return { ok: true, actionCount: 1, movedFocus: false };
+          }
+          expect(target.ref).toBe("@claude-send");
+          const replyToken = replyTokenFromMessage(claudeValue);
+          claudeReply = `Claude summarized the Apple Notes content and included ${replyToken}.`;
+          claudeValue = "";
+          return { ok: true, actionCount: 1 };
+        },
+        async getVirtualPointerEvidence() {
+          return {
+            present: true,
+            source: "fixture",
+            evidencePath: "/tmp/ocu-pointer-proof.json",
+            notes: "Fixture pointer proof for semantic OCU action.",
+          };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.usedClipboard).toBe(false);
+    expect(result.movedFocus).toBe(false);
+    expect(result.virtualPointer).toMatchObject({
+      present: true,
+      evidencePath: "/tmp/ocu-pointer-proof.json",
+    });
+    expect(result.workspace.workspaceMeasurement).toBe("clean");
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
+    expect(
+      result.audit.map((record) => [record.appName, record.actionType, record.elementRef]),
+    ).toEqual([
+      ["Notes", "setValue", "@notes-body"],
+      ["Claude", "setValue", "@claude-input"],
+      ["Claude", "click", "@claude-send"],
+    ]);
+    expect(notesValue).toContain("Jarvis GUI benchmark safari-notes-claude");
+    expect(notesValue).toContain("Visible token: JARVIS_GUI_");
+    expect(notesNewClicked).toBe(true);
+    expect(claudeValue).toBe("");
+    expect(result.replyText).toContain("JARVIS_GUI_");
+  });
+
+  it("fails safari-notes-claude before live Notes mutation unless explicitly approved", async () => {
+    let notesWrites = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "agent-desktop",
+      task: "safari-notes-claude",
+      dryRun: false,
+      runtimeImpl: {
+        name: "agent-desktop",
+        async listApps() {
+          return [];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Safari") {
+            return benchmarkSnapshot({
+              id: "safari",
+              appName: "Safari",
+              windowTitle: "Home / X",
+              visibleText: ["Home / X", "For you", "Visible timeline item"],
+            });
+          }
+          return benchmarkSnapshot({
+            id: "notes",
+            appName: "Notes",
+            windowTitle: "Notes",
+            elements: [{ ref: "@notes-body", role: "textArea", label: "Note body" }],
+          });
+        },
+        async setValue() {
+          notesWrites += 1;
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("--approve-notes-write");
+    expect(result.actionCount).toBe(0);
+    expect(result.audit).toHaveLength(0);
+    expect(notesWrites).toBe(0);
+  });
+
   it("fails closed before a live Claude send unless explicitly approved", async () => {
     const result = await runGuiBenchmark({
       runtime: "agent-desktop",
@@ -1894,8 +2269,12 @@ describe("runGuiBenchmark", () => {
     expect(result.workspace.frontmostBefore).toBe("Terminal");
     expect(result.workspace.frontmostAfter).toBe("Terminal");
     expect(result.workspace.frontmostRestored).toBe(true);
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
     expect(result.qualityGate.blockers).not.toContain(
       "Frontmost app restoration was not proven true.",
+    );
+    expect(result.qualityGate.blockers).not.toContain(
+      "Stage Manager/workspace preservation was not proven true.",
     );
   });
 

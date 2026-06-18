@@ -396,21 +396,93 @@ describe("OpenComputerUseRuntime", () => {
     ]);
   });
 
-  it("reports focusWindow as unsupported without shelling out", async () => {
-    const runtime = new OpenComputerUseRuntime({ command: "unused-open-computer-use" });
+  it("restores focus by raising the target app window through OCU secondary actions", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
+    const callsPath = path.join(tempDir, "calls.json");
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          `const callsPath = ${JSON.stringify(callsPath)};`,
+          "const args = process.argv.slice(1);",
+          "const calls = fs.existsSync(callsPath) ? JSON.parse(fs.readFileSync(callsPath, 'utf8')) : [];",
+          "calls.push(args);",
+          "fs.writeFileSync(callsPath, JSON.stringify(calls));",
+          "const tool = args[1];",
+          "if (tool === 'get_app_state') {",
+          "  console.log(JSON.stringify({ isError: false, content: [{ type: 'text', text: 'App=com.apple.Terminal (pid 42)\\nWindow: \"Terminal\", App: Terminal.\\n0 standard window Terminal, Secondary Actions: Raise' }] }));",
+          "} else if (tool === 'perform_secondary_action') {",
+          "  console.log(JSON.stringify({ isError: false, content: [{ type: 'text', text: 'raised' }] }));",
+          "} else if (tool === 'list_apps') {",
+          "  console.log(JSON.stringify({ isError: false, content: [{ type: 'text', text: 'Terminal — com.apple.Terminal [frontmost, running]\\nClaude — com.anthropic.claudefordesktop [running]' }] }));",
+          "} else {",
+          "  console.log(JSON.stringify({ isError: true, content: [{ type: 'text', text: 'unexpected tool ' + tool }] }));",
+          "}",
+        ].join(""),
+      ],
+    });
 
-    await expect(runtime.focusWindow({ appName: "Claude", focused: true })).resolves.toEqual({
+    const result = await runtime.focusWindow({ appName: "Terminal", focused: true });
+    const calls = JSON.parse(await fs.readFile(callsPath, "utf8"));
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        actionCount: 1,
+        movedFocus: true,
+      }),
+    );
+    expect(calls).toEqual([
+      ["call", "get_app_state", "--args", JSON.stringify({ app: "Terminal" })],
+      [
+        "call",
+        "perform_secondary_action",
+        "--args",
+        JSON.stringify({ app: "Terminal", window: "Terminal", element_index: 0, action: "Raise" }),
+      ],
+      ["call", "list_apps", "--args", JSON.stringify({})],
+    ]);
+  });
+
+  it("fails closed when OCU does not expose a Raise action for the target app", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
+    const callsPath = path.join(tempDir, "calls.json");
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          `const callsPath = ${JSON.stringify(callsPath)};`,
+          "const args = process.argv.slice(1);",
+          "const calls = fs.existsSync(callsPath) ? JSON.parse(fs.readFileSync(callsPath, 'utf8')) : [];",
+          "calls.push(args);",
+          "fs.writeFileSync(callsPath, JSON.stringify(calls));",
+          "console.log(JSON.stringify({ isError: false, content: [{ type: 'text', text: 'App=com.apple.Terminal (pid 42)\\nWindow: \"Terminal\", App: Terminal.\\n0 standard window Terminal' }] }));",
+        ].join(""),
+      ],
+    });
+
+    const result = await runtime.focusWindow({ appName: "Terminal", focused: true });
+    const calls = JSON.parse(await fs.readFile(callsPath, "utf8"));
+
+    expect(result).toEqual({
       ok: false,
       actionCount: 0,
       movedFocus: false,
       usedClipboard: false,
       rawCoordinatesUsed: false,
-      message:
-        "OpenComputerUse CLI does not expose a supported window or app focus tool for workspace restore.",
-      raw: {
+      message: "OpenComputerUse did not expose a Raise secondary action for Terminal.",
+      raw: expect.objectContaining({
         unsupported: "focusWindow",
-        target: { appName: "Claude", focused: true },
-      },
+        reason: "missing-raise-action",
+        target: { appName: "Terminal", focused: true },
+      }),
     });
+    expect(calls).toEqual([
+      ["call", "get_app_state", "--args", JSON.stringify({ app: "Terminal" })],
+    ]);
   });
 });
