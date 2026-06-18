@@ -86,6 +86,11 @@ mode refuses to run when runtime JS, package/lockfile, Node/uv, extension,
 skill, template, device-model, or bundled dependency inputs no longer match the
 saved runtime manifest.
 
+Packaging also writes `OpenClawRuntime/openclaw/skills.manifest.json`, and
+`verify-consumer-mac-app.sh` compares consumer-default bundled skill content
+hashes against the source checkout. If a skill changes, rerun packaging without
+runtime reuse so Jarvis does not ship stale model-facing skill instructions.
+
 To remove generated UI-smoke build output without deleting a currently running
 smoke app, run:
 
@@ -239,11 +244,12 @@ bash scripts/package-openclaw-mac-dist.sh --local-proof
 
 This builds `dist/Jarvis.app`, runs `verify-consumer-mac-app.sh` against the
 stable release identity, verifies the bundled runtime `package.json` version
-matches the app version, writes `dist/jarvis-release-manifest.env`, writes the
-app build receipt, and stops. It does not create `Jarvis.dmg`, `Jarvis.zip`, or
-`jarvis-appcast.xml`; it also does not notarize, publish GitHub assets, install
-or launch the app, touch launchd, or change the shared gateway runtime. Use this
-when the question is "does this Jarvis app build verify locally?" instead of
+matches the app version, verifies bundled skill content hashes, writes
+`dist/jarvis-release-manifest.env`, writes the app build receipt, and stops. It
+does not create `Jarvis.dmg`, `Jarvis.zip`, or `jarvis-appcast.xml`; it also
+does not notarize, publish GitHub assets, install or launch the app, touch
+launchd, or change the shared gateway runtime. Use this when the question is
+"does this Jarvis app build verify locally?" instead of
 "is this public distribution artifact sendable?"
 
 ```bash
@@ -314,17 +320,25 @@ bash scripts/jarvis-public-release.sh
 
 The wrapper inspects existing `dist/` artifacts, receipts, and the release
 manifest, chooses the next safe package phase, and delegates to
-`scripts/package-openclaw-mac-dist.sh`. If it selects
+`scripts/package-openclaw-mac-dist.sh`. With
+`--parallel-safe-local-assets`, the wrapper may create local `Jarvis.zip` and
+`jarvis-appcast.xml` after app notarization is accepted and a DMG notary
+submission exists, while DMG polling remains a separate resumable step. This is
+local-only P2 parallelism: the appcast upload still stays last because it is the
+public go-live switch. If the wrapper selects
 `create-local-release-assets-only`, pass the latest release tag so the Sparkle
 appcast signs an immutable tagged `Jarvis.zip` URL:
 
 ```bash
 bash scripts/jarvis-public-release.sh \
+  --parallel-safe-local-assets \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
 When local notarized assets are ready, publishing still requires the explicit
-latest tag:
+publish flag and latest tag. Publish only after app and DMG notarization are
+accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
+`dist/jarvis-appcast.xml` are present:
 
 ```bash
 bash scripts/jarvis-public-release.sh \

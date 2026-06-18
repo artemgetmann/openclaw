@@ -8,6 +8,10 @@ description: "Use when designing, reviewing, or editing Jarvis consumer onboardi
 Use this skill before changing Jarvis consumer onboarding screens or judging
 whether onboarding copy/layout is ready for users.
 
+Read `docs/jarvis/VISION.md` first when the UI/copy change affects product
+promise, onboarding strategy, launch positioning, pricing, or user-facing
+defaults. For narrow visual fixes, this skill is enough.
+
 ## Core stance
 
 Make setup feel like Apple setup assistant: one clear screen, one job, obvious

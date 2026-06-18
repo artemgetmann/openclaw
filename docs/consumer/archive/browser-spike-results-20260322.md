@@ -2,7 +2,11 @@
 
 Last updated: 2026-03-22
 Owner: consumer execution team
-Status: In progress
+Status: archived benchmark evidence
+
+Archive note: preserved as historical browser-lane proof only. Current Jarvis
+product docs live in `docs/jarvis/README.md`. Do not use this file as an active
+tracker.
 
 ## References
 

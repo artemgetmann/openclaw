@@ -1,6 +1,10 @@
 # Telegram Managed Onboarding Tracker
 
-Status: local proof updated 2026-05-25.
+Status: archived local proof tracker
+
+Archive note: preserved as historical Telegram onboarding proof only. Current
+launch gates live in `docs/research/jarvis-consumer-launch-plan.md`. Do not use
+this file as an active handoff or package checklist.
 
 Purpose: keep the remaining Telegram Managed Bots onboarding proof work small
 and explicit after the visual copy/layout slice landed.

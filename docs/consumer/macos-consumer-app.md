@@ -1,7 +1,6 @@
-# OpenClaw macOS Consumer App
+# Jarvis macOS App
 
-The main-built macOS app is the simplified local controller for the OpenClaw
-consumer product.
+The main-built macOS app is the simplified local controller for Jarvis.
 
 ## Purpose
 
@@ -12,10 +11,10 @@ consumer product.
 ## Isolation model
 
 The consumer product is no longer shipped from a separate repository. Release
-artifacts are visibly named `OpenClaw`, while the current bundle/runtime
+artifacts are visibly named `Jarvis`, while the current bundle/runtime
 identity stays consumer-scoped for continuity.
 
-- Visible app name: `OpenClaw.app`
+- Visible app name: `Jarvis.app`
 - Bundle identifier: `ai.openclaw.consumer.mac`
 - App variant metadata: `consumer`
 - State directory: `~/Library/Application Support/OpenClaw/.openclaw`
@@ -89,7 +88,7 @@ Consumer v1 targets signed + notarized direct download distribution.
 
 ## Distribution package handoff
 
-Use the guarded distribution wrapper for a user-facing OpenClaw package:
+Use the guarded distribution wrapper for a user-facing Jarvis package:
 
 ```bash
 SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh

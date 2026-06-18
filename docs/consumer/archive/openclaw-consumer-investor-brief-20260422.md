@@ -1,5 +1,12 @@
 # OpenClaw Consumer Wrapper — 1-Page Investor Brief
 
+Status: archived investor framing
+
+Archive note: preserved for historical framing only. Pricing, naming, and launch
+state are stale. Use `docs/consumer/jarvis-launch-package.md` for current
+pricing/package truth and create a fresh investor brief from current docs if one
+is needed.
+
 ## Vision
 
 A personal AI operator that does real digital work for users from Telegram, running on their own Mac.

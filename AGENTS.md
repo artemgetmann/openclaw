@@ -24,6 +24,8 @@
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
 - Read `docs/consumer/project-status.md` before high-level product, launch, pricing, reliability, scaling, or architecture decisions. If that card is stale, its numbers are not decision-grade until refreshed.
+- Read `docs/jarvis/VISION.md` before product, UX, launch, pricing, onboarding, or strategy work. Do not load it for unrelated engineering tasks.
+- For Jarvis launch docs, follow the docs operating system in `docs/jarvis/README.md`: short-lived mission trackers, max 3 Now items, max 5 open gates, and cold storage for non-blocking ideas.
 - Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now the sacred home clone `~/Programming_Projects/openclaw` on `main`; `~/Programming_Projects/openclaw-consumer` is legacy/emergency fallback only. The home clone is a pull-only runtime anchor. All implementation work happens in temporary worktrees created from the correct sacred home clone, and default task spawn should create that temp worktree immediately.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
@@ -47,10 +49,12 @@
 
 - Product context and current priorities:
   - `CONSUMER.md`
+  - `docs/jarvis/README.md`
+  - `docs/jarvis/VISION.md`
   - `docs/consumer/project-status.md`
   - `docs/research/jarvis-consumer-launch-plan.md`
   - `docs/consumer/jarvis-launch-package.md`
-  - `docs/consumer/openclaw-consumer-execution-spec.md`
+  - Historical launch/package details live under `docs/consumer/archive/`
 - Branching, PR targets, commits, GitHub footguns:
   - `docs/agent-guides/workflow.md`
 - Fork maintenance and upstream intake:
