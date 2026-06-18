@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
+source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -1176,6 +1177,7 @@ prepare_bundled_consumer_runtime() {
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
   rm -rf "$deploy_root"
   trap - RETURN
+  openclaw_prune_bundled_koffi_non_macos "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
 
   stage_consumer_matrix_crypto_x64_twin
 
