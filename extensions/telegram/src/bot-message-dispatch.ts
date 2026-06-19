@@ -380,6 +380,7 @@ export const dispatchTelegramMessage = async ({
     cfg,
     channel: "telegram",
     accountId: route.accountId,
+    supportsBlockTables: true,
   });
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode }),

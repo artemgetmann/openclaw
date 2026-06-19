@@ -767,6 +767,60 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("prefers Telegram rich messages for text replies with native tables", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn();
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "| Name | Score |\n| --- | --- |\n| Ada | **9** |" }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: "123",
+        rich_message: expect.objectContaining({
+          html: expect.stringContaining("<table>"),
+        }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to legacy HTML then plain text when rich table delivery fails", async () => {
+    const runtime = createRuntime();
+    const parseErr = new Error("400: Bad Request: can't parse entities");
+    const sendRichMessage = vi.fn().mockRejectedValue(new Error("rich endpoint unavailable"));
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "| Name | Score |\n| --- | --- |\n| Ada | **9** |" }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      expect.stringContaining("<table>"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "123", "Name | Score\nAda | 9", {});
+  });
+
   it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn(async (_chatId: string, text: string) => {

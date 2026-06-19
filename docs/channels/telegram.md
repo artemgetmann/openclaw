@@ -289,13 +289,14 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Formatting and HTML fallback">
-    Outbound text uses Telegram `parse_mode: "HTML"`.
+    Outbound text prefers Telegram Bot API rich messages, then falls back to Telegram `parse_mode: "HTML"`.
 
-    - Markdown-ish text is rendered to Telegram-safe HTML.
+    - Markdown-ish text is rendered to Telegram-safe rich HTML, including native rich-message tables when supported.
     - Raw model HTML is escaped to reduce Telegram parse failures.
+    - If Telegram rich-message delivery is unavailable or rejected, OpenClaw retries the same reply through legacy HTML `sendMessage`.
     - If Telegram rejects parsed HTML, OpenClaw retries as plain text.
 
-    Link previews are enabled by default and can be disabled with `channels.telegram.linkPreview: false`.
+    Link previews are enabled by default and can be disabled with `channels.telegram.linkPreview: false`. Rich-message text delivery is enabled by default and can be disabled with `channels.telegram.richMessages: false`.
 
   </Accordion>
 
@@ -994,6 +995,7 @@ Primary reference:
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.commands.nativeSkills`: enable/disable Telegram native skills commands.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `off`).
+- `channels.telegram.richMessages`: prefer Telegram Bot API rich messages for text sends/replies (default: true). If rich delivery fails, OpenClaw retries with legacy HTML and then plain text.
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
@@ -1025,7 +1027,7 @@ Telegram-specific high-signal fields:
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `blockStreaming`
-- formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
+- formatting/delivery: `richMessages`, `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`

@@ -27,7 +27,11 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { guardedTelegramDeleteMessage } from "./delete-guard.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
+import {
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+  splitTelegramRichMessageTextChunks,
+} from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
@@ -38,6 +42,11 @@ import {
   buildTelegramThreadReplyParams,
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
+import {
+  buildTelegramRichMessage,
+  getTelegramRichRawApi,
+  toTelegramRichMessageContextParams,
+} from "./rich-message.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -632,8 +641,10 @@ export async function sendMessageTelegram(
     cfg,
     channel: "telegram",
     accountId: account.accountId,
+    supportsBlockTables: true,
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
+  const richMessagesEnabled = account.config.richMessages !== false;
 
   // Resolve link preview setting from config (default: enabled).
   const linkPreviewEnabled = account.config.linkPreview ?? true;
@@ -683,6 +694,45 @@ export async function sendMessageTelegram(
           parse_mode: "HTML" as const,
           ...plainParams,
         };
+        const richRawApi = richMessagesEnabled ? getTelegramRichRawApi(api) : null;
+        if (richRawApi) {
+          try {
+            const richParams = {
+              ...toTelegramRichMessageContextParams(baseParams),
+              ...(opts.silent === true ? { disable_notification: true } : {}),
+            };
+            const richMessage = buildTelegramRichMessage(
+              { text: htmlText, textMode: "html" },
+              {
+                tableMode,
+                skipEntityDetection: linkPreviewEnabled === false,
+              },
+            );
+            return await withTelegramThreadFallback(
+              richParams,
+              "rich-message",
+              opts.verbose,
+              { allowThreadlessRetry },
+              async (effectiveRichParams, retryLabel) =>
+                requestWithChatNotFound(
+                  () =>
+                    richRawApi.sendRichMessage({
+                      chat_id: chatId,
+                      rich_message: richMessage,
+                      ...(baseParams.reply_markup ? { reply_markup: baseParams.reply_markup } : {}),
+                      ...(effectiveRichParams ?? {}),
+                    } as Parameters<typeof richRawApi.sendRichMessage>[0]),
+                  retryLabel,
+                ),
+            );
+          } catch (err) {
+            logVerbose(
+              `telegram rich-message send failed, retrying legacy sendMessage: ${formatErrorMessage(
+                err,
+              )}`,
+            );
+          }
+        }
         return await withTelegramHtmlParseFallback({
           label,
           verbose: opts.verbose,
@@ -941,8 +991,22 @@ export async function sendMessageTelegram(
   if (textMode === "html") {
     textResult = await sendChunkedText(text, "text send");
   } else {
+    const richChunks = splitTelegramRichMessageTextChunks({
+      text,
+      textLimit: 4000,
+      textMode: "markdown",
+      tableMode,
+    });
+    const fallbackChunks = splitTelegramPlainTextFallback(
+      opts.plainText ?? text,
+      richChunks.length,
+      4000,
+    );
     textResult = await sendTelegramTextChunks(
-      [{ plainText: opts.plainText ?? text, htmlText: renderHtmlText(text) }],
+      richChunks.map((chunk, index) => ({
+        plainText: fallbackChunks[index] ?? chunk.plainText,
+        htmlText: chunk.text,
+      })),
       "text send",
     );
   }
