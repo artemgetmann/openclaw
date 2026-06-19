@@ -55,6 +55,25 @@ export type TelegramUserAuthStatus = {
   user: TelegramUserPrecheck["user"] | null;
 };
 
+export type TelegramUserDoctorResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: TelegramUserPrecheck["chat"];
+  diagnosis: string;
+  expected: {
+    env_file: string;
+    session_path: string;
+  };
+  missing: {
+    api_hash: boolean;
+    api_id: boolean;
+    session: boolean;
+  };
+  next_step: string;
+  ready: boolean;
+  state: TelegramUserAuthState;
+  user: TelegramUserPrecheck["user"] | null;
+};
+
 export type TelegramUserLoginResult = {
   backend_meta?: TelegramUserBackendMeta;
   pending_login: TelegramUserAuthStatus["pending_login"];

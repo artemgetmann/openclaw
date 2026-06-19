@@ -182,6 +182,13 @@ describe("exec safe bin policy product-owned cli defaults", () => {
   it("allows Telegram-as-me direct commands only through telegram-user families", () => {
     const openclawProfile = SAFE_BIN_PROFILES.openclaw;
     expect(validateSafeBinArgv(["telegram-user", "status", "--json"], openclawProfile)).toBe(true);
+    expect(validateSafeBinArgv(["telegram-user", "doctor", "--json"], openclawProfile)).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["telegram-user", "doctor", "--chat", "@jarvis_tester_1_bot", "--json"],
+        openclawProfile,
+      ),
+    ).toBe(true);
     expect(
       validateSafeBinArgv(
         ["telegram-user", "login", "--phone", "+15551234567", "--code", "12345", "--json"],

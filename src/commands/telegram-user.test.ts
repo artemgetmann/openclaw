@@ -33,6 +33,7 @@ const runtime: RuntimeEnv = {
 
 const {
   telegramUserInboxCommand,
+  telegramUserDoctorCommand,
   telegramUserLoginCommand,
   telegramUserLogoutCommand,
   telegramUserPrecheckCommand,
@@ -76,6 +77,123 @@ describe("telegram-user commands", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("state=needs_reauth"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("pending_state=-"));
+  });
+
+  it("renders doctor JSON for missing credentials with setup paths and missing fields", async () => {
+    backendMocks.runTelegramUserStatus.mockResolvedValueOnce({
+      backend_meta: {
+        api_hash_source: "missing",
+        api_id_source: "missing",
+        env_file: "/Users/test/.openclaw/telegram-user/.env.local",
+        session_path: "/Users/test/.openclaw/telegram-user/userbot.session",
+      },
+      chat: null,
+      pending_login: null,
+      session_path: "/Users/test/.openclaw/telegram-user/userbot.session",
+      state: "missing_credentials",
+      user: null,
+    });
+
+    await telegramUserDoctorCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string);
+    expect(payload).toMatchObject({
+      expected: {
+        env_file: "/Users/test/.openclaw/telegram-user/.env.local",
+        session_path: "/Users/test/.openclaw/telegram-user/userbot.session",
+      },
+      missing: {
+        api_hash: true,
+        api_id: true,
+        session: false,
+      },
+      ready: false,
+      state: "missing_credentials",
+    });
+    expect(payload.next_step).toContain("consumer-setup");
+  });
+
+  it("renders doctor text for missing session without claiming credentials are missing", async () => {
+    backendMocks.runTelegramUserStatus.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: null,
+      pending_login: null,
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "missing_session",
+      user: null,
+    });
+
+    await telegramUserDoctorCommand({}, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("state=missing_session"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("has API credentials but no saved real-account session"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Expected session:"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("complete login"));
+  });
+
+  it("renders doctor text for sessions that need reauth", async () => {
+    backendMocks.runTelegramUserStatus.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: null,
+      pending_login: null,
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "needs_reauth",
+      user: null,
+    });
+
+    await telegramUserDoctorCommand({}, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("state=needs_reauth"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Telegram no longer accepts it"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Reconnect Telegram-as-me"));
+  });
+
+  it("renders doctor JSON for a ready session with user and optional chat resolution", async () => {
+    backendMocks.runTelegramUserStatus.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: { chat_id: 10, peer_type: "User", title: null, username: "jarvis_tester_1_bot" },
+      pending_login: null,
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "ready",
+      user: { first_name: "Tester", user_id: 99, username: "artem" },
+    });
+
+    await telegramUserDoctorCommand({ chat: "@jarvis_tester_1_bot", json: true }, runtime);
+
+    expect(backendMocks.runTelegramUserStatus).toHaveBeenCalledWith({
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      session: undefined,
+    });
+    const payload = JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string);
+    expect(payload).toMatchObject({
+      chat: { chat_id: 10, username: "jarvis_tester_1_bot" },
+      ready: true,
+      state: "ready",
+      user: { user_id: 99, username: "artem" },
+    });
+  });
+
+  it("renders doctor JSON for an in-progress login requiring Telegram 2FA", async () => {
+    backendMocks.runTelegramUserStatus.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: null,
+      pending_login: { phone: "+15551234567", state: "awaiting_password" },
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "awaiting_password",
+      user: null,
+    });
+
+    await telegramUserDoctorCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string);
+    expect(payload.state).toBe("awaiting_password");
+    expect(payload.diagnosis).toContain("Telegram 2FA");
+    expect(payload.next_step).toContain("secure local login prompt");
   });
 
   it("renders login output when a code was sent", async () => {
