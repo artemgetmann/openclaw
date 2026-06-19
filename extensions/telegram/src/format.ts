@@ -111,12 +111,13 @@ export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
+  const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: options.tableMode,
+    tableMode,
   });
   const html = renderTelegramHtml(ir);
   // Apply file reference wrapping if requested (for chunked rendering)
@@ -239,6 +240,303 @@ export function renderTelegramHtmlText(
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+}
+
+const TELEGRAM_RICH_HTML_TABLE_PATTERN = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
+const TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+const TELEGRAM_HTML_ANCHOR_PATTERN =
+  /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi;
+const TELEGRAM_HTML_BREAK_PATTERN = /<br\s*\/?>/gi;
+const TELEGRAM_HTML_TAG_PATTERN = /<[^>]*>/g;
+const TELEGRAM_HTML_ENTITY_PATTERN = /&(#x[0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
+const TELEGRAM_RICH_TABLE_COLUMN_LIMIT = 20;
+
+type TelegramRichTextMode = "markdown" | "html";
+
+export type TelegramRichTextChunk = {
+  text: string;
+  textMode: TelegramRichTextMode;
+  plainText: string;
+};
+
+type MarkdownTableBlock = {
+  start: number;
+  end: number;
+  headers: string[];
+  rows: string[][];
+};
+
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim();
+  const body = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  const withoutTrailingPipe = body.endsWith("|") ? body.slice(0, -1) : body;
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+  for (const char of withoutTrailingPipe) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function isMarkdownTableDelimiter(line: string): boolean {
+  if (!line.includes("|")) {
+    return false;
+  }
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return line.includes("|") && splitMarkdownTableRow(line).length > 1;
+}
+
+function findMarkdownTableBlocks(markdown: string): MarkdownTableBlock[] {
+  const lines = markdown.split("\n");
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
+
+  const blocks: MarkdownTableBlock[] = [];
+  let index = 0;
+  let inFence = false;
+  while (index + 1 < lines.length) {
+    const headerLine = lines[index] ?? "";
+    if (/^[ \t]*(?:```|~~~)/.test(headerLine)) {
+      inFence = !inFence;
+      index += 1;
+      continue;
+    }
+    if (inFence) {
+      index += 1;
+      continue;
+    }
+
+    const delimiterLine = lines[index + 1] ?? "";
+    if (!isMarkdownTableRow(headerLine) || !isMarkdownTableDelimiter(delimiterLine)) {
+      index += 1;
+      continue;
+    }
+
+    const headers = splitMarkdownTableRow(headerLine);
+    const rows: string[][] = [];
+    let endLine = index + 1;
+    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
+      const rowLine = lines[rowIndex] ?? "";
+      if (!isMarkdownTableRow(rowLine)) {
+        break;
+      }
+      rows.push(splitMarkdownTableRow(rowLine));
+      endLine = rowIndex;
+    }
+
+    const start = lineStarts[index] ?? 0;
+    const end = (lineStarts[endLine] ?? start) + (lines[endLine] ?? "").length;
+    blocks.push({ start, end, headers, rows });
+    index = endLine + 1;
+  }
+  return blocks;
+}
+
+function decodeTelegramHtmlEntities(text: string): string {
+  TELEGRAM_HTML_ENTITY_PATTERN.lastIndex = 0;
+  return text.replace(TELEGRAM_HTML_ENTITY_PATTERN, (match, entity: string) => {
+    switch (entity) {
+      case "amp":
+        return "&";
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "quot":
+        return '"';
+      case "apos":
+        return "'";
+      default:
+        if (entity.startsWith("#x") || entity.startsWith("#X")) {
+          return String.fromCodePoint(Number.parseInt(entity.slice(2), 16));
+        }
+        if (entity.startsWith("#")) {
+          return String.fromCodePoint(Number.parseInt(entity.slice(1), 10));
+        }
+        return match;
+    }
+  });
+}
+
+function stripTelegramHtmlForPlainText(html: string): string {
+  return decodeTelegramHtmlEntities(
+    html.replace(TELEGRAM_HTML_BREAK_PATTERN, "\n").replace(TELEGRAM_HTML_TAG_PATTERN, ""),
+  );
+}
+
+function parseTelegramRichHtmlTableRows(tableHtml: string): string[][] {
+  const rows: string[][] = [];
+  TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN.lastIndex = 0;
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN.exec(tableHtml)) !== null) {
+    const rowHtml = rowMatch[1] ?? "";
+    const row: string[] = [];
+    TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN.lastIndex = 0;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN.exec(rowHtml)) !== null) {
+      row.push(
+        stripTelegramHtmlForPlainText(cellMatch[2] ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+    }
+    if (row.length > 0) {
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+export function telegramHtmlToPlainTextFallback(html: string): string {
+  const withPlainTables = html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) =>
+    parseTelegramRichHtmlTableRows(tableHtml)
+      .map((row) => row.join(" | "))
+      .join("\n"),
+  );
+  TELEGRAM_HTML_ANCHOR_PATTERN.lastIndex = 0;
+  const withPlainLinks = withPlainTables.replace(
+    TELEGRAM_HTML_ANCHOR_PATTERN,
+    (
+      _match: string,
+      doubleQuotedHref: string | undefined,
+      singleQuotedHref: string | undefined,
+      unquotedHref: string | undefined,
+      labelHtml: string,
+    ) => {
+      const href = decodeTelegramHtmlEntities(
+        doubleQuotedHref ?? singleQuotedHref ?? unquotedHref ?? "",
+      ).trim();
+      const label = stripTelegramHtmlForPlainText(labelHtml).trim();
+      if (!href || label === href) {
+        return label || href;
+      }
+      return `${label} (${href})`;
+    },
+  );
+  return stripTelegramHtmlForPlainText(withPlainLinks).trim();
+}
+
+function renderTelegramRichTableFallback(table: MarkdownTableBlock): string {
+  const rows = [table.headers, ...table.rows];
+  const columnCount = Math.max(...rows.map((row) => row.length), 0);
+  const widths = Array.from({ length: columnCount }, () => 3);
+  for (const row of rows) {
+    for (let index = 0; index < columnCount; index += 1) {
+      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
+    }
+  }
+  const renderRow = (row: readonly string[]) =>
+    `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`;
+  const divider = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
+  const tableText = [renderRow(table.headers), divider, ...table.rows.map(renderRow)].join("\n");
+  return `<pre><code>${escapeHtml(tableText)}</code></pre>\n\n`;
+}
+
+function renderTelegramRichCell(markdown: string): string {
+  return markdownToTelegramHtml(markdown.trim(), {
+    tableMode: "off",
+    wrapFileRefs: false,
+  });
+}
+
+function renderTelegramRichTable(table: MarkdownTableBlock): string {
+  const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
+  if (columnCount > TELEGRAM_RICH_TABLE_COLUMN_LIMIT) {
+    return renderTelegramRichTableFallback(table);
+  }
+  const header = table.headers.length
+    ? `<thead><tr>${table.headers
+        .map((cell) => `<th>${renderTelegramRichCell(cell)}</th>`)
+        .join("")}</tr></thead>`
+    : "";
+  const bodyRows = table.rows
+    .map(
+      (row) =>
+        `<tr>${Array.from({ length: columnCount }, (_value, index) => `<td>${renderTelegramRichCell(row[index] ?? "")}</td>`).join("")}</tr>`,
+    )
+    .join("");
+  const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
+  return `<table>${header}${body}</table>\n\n`;
+}
+
+function renderTelegramRichMarkdownDocument(markdown: string): string {
+  // The legacy Telegram HTML renderer intentionally downgrades tables to code.
+  // Rich messages are the only Telegram path where emitting native <table> is safe.
+  const blocks = findMarkdownTableBlocks(markdown);
+  if (!blocks.length) {
+    return markdownToTelegramHtml(markdown, { tableMode: "code" });
+  }
+  let cursor = 0;
+  let html = "";
+  for (const block of blocks) {
+    html += markdownToTelegramHtml(markdown.slice(cursor, block.start), {
+      tableMode: "code",
+      wrapFileRefs: false,
+    });
+    html += renderTelegramRichTable(block);
+    cursor = block.end;
+  }
+  html += markdownToTelegramHtml(markdown.slice(cursor), {
+    tableMode: "code",
+    wrapFileRefs: false,
+  });
+  return wrapFileReferencesInHtml(html).trim();
+}
+
+export function sanitizeTelegramRichHtml(html: string): string {
+  return html.trim();
+}
+
+export function markdownToTelegramRichHtml(
+  markdown: string,
+  options: { tableMode?: MarkdownTableMode } = {},
+): string {
+  if (options.tableMode !== "block") {
+    return sanitizeTelegramRichHtml(markdownToTelegramHtml(markdown, options));
+  }
+  return sanitizeTelegramRichHtml(renderTelegramRichMarkdownDocument(markdown ?? ""));
+}
+
+export function splitTelegramRichMessageTextChunks(params: {
+  text: string;
+  textLimit: number;
+  textMode: TelegramRichTextMode;
+  tableMode?: MarkdownTableMode;
+}): TelegramRichTextChunk[] {
+  const html =
+    params.textMode === "html"
+      ? sanitizeTelegramRichHtml(params.text)
+      : markdownToTelegramRichHtml(params.text, { tableMode: params.tableMode });
+  return splitTelegramHtmlChunks(html, params.textLimit).map((chunk) => ({
+    text: chunk,
+    textMode: "html",
+    plainText: telegramHtmlToPlainTextFallback(chunk),
+  }));
 }
 
 type TelegramHtmlTag = {

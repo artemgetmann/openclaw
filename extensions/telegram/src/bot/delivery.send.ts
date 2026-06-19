@@ -1,4 +1,5 @@
 import { type Bot, GrammyError } from "grammy";
+import type { MarkdownTableMode } from "../../../../src/config/types.base.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
@@ -8,6 +9,12 @@ import {
   getTelegramNativeQuoteReplyMessageId,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
+import {
+  buildTelegramRichMessage,
+  getTelegramRichRawApi,
+  removeTelegramRichNativeQuoteParam,
+  toTelegramRichMessageContextParams,
+} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -53,6 +60,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
   thread?: TelegramThreadSpec | null;
   requestParams: Record<string, unknown>;
   send: (effectiveParams: Record<string, unknown>) => Promise<T>;
+  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
   shouldLog?: (err: unknown) => boolean;
 }): Promise<T> {
   const allowThreadlessRetry = params.thread?.scope === "dm";
@@ -77,10 +85,12 @@ export async function sendTelegramWithThreadFallback<T>(params: {
       params.runtime.log?.(
         `telegram ${params.operation}: native quote rejected; retrying with legacy reply_to_message_id`,
       );
+      const removeNativeQuoteParam =
+        params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam;
       return await sendTelegramWithThreadFallback({
         ...params,
         operation: `${params.operation} (legacy reply retry)`,
-        requestParams: removeTelegramNativeQuoteParam(params.requestParams),
+        requestParams: removeNativeQuoteParam(params.requestParams),
       });
     }
     if (!allowThreadlessRetry || !hasThreadId || !isTelegramThreadNotFoundError(err)) {
@@ -115,6 +125,8 @@ export async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
+    tableMode?: MarkdownTableMode;
+    richMessages?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
@@ -156,6 +168,47 @@ export async function sendTelegramText(
       throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
     }
     return await sendPlainFallback();
+  }
+  if (opts?.richMessages !== false) {
+    const richRawApi = getTelegramRichRawApi(bot.api);
+    if (richRawApi) {
+      try {
+        const richParams = toTelegramRichMessageContextParams(baseParams);
+        const richMessage = buildTelegramRichMessage(
+          { text: htmlText, textMode: "html" },
+          {
+            tableMode: opts?.tableMode,
+            skipEntityDetection: opts?.linkPreview === false,
+          },
+        );
+        const res = await sendTelegramWithThreadFallback({
+          operation: "sendRichMessage",
+          runtime,
+          thread: opts?.thread,
+          requestParams: richParams,
+          removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+          shouldLog: () => false,
+          send: (effectiveParams) =>
+            richRawApi.sendRichMessage({
+              chat_id: chatId,
+              rich_message: richMessage,
+              ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+              ...effectiveParams,
+            }),
+        });
+        if (typeof res.message_id !== "number" || !Number.isFinite(res.message_id)) {
+          throw new Error("Telegram sendRichMessage returned no message_id");
+        }
+        runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+        return Math.trunc(res.message_id);
+      } catch (err) {
+        runtime.log?.(
+          `telegram sendRichMessage failed; retrying with legacy sendMessage: ${formatErrorMessage(
+            err,
+          )}`,
+        );
+      }
+    }
   }
   try {
     const res = await sendTelegramWithThreadFallback({
