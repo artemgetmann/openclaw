@@ -116,15 +116,17 @@ that handoff path with `OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path`, or set it to
 `0` to skip the copy.
 
 The user-facing consumer distribution now ships with the visible product name
-`Jarvis.app` / `Jarvis.dmg` / `Jarvis.zip` while preserving the existing
-consumer bundle id for continuity:
+`Jarvis.app` / `Jarvis.dmg` / `Jarvis.zip` and the broad-public Jarvis bundle
+identity. Broad-public defaults use Jarvis-owned runtime state and gateway
+labels; trusted-tester/debug lanes keep their isolated OpenClaw-shaped
+identities:
 
-- bundle identifier: `ai.openclaw.consumer.mac`
+- bundle identifier: `ai.jarvis.mac`
 - executable: `OpenClaw`
 - URL scheme: `openclaw-consumer`
-- state dir: `~/Library/Application Support/OpenClaw/.openclaw`
+- state dir: `~/Library/Application Support/Jarvis/.jarvis`
 - local gateway port: `18789`
-- gateway launch label: `ai.openclaw.gateway`
+- gateway launch label: `ai.jarvis.gateway`
 - app icon: `Jarvis.icns` when that approved asset exists, otherwise the
   packaging scripts keep using `OpenClaw.icns` and print a warning
 
@@ -137,7 +139,9 @@ broader distribution still needs Developer ID + notarization.
 
 Production Consumer releases use Developer ID signing, notarization, and
 Sparkle with the public Jarvis appcast. Do not point Consumer builds at the
-generic upstream OpenClaw appcast.
+generic upstream OpenClaw appcast. A release package should verify as
+`CFBundleIdentifier=ai.jarvis.mac`; older trusted-tester packages used
+`ai.openclaw.consumer.mac`.
 
 ```bash
 # Read-only. Reports missing/present state without printing secret values.
@@ -225,11 +229,10 @@ For a real update to existing installations, bump `APP_VERSION` and/or
 `CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
 same-build upload is just a republish and will not trigger an update.
 
-The public release acceleration spec lives at
-`docs/consumer/jarvis-public-release-acceleration-spec.md`. It captures the
-full plan: one-command resume, bounded GitHub retries, timing, read-only size
-inventory, later safe parallelism, and bundle diet only after compatibility
-proof.
+The historical public release acceleration spec is archived at
+`docs/consumer/archive/jarvis-public-release-acceleration-spec.md`. The
+implemented release wrapper, package script, and printed receipt checks are the
+current source of truth.
 
 The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public

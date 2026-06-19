@@ -13,6 +13,17 @@ describe("consumer Sparkle release gates", () => {
     expect(script).toContain('SPARKLE_FEED_URL="${SPARKLE_FEED_URL}"');
   });
 
+  it("blocks Jarvis bundle ids from using the generic OpenClaw appcast", () => {
+    const script = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
+
+    expect(script).toContain('"$BUNDLE_ID" == ai.openclaw.consumer.mac*');
+    expect(script).toContain('"$BUNDLE_ID" == ai.jarvis.mac*');
+    expect(script).toContain('"$SPARKLE_FEED_URL" == "$DEFAULT_STANDARD_SPARKLE_FEED_URL"');
+    expect(script).toContain(
+      "Jarvis/consumer bundle ids must not point at the generic OpenClaw appcast.",
+    );
+  });
+
   it("keeps notarized consumer distribution blocked without a feed and production key", () => {
     const script = fs.readFileSync(
       path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
@@ -140,8 +151,9 @@ describe("consumer Sparkle release gates", () => {
     );
 
     expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --local-proof");
-    expect(readme).toContain("It does not create `Jarvis.dmg`, `Jarvis.zip`, or");
-    expect(readme).toContain("`jarvis-appcast.xml`; it also does not notarize");
+    expect(readme).toContain("does not create `Jarvis.dmg`, `Jarvis.zip`, or");
+    expect(readme).toContain("`jarvis-appcast.xml`");
+    expect(readme).toContain("does not notarize, publish GitHub assets");
   });
 
   it("adds narrow resumable release phases with saved manifest and receipts", () => {

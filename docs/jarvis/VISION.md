@@ -17,9 +17,20 @@ the user's real environment, not like managing infrastructure.
 ## User
 
 Jarvis starts with high-intent people who want leverage now: founders,
-operators, power users, assistants, and ambitious non-technical users with many
-small digital tasks.
+solo operators, solopreneurs, power users, and ambitious non-technical users
+with many small digital tasks.
 
+The strongest early user is a high-agency individual who owns their computer,
+owns the risk, and wants more execution capacity without building a team or a
+custom automation stack.
+
+Useful shorthand:
+
+> Jarvis is an Iron Man suit for one high-agency operator, not a company uniform
+> for a committee.
+
+Assistants, PA networks, and businesses are useful learning surfaces, but the
+first wedge is not broad employee deployment or enterprise workflow management.
 The product should make normal users feel oriented quickly while still leaving
 power users room to go deeper.
 
@@ -50,7 +61,27 @@ power users room to go deeper.
 - Do not expose runtime placement, ports, bundle IDs, or internal service names
   in primary consumer copy.
 - Do not sell Artem as a custom automation agency. Jarvis is the product.
+- Do not prematurely turn Jarvis into enterprise employee-control software with
+  admin consoles, role-based access, procurement flows, audit theater, or
+  self-hosted enterprise deployments before repeated real demand proves that
+  market is worth pursuing.
 - Do not keep permanent backlog docs in the active path.
+
+## Trust Positioning
+
+Security and trust matter, but the first trust story should be simple and
+truthful:
+
+- local-first Mac execution,
+- open-source inspectability,
+- user-owned environment,
+- approval before external sends, purchases, payments, deletion, or other risky
+  actions,
+- clear proof/logs when Jarvis acts.
+
+Do not lead with high-risk enterprise claims. If a prospect needs full
+self-hosting, local-model infrastructure, admin controls, or procurement-grade
+security review, they are probably not the current first ICP.
 
 ## Current Launch Bias
 

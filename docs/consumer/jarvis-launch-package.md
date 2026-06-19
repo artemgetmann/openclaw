@@ -2,7 +2,7 @@
 
 Status: Jarvis trusted-tester launch package
 Owner: Artem
-Last updated: 2026-06-13
+Last updated: 2026-06-16
 
 Purpose: launch-facing package, pricing, copy, and artifact truth.
 
@@ -26,11 +26,12 @@ identity:
   OpenClaw paths
 - reason: fastest safe path for the small trusted tester ring
 
-Before broad public launch, make a deliberate identity/update-path decision.
-Full migration to `ai.jarvis.mac` is recommended if the goal is clean brand,
-permissions, LaunchAgent identity, and update continuity. If speed wins, the
-alternative is to keep `ai.openclaw.consumer.mac` for one more public-ish beta
-and document that as internal identity debt.
+Broad-public packages should move to `ai.jarvis.mac` before unknown users
+install Jarvis. Broad-public runtime defaults should also use
+`~/Library/Application Support/Jarvis/.jarvis` and `ai.jarvis.gateway`. Keep old
+trusted-tester state cleanly separated unless Artem explicitly chooses a
+migration path: macOS permissions are bundle-id scoped, and dragging the old
+tester identity into public launch creates update and support debt.
 
 ## Current Release
 
@@ -68,7 +69,9 @@ Open release proof:
   older-app prompt/download readiness, and manual public DMG replacement, not a
   complete download/verify/install/relaunch/preserve-state Sparkle update.
 
-Future Jarvis packages and updates must come from the canonical publish lane:
+Future broad-public Jarvis packages and updates must come from the canonical
+publish lane and verify as `ai.jarvis.mac`, Jarvis state path, and
+`ai.jarvis.gateway` before release:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh --publish-release-assets --github-release-tag <latest-tag>
@@ -124,8 +127,8 @@ whether the first useful task is obvious.
 ```
 
 Do not turn the trusted-tester send into a broad public launch. Broader launch
-still needs real tester feedback, fuller Sparkle update-cycle proof, and an
-identity/update-path decision.
+still needs real tester feedback, local proof for the `ai.jarvis.mac` package,
+and fuller Sparkle update-cycle proof.
 
 ## Commercial Package
 
@@ -199,7 +202,8 @@ Honest limitations:
 - third-party skills can run code and should be treated as untrusted until
   reviewed
 - external tools should be installed only from sources the user trusts
-- internal identity remains `ai.openclaw.consumer.mac` for trusted testers
+- trusted-tester identity remains `ai.openclaw.consumer.mac`; broad-public
+  packages should verify as `ai.jarvis.mac`
 - full Sparkle update-cycle proof is still needed before broader distribution
 
 ## 60-Second Demo
@@ -250,7 +254,7 @@ needs a human decision.
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Done for trusted testers   | Jarvis visible branding, public `v2026.3.23` DMG/ZIP/appcast assets, local installed-app proof, separate-user public-DMG install proof, account/trial backend, managed utility backend, Managed Bots-first Telegram path, and Gate2 clean-user proof. |
 | Next tester ring           | Send the `v2026.3.23` DMG, watch first real install/use feedback, and keep package secret-safety plus release-asset verification on every new build.                                                                                                  |
-| Before broad public launch | Identity/update-path decision, fuller Sparkle update-cycle proof, onboarding copy/friction fixes from tester feedback, and Telegram command/settings cleanup if tester feedback shows confusion.                                                      |
+| Before broad public launch | Local proof for the `ai.jarvis.mac` package with Jarvis runtime identity, fuller Sparkle update-cycle proof, onboarding copy/friction fixes from tester feedback, and Telegram command/settings cleanup if tester feedback shows confusion.           |
 | Deferred                   | Maintenance work that has no tester evidence yet.                                                                                                                                                                                                     |
 
 ## Launch Copy
@@ -275,6 +279,6 @@ Pricing one-liner:
 
 - Confirm exact public wording for "powered by OpenClaw" in developer-facing
   surfaces.
-- Decide whether broad public launch migrates to `ai.jarvis.mac` first or ships
-  one more public-ish beta on `ai.openclaw.consumer.mac` with identity debt
-  documented.
+- Decide whether old trusted-tester state starts clean under the new
+  `ai.jarvis.mac` package or gets a deliberate migration tool before broader
+  distribution.

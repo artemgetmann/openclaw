@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const root = process.cwd();
 
 describe("consumer product rename", () => {
-  it("ships release artifacts as Jarvis while preserving consumer identity", () => {
+  it("ships release artifacts as Jarvis while preserving script wiring", () => {
     const distScript = fs.readFileSync(
       path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
       "utf8",
@@ -22,6 +23,31 @@ describe("consumer product rename", () => {
     expect(packageScript).toContain('DEFAULT_APP_NAME="Jarvis"');
     expect(packageScript).toContain("Jarvis.icns");
     expect(packageScript).toContain("APP_ICON_BASENAME");
+  });
+
+  it("moves only the default release bundle identity to Jarvis", () => {
+    const scriptPath = path.join(root, "scripts", "lib", "consumer-instance.sh");
+    const output = execFileSync(
+      "bash",
+      [
+        "-lc",
+        [
+          `source "${scriptPath}"`,
+          'consumer_instance_release_bundle_id ""',
+          "printf '\\n'",
+          'consumer_instance_release_bundle_id "rc"',
+          "printf '\\n'",
+          'consumer_instance_bundle_id ""',
+        ].join("; "),
+      ],
+      { encoding: "utf8" },
+    ).trimEnd();
+
+    expect(output.split("\n")).toEqual([
+      "ai.jarvis.mac",
+      "ai.openclaw.consumer.mac.rc",
+      "ai.openclaw.consumer.mac.debug",
+    ]);
   });
 
   it("verifies that the packaged icon named by Info.plist exists", () => {

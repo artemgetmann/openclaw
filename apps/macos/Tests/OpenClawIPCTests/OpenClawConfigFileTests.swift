@@ -106,7 +106,7 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
         ]) {
             let path = OpenClawConfigFile.stateDirURL().path
-            #expect(path.contains("Library/Application Support/OpenClaw/.openclaw"))
+            #expect(path.contains("Library/Application Support/Jarvis/.jarvis"))
         }
     }
 
@@ -120,7 +120,7 @@ struct OpenClawConfigFileTests {
         ]) {
             #expect(AppFlavor.current == .consumer)
             #expect(AppFlavor.current.appName == "Jarvis")
-            #expect(OpenClawConfigFile.stateDirURL().path.contains("Library/Application Support/OpenClaw/.openclaw"))
+            #expect(OpenClawConfigFile.stateDirURL().path.contains("Library/Application Support/Jarvis/.jarvis"))
         }
 
         await TestIsolation.withEnvValues([
@@ -136,13 +136,18 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func `consumer runtime automatically copies legacy consumer config when destination is empty`() async throws {
+    func `consumer instance runtime automatically copies previous consumer config when destination is empty`() async throws {
+        let instanceID = "migration-lane"
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         let previousState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw Consumer/.openclaw", isDirectory: true)
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw Consumer/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
         let destinationState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
 
         try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
@@ -155,7 +160,7 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_APP_VARIANT": "consumer",
-            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_CONSUMER_INSTANCE_ID": instanceID,
             "OPENCLAW_MIGRATE_APP_RUNTIME": nil,
             "OPENCLAW_DISABLE_APP_RUNTIME_MIGRATION": nil,
             "OPENCLAW_TEST": "1",
@@ -173,13 +178,18 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func `consumer runtime migration can be disabled for controlled smoke lanes`() async throws {
+    func `consumer instance runtime migration can be disabled for controlled smoke lanes`() async throws {
+        let instanceID = "migration-lane"
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         let previousState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw Consumer/.openclaw", isDirectory: true)
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw Consumer/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
         let destinationState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
 
         try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
@@ -192,7 +202,7 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_APP_VARIANT": "consumer",
-            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_CONSUMER_INSTANCE_ID": instanceID,
             "OPENCLAW_MIGRATE_APP_RUNTIME": nil,
             "OPENCLAW_DISABLE_APP_RUNTIME_MIGRATION": "1",
             "OPENCLAW_TEST": "1",
@@ -207,12 +217,12 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func `consumer runtime copies legacy dotdir config when migration is requested`() async throws {
+    func `default Jarvis runtime does not automatically copy legacy dotdir config`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
         let destinationState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/Jarvis/.jarvis", isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
 
         try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
@@ -221,7 +231,7 @@ struct OpenClawConfigFileTests {
             atomically: true,
             encoding: .utf8)
 
-        try await TestIsolation.withEnvValues([
+        await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_APP_VARIANT": "consumer",
@@ -231,41 +241,32 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_TEST": "1",
             "OPENCLAW_TEST_HOME": home.path,
         ]) {
+            #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
             OpenClawPaths.migrateConsumerRuntimeIfNeeded(
                 identity: RuntimeIdentity.current,
                 instanceID: ConsumerInstance.current.id)
-            #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
-            let migrated = try String(
-                contentsOf: destinationState.appendingPathComponent("openclaw.json"),
-                encoding: .utf8)
-            #expect(migrated.contains("legacy-dotdir"))
+            #expect(!FileManager().fileExists(atPath: destinationState.appendingPathComponent("openclaw.json").path))
             #expect(FileManager().fileExists(atPath: legacyState.appendingPathComponent("openclaw.json").path))
         }
     }
 
     @Test
-    func `consumer runtime prefers previous consumer config over legacy main dotdir`() async throws {
+    func `default Jarvis runtime does not automatically copy previous consumer config`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
-        let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
         let previousState = home
             .appendingPathComponent("Library/Application Support/OpenClaw Consumer/.openclaw", isDirectory: true)
         let destinationState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/Jarvis/.jarvis", isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
 
-        try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
         try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
-        try #"{"source":"legacy-main"}"#.write(
-            to: legacyState.appendingPathComponent("openclaw.json"),
-            atomically: true,
-            encoding: .utf8)
         try #"{"source":"previous-consumer"}"#.write(
             to: previousState.appendingPathComponent("openclaw.json"),
             atomically: true,
             encoding: .utf8)
 
-        try await TestIsolation.withEnvValues([
+        await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_APP_VARIANT": "consumer",
@@ -279,27 +280,30 @@ struct OpenClawConfigFileTests {
                 identity: RuntimeIdentity.current,
                 instanceID: ConsumerInstance.current.id)
             #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
-            let migrated = try String(
-                contentsOf: destinationState.appendingPathComponent("openclaw.json"),
-                encoding: .utf8)
-            #expect(migrated.contains("previous-consumer"))
-            #expect(!migrated.contains("legacy-main"))
+            #expect(!FileManager().fileExists(atPath: destinationState.appendingPathComponent("openclaw.json").path))
+            #expect(FileManager().fileExists(atPath: previousState.appendingPathComponent("openclaw.json").path))
         }
     }
 
     @Test
-    func `consumer runtime does not clobber existing OpenClaw config during migration`() async throws {
+    func `consumer instance runtime does not clobber existing OpenClaw config during migration`() async throws {
+        let instanceID = "migration-lane"
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
-        let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
+        let previousState = home
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw Consumer/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
         let destinationState = home
-            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
 
-        try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
         try FileManager().createDirectory(at: destinationState, withIntermediateDirectories: true)
         try #"{"source":"legacy"}"#.write(
-            to: legacyState.appendingPathComponent("openclaw.json"),
+            to: previousState.appendingPathComponent("openclaw.json"),
             atomically: true,
             encoding: .utf8)
         try #"{"source":"new"}"#.write(
@@ -311,7 +315,7 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_APP_VARIANT": "consumer",
-            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_CONSUMER_INSTANCE_ID": instanceID,
             "OPENCLAW_MIGRATE_APP_RUNTIME": nil,
             "OPENCLAW_DISABLE_APP_RUNTIME_MIGRATION": nil,
             "OPENCLAW_TEST": "1",
