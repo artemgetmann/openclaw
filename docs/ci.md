@@ -237,17 +237,17 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 
 ## Runners
 
-| Runner                          | Jobs                                             |
-| ------------------------------- | ------------------------------------------------ |
-| `ubuntu-latest`                 | CI Linux jobs and Workflow Sanity merge gates    |
-| `windows-latest`                | `checks-windows`                                 |
-| `macos-latest`                  | `macos`, `ios`                                   |
-| `blacksmith-16vcpu-ubuntu-2404` | Non-required label/install/sandbox smoke helpers |
+| Runner           | Jobs                                             |
+| ---------------- | ------------------------------------------------ |
+| `ubuntu-latest`  | CI Linux jobs and Workflow Sanity merge gates    |
+| `windows-latest` | `checks-windows`                                 |
+| `macos-latest`   | `macos`, `ios`                                   |
+| `ubuntu-latest`  | Non-required label/install/sandbox smoke helpers |
 
 Critical PR merge gates should prefer GitHub-hosted runners. Custom runner pools
 are useful for speed, but they must not be the only path for `CI / pr-required`
-or `Workflow Sanity / actionlint`; if that pool stalls, merge safety becomes a
-deadlock instead of a gate.
+or high-churn helper workflows; if that pool stalls, merge safety becomes a
+deadlock instead of a gate and optional checks create noisy PR rollups.
 
 CI concurrency is scoped by commit SHA so a stale queued run cannot hold the PR's
 merge gate hostage after a new commit is pushed.
