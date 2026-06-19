@@ -42,7 +42,11 @@ Automation Rule
   `wait --contains ...`; do not pipe Telegram JSON to `grep` when one of those
   options fits.
 - Start with the cheapest truthful check:
-  `openclaw telegram-user status --json`
+  `openclaw telegram-user doctor --json`
+- Use raw `status --json` only when you need the underlying state object. If
+  setup is not ready, `doctor --json` is the clearest interpreter because it
+  names the expected env file, expected session path, missing setup piece, and
+  next product step.
 - For broad unread triage, start with inbox discovery before picking a chat:
   `openclaw telegram-user inbox --json`
 - To focus only on unread conversations, use:
@@ -78,18 +82,22 @@ When Not To Use
 
 Setup Routing
 
-- If `status --json` returns `missing_credentials`, route through
+- If `doctor --json` returns `missing_credentials`, route through
   `consumer-setup`.
   Explain plainly that Telegram-as-me is not connected yet because this Mac
   still needs the user's Telegram API credentials from `my.telegram.org/apps`.
-- If `status --json` returns `missing_session`, route through `consumer-setup`.
+- If `doctor --json` returns `missing_session`, route through `consumer-setup`.
   Explain that Telegram-as-me is not logged in yet and offer to connect it now.
-- If `status --json` returns `awaiting_code`, ask the user for the Telegram OTP
+- If `doctor --json` returns `awaiting_code`, ask the user for the Telegram OTP
   that was just sent to their Telegram app/SMS.
-- If `status --json` returns `awaiting_password`, explain that Telegram 2FA is
+- If `doctor --json` returns `awaiting_password`, explain that Telegram 2FA is
   still required before the real-account session can be used.
-- If `status --json` returns `needs_reauth`, say the saved Telegram session is
+- If `doctor --json` returns `needs_reauth`, say the saved Telegram session is
   no longer accepted and must be logged in again.
+- Do not use repo-local `scripts/telegram-e2e/.env.local` or
+  `scripts/telegram-e2e/tmp/userbot.session` as the normal consumer setup
+  answer. Those files are test/operator compatibility only; consumers need the
+  packaged Telegram User setup path.
 - If the user explicitly wants the terminal path, use the exact commands below.
   Otherwise keep the explanation in product language first.
 
@@ -107,6 +115,8 @@ Login Flow
 
 Default Commands
 
+- Doctor / setup-state interpreter:
+  `openclaw telegram-user doctor --json`
 - Status:
   `openclaw telegram-user status --json`
 - Inbox overview across recent chats:

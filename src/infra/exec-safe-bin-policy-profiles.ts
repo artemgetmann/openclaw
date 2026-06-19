@@ -332,6 +332,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     maxPositional: 2,
     commandFamilies: [
       ["telegram-user", "status"],
+      ["telegram-user", "doctor"],
       ["telegram-user", "login"],
       ["telegram-user", "logout"],
       ["telegram-user", "precheck"],

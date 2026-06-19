@@ -43,6 +43,10 @@ export function registerTelegramUserCli(program: Command) {
             "Inspect whether the Telegram-as-me session is ready, expired, or awaiting reauth.",
           ],
           [
+            "openclaw telegram-user doctor --json",
+            "Explain setup state and next steps without repairing or exposing secrets.",
+          ],
+          [
             'openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello"',
             "Send as the Telegram user account.",
           ],
@@ -89,6 +93,19 @@ export function registerTelegramUserCli(program: Command) {
       await runTelegramUserCommand(async () => {
         const { telegramUserStatusCommand } = await import("../commands/telegram-user.js");
         await telegramUserStatusCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("doctor")
+      .description("Explain Telegram-as-me setup state and next steps without repairing it"),
+  )
+    .option("--chat <target>", "Resolve and validate this chat target when session is healthy")
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserDoctorCommand } = await import("../commands/telegram-user.js");
+        await telegramUserDoctorCommand(opts, defaultRuntime);
       });
     });
 

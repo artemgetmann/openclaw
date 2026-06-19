@@ -2,12 +2,14 @@ import { Command, Option } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const telegramUserInboxCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserDoctorCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserReadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicCreateCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/telegram-user.js", () => ({
+  telegramUserDoctorCommand,
   telegramUserInboxCommand,
   telegramUserReadCommand,
   telegramUserDownloadCommand,
@@ -46,6 +48,7 @@ describe("telegram-user cli", () => {
     );
 
     expect(help).toContain("openclaw telegram-user status --json");
+    expect(help).toContain("openclaw telegram-user doctor --json");
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
     expect(help).toContain(
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
@@ -55,6 +58,39 @@ describe("telegram-user cli", () => {
     );
     expect(help).toContain("instead of piping JSON to grep");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
+  });
+
+  it("registers doctor and forwards optional chat/state flags", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    expect(telegramUser?.commands.map((command) => command.name())).toContain("doctor");
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "doctor",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--env-file",
+        "/tmp/tg.env",
+        "--session",
+        "/tmp/userbot.session",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserDoctorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "@jarvis_tester_1_bot",
+        envFile: "/tmp/tg.env",
+        json: true,
+        session: "/tmp/userbot.session",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("registers the inbox command and forwards unread triage flags", async () => {
