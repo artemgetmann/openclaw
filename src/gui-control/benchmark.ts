@@ -26,7 +26,8 @@ export type GuiBenchmarkTask =
   | "x-to-claude"
   | "safari-notes-claude"
   | "workspace-restore"
-  | "same-stage-activation";
+  | "same-stage-activation"
+  | "same-stage-activation-matrix";
 
 export type GuiBenchmarkOptions = {
   runtime: GuiRuntimeName;
@@ -44,6 +45,24 @@ export type GuiBenchmarkOptions = {
   allowClipboardFallback?: boolean;
   progress?: (message: string) => void;
   runtimeImpl?: GuiRuntime;
+};
+
+export type GuiSameStageActivationReport = {
+  targetApp: string;
+  frontmostBefore?: string;
+  frontmostAfterTask?: string;
+  targetVisibleBefore: boolean | null;
+  targetVisibleAfter: boolean | null;
+  strictRestoreNeeded: boolean | null;
+  forcedActivationUsed: boolean | null;
+  launchOrOpenRecoveryUsed: boolean | null;
+  strategy?: string;
+  methodEvidence?: unknown;
+  visibleSameStageApproximation: boolean | null;
+  stageManagerMembershipProven: boolean | null;
+  stageManagerMembershipNote?: string;
+  visualObservationNotesPath?: string;
+  notes: string;
 };
 
 export type GuiBenchmarkResult = {
@@ -112,23 +131,8 @@ export type GuiBenchmarkResult = {
     sameStageOrBackgroundSafe: boolean | null;
     notes: string;
   };
-  sameStageActivation?: {
-    targetApp: string;
-    frontmostBefore?: string;
-    frontmostAfterTask?: string;
-    targetVisibleBefore: boolean | null;
-    targetVisibleAfter: boolean | null;
-    strictRestoreNeeded: boolean | null;
-    forcedActivationUsed: boolean | null;
-    launchOrOpenRecoveryUsed: boolean | null;
-    strategy?: string;
-    methodEvidence?: unknown;
-    visibleSameStageApproximation: boolean | null;
-    stageManagerMembershipProven: boolean | null;
-    stageManagerMembershipNote?: string;
-    visualObservationNotesPath?: string;
-    notes: string;
-  };
+  sameStageActivation?: GuiSameStageActivationReport;
+  sameStageActivationMatrix?: GuiSameStageActivationReport[];
   virtualPointer: {
     present: boolean | null;
     notes: string;
@@ -188,6 +192,9 @@ const CODEX_COMPUTER_USE_BASELINE = {
   elapsedSeconds: 95,
   actionCount: 10,
 } as const;
+
+// Keep this matrix small: it probes window visibility semantics, not app-specific workflows.
+const SAME_STAGE_ACTIVATION_MATRIX_TARGETS = ["Claude", "Notes", "Reminders"] as const;
 
 function uniqueBenchmarkToken(): string {
   return randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
@@ -290,19 +297,20 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
       return { ok: true, actionCount: 1, movedFocus: true };
     },
     async sameStageActivate(app: string) {
+      const visibleBefore = app === "Claude";
       return {
         ok: true,
         actionCount: 1,
         movedFocus: false,
         frontmostBefore: frontmostApp,
         frontmostAfterTask: frontmostApp,
-        targetVisibleBefore: app === "Claude",
-        targetVisibleAfter: app === "Claude",
+        targetVisibleBefore: visibleBefore,
+        targetVisibleAfter: true,
         forcedActivationUsed: false,
         launchOrOpenRecoveryUsed: false,
         strategy: "dry-run-same-stage-activation",
         methodEvidence: { tool: "same_stage_activate", app, dryRun: true },
-        visibleSameStageApproximation: app === "Claude",
+        visibleSameStageApproximation: true,
         stageManagerMembershipProven: false,
         stageManagerMembershipNote: "Dry-run does not measure exact Stage Manager membership.",
         message:
@@ -1587,6 +1595,67 @@ function evaluateQualityGate(
     };
   }
 
+  if (result.task === "same-stage-activation-matrix") {
+    const activations = result.sameStageActivationMatrix ?? [];
+    const frontmostBefore =
+      activations.find((activation) => activation.frontmostBefore)?.frontmostBefore ??
+      result.workspace.frontmostBefore;
+    // Already-visible targets are useful telemetry but not proof that OCU can
+    // bring a hidden Stage Manager window into the current working set.
+    const hiddenToVisible = activations.filter(
+      (activation) =>
+        activation.targetVisibleBefore === false && activation.targetVisibleAfter === true,
+    );
+
+    if (!activations.length) {
+      blockers.push("Same-stage activation matrix did not record any target evidence.");
+    }
+    if (!frontmostBefore || normalizeVisibleText(frontmostBefore) !== "safari") {
+      blockers.push("Safari was not proven frontmost before same-stage activation matrix.");
+    }
+    if (!hiddenToVisible.length) {
+      blockers.push("No matrix target proved hidden-to-visible same-stage activation.");
+    }
+
+    for (const activation of activations) {
+      const prefix = `${activation.targetApp}:`;
+      if (activation.targetVisibleAfter !== true) {
+        blockers.push(
+          `${prefix} target visibility after same-stage activation was not proven true.`,
+        );
+      }
+      if (activation.visibleSameStageApproximation !== true) {
+        blockers.push(`${prefix} visible same-stage approximation was not proven true.`);
+      }
+      if (activation.forcedActivationUsed !== false) {
+        blockers.push(
+          activation.forcedActivationUsed === true
+            ? `${prefix} OCU used forced activation instead of same-stage activation.`
+            : `${prefix} OCU did not report whether forced activation was used.`,
+        );
+      }
+      if (activation.launchOrOpenRecoveryUsed !== false) {
+        blockers.push(
+          activation.launchOrOpenRecoveryUsed === true
+            ? `${prefix} OCU used launch/open recovery; target was expected to already be running.`
+            : `${prefix} OCU did not report whether launch/open recovery was used.`,
+        );
+      }
+    }
+
+    if (result.workspace.frontmostRestored !== true) {
+      blockers.push("Frontmost Safari workspace preservation was not proven after matrix run.");
+    }
+
+    return {
+      codexComputerUseParity: blockers.length ? "functional-pass-with-debt" : "pass",
+      onParWithCodexComputerUse: !blockers.length,
+      baselineElapsedSeconds,
+      baselineActionCount,
+      blockers,
+    };
+  }
+
   // A functional pass is not automatically product parity. Codex Computer Use
   // is the reference because it completed the task quickly, visibly, without
   // clipboard recovery, and with less user-workspace disruption.
@@ -1635,6 +1704,25 @@ function evaluateQualityGate(
     baselineActionCount,
     blockers,
   };
+}
+
+function renderSameStageActivationMatrix(
+  matrix: GuiSameStageActivationReport[] | undefined,
+): string[] {
+  if (!matrix?.length) {
+    return [];
+  }
+  const hiddenToVisible = matrix.filter(
+    (activation) =>
+      activation.targetVisibleBefore === false && activation.targetVisibleAfter === true,
+  ).length;
+  return [
+    `- same-stage matrix hidden-to-visible proofs: ${hiddenToVisible}/${matrix.length}`,
+    ...matrix.map(
+      (activation) =>
+        `- same-stage ${activation.targetApp}: before=${activation.targetVisibleBefore ?? "unknown"} after=${activation.targetVisibleAfter ?? "unknown"} forced=${activation.forcedActivationUsed ?? "unknown"} open=${activation.launchOrOpenRecoveryUsed ?? "unknown"} approx=${activation.visibleSameStageApproximation ?? "unknown"}`,
+    ),
+  ];
 }
 
 function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): string {
@@ -1705,6 +1793,7 @@ function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): str
     result.sameStageActivation?.visualObservationNotesPath
       ? `- visual/manual observation notes: ${result.sameStageActivation.visualObservationNotesPath}`
       : "",
+    ...renderSameStageActivationMatrix(result.sameStageActivationMatrix),
     `- virtual pointer/intent: ${result.virtualPointer.present ?? "unknown"}`,
     result.qualityGate.blockers.length
       ? `- parity blockers: ${result.qualityGate.blockers.join(" | ")}`
@@ -1789,7 +1878,7 @@ async function scoreVirtualPointerProof(
 function sameStageActivationReport(
   targetApp: string,
   result: SameStageActivationResult,
-): NonNullable<GuiBenchmarkResult["sameStageActivation"]> {
+): GuiSameStageActivationReport {
   return {
     targetApp,
     frontmostBefore: result.frontmostBefore,
@@ -1812,9 +1901,9 @@ function sameStageActivationReport(
 }
 
 function updateSameStageActivationWorkspace(
-  activation: GuiBenchmarkResult["sameStageActivation"],
+  activation: GuiSameStageActivationReport | undefined,
   workspace: GuiBenchmarkResult["workspace"],
-): GuiBenchmarkResult["sameStageActivation"] {
+): GuiSameStageActivationReport | undefined {
   if (!activation) {
     return undefined;
   }
@@ -1827,6 +1916,15 @@ function updateSameStageActivationWorkspace(
         ? null
         : workspace.frontmostChanged || workspace.workspaceMeasurement === "changed-by-runtime",
   };
+}
+
+function updateSameStageActivationMatrixWorkspace(
+  activations: GuiSameStageActivationReport[] | undefined,
+  workspace: GuiBenchmarkResult["workspace"],
+): GuiSameStageActivationReport[] | undefined {
+  return activations?.map(
+    (activation) => updateSameStageActivationWorkspace(activation, workspace) ?? activation,
+  );
 }
 
 async function finalizeBenchmarkResult(
@@ -1861,6 +1959,10 @@ async function finalizeBenchmarkResult(
     ...base,
     stageManager: scoreStageManagerPreservation(base.stageManager, workspace),
     sameStageActivation: updateSameStageActivationWorkspace(base.sameStageActivation, workspace),
+    sameStageActivationMatrix: updateSameStageActivationMatrixWorkspace(
+      base.sameStageActivationMatrix,
+      workspace,
+    ),
     virtualPointer,
     actionCount: base.actionCount + workspace.restoreActionCount,
     workspace,
@@ -2487,6 +2589,97 @@ async function runSameStageActivationBenchmark(
   return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
 }
 
+async function runSameStageActivationMatrixBenchmark(
+  options: GuiBenchmarkOptions,
+): Promise<GuiBenchmarkResult> {
+  const started = Date.now();
+  const progress = options.progress ?? (() => undefined);
+  const runtime = options.runtimeImpl ?? createBenchmarkRuntime(options);
+  const workspaceBefore = await captureWorkspace(runtime);
+
+  if (!runtime.sameStageActivate) {
+    const elapsedSeconds = (Date.now() - started) / 1000;
+    const base = {
+      ok: false,
+      runtime: options.runtime,
+      task: options.task,
+      dryRun: Boolean(options.dryRun),
+      elapsedSeconds,
+      ...emptyGuiVerifierStats(),
+      directRuntimeEscape: false,
+      replyTextExtracted: false,
+      replyExtractionMethod: "none" as const,
+      xWindow: {
+        openAttempted: false,
+        openSucceeded: null,
+      },
+      stageManager: {
+        sameStageOrBackgroundSafe: null,
+        notes: "Not measured because the runtime does not expose sameStageActivate(app).",
+      },
+      virtualPointer: {
+        present: options.dryRun ? false : null,
+        notes: "Same-stage activation matrix does not require virtual pointer proof.",
+      },
+      audit: [],
+      sameStageActivationMatrix: [],
+      failureReason: "Selected GUI runtime does not support same-stage activation.",
+    };
+    return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+  }
+
+  const reports: GuiSameStageActivationReport[] = [];
+  const stats: GuiVerifierStats[] = [];
+  const failures: string[] = [];
+
+  // Run sequentially so each app reports its own before/after state against the
+  // workspace produced by the previous activation, matching the watched flow.
+  for (const targetApp of SAME_STAGE_ACTIVATION_MATRIX_TARGETS) {
+    progress(`Activating ${targetApp} same-stage`);
+    const activation = await runtime.sameStageActivate(targetApp);
+    reports.push(sameStageActivationReport(targetApp, activation));
+    stats.push(statsFromActionResult(activation));
+    if (!activation.ok) {
+      failures.push(`${targetApp}: ${activation.message ?? "same-stage activation failed"}`);
+    }
+  }
+
+  const mergedStats = mergeStats(stats);
+  const elapsedSeconds = (Date.now() - started) / 1000;
+  const allApproximated = reports.every(
+    (activation) => activation.visibleSameStageApproximation === true,
+  );
+  const base = {
+    ok: failures.length === 0,
+    runtime: options.runtime,
+    task: options.task,
+    dryRun: Boolean(options.dryRun),
+    elapsedSeconds,
+    ...mergedStats,
+    directRuntimeEscape: false,
+    replyTextExtracted: false,
+    replyExtractionMethod: "none" as const,
+    xWindow: {
+      openAttempted: false,
+      openSucceeded: null,
+    },
+    stageManager: {
+      sameStageOrBackgroundSafe: allApproximated,
+      notes: allApproximated
+        ? "OCU reported target-visible same-stage approximations for every matrix app; exact Stage Manager membership was not measured."
+        : "At least one matrix app did not report target-visible same-stage approximation; exact Stage Manager membership was not measured.",
+    },
+    sameStageActivationMatrix: reports,
+    virtualPointer: {
+      present: options.dryRun ? false : null,
+      notes: "Same-stage activation matrix records method evidence separately from pointer proof.",
+    },
+    audit: [],
+    failureReason: failures.length ? failures.join(" | ") : undefined,
+  };
+  return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+}
+
 export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<GuiBenchmarkResult> {
   const started = Date.now();
   const progress = options.progress ?? (() => undefined);
@@ -2494,6 +2687,10 @@ export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<Gui
 
   if (options.task === "same-stage-activation") {
     return runSameStageActivationBenchmark(options);
+  }
+
+  if (options.task === "same-stage-activation-matrix") {
+    return runSameStageActivationMatrixBenchmark(options);
   }
 
   if (options.task === "workspace-restore") {

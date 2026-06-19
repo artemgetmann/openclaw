@@ -17,7 +17,8 @@ function parseTask(value: string): GuiBenchmarkTask {
     value === "x-to-claude" ||
     value === "safari-notes-claude" ||
     value === "workspace-restore" ||
-    value === "same-stage-activation"
+    value === "same-stage-activation" ||
+    value === "same-stage-activation-matrix"
   ) {
     return value;
   }
@@ -42,7 +43,7 @@ export function registerGuiBenchmarkCli(program: Command) {
     .requiredOption("--runtime <runtime>", "Runtime adapter: agent-desktop, open-computer-use")
     .requiredOption(
       "--task <task>",
-      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore, same-stage-activation",
+      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore, same-stage-activation, same-stage-activation-matrix",
     )
     .option("--dry-run", "Simulate the benchmark without touching real apps", false)
     .option("--write-report", "Write structured JSON report under artifacts/gui-benchmark", false)

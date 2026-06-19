@@ -379,6 +379,136 @@ describe("runGuiBenchmark", () => {
     );
   });
 
+  it("runs same-stage-activation-matrix and requires hidden-to-visible proof", async () => {
+    const progress: string[] = [];
+    const activationCalls: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "same-stage-activation-matrix",
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Safari", frontmost: true },
+            { appName: "Claude", frontmost: false },
+            { appName: "Notes", frontmost: false },
+            { appName: "Reminders", frontmost: false },
+          ];
+        },
+        async observe() {
+          return benchmarkSnapshot({ appName: "Claude" });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+        async sameStageActivate(app: string) {
+          activationCalls.push(app);
+          const targetVisibleBefore = app === "Claude";
+          return {
+            ok: true,
+            actionCount: 1,
+            movedFocus: false,
+            frontmostBefore: "Safari",
+            frontmostAfterTask: "Safari",
+            targetVisibleBefore,
+            targetVisibleAfter: true,
+            forcedActivationUsed: false,
+            launchOrOpenRecoveryUsed: false,
+            strategy: "stage-manager-visible-window-raise",
+            methodEvidence: {
+              tool: "same_stage_activate",
+              app,
+              measuredMembership: false,
+            },
+            visibleSameStageApproximation: true,
+          };
+        },
+      },
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task).toBe("same-stage-activation-matrix");
+    expect(activationCalls).toEqual(["Claude", "Notes", "Reminders"]);
+    expect(result.actionCount).toBe(3);
+    expect(result.sameStageActivationMatrix).toHaveLength(3);
+    expect(result.sameStageActivationMatrix?.map((activation) => activation.targetApp)).toEqual([
+      "Claude",
+      "Notes",
+      "Reminders",
+    ]);
+    expect(
+      result.sameStageActivationMatrix?.filter(
+        (activation) =>
+          activation.targetVisibleBefore === false && activation.targetVisibleAfter === true,
+      ),
+    ).toHaveLength(2);
+    expect(result.qualityGate.codexComputerUseParity).toBe("pass");
+    expect(result.qualityGate.blockers).toEqual([]);
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
+    expect(result.markdownSummary).toContain("same-stage matrix hidden-to-visible proofs: 2/3");
+    expect(result.markdownSummary).toContain("same-stage Notes: before=false after=true");
+    expect(progress).toEqual([
+      "Activating Claude same-stage",
+      "Activating Notes same-stage",
+      "Activating Reminders same-stage",
+    ]);
+  });
+
+  it("marks same-stage-activation-matrix as debt when no target starts hidden", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "same-stage-activation-matrix",
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Safari", frontmost: true },
+            { appName: "Claude", frontmost: false },
+            { appName: "Notes", frontmost: false },
+            { appName: "Reminders", frontmost: false },
+          ];
+        },
+        async observe() {
+          return benchmarkSnapshot({ appName: "Claude" });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+        async sameStageActivate(app: string) {
+          return {
+            ok: true,
+            actionCount: 1,
+            movedFocus: false,
+            frontmostBefore: "Safari",
+            frontmostAfterTask: "Safari",
+            targetVisibleBefore: true,
+            targetVisibleAfter: true,
+            forcedActivationUsed: false,
+            launchOrOpenRecoveryUsed: false,
+            strategy: "stage-manager-visible-window-raise",
+            methodEvidence: { tool: "same_stage_activate", app },
+            visibleSameStageApproximation: true,
+          };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.qualityGate.codexComputerUseParity).toBe("functional-pass-with-debt");
+    expect(result.qualityGate.blockers).toContain(
+      "No matrix target proved hidden-to-visible same-stage activation.",
+    );
+    expect(result.markdownSummary).toContain("same-stage matrix hidden-to-visible proofs: 0/3");
+  });
+
   it("records workspace restore diagnostics for each source app", async () => {
     const progress: string[] = [];
     let frontmost = "Terminal";
