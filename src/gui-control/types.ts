@@ -73,6 +73,21 @@ export type ActionResult = {
   raw?: unknown;
 };
 
+export type SameStageActivationResult = ActionResult & {
+  frontmostBefore?: string;
+  frontmostAfterTask?: string;
+  targetVisibleBefore?: boolean;
+  targetVisibleAfter?: boolean;
+  forcedActivationUsed?: boolean;
+  launchOrOpenRecoveryUsed?: boolean;
+  strategy?: string;
+  methodEvidence?: unknown;
+  visibleSameStageApproximation?: boolean;
+  stageManagerMembershipProven?: boolean;
+  stageManagerMembershipNote?: string;
+  visualObservationNotesPath?: string;
+};
+
 export type VirtualPointerEvidence = {
   present: boolean;
   source: string;
@@ -100,6 +115,7 @@ export interface GuiRuntime {
   readClipboard?(): Promise<{ ok: boolean; text?: string; raw?: unknown }>;
   writeClipboard?(text: string): Promise<ActionResult>;
   getVirtualPointerEvidence?(): Promise<VirtualPointerEvidence>;
+  sameStageActivate?(app: string): Promise<SameStageActivationResult>;
 }
 
 export type GuiAuditRecord = {

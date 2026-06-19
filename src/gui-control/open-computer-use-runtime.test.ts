@@ -6,6 +6,7 @@ import {
   OpenComputerUseRuntime,
   parseOpenComputerUseActionResult,
   parseOpenComputerUseApps,
+  parseOpenComputerUseSameStageActivationResult,
   parseOpenComputerUseSnapshot,
   parseOpenComputerUseVirtualPointerEvidence,
   parseOpenComputerUseWindows,
@@ -286,6 +287,54 @@ describe("parseOpenComputerUseActionResult", () => {
   });
 });
 
+describe("parseOpenComputerUseSameStageActivationResult", () => {
+  it("extracts same-stage activation evidence from JSON text content", () => {
+    const result = parseOpenComputerUseSameStageActivationResult({
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            ok: true,
+            frontmostBefore: "Safari",
+            frontmostAfterTask: "Safari",
+            targetVisibleBefore: false,
+            targetVisibleAfter: true,
+            forcedActivationUsed: false,
+            launchOrOpenRecoveryUsed: false,
+            strategy: "stage-manager-visible-window-raise",
+            methodEvidence: { measuredMembership: false },
+            visibleSameStageApproximation: true,
+            stageManagerMembershipProven: false,
+            stageManagerMembershipNote:
+              "macOS does not expose public evidence for arbitrary Stage Manager group membership.",
+            visualObservationNotesPath: "artifacts/gui-benchmark/manual-note.md",
+          }),
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        frontmostBefore: "Safari",
+        frontmostAfterTask: "Safari",
+        targetVisibleBefore: false,
+        targetVisibleAfter: true,
+        forcedActivationUsed: false,
+        launchOrOpenRecoveryUsed: false,
+        strategy: "stage-manager-visible-window-raise",
+        methodEvidence: { measuredMembership: false },
+        visibleSameStageApproximation: true,
+        stageManagerMembershipProven: false,
+        stageManagerMembershipNote:
+          "macOS does not expose public evidence for arbitrary Stage Manager group membership.",
+        visualObservationNotesPath: "artifacts/gui-benchmark/manual-note.md",
+      }),
+    );
+  });
+});
+
 describe("parseOpenComputerUseVirtualPointerEvidence", () => {
   it("accepts non-hidden visual cursor observations with cursor geometry", () => {
     const evidence = parseOpenComputerUseVirtualPointerEvidence(
@@ -393,6 +442,39 @@ describe("OpenComputerUseRuntime", () => {
         element_index: 124,
         action: "AXPress",
       }),
+    ]);
+  });
+
+  it("calls OCU same_stage_activate with the target app", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
+    const argsPath = path.join(tempDir, "argv.json");
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(1)));`,
+          "console.log(JSON.stringify({ ok: true, targetVisibleAfter: true, visibleSameStageApproximation: true }));",
+        ].join(""),
+      ],
+    });
+
+    const result = await runtime.sameStageActivate("Claude");
+    const argv = JSON.parse(await fs.readFile(argsPath, "utf8"));
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        targetVisibleAfter: true,
+        visibleSameStageApproximation: true,
+      }),
+    );
+    expect(argv).toEqual([
+      "call",
+      "same_stage_activate",
+      "--args",
+      JSON.stringify({ app: "Claude" }),
     ]);
   });
 

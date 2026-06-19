@@ -13,7 +13,12 @@ function parseRuntime(value: string): GuiRuntimeName {
 }
 
 function parseTask(value: string): GuiBenchmarkTask {
-  if (value === "x-to-claude" || value === "safari-notes-claude" || value === "workspace-restore") {
+  if (
+    value === "x-to-claude" ||
+    value === "safari-notes-claude" ||
+    value === "workspace-restore" ||
+    value === "same-stage-activation"
+  ) {
     return value;
   }
   throw new Error(`Unsupported GUI benchmark task: ${value}`);
@@ -37,7 +42,7 @@ export function registerGuiBenchmarkCli(program: Command) {
     .requiredOption("--runtime <runtime>", "Runtime adapter: agent-desktop, open-computer-use")
     .requiredOption(
       "--task <task>",
-      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore",
+      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore, same-stage-activation",
     )
     .option("--dry-run", "Simulate the benchmark without touching real apps", false)
     .option("--write-report", "Write structured JSON report under artifacts/gui-benchmark", false)

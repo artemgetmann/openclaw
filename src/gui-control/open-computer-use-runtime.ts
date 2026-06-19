@@ -7,6 +7,7 @@ import type {
   ElementRef,
   GuiRuntime,
   GuiSnapshot,
+  SameStageActivationResult,
   VirtualPointerEvidence,
   WindowState,
 } from "./types.js";
@@ -553,6 +554,89 @@ export function parseOpenComputerUseActionResult(raw: unknown, commandOk = true)
   };
 }
 
+export function parseOpenComputerUseSameStageActivationResult(
+  raw: unknown,
+  commandOk = true,
+): SameStageActivationResult {
+  const record = asRecord(raw);
+  const payload = asRecord(unwrapPayload(raw));
+  const action = parseOpenComputerUseActionResult(raw, commandOk);
+  const forcedActivationUsed =
+    payload.forcedActivationUsed ?? payload.forced_activation_used ?? record.forcedActivationUsed;
+  const launchOrOpenRecoveryUsed =
+    payload.launchOrOpenRecoveryUsed ??
+    payload.launch_or_open_recovery_used ??
+    record.launchOrOpenRecoveryUsed;
+  const targetVisibleBefore =
+    payload.targetVisibleBefore ?? payload.target_visible_before ?? record.targetVisibleBefore;
+  const targetVisibleAfter =
+    payload.targetVisibleAfter ?? payload.target_visible_after ?? record.targetVisibleAfter;
+  const visibleSameStageApproximation =
+    payload.visibleSameStageApproximation ??
+    payload.visible_same_stage_approximation ??
+    record.visibleSameStageApproximation;
+  const stageManagerMembershipProven =
+    payload.stageManagerMembershipProven ??
+    payload.stage_manager_membership_proven ??
+    record.stageManagerMembershipProven;
+  const strategies = payload.strategies ?? payload.strategyEvidence ?? record.strategies;
+  const strategyFromEvidence = Array.isArray(strategies)
+    ? firstString(
+        asRecord(strategies.find((strategy) => asRecord(strategy).used === true)).name,
+        undefined,
+      )
+    : undefined;
+
+  return {
+    ...action,
+    frontmostBefore: firstString(
+      payload.frontmostBefore ?? payload.frontmost_before ?? record.frontmostBefore,
+      undefined,
+    ),
+    frontmostAfterTask: firstString(
+      payload.frontmostAfterTask ??
+        payload.frontmostAfter ??
+        payload.frontmost_after_task ??
+        payload.frontmost_after ??
+        record.frontmostAfterTask,
+      undefined,
+    ),
+    targetVisibleBefore: typeof targetVisibleBefore === "boolean" ? targetVisibleBefore : undefined,
+    targetVisibleAfter: typeof targetVisibleAfter === "boolean" ? targetVisibleAfter : undefined,
+    forcedActivationUsed:
+      typeof forcedActivationUsed === "boolean" ? forcedActivationUsed : undefined,
+    launchOrOpenRecoveryUsed:
+      typeof launchOrOpenRecoveryUsed === "boolean" ? launchOrOpenRecoveryUsed : undefined,
+    strategy: firstString(payload.strategy ?? record.strategy, strategyFromEvidence),
+    methodEvidence:
+      payload.methodEvidence ??
+      payload.method_evidence ??
+      payload.sameStageMethodEvidence ??
+      payload.same_stage_method_evidence ??
+      (strategies ? { strategies } : undefined) ??
+      undefined,
+    visibleSameStageApproximation:
+      typeof visibleSameStageApproximation === "boolean"
+        ? visibleSameStageApproximation
+        : undefined,
+    stageManagerMembershipProven:
+      typeof stageManagerMembershipProven === "boolean" ? stageManagerMembershipProven : undefined,
+    stageManagerMembershipNote: firstString(
+      payload.stageManagerMembershipNote ??
+        payload.stage_manager_membership_note ??
+        record.stageManagerMembershipNote,
+      undefined,
+    ),
+    visualObservationNotesPath: firstString(
+      payload.visualObservationNotesPath ??
+        payload.visual_observation_notes_path ??
+        payload.visualNotesPath ??
+        payload.visual_notes_path,
+      undefined,
+    ),
+  };
+}
+
 function readElementIndex(target: ElementRef): number | undefined {
   const fromRef = /^@?(\d+)$/.exec(target.ref) ?? /^ocu:(\d+)$/.exec(target.ref);
   return firstNumber(fromRef?.[1]);
@@ -761,5 +845,15 @@ export class OpenComputerUseRuntime implements GuiRuntime {
       direction: options.direction ?? "down",
       pages: options.amount ?? 3,
     });
+  }
+
+  async sameStageActivate(app: string): Promise<SameStageActivationResult> {
+    const result = await this.runActionJson([
+      "call",
+      "same_stage_activate",
+      "--args",
+      JSON.stringify({ app }),
+    ]);
+    return parseOpenComputerUseSameStageActivationResult(result.raw, result.ok);
   }
 }

@@ -218,6 +218,122 @@ describe("runGuiBenchmark", () => {
     expect(progress).toEqual([]);
   });
 
+  it("runs same-stage-activation in dry-run mode with deterministic report evidence", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "same-stage-activation",
+      dryRun: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task).toBe("same-stage-activation");
+    expect(result.actionCount).toBe(1);
+    expect(result.sameStageActivation).toMatchObject({
+      targetApp: "Claude",
+      frontmostBefore: "Safari",
+      frontmostAfterTask: "Safari",
+      targetVisibleBefore: true,
+      targetVisibleAfter: true,
+      forcedActivationUsed: false,
+      launchOrOpenRecoveryUsed: false,
+      visibleSameStageApproximation: true,
+      strategy: "dry-run-same-stage-activation",
+    });
+    expect(result.sameStageActivation?.methodEvidence).toEqual({
+      tool: "same_stage_activate",
+      app: "Claude",
+      dryRun: true,
+    });
+    expect(result.sameStageActivation?.strictRestoreNeeded).toBeNull();
+    expect(result.stageManager.notes).toContain("exact Stage Manager membership was not measured");
+    expect(result.qualityGate.codexComputerUseParity).toBe("not-measured");
+    expect(progress).toEqual(["Activating Claude same-stage"]);
+  });
+
+  it("records same-stage activation machine evidence separately from visual notes", async () => {
+    let activationCalls = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "same-stage-activation",
+      dryRun: false,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Safari", frontmost: true },
+            { appName: "Claude", frontmost: false },
+          ];
+        },
+        async listWindows() {
+          return [
+            { id: "safari-window", appName: "Safari", title: "Home / X", focused: true },
+            { id: "claude-window", appName: "Claude", title: "Claude", focused: false },
+          ];
+        },
+        async observe() {
+          return benchmarkSnapshot({ appName: "Claude" });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+        async sameStageActivate(app: string) {
+          activationCalls += 1;
+          return {
+            ok: true,
+            actionCount: 1,
+            movedFocus: false,
+            frontmostBefore: "Safari",
+            frontmostAfterTask: "Safari",
+            targetVisibleBefore: false,
+            targetVisibleAfter: true,
+            forcedActivationUsed: false,
+            launchOrOpenRecoveryUsed: false,
+            strategy: "stage-manager-visible-window-raise",
+            methodEvidence: {
+              tool: "same_stage_activate",
+              app,
+              measuredMembership: false,
+            },
+            visibleSameStageApproximation: true,
+            visualObservationNotesPath: "artifacts/gui-benchmark/manual-note.md",
+          };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(activationCalls).toBe(1);
+    expect(result.sameStageActivation).toMatchObject({
+      targetApp: "Claude",
+      targetVisibleBefore: false,
+      targetVisibleAfter: true,
+      strictRestoreNeeded: false,
+      forcedActivationUsed: false,
+      launchOrOpenRecoveryUsed: false,
+      strategy: "stage-manager-visible-window-raise",
+      visibleSameStageApproximation: true,
+      visualObservationNotesPath: "artifacts/gui-benchmark/manual-note.md",
+    });
+    expect(result.sameStageActivation?.methodEvidence).toEqual({
+      tool: "same_stage_activate",
+      app: "Claude",
+      measuredMembership: false,
+    });
+    expect(result.stageManager.sameStageOrBackgroundSafe).toBe(true);
+    expect(result.qualityGate.codexComputerUseParity).toBe("pass");
+    expect(result.markdownSummary).toContain("visible same-stage approximation: true");
+    expect(result.markdownSummary).toContain(
+      "visual/manual observation notes: artifacts/gui-benchmark/manual-note.md",
+    );
+  });
+
   it("records workspace restore diagnostics for each source app", async () => {
     const progress: string[] = [];
     let frontmost = "Terminal";
