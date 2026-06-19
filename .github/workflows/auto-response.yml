@@ -10,6 +10,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  HAS_GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
+  HAS_GH_APP_PRIVATE_KEY_FALLBACK: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK != '' }}
 
 permissions: {}
 
@@ -22,6 +24,7 @@ jobs:
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
+        if: env.HAS_GH_APP_PRIVATE_KEY == 'true'
         continue-on-error: true
         with:
           app-id: "2729701"
@@ -30,7 +33,7 @@ jobs:
           permission-pull-requests: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
-        if: steps.app-token.outcome == 'failure'
+        if: (steps.app-token.outcome == 'failure' || steps.app-token.outcome == 'skipped') && env.HAS_GH_APP_PRIVATE_KEY_FALLBACK == 'true'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -39,7 +42,7 @@ jobs:
       - name: Handle labeled items
         uses: actions/github-script@v8
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             // Labels prefixed with "r:" are auto-response triggers.
             const activePrLimit = 10;
