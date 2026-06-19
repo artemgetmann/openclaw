@@ -3,10 +3,10 @@ current_stage: private_beta
 users_total: 20
 paying_users: 0
 active_beta_users_7d: TBD
-updated_at: 2026-06-13
+updated_at: 2026-06-16
 stale_after_days: 14
 source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof and 2026-06-13 v2026.3.23 public release/manual install proof.
-decision_implication: Trusted-tester send is unblocked; broader launch still needs an identity/update-path decision, fuller Sparkle update-cycle proof, and real tester feedback.
+decision_implication: Trusted-tester send is unblocked; broader launch now targets Jarvis package/runtime identity and still needs local package proof, fuller Sparkle update-cycle proof, and real tester feedback.
 ---
 
 # Jarvis Project Status
@@ -36,12 +36,13 @@ Next decision inputs:
 - first real tester install/use feedback
 - onboarding copy/friction fixes found from that feedback
 - fuller Sparkle update-cycle proof
-- identity/update-path decision before broader public launch
+- local proof for the broad-public `ai.jarvis.mac` package with Jarvis runtime identity
 
-Full migration to `ai.jarvis.mac` is recommended before broad public launch if
-the priority is clean brand, permissions, LaunchAgent identity, and update
-continuity. If speed wins, keeping `ai.openclaw.consumer.mac` for one more
-public-ish beta is a deliberate debt decision, not a trusted-tester blocker.
+Broad-public packages now target `ai.jarvis.mac`,
+`~/Library/Application Support/Jarvis/.jarvis`, and `ai.jarvis.gateway` before
+unknown users install Jarvis. Keep old trusted-tester state separate unless
+Artem explicitly chooses a migration tool; macOS permissions are bundle-id
+scoped, so clean-start behavior is the safer default until proven otherwise.
 
 These numbers expire after `stale_after_days`. Once expired, they are not decision-grade.
 Do not use stale numbers for pricing, launch, investor, resourcing, reliability,

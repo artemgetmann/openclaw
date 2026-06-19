@@ -329,7 +329,7 @@ struct GatewayLaunchAgentManagerTests {
         let bundled = try self.makeBundledRuntime()
         let staleSourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
         let plistURL = home
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .appendingPathComponent("Library/LaunchAgents/ai.jarvis.gateway.plist")
         defer {
             ConsumerBundledRuntime._clearTestingResourceURL()
             GatewayLaunchAgentManager._clearTestingHooks()
@@ -568,7 +568,7 @@ struct GatewayLaunchAgentManagerTests {
 
         await TestIsolation.withIsolatedState(
             env: [
-                "OPENCLAW_APP_VARIANT": "consumer",
+                "OPENCLAW_APP_VARIANT": "standard",
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
             ],
@@ -612,7 +612,7 @@ struct GatewayLaunchAgentManagerTests {
             .appendingPathComponent("openclaw-installed-\(UUID().uuidString)", isDirectory: true)
         let entrypoint = installedRoot.appendingPathComponent("dist/index.js")
         let plistURL = home
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .appendingPathComponent("Library/LaunchAgents/ai.jarvis.gateway.plist")
         try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: entrypoint)
@@ -685,7 +685,7 @@ struct GatewayLaunchAgentManagerTests {
         let installedRoot = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-installed-\(UUID().uuidString)", isDirectory: true)
         let plistURL = home
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .appendingPathComponent("Library/LaunchAgents/ai.jarvis.gateway.plist")
         defer {
             try? FileManager().removeItem(at: home)
             try? FileManager().removeItem(at: installedRoot)
@@ -763,7 +763,7 @@ struct GatewayLaunchAgentManagerTests {
             .appendingPathComponent("openclaw-root-\(UUID().uuidString)", isDirectory: true)
         let entrypoint = root.appendingPathComponent("dist/index.js")
         let plistURL = home
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .appendingPathComponent("Library/LaunchAgents/ai.jarvis.gateway.plist")
         try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: entrypoint)
@@ -837,7 +837,7 @@ struct GatewayLaunchAgentManagerTests {
             .appendingPathComponent("openclaw-root-\(UUID().uuidString)", isDirectory: true)
         let entrypoint = root.appendingPathComponent("dist/index.js")
         let plistURL = home
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .appendingPathComponent("Library/LaunchAgents/ai.jarvis.gateway.plist")
         try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: entrypoint)
@@ -1017,7 +1017,7 @@ struct GatewayLaunchAgentManagerTests {
                 base: [:],
                 projectRootHint: nil)
             let expectedConfig = home
-                .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw/openclaw.json")
+                .appendingPathComponent("Library/Application Support/Jarvis/.jarvis/openclaw.json")
                 .path
 
             #expect(env["OPENCLAW_CONFIG_PATH"] == expectedConfig)

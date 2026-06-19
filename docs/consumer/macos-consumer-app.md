@@ -10,19 +10,21 @@ The main-built macOS app is the simplified local controller for Jarvis.
 
 ## Isolation model
 
-The consumer product is no longer shipped from a separate repository. Release
-artifacts are visibly named `Jarvis`, while the current bundle/runtime
-identity stays consumer-scoped for continuity.
+The consumer product is no longer shipped from a separate repository. Broad
+public release artifacts are visibly named `Jarvis` and use the Jarvis bundle
+identity, runtime state path, and default gateway LaunchAgent. This is a clean
+public default, not an automatic migration of old trusted-tester machines.
 
 - Visible app name: `Jarvis.app`
-- Bundle identifier: `ai.openclaw.consumer.mac`
+- Bundle identifier: `ai.jarvis.mac`
 - App variant metadata: `consumer`
-- State directory: `~/Library/Application Support/OpenClaw/.openclaw`
+- State directory: `~/Library/Application Support/Jarvis/.jarvis`
 - Local gateway port: `18789`
-- Gateway launch label: `ai.openclaw.gateway`
+- Gateway launch label: `ai.jarvis.gateway`
 
-This keeps replacement installs stable without pretending the retired
-`openclaw-consumer` checkout is still the shipping source.
+Trusted-tester builds published before the broad-public identity migration used
+`ai.openclaw.consumer.mac` and OpenClaw-shaped runtime paths. Treat those as the
+old tester ring, not the identity for new unknown-user installs.
 
 ## Default UX
 

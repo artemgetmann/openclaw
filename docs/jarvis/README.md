@@ -31,6 +31,8 @@ Jarvis docs should create action, not emotional debt.
   tracker. Keep it short.
 - `docs/consumer/jarvis-launch-package.md` - current package, pricing, copy, and
   artifact truth.
+- `docs/consumer/jarvis-identity-migration-checklist.md` - active identity
+  migration proof checklist.
 
 ## Reference
 

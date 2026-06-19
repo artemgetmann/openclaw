@@ -65,7 +65,7 @@ enum ConsumerRuntime {
         // This marker means "protect the default shared gateway config", not
         // "this runtime has a config file". Isolated consumer instances must
         // leave it unset so the JS preflight treats them as tester lanes.
-        guard identity.gatewayLaunchdLabel == "ai.openclaw.gateway" else { return nil }
+        guard identity.gatewayLaunchdLabel == "ai.jarvis.gateway" else { return nil }
         return identity.configURL.path
     }
 

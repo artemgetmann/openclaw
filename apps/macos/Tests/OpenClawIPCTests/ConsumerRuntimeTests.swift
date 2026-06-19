@@ -80,13 +80,18 @@ import Testing
         ]) {
             ConsumerRuntime.bootstrapProcessEnvironment()
 
+            let expectedState = homeURL
+                .appendingPathComponent("Library/Application Support/Jarvis/.jarvis", isDirectory: true)
+            #expect(OpenClawEnv.path("OPENCLAW_HOME") == expectedState.deletingLastPathComponent().path)
+            #expect(OpenClawEnv.path("OPENCLAW_STATE_DIR") == expectedState.path)
+            #expect(OpenClawEnv.path("OPENCLAW_CONFIG_PATH") == expectedState.appendingPathComponent("openclaw.json").path)
             let data = try Data(contentsOf: ConsumerRuntime.configURL)
             let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let gateway = object?["gateway"] as? [String: Any]
             #expect(gateway?["mode"] as? String == "local")
             #expect(gateway?["port"] as? Int == 18_789)
             #expect(gateway?["bind"] as? String == "loopback")
-            #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.openclaw.gateway")
+            #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.jarvis.gateway")
             #expect(OpenClawEnv.path("OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH") == ConsumerRuntime.configURL.path)
         }
     }
@@ -123,7 +128,7 @@ import Testing
 
             #expect(OpenClawEnv.path("OPENCLAW_FORK_ROOT") == nil)
             #expect(OpenClawEnv.path("OPENCLAW_CONFIG_PATH") == ConsumerRuntime.configURL.path)
-            #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.openclaw.gateway")
+            #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.jarvis.gateway")
         }
     }
 

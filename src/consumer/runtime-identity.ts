@@ -2,14 +2,16 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
-export const CONSUMER_RUNTIME_ROOT_NAME = "OpenClaw" as const;
-export const CONSUMER_STATE_DIR_NAME = ".openclaw" as const;
+export const CONSUMER_RUNTIME_ROOT_NAME = "Jarvis" as const;
+export const CONSUMER_STATE_DIR_NAME = ".jarvis" as const;
+export const CONSUMER_INSTANCE_RUNTIME_ROOT_NAME = "OpenClaw" as const;
+export const CONSUMER_INSTANCE_STATE_DIR_NAME = ".openclaw" as const;
 export const CONSUMER_CONFIG_FILE_NAME = "openclaw.json" as const;
 export const CONSUMER_WORKSPACE_DIR_NAME = "workspace" as const;
 export const CONSUMER_LOG_DIR_NAME = "logs" as const;
 export const CONSUMER_PROFILE_PREFIX = "consumer" as const;
 export const CONSUMER_LAUNCHD_LABEL_PREFIX = "ai.openclaw.consumer" as const;
-export const CANONICAL_GATEWAY_LAUNCHD_LABEL = "ai.openclaw.gateway" as const;
+export const PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL = "ai.jarvis.gateway" as const;
 export const CONSUMER_GATEWAY_BIND = "loopback" as const;
 export const CANONICAL_GATEWAY_PORT = 18789 as const;
 export const CONSUMER_GATEWAY_PORT_MIN = 20000 as const;
@@ -67,12 +69,18 @@ export function resolveConsumerRuntimeIdentity(
         homeDir,
         "Library",
         "Application Support",
-        CONSUMER_RUNTIME_ROOT_NAME,
+        CONSUMER_INSTANCE_RUNTIME_ROOT_NAME,
         "instances",
         normalizedId,
       )
     : path.join(homeDir, "Library", "Application Support", CONSUMER_RUNTIME_ROOT_NAME);
-  const stateDir = path.join(runtimeRoot, CONSUMER_STATE_DIR_NAME);
+  // Public Jarvis gets a clean app-owned state root. Named lanes keep their
+  // existing OpenClaw-shaped isolation so active tester/debug runtimes do not
+  // silently move during the broad-public identity migration.
+  const stateDir = path.join(
+    runtimeRoot,
+    normalizedId ? CONSUMER_INSTANCE_STATE_DIR_NAME : CONSUMER_STATE_DIR_NAME,
+  );
 
   return {
     normalizedId,
@@ -87,7 +95,7 @@ export function resolveConsumerRuntimeIdentity(
       : CONSUMER_LAUNCHD_LABEL_PREFIX,
     gatewayLaunchdLabel: normalizedId
       ? `${CONSUMER_LAUNCHD_LABEL_PREFIX}.${normalizedId}.gateway`
-      : CANONICAL_GATEWAY_LAUNCHD_LABEL,
+      : PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL,
     defaultsPrefix: normalizedId
       ? `openclaw.consumer.instances.${normalizedId}`
       : "openclaw.consumer",

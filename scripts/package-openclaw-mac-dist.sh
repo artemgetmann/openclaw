@@ -1064,10 +1064,10 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   exit 1
 fi
 
-# Release packaging now ships the consumer product under the final visible
-# product name while preserving the existing consumer bundle id/runtime identity.
-# That lets replacement installs keep state and permissions continuity instead
-# of turning a cosmetic rename into a new-app migration.
+# Release packaging ships the broad-public product under the Jarvis name and
+# bundle id. Runtime state paths and the gateway label remain unchanged here;
+# moving those is a separate migration/clean-start decision, not a packaging
+# default.
 APP_NAME="${APP_NAME:-Jarvis}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_PATH="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
