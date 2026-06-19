@@ -18,6 +18,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  HAS_GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
+  HAS_GH_APP_PRIVATE_KEY_FALLBACK: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK != '' }}
 
 permissions: {}
 
@@ -25,11 +27,13 @@ jobs:
   label:
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
+        if: env.HAS_GH_APP_PRIVATE_KEY == 'true'
         continue-on-error: true
         with:
           app-id: "2729701"
@@ -39,7 +43,7 @@ jobs:
           permission-pull-requests: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
-        if: steps.app-token.outcome == 'failure'
+        if: (steps.app-token.outcome == 'failure' || steps.app-token.outcome == 'skipped') && env.HAS_GH_APP_PRIVATE_KEY_FALLBACK == 'true'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -49,12 +53,12 @@ jobs:
       - uses: actions/labeler@v6
         with:
           configuration-path: .github/labeler.yml
-          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           sync-labels: true
       - name: Apply PR size label
         uses: actions/github-script@v8
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
@@ -387,11 +391,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
+        if: env.HAS_GH_APP_PRIVATE_KEY == 'true'
         continue-on-error: true
         with:
           app-id: "2729701"
@@ -401,7 +407,7 @@ jobs:
           permission-pull-requests: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
-        if: steps.app-token.outcome == 'failure'
+        if: (steps.app-token.outcome == 'failure' || steps.app-token.outcome == 'skipped') && env.HAS_GH_APP_PRIVATE_KEY_FALLBACK == 'true'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -411,7 +417,7 @@ jobs:
       - name: Backfill PR labels
         uses: actions/github-script@v8
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -647,6 +653,7 @@ jobs:
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
+        if: env.HAS_GH_APP_PRIVATE_KEY == 'true'
         continue-on-error: true
         with:
           app-id: "2729701"
@@ -654,7 +661,7 @@ jobs:
           permission-issues: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
-        if: steps.app-token.outcome == 'failure'
+        if: (steps.app-token.outcome == 'failure' || steps.app-token.outcome == 'skipped') && env.HAS_GH_APP_PRIVATE_KEY_FALLBACK == 'true'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -662,7 +669,7 @@ jobs:
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@v8
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const login = context.payload.issue?.user?.login;
             if (!login) {
