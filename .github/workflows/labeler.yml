@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
@@ -34,12 +34,18 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/labeler@v6
         with:
           configuration-path: .github/labeler.yml
@@ -382,7 +388,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
@@ -390,12 +396,18 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
       - name: Backfill PR labels
         uses: actions/github-script@v8
         with:
@@ -631,7 +643,7 @@ jobs:
     if: github.event_name == 'issues'
     permissions:
       issues: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
@@ -639,12 +651,14 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
       - uses: actions/create-github-app-token@v2
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@v8
         with:
