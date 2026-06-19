@@ -1,13 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
-# Opt-in extension dependencies at build time (space-separated directory names).
+# Legacy compatibility knob. Docker now installs every workspace extension
+# package manifest because the build compiles shared plugin-sdk references and
+# the runtime image copies the extension tree.
 # Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
 #
 # Multi-stage build produces a minimal runtime image without build tools,
 # source code, or Bun. Works with Docker, Buildx, and Podman.
-# The ext-deps stage extracts only the package.json files we need from
-# extensions/, so the main build layer is not invalidated by unrelated
-# extension source changes.
+# The ext-deps stage extracts package.json files from extensions/, so the main
+# build dependency layer is not invalidated by unrelated extension source
+# changes.
 #
 # Two runtime variants:
 #   Default (bookworm):      docker build .
@@ -27,13 +29,15 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f3411
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
 COPY extensions /tmp/extensions
-# Copy package.json for opted-in extensions so pnpm resolves their deps.
+# Copy every extension package.json before pnpm install. The later build copies
+# all extension source, so installing only selected extension deps leaves the
+# Docker build with source files whose imports cannot resolve.
 RUN mkdir -p /out && \
-    for ext in $OPENCLAW_EXTENSIONS; do \
-      if [ -f "/tmp/extensions/$ext/package.json" ]; then \
-        mkdir -p "/out/$ext" && \
-        cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
-      fi; \
+    find /tmp/extensions -mindepth 2 -maxdepth 2 -name package.json -print | sort | \
+    while IFS= read -r package_json; do \
+      ext="$(basename "$(dirname "$package_json")")"; \
+      mkdir -p "/out/$ext"; \
+      cp "$package_json" "/out/$ext/package.json"; \
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
