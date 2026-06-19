@@ -22,8 +22,8 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
 - [x] Do not build a general automatic migration tool for v1; inactive testers
       can clean install, and serious users get a manual runbook after Artem's
       migration is proven.
-- [ ] Do not touch Artem's real app, state, or shared gateway until fake-home and
-      package proof pass.
+- [x] Do not touch Artem's real app, state, or shared gateway until fake-home and
+      package proof pass and Artem explicitly approves the manual install.
 
 ## Proof
 
@@ -37,8 +37,18 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
       launch, migrate state, or touch the shared gateway.
 - [x] Local Sparkle freshness guard passes with `2026.6.19` build `2026061990`
       against installed build `2026061317`.
-- [ ] Full Sparkle update proof passes through the public appcast and
+- [x] Public appcast proof reaches the old installed app through About -> Check
+      for Updates and downloads the `2026.6.19` update.
+- [ ] Full Sparkle update install proof passes through the public appcast and
       About -> Check for Updates.
+- [x] Sparkle update failure is understood: Artem's old installed app was
+      `ai.openclaw.consumer.mac` `2026.3.23` and its sealed Sparkle framework was
+      missing `Updater.app`, so it could download but could not launch the
+      installer.
+- [x] Manual install proof replaced `/Applications/Jarvis.app` with
+      `ai.jarvis.mac` `2026.6.19` build `2026061990`; Gatekeeper accepts the new
+      app, and the shared `ai.openclaw.gateway` stayed on the sacred `main`
+      runtime.
 
 ## Deferred
 
