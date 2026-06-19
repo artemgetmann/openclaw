@@ -334,6 +334,51 @@ describe("runGuiBenchmark", () => {
     );
   });
 
+  it("does not treat an already-visible target as activation-from-hidden proof", async () => {
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "same-stage-activation",
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [
+            { appName: "Safari", frontmost: true },
+            { appName: "Claude", frontmost: false },
+          ];
+        },
+        async observe() {
+          return benchmarkSnapshot({ appName: "Claude" });
+        },
+        async setValue() {
+          return { ok: true };
+        },
+        async click() {
+          return { ok: true };
+        },
+        async sameStageActivate() {
+          return {
+            ok: true,
+            actionCount: 1,
+            movedFocus: false,
+            frontmostBefore: "Safari",
+            frontmostAfterTask: "Safari",
+            targetVisibleBefore: true,
+            targetVisibleAfter: true,
+            forcedActivationUsed: false,
+            launchOrOpenRecoveryUsed: false,
+            visibleSameStageApproximation: true,
+          };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.qualityGate.codexComputerUseParity).toBe("functional-pass-with-debt");
+    expect(result.qualityGate.blockers).toContain(
+      "Target was already visible before same-stage activation; activation-from-hidden was not proven.",
+    );
+  });
+
   it("records workspace restore diagnostics for each source app", async () => {
     const progress: string[] = [];
     let frontmost = "Terminal";

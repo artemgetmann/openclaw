@@ -1551,6 +1551,13 @@ function evaluateQualityGate(
     if (activation?.targetVisibleAfter !== true) {
       blockers.push("Target visibility after same-stage activation was not proven true.");
     }
+    if (activation?.targetVisibleBefore !== false) {
+      blockers.push(
+        activation?.targetVisibleBefore === true
+          ? "Target was already visible before same-stage activation; activation-from-hidden was not proven."
+          : "OCU did not report whether the target was visible before same-stage activation.",
+      );
+    }
     if (activation?.visibleSameStageApproximation !== true) {
       blockers.push("Visible same-stage approximation was not proven true.");
     }

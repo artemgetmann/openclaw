@@ -1,6 +1,6 @@
 # Native Computer Use Runtime Plan
 
-Last updated: 2026-06-12
+Last updated: 2026-06-19
 Status: fork-backed adapter spike in progress, dev-only
 
 ## Goal
@@ -168,6 +168,18 @@ Benchmark tasks:
 3. Focus mismatch test: bring another app frontmost and prove the target action
    still scopes correctly or fails closed.
 4. Live X to Claude proof only after explicit user approval.
+
+Future reliability probes:
+
+1. Safari flight-booking dry run. Use real Safari, not browser control or Chrome,
+   to search for a flight and reach a reviewable itinerary page. Stop before
+   login, passenger details, payment, purchase, or any externally visible
+   booking action. Score AX targeting, stale-state recovery, form handling,
+   navigation robustness, and workspace disruption.
+2. Jarvis macOS app smoke. Open the installed Jarvis app, navigate core screens,
+   click Check for Updates, and verify the UI reacts correctly. Stop before
+   installing an update unless separately approved. Score native app targeting,
+   buttons, dialogs, focus behavior, and fail-closed handling.
 
 Live proof requirements:
 
