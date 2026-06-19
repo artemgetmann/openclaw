@@ -141,6 +141,11 @@ The normal required gates are `CI / pr-required` and
 non-blocking helper workflows unless the current GitHub ruleset marks them
 required.
 
+PR and required-check workflows should run on GitHub-hosted runners and
+`actions/cache`. Do not route PR merge gates, helper workflows, or CodeQL
+through Blacksmith runners or sticky disks; a missing third-party runner should
+never leave a mergeable PR in a long-lived queued state.
+
 Treat GitHub `BEHIND` and `DIRTY` merge states as branch-update-needed. If
 `gh pr update-branch` or the fast-path helper reports conflicts after a
 reused branch was squash-merged earlier, stop fighting the branch shape: create
