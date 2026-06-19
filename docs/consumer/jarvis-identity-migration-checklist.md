@@ -30,11 +30,14 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
 - [x] Fake-home TS tests cover Jarvis default state path and old isolated lanes.
 - [x] Fake-home Swift tests cover Jarvis default state path and old isolated lanes.
 - [x] Fake-home tests cover Jarvis default LaunchAgent label.
-- [ ] Package proof verifies `CFBundleIdentifier=ai.jarvis.mac`.
-- [ ] Package proof verifies app env points at Jarvis state and `ai.jarvis.gateway`.
+- [x] Package proof verifies `CFBundleIdentifier=ai.jarvis.mac`.
+- [x] Package proof verifies app env points at Jarvis state and `ai.jarvis.gateway`.
 - [x] Sparkle/appcast guard proof blocks generic OpenClaw appcast for Jarvis.
-- [ ] Package proof blocked until the tracked worktree is clean; release
-      packaging intentionally refuses dirty tracked files.
+- [x] Local package proof builds only `dist/Jarvis.app`; it does not install,
+      launch, migrate state, or touch the shared gateway.
+- [ ] Sparkle update proof passes with a build number newer than the installed
+      Jarvis app. Current local proof correctly fails this freshness gate because
+      build `2026031690` is older than installed build `2026061317`.
 
 ## Deferred
 
