@@ -35,9 +35,10 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
 - [x] Sparkle/appcast guard proof blocks generic OpenClaw appcast for Jarvis.
 - [x] Local package proof builds only `dist/Jarvis.app`; it does not install,
       launch, migrate state, or touch the shared gateway.
-- [ ] Sparkle update proof passes with a build number newer than the installed
-      Jarvis app. Current local proof correctly fails this freshness gate because
-      build `2026031690` is older than installed build `2026061317`.
+- [x] Local Sparkle freshness guard passes with `2026.6.19` build `2026061990`
+      against installed build `2026061317`.
+- [ ] Full Sparkle update proof passes through the public appcast and
+      About -> Check for Updates.
 
 ## Deferred
 
