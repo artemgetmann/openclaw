@@ -1,5 +1,8 @@
 # Jarvis Public Release Acceleration Spec
 
+Archived on 2026-06-19. P0 through P2 have been implemented; this file is
+kept as historical design context, not an active tracker.
+
 ## Problem
 
 The public Jarvis release path is correct but too slow and too operator-heavy.

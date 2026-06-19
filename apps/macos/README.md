@@ -225,11 +225,10 @@ For a real update to existing installations, bump `APP_VERSION` and/or
 `CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
 same-build upload is just a republish and will not trigger an update.
 
-The public release acceleration spec lives at
-`docs/consumer/jarvis-public-release-acceleration-spec.md`. It captures the
-full plan: one-command resume, bounded GitHub retries, timing, read-only size
-inventory, later safe parallelism, and bundle diet only after compatibility
-proof.
+The historical public release acceleration spec is archived at
+`docs/consumer/archive/jarvis-public-release-acceleration-spec.md`. The
+implemented release wrapper, package script, and printed receipt checks are the
+current source of truth.
 
 The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public
