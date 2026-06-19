@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 OCU_REPO_URL="${OPENCLAW_OPEN_COMPUTER_USE_REPO:-https://github.com/artemgetmann/open-codex-computer-use.git}"
-OCU_REF="${OPENCLAW_OPEN_COMPUTER_USE_REF:-d71101e6262460a62a96463c4a3c86747e3b3fc4}"
+OCU_REF="${OPENCLAW_OPEN_COMPUTER_USE_REF:-openclaw-ocu-restore-20260618}"
 OCU_WORKDIR="${OPENCLAW_OPEN_COMPUTER_USE_WORKDIR:-/tmp/jarvis-ocu-pinned-runtime/open-codex-computer-use}"
 OCU_APP_PATH="${OPENCLAW_OPEN_COMPUTER_USE_APP_PATH:-${HOME}/Applications/Open Computer Use (Dev).app}"
 OCU_BIN_PATH_FILE="${OPENCLAW_OPEN_COMPUTER_USE_BIN_PATH_FILE:-/tmp/jarvis-ocu-stability-bin-path.txt}"

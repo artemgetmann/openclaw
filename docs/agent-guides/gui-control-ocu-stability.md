@@ -1,6 +1,6 @@
 # GUI Control OCU Stability
 
-Last updated: 2026-06-15
+Last updated: 2026-06-19
 Status: active stability slice, dev-only
 
 Use this checklist when proving OpenComputerUse-backed Jarvis GUI control. The
@@ -137,6 +137,8 @@ Latest live evidence for this slice:
   `https://github.com/artemgetmann/open-codex-computer-use`
 - pinned OpenComputerUse commit:
   `d71101e6262460a62a96463c4a3c86747e3b3fc4`
+- pinned OpenComputerUse tag:
+  `openclaw-ocu-restore-20260618`
 - pinned OpenComputerUse branch:
   `codex/raise-activates-frontmost`
 - reproducible bootstrap:
@@ -175,14 +177,21 @@ Current result:
 - restore-only diagnostic passed 3/3 source-app cases:
   Terminal -> Claude -> Terminal, Safari -> Claude -> Safari, and Notes ->
   Claude -> Notes all restored the source app frontmost
+- 2026-06-19 watched smoke proof:
+  - restore report:
+    `/tmp/jarvis-ocu-visual-workspace-restore-20260619/workspace-restore-1781842464390.json`
+  - medium report:
+    `/tmp/jarvis-ocu-visual-medium-20260619/safari-notes-claude-1781842526400.json`
+  - both passed with `qualityGate.codexComputerUseParity=pass`
 
 Current blocker:
 
 - The OpenClaw wrapper has clean local parity evidence against the pinned
   OpenComputerUse fork build.
-- Upstream OpenComputerUse has not accepted the `Raise` activation patch yet.
-  Until then, use `scripts/bootstrap-open-computer-use-runtime.sh` to rebuild
-  from the Jarvis/OpenClaw-owned fork pin.
+- The pinned fork tag is sufficient for Jarvis/OpenClaw dev validation.
+- Next product slice: bundle and enable the OpenComputerUse runtime in packaged
+  Jarvis/consumer app flows instead of requiring a manual dev bootstrap,
+  including first-run permission guidance and a durable runtime path.
 
 ## Restore Diagnostic
 
