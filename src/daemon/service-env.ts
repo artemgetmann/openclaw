@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   CONSUMER_PROFILE_PREFIX,
+  PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL,
   normalizeConsumerRuntimeId,
   resolveConsumerRuntimeIdentity,
 } from "../consumer/runtime-identity.js";
@@ -406,7 +407,9 @@ function resolveSharedServiceEnvironmentFields(
   const launchdLabel =
     env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
     (platform === "darwin" ? resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) : "");
-  const defaultSharedGateway = launchdLabel === GATEWAY_LAUNCH_AGENT_LABEL;
+  const defaultSharedGateway =
+    launchdLabel === GATEWAY_LAUNCH_AGENT_LABEL ||
+    launchdLabel === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL;
   // The canonical shared gateway protects the config it owns. Persisting this
   // path into launchd/systemd avoids runtime fallback to legacy ~/.openclaw when
   // the installed service was intentionally pointed at an app-owned config.

@@ -391,7 +391,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(env.OPENCLAW_GATEWAY_BIND).toBe("loopback");
     expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
-    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.jarvis.gateway");
     expect(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBe(identity.configPath);
   });
 

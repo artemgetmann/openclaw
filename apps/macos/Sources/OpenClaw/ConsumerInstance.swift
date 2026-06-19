@@ -4,7 +4,8 @@ struct ConsumerInstance: Equatable {
     static let envKey = "OPENCLAW_CONSUMER_INSTANCE_ID"
     static let infoPlistKey = "OpenClawConsumerInstanceID"
 
-    private static let runtimeHomeName = "OpenClaw"
+    private static let defaultRuntimeHomeName = "Jarvis"
+    private static let instanceRuntimeHomeName = "OpenClaw"
     private static let defaultProfile = "consumer"
     private static let defaultGatewayPort = 18_789
     private static let gatewayPortRangeStart = 20_000
@@ -36,12 +37,12 @@ struct ConsumerInstance: Equatable {
     }
 
     var runtimeHomeName: String {
-        Self.runtimeHomeName
+        self.id == nil ? Self.defaultRuntimeHomeName : Self.instanceRuntimeHomeName
     }
 
     var runtimeRootURL: URL {
         let base = OpenClawHome.currentURL
-            .appendingPathComponent("Library/Application Support/\(Self.runtimeHomeName)", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/\(self.runtimeHomeName)", isDirectory: true)
         guard let id = self.id else {
             return base
         }
@@ -51,7 +52,8 @@ struct ConsumerInstance: Equatable {
     }
 
     var stateDirURL: URL {
-        self.runtimeRootURL.appendingPathComponent(".openclaw", isDirectory: true)
+        let stateDirName = self.id == nil ? ".jarvis" : ".openclaw"
+        return self.runtimeRootURL.appendingPathComponent(stateDirName, isDirectory: true)
     }
 
     var configURL: URL {
@@ -94,7 +96,7 @@ struct ConsumerInstance: Equatable {
 
     var gatewayLaunchdLabel: String {
         guard let id = self.id else {
-            return "ai.openclaw.gateway"
+            return "ai.jarvis.gateway"
         }
         return "ai.openclaw.consumer.\(id).gateway"
     }
@@ -108,7 +110,7 @@ struct ConsumerInstance: Equatable {
 
     var stableSuiteName: String {
         guard let id = self.id else {
-            return "ai.openclaw.consumer.mac"
+            return "ai.jarvis.mac"
         }
         return "ai.openclaw.consumer.mac.\(id)"
     }

@@ -9,6 +9,10 @@ import type {
   GatewayBindMode,
   GatewayControlUiConfig,
 } from "../../config/types.js";
+import {
+  PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL,
+  resolveConsumerRuntimeIdentity,
+} from "../../consumer/runtime-identity.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
@@ -180,16 +184,24 @@ function isCanonicalAppOwnedDefaultServiceEnv(serviceEnv: Record<string, string>
   const home = serviceEnv.OPENCLAW_HOME?.trim();
   const stateDir = serviceEnv.OPENCLAW_STATE_DIR?.trim();
   const configPath = serviceEnv.OPENCLAW_CONFIG_PATH?.trim();
-  if (launchdLabel !== "ai.openclaw.gateway" || !home || !stateDir || !configPath) {
+  if (!launchdLabel || !home || !stateDir || !configPath) {
     return false;
   }
 
-  // The shared macOS runtime is app-owned even when it is backed by the
-  // sacred main checkout. In that mode the LaunchAgent intentionally points at
-  // ~/Library/Application Support/OpenClaw/.openclaw, so an unscoped status
-  // command should inspect the loaded service env instead of inventing
-  // ~/.openclaw as the expected config root.
-  return stateDir === `${home}/.openclaw` && configPath === `${stateDir}/openclaw.json`;
+  if (launchdLabel === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL) {
+    return stateDir === `${home}/.jarvis` && configPath === `${stateDir}/openclaw.json`;
+  }
+
+  if (launchdLabel === GATEWAY_LAUNCH_AGENT_LABEL) {
+    // The shared macOS runtime is app-owned even when it is backed by the
+    // sacred main checkout. In that mode the LaunchAgent intentionally points at
+    // ~/Library/Application Support/OpenClaw/.openclaw, so an unscoped status
+    // command should inspect the loaded service env instead of inventing
+    // ~/.openclaw as the expected config root.
+    return stateDir === `${home}/.openclaw` && configPath === `${stateDir}/openclaw.json`;
+  }
+
+  return false;
 }
 
 function isDefaultGatewayStatusTarget(params: {
@@ -202,7 +214,7 @@ function isDefaultGatewayStatusTarget(params: {
   const profile = params.serviceEnv?.OPENCLAW_PROFILE?.trim() || params.cliEnv.OPENCLAW_PROFILE;
 
   if (label) {
-    return label === GATEWAY_LAUNCH_AGENT_LABEL;
+    return label === GATEWAY_LAUNCH_AGENT_LABEL || label === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL;
   }
   return !profile || profile === "default" || profile === "consumer";
 }
@@ -220,7 +232,8 @@ function shouldAdoptCanonicalServiceEnv(params: {
   }
   if (
     serviceEnv.OPENCLAW_PROFILE?.trim() === "consumer" &&
-    serviceEnv.OPENCLAW_LAUNCHD_LABEL?.trim() === "ai.openclaw.gateway" &&
+    serviceEnv.OPENCLAW_LAUNCHD_LABEL?.trim() ===
+      resolveConsumerRuntimeIdentity().gatewayLaunchdLabel &&
     Boolean(serviceEnv.OPENCLAW_STATE_DIR?.trim()) &&
     Boolean(serviceEnv.OPENCLAW_CONFIG_PATH?.trim())
   ) {

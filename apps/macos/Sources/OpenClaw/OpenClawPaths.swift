@@ -72,6 +72,7 @@ enum OpenClawPaths {
     {
         guard AppFlavor.current.isConsumer else { return }
         guard !self.runtimeMigrationDisabled() else { return }
+        guard instanceID != nil else { return }
 
         let destination = identity.stateDirURL
         let destinationConfig = destination.appendingPathComponent("openclaw.json")

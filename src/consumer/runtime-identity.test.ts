@@ -8,7 +8,11 @@ import {
 } from "./runtime-identity.js";
 
 describe("consumer/runtime-identity", () => {
-  function consumerPath(...segments: string[]): string {
+  function jarvisPath(...segments: string[]): string {
+    return path.join("/Users/tester", "Library", "Application Support", "Jarvis", ...segments);
+  }
+
+  function consumerInstancePath(...segments: string[]): string {
     return path.join("/Users/tester", "Library", "Application Support", "OpenClaw", ...segments);
   }
 
@@ -34,25 +38,25 @@ describe("consumer/runtime-identity", () => {
     ).toBe("");
   });
 
-  it("builds the shared consumer runtime identity when no instance is set", () => {
+  it("builds the shared public Jarvis runtime identity when no instance is set", () => {
     const homeDir = "/Users/tester";
     expect(resolveConsumerRuntimeIdentity({ homeDir })).toEqual({
       normalizedId: "",
-      runtimeRoot: consumerPath(),
-      stateDir: consumerPath(".openclaw"),
-      configPath: consumerPath(".openclaw", "openclaw.json"),
-      workspacePath: consumerPath(".openclaw", "workspace"),
-      logDir: consumerPath(".openclaw", "logs"),
+      runtimeRoot: jarvisPath(),
+      stateDir: jarvisPath(".jarvis"),
+      configPath: jarvisPath(".jarvis", "openclaw.json"),
+      workspacePath: jarvisPath(".jarvis", "workspace"),
+      logDir: jarvisPath(".jarvis", "logs"),
       profile: "consumer",
       launchdLabel: "ai.openclaw.consumer",
-      gatewayLaunchdLabel: "ai.openclaw.gateway",
+      gatewayLaunchdLabel: "ai.jarvis.gateway",
       defaultsPrefix: "openclaw.consumer",
       gatewayPort: 18789,
       gatewayBind: "loopback",
     });
   });
 
-  it("builds an isolated consumer runtime identity for an instance id", () => {
+  it("keeps isolated consumer runtime identity on OpenClaw-shaped instance paths", () => {
     const identity = resolveConsumerRuntimeIdentity({
       homeDir: "/Users/tester",
       instanceId: "Main Durable Lane",
@@ -60,11 +64,21 @@ describe("consumer/runtime-identity", () => {
 
     expect(identity).toEqual({
       normalizedId: "main-durable-lane",
-      runtimeRoot: consumerPath("instances", "main-durable-lane"),
-      stateDir: consumerPath("instances", "main-durable-lane", ".openclaw"),
-      configPath: consumerPath("instances", "main-durable-lane", ".openclaw", "openclaw.json"),
-      workspacePath: consumerPath("instances", "main-durable-lane", ".openclaw", "workspace"),
-      logDir: consumerPath("instances", "main-durable-lane", ".openclaw", "logs"),
+      runtimeRoot: consumerInstancePath("instances", "main-durable-lane"),
+      stateDir: consumerInstancePath("instances", "main-durable-lane", ".openclaw"),
+      configPath: consumerInstancePath(
+        "instances",
+        "main-durable-lane",
+        ".openclaw",
+        "openclaw.json",
+      ),
+      workspacePath: consumerInstancePath(
+        "instances",
+        "main-durable-lane",
+        ".openclaw",
+        "workspace",
+      ),
+      logDir: consumerInstancePath("instances", "main-durable-lane", ".openclaw", "logs"),
       profile: "consumer-main-durable-lane",
       launchdLabel: "ai.openclaw.consumer.main-durable-lane",
       gatewayLaunchdLabel: "ai.openclaw.consumer.main-durable-lane.gateway",

@@ -58,8 +58,8 @@ consumer_instance_app_name() {
 
 consumer_instance_stable_tcc_identity_enabled() {
   local raw="${OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY:-}"
-  case "${raw,,}" in
-    1|true|yes|on)
+  case "$raw" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
       return 0
       ;;
     *)
@@ -97,7 +97,7 @@ consumer_instance_bundle_id() {
 consumer_instance_release_bundle_id() {
   local normalized="${1:-}"
   if [[ -z "$normalized" ]]; then
-    printf 'ai.openclaw.consumer.mac'
+    printf 'ai.jarvis.mac'
     return
   fi
   printf 'ai.openclaw.consumer.mac.%s' "$normalized"

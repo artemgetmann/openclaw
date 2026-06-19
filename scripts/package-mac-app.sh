@@ -403,8 +403,8 @@ else
   SPARKLE_FEED_URL="$(default_sparkle_feed_url_for_bundle "$BUNDLE_ID")"
 fi
 
-if [[ "$BUNDLE_ID" == ai.openclaw.consumer.mac* && "$SPARKLE_FEED_URL" == "$DEFAULT_STANDARD_SPARKLE_FEED_URL" ]]; then
-  echo "ERROR: consumer bundle ids must not point at the generic OpenClaw appcast." >&2
+if [[ ( "$BUNDLE_ID" == ai.openclaw.consumer.mac* || "$BUNDLE_ID" == ai.jarvis.mac* ) && "$SPARKLE_FEED_URL" == "$DEFAULT_STANDARD_SPARKLE_FEED_URL" ]]; then
+  echo "ERROR: Jarvis/consumer bundle ids must not point at the generic OpenClaw appcast." >&2
   echo "Set SPARKLE_FEED_URL to a consumer-owned feed or leave it blank to keep updates disabled." >&2
   exit 1
 fi

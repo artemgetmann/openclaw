@@ -271,10 +271,10 @@ describe("gatherDaemonStatus", () => {
       programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
       environment: {
         OPENCLAW_PROFILE: "consumer",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_STATE_DIR: "/Users/test/Library/Application Support/OpenClaw/.openclaw",
+        OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+        OPENCLAW_STATE_DIR: "/Users/test/Library/Application Support/Jarvis/.jarvis",
         OPENCLAW_CONFIG_PATH:
-          "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+          "/Users/test/Library/Application Support/Jarvis/.jarvis/openclaw.json",
         OPENCLAW_GATEWAY_PORT: "18789",
       },
     });
@@ -286,10 +286,10 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(status.config?.cli.path).toBe(
-      "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+      "/Users/test/Library/Application Support/Jarvis/.jarvis/openclaw.json",
     );
     expect(status.config?.daemon?.path).toBe(
-      "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+      "/Users/test/Library/Application Support/Jarvis/.jarvis/openclaw.json",
     );
     expect(status.config?.mismatch).toBeUndefined();
     expect(status.portMismatch).toBeUndefined();
@@ -421,13 +421,15 @@ describe("gatherDaemonStatus", () => {
       status: "running",
       detail: "19001",
     });
-    expect(status.runtimeFingerprint).toEqual({
-      branch: expect.any(String),
-      worktree: expect.any(String),
-      stateDir: "/tmp/openclaw-daemon",
-      configPath: "/tmp/openclaw-daemon/openclaw.json",
-      serviceLabel: "LaunchAgent",
-    });
+    expect(status.runtimeFingerprint).toEqual(
+      expect.objectContaining({
+        branch: expect.any(String),
+        worktree: expect.any(String),
+        stateDir: "/tmp/openclaw-daemon",
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+        serviceLabel: "LaunchAgent",
+      }),
+    );
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {
