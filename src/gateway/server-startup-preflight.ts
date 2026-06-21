@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   migrateLegacyConfig,
@@ -10,6 +12,7 @@ import {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import {
   resolveRuntimeFingerprint,
@@ -452,9 +455,62 @@ function normalizePathForComparison(targetPath: string | null | undefined): stri
   }
 }
 
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function isTruthyEnvFlag(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function isPublicJarvisServiceIdentity(params: {
+  env: NodeJS.ProcessEnv;
+  runtimeFingerprint: RuntimeFingerprint;
+}): boolean {
+  const explicitLabel = params.env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const fingerprintLabel = params.runtimeFingerprint.serviceLabel?.trim();
+  return (
+    explicitLabel === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL ||
+    fingerprintLabel === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL
+  );
+}
+
+function isPackagedPublicJarvisRuntime(params: {
+  env: NodeJS.ProcessEnv;
+  runtimeFingerprint: RuntimeFingerprint;
+}): boolean {
+  if (!isPublicJarvisServiceIdentity(params)) {
+    return false;
+  }
+
+  const runtimeRoot = normalizePathForComparison(params.runtimeFingerprint.worktree);
+  if (!runtimeRoot) {
+    return false;
+  }
+
+  if (
+    runtimeRoot.includes(
+      path.join("Jarvis.app", "Contents", "Resources", "OpenClawRuntime", "openclaw"),
+    )
+  ) {
+    return true;
+  }
+
+  const home = params.env.HOME?.trim() || process.env.HOME?.trim() || os.homedir();
+  const appSupportRuntime = normalizePathForComparison(
+    path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "lib",
+      "openclaw-bundled",
+    ),
+  );
+  return Boolean(appSupportRuntime && isPathInside(appSupportRuntime, runtimeRoot));
 }
 
 function buildNoncanonicalSharedRuntimeMessage(params: {
@@ -505,6 +561,7 @@ export async function runGatewayStartupRuntimePolicyPhase(
     });
     const noncanonicalSharedRuntime =
       (canonicalSharedConfig || defaultSharedServiceIdentity) &&
+      !isPackagedPublicJarvisRuntime({ env, runtimeFingerprint }) &&
       canonicalMainRepo &&
       normalizePathForComparison(runtimeFingerprint.worktree) !==
         normalizePathForComparison(canonicalMainRepo);

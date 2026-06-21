@@ -918,6 +918,42 @@ describe("launchd install", () => {
     ).toBe(false);
   });
 
+  it("public Jarvis install disables old shared OpenClaw gateway agents", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_PROFILE: "consumer",
+      OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory:
+        "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
+    });
+
+    expect(state.launchctlCalls).toContainEqual([
+      "disable",
+      `${domain}/ai.openclaw.gateway-watchdog`,
+    ]);
+    expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/ai.openclaw.gateway`]);
+    expect(state.launchctlCalls).toContainEqual([
+      "bootstrap",
+      domain,
+      "/Users/test/Library/LaunchAgents/ai.jarvis.gateway.plist",
+    ]);
+    expect(
+      state.launchctlCalls.some(
+        (call) =>
+          call[0] === "bootstrap" &&
+          call.some((part) => part.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
+      ),
+    ).toBe(false);
+  });
+
   it("boots out the watchdog before stopping the canonical shared service", async () => {
     const canonicalMain = makeTempDir();
     fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
