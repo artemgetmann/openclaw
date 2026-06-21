@@ -1,8 +1,8 @@
 # Jarvis Launch Package
 
-Status: Jarvis trusted-tester launch package
+Status: Jarvis launch package truth
 Owner: Artem
-Last updated: 2026-06-16
+Last updated: 2026-06-21
 
 Purpose: launch-facing package, pricing, copy, and artifact truth.
 
@@ -18,20 +18,24 @@ technical, developer, repo, or "powered by OpenClaw" language only.
 Public-facing app/docs, visible app name, release artifacts, and app icon are
 Jarvis now.
 
-Trusted testers can receive the current package with the existing technical
-identity:
+Trusted testers can receive the current public package with the existing
+technical identity:
 
 - visible product: Jarvis
 - current bundle/runtime/update identity: `ai.openclaw.consumer.mac` plus
   OpenClaw paths
 - reason: fastest safe path for the small trusted tester ring
 
-Broad-public packages should move to `ai.jarvis.mac` before unknown users
-install Jarvis. Broad-public runtime defaults should also use
-`~/Library/Application Support/Jarvis/.jarvis` and `ai.jarvis.gateway`. Keep old
-trusted-tester state cleanly separated unless Artem explicitly chooses a
-migration path: macOS permissions are bundle-id scoped, and dragging the old
-tester identity into public launch creates update and support debt.
+Repo `main` now targets the broad-public Jarvis identity: `ai.jarvis.mac`,
+`~/Library/Application Support/Jarvis/.jarvis`, and `ai.jarvis.gateway`. It
+also includes #960 packaged-gateway ownership and stale OpenClaw LaunchAgent
+cleanup.
+
+Do not claim the shipped/public app contains #960 until a fresh package from
+current `main` is built, installed, and proven. Keep old trusted-tester state
+cleanly separated unless Artem explicitly chooses a migration path: macOS
+permissions are bundle-id scoped, and dragging the old tester identity into
+public launch creates update and support debt.
 
 ## Current Release
 
@@ -44,11 +48,9 @@ Trusted-tester send is unblocked.
   `https://github.com/artemgetmann/openclaw/releases/tag/v2026.3.23`
 - Public assets: `Jarvis.dmg`, `Jarvis.zip`, `jarvis-appcast.xml`
 - App version/build: `2026.3.23` / `2026061317`
-- Public asset metadata checked on 2026-06-13:
-  - `Jarvis.dmg` size `341287463`
-  - `Jarvis.zip` size `499325709`
-  - `jarvis-appcast.xml` size `1134`
-  - created at `2026-06-13T10:07:06Z`
+- Public asset metadata was checked on 2026-06-13.
+- This public release predates the merged #953/#960 broad-public
+  package/runtime fixes.
 
 Accepted proof:
 
@@ -64,14 +66,16 @@ Accepted proof:
 
 Open release proof:
 
+- Fresh package build/install proof from current `main` is still needed before
+  claiming the installed/public app contains #960.
 - Full Sparkle update-cycle proof is still needed before relying on updates for
   recovery or broader distribution. Current proof covers live appcast metadata,
   older-app prompt/download readiness, and manual public DMG replacement, not a
   complete download/verify/install/relaunch/preserve-state Sparkle update.
 
 Future broad-public Jarvis packages and updates must come from the canonical
-publish lane and verify as `ai.jarvis.mac`, Jarvis state path, and
-`ai.jarvis.gateway` before release:
+publish lane and verify as `ai.jarvis.mac`, Jarvis state path,
+`ai.jarvis.gateway`, and #960 behavior before release:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh --publish-release-assets --github-release-tag <latest-tag>
@@ -79,27 +83,20 @@ bash scripts/package-openclaw-mac-dist.sh --publish-release-assets --github-rele
 
 ## Backend And Account Truth
 
-Current beta backend:
-
-- Render service: `jarvis-backend`
-- Service ID: `srv-d80sqc8g4nts738v1j80`
-- URL: `https://jarvis-backend-klvq.onrender.com`
-- Region/plan: `virginia` / `starter`
-- Source: `https://github.com/artemgetmann/openclaw` on `main`
+Current beta backend: `jarvis-backend`
+(`https://jarvis-backend-klvq.onrender.com`), Render service
+`srv-d80sqc8g4nts738v1j80`, `virginia` / `starter`, sourced from this repo's
+`main`.
 
 Current launch-facing truth:
 
-- `/healthz` is live and reports production mode.
-- OpenAI, Firecrawl, Google Places, Gemini, and Brave provider env are
+- `/healthz` is live in production mode.
+- OpenAI, Firecrawl, Google Places, Gemini, Brave, Neon, and Managed Bots are
   configured server-side.
 - Anthropic is not configured yet.
-- Neon persistence is configured server-side.
-- Account activation creates a persisted 14-day trial.
-- License status succeeds for a valid account token.
-- Repeated activation for the same email fails closed with 409.
-- Invalid account access tokens reject with 401.
-- Managed Bots env is enabled on Render, and live Managed Bots start/status
-  proof passed with token output redacted.
+- Account activation creates a persisted 14-day trial; valid license checks
+  pass, repeated activation fails closed with 409, and invalid tokens reject
+  with 401.
 
 Google Places details/resolve/reviews and Nano Banana input-image editing still
 require direct BYOK until the backend exposes managed utilities for those
@@ -127,8 +124,8 @@ whether the first useful task is obvious.
 ```
 
 Do not turn the trusted-tester send into a broad public launch. Broader launch
-still needs real tester feedback, local proof for the `ai.jarvis.mac` package,
-and fuller Sparkle update-cycle proof.
+still needs real tester feedback, fresh package build/install proof from
+current `main`, and fuller Sparkle update-cycle proof.
 
 ## Commercial Package
 
@@ -143,22 +140,16 @@ controlled beta support, and non-model tool surfaces.
 | Jarvis Core              | $19/mo   | technical and power users  | yes              | BYOK raw API keys and advanced provider setup   |
 | Jarvis Founder Concierge | $299/mo+ | high-touch pilot customers | no               | onboarding, workflow setup, priority support    |
 
-Trial/account rules:
-
-- Trial: 14 days.
-- Trial entry: account login required.
-- Credit card: not required for the first GitHub/Reddit beta.
-- Later paid ads: require credit card before trial.
-- Offline grace: 7 days after the last successful license check.
-- Expired account keeps local export access.
-- Expired account loses automatic updates, managed services, and support.
+Trial/account rules: 14-day account-login trial; no card for the first
+GitHub/Reddit beta; later paid ads require a card before trial; 7-day offline
+grace after the last successful license check; expired accounts keep local
+export access but lose automatic updates, managed services, and support.
 
 Provider boundaries:
 
 - Primary model usage should use user subscription/login where supported.
 - Backend-managed utilities are capped and server-side.
-- Raw founder/provider keys must never be packaged inside the app.
-- Raw founder/provider keys must never be sent to the app.
+- Raw founder/provider keys must never be packaged inside or sent to the app.
 - BYOK raw API keys are an advanced escape hatch, not the default consumer path.
 - Unlimited backend-paid model usage at consumer pricing is a margin trap. Do
   not ship it.
@@ -199,63 +190,24 @@ Honest limitations:
 - setup is improving fast, but early users should expect sharp edges
 - primary model subscription/login support depends on each provider surface
 - Core/BYOK users must bring their own raw provider keys
-- third-party skills can run code and should be treated as untrusted until
-  reviewed
-- external tools should be installed only from sources the user trusts
-- trusted-tester identity remains `ai.openclaw.consumer.mac`; broad-public
-  packages should verify as `ai.jarvis.mac`
-- full Sparkle update-cycle proof is still needed before broader distribution
-
-## 60-Second Demo
-
-Goal: prove Jarvis is an operator, not a chatbot.
-
-0-5 seconds:
-
-> "This is Jarvis: a local-first AI assistant that runs on my Mac and answers in
-> Telegram."
-
-5-12 seconds:
-
-> "I am going to delegate a real task like I would to a human assistant."
-
-Show Telegram prompt:
-
-```text
-Jarvis, check my launch notes, tighten the README pricing section, and give me
-the exact diff before you change anything.
-```
-
-12-25 seconds:
-
-Show Jarvis reporting what it will inspect:
-
-> "Jarvis checks the local repo, reads the launch plan, and decides what needs
-> changing."
-
-25-40 seconds:
-
-Show local action: file, browser, terminal, diff preview, or Telegram progress.
-
-40-52 seconds:
-
-Show final Telegram answer with what changed, what was verified, and what still
-needs a human decision.
-
-52-60 seconds:
-
-> "Jarvis is open source, Mac-first, and built for delegation. Start with
-> Personal if you want the normal consumer path, or Core if you want raw
-> API-key control."
+- third-party skills and external tools should be trusted before use
+- current trusted-tester identity remains `ai.openclaw.consumer.mac`; broad
+  public packages must verify Jarvis identity, #960 behavior, and full Sparkle
+  update-cycle proof
 
 ## Roadmap
 
-| State                      | Launch-facing item                                                                                                                                                                                                                                    |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Done for trusted testers   | Jarvis visible branding, public `v2026.3.23` DMG/ZIP/appcast assets, local installed-app proof, separate-user public-DMG install proof, account/trial backend, managed utility backend, Managed Bots-first Telegram path, and Gate2 clean-user proof. |
-| Next tester ring           | Send the `v2026.3.23` DMG, watch first real install/use feedback, and keep package secret-safety plus release-asset verification on every new build.                                                                                                  |
-| Before broad public launch | Local proof for the `ai.jarvis.mac` package with Jarvis runtime identity, fuller Sparkle update-cycle proof, onboarding copy/friction fixes from tester feedback, and Telegram command/settings cleanup if tester feedback shows confusion.           |
-| Deferred                   | Maintenance work that has no tester evidence yet.                                                                                                                                                                                                     |
+- Done for trusted testers: Jarvis visible branding, public `v2026.3.23`
+  assets, installed-app proof, backend/trial proof, Managed Bots path, and Gate2
+  clean-user proof.
+- Done in repo `main`: broad-public Jarvis identity defaults and #960
+  packaged-gateway ownership behavior.
+- Next package proof: build/install from current `main`; prove `ai.jarvis.mac`,
+  Jarvis state, `ai.jarvis.gateway`, stale OpenClaw LaunchAgent cleanup, and no
+  need for `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1`.
+- Before broad public launch: fresh package proof, fuller Sparkle update-cycle
+  proof, onboarding fixes from tester feedback, and Telegram cleanup only if
+  tester feedback shows confusion.
 
 ## Launch Copy
 
@@ -279,6 +231,5 @@ Pricing one-liner:
 
 - Confirm exact public wording for "powered by OpenClaw" in developer-facing
   surfaces.
-- Decide whether old trusted-tester state starts clean under the new
-  `ai.jarvis.mac` package or gets a deliberate migration tool before broader
-  distribution.
+- Decide whether old trusted-tester state starts clean under `ai.jarvis.mac` or
+  gets a small manual migration runbook before broader distribution.
