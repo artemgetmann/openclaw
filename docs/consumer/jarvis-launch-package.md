@@ -18,12 +18,12 @@ technical, developer, repo, or "powered by OpenClaw" language only.
 Public-facing app/docs, visible app name, release artifacts, and app icon are
 Jarvis now.
 
-Trusted testers can receive the current public package with the existing
+Trusted testers can receive the current public package with the Jarvis
 technical identity:
 
 - visible product: Jarvis
-- current bundle/runtime/update identity: `ai.openclaw.consumer.mac` plus
-  OpenClaw paths
+- current bundle/runtime/update identity: `ai.jarvis.mac`,
+  `~/Library/Application Support/Jarvis/.jarvis`, and `ai.jarvis.gateway`
 - reason: fastest safe path for the small trusted tester ring
 
 Repo `main` now targets the broad-public Jarvis identity: `ai.jarvis.mac`,
@@ -31,31 +31,29 @@ Repo `main` now targets the broad-public Jarvis identity: `ai.jarvis.mac`,
 also includes #960 packaged-gateway ownership and stale OpenClaw LaunchAgent
 cleanup.
 
-Do not claim the shipped/public app contains #960 until a fresh package from
-current `main` is built, installed, and proven. Keep old trusted-tester state
-cleanly separated unless Artem explicitly chooses a migration path: macOS
-permissions are bundle-id scoped, and dragging the old tester identity into
-public launch creates update and support debt.
+Keep old trusted-tester state cleanly separated unless Artem explicitly chooses
+a migration path: macOS permissions are bundle-id scoped, and dragging the old
+tester identity into public launch creates update and support debt.
 
 ## Current Release
 
 Trusted-tester send is unblocked.
 
-- Current trusted-tester release: `v2026.3.23`
+- Current Jarvis app version/build: `2026.6.21` / `2026062190`
 - Sendable DMG:
   `https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.dmg`
 - Release page:
-  `https://github.com/artemgetmann/openclaw/releases/tag/v2026.3.23`
+  `https://github.com/artemgetmann/openclaw/releases/tag/v2026.6.19`
 - Public assets: `Jarvis.dmg`, `Jarvis.zip`, `jarvis-appcast.xml`
-- App version/build: `2026.3.23` / `2026061317`
-- Public asset metadata was checked on 2026-06-13.
-- This public release predates the merged #953/#960 broad-public
-  package/runtime fixes.
+- Public asset metadata was checked on 2026-06-21.
+- This package contains the merged #953/#960 broad-public package/runtime fixes.
 
 Accepted proof:
 
-- Local installed proof passed on Artem's Mac for app version `2026.3.23`,
-  build `2026061317`, commit `a1a094ef2a`.
+- Local installed proof passed on Artem's Mac for app version `2026.6.21`,
+  build `2026062190`, commit `0f717c4afb`.
+- Installed LaunchAgent proof verified `ai.jarvis.gateway`, Jarvis state, and
+  no `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME` override.
 - A separate user's Mac manually installed the public DMG from an older Jarvis
   `2026.3.14` install and reached Settings -> AI access with
   `Continue with ChatGPT` selected and no helper-repair message.
@@ -66,12 +64,11 @@ Accepted proof:
 
 Open release proof:
 
-- Fresh package build/install proof from current `main` is still needed before
-  claiming the installed/public app contains #960.
 - Full Sparkle update-cycle proof is still needed before relying on updates for
   recovery or broader distribution. Current proof covers live appcast metadata,
-  older-app prompt/download readiness, and manual public DMG replacement, not a
-  complete download/verify/install/relaunch/preserve-state Sparkle update.
+  older-app prompt/download readiness, public asset replacement, and manual app
+  replacement, not a complete download/verify/install/relaunch/preserve-state
+  Sparkle update.
 
 Future broad-public Jarvis packages and updates must come from the canonical
 publish lane and verify as `ai.jarvis.mac`, Jarvis state path,
@@ -124,8 +121,7 @@ whether the first useful task is obvious.
 ```
 
 Do not turn the trusted-tester send into a broad public launch. Broader launch
-still needs real tester feedback, fresh package build/install proof from
-current `main`, and fuller Sparkle update-cycle proof.
+still needs real tester feedback and fuller Sparkle update-cycle proof.
 
 ## Commercial Package
 
@@ -191,23 +187,22 @@ Honest limitations:
 - primary model subscription/login support depends on each provider surface
 - Core/BYOK users must bring their own raw provider keys
 - third-party skills and external tools should be trusted before use
-- current trusted-tester identity remains `ai.openclaw.consumer.mac`; broad
-  public packages must verify Jarvis identity, #960 behavior, and full Sparkle
+- public packages must verify Jarvis identity, #960 behavior, and full Sparkle
   update-cycle proof
 
 ## Roadmap
 
-- Done for trusted testers: Jarvis visible branding, public `v2026.3.23`
+- Done for trusted testers: Jarvis visible branding, public Jarvis
   assets, installed-app proof, backend/trial proof, Managed Bots path, and Gate2
   clean-user proof.
 - Done in repo `main`: broad-public Jarvis identity defaults and #960
   packaged-gateway ownership behavior.
-- Next package proof: build/install from current `main`; prove `ai.jarvis.mac`,
-  Jarvis state, `ai.jarvis.gateway`, stale OpenClaw LaunchAgent cleanup, and no
-  need for `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1`.
-- Before broad public launch: fresh package proof, fuller Sparkle update-cycle
-  proof, onboarding fixes from tester feedback, and Telegram cleanup only if
-  tester feedback shows confusion.
+- Done in current package: `ai.jarvis.mac`, Jarvis state, `ai.jarvis.gateway`,
+  stale OpenClaw LaunchAgent cleanup, and no need for
+  `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1`.
+- Before broad public launch: fuller Sparkle update-cycle proof, onboarding
+  fixes from tester feedback, and Telegram cleanup only if tester feedback shows
+  confusion.
 
 ## Launch Copy
 

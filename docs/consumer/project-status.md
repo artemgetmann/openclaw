@@ -5,8 +5,8 @@ paying_users: 0
 active_beta_users_7d: TBD
 updated_at: 2026-06-21
 stale_after_days: 14
-source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof, 2026-06-13 v2026.3.23 public release/manual install proof, and repo main at 7a40c86633.
-decision_implication: Trusted-tester send is unblocked; broader launch now needs fresh package build/install proof from current main, fuller Sparkle update-cycle proof, and real tester feedback.
+source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof, 2026-06-21 Jarvis 2026.6.21 public release/install proof, and repo main at 0f717c4afb.
+decision_implication: Trusted-tester send is unblocked; broader launch now needs fuller Sparkle update-cycle proof and real tester feedback.
 ---
 
 # Jarvis Project Status
@@ -26,18 +26,15 @@ The current planning snapshot is about 20 total users, 0 paying users, and
 `active_beta_users_7d` is still TBD until analytics or an explicit beta-activity
 source is wired in.
 
-Trusted-tester send is unblocked. Public `v2026.3.23` assets, same-user
-onboarding, Gate2 clean-user proof, and separate-user manual DMG install proof
-are accepted.
+Trusted-tester send is unblocked. Current public Jarvis assets install as
+`2026.6.21` build `2026062190`; same-user onboarding, Gate2 clean-user proof,
+and separate-user manual DMG install proof are accepted.
 
 Repo `main` includes the public Jarvis identity migration and #960 packaged
-gateway ownership fix. The current public DMG and currently installed app should
-not be treated as containing #960 until a fresh package is built, installed, and
-proven.
+gateway ownership fix. The current installed app contains that fix.
 
 Next decision inputs:
 
-- fresh packaged app build/install proof from current `main`
 - first real tester install/use feedback
 - onboarding copy/friction fixes found from that feedback
 - fuller Sparkle update-cycle proof

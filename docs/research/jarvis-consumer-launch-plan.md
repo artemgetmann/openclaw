@@ -15,10 +15,8 @@ strategy/history in `docs/consumer/archive/`.
 
 ## Now
 
-1. Build/install the next Jarvis package from current `main` and prove #960 in
-   the installed app.
-2. Complete full Sparkle update-cycle proof.
-3. Collect real tester install/use feedback and fix only concrete onboarding
+1. Complete full Sparkle update-cycle proof.
+2. Collect real tester install/use feedback and fix only concrete onboarding
    friction.
 
 ## Active Mission
@@ -32,23 +30,24 @@ to cold storage or let it die.
 
 ## Current Truth
 
-Trusted-tester send is unblocked, but broad-public packaging is still gated.
+Trusted-tester send is unblocked, but broad-public launch still needs update
+and tester-feedback proof.
 
-- Current trusted-tester release: `v2026.3.23`
+- Current Jarvis app version/build: `2026.6.21` / `2026062190`
 - Sendable DMG:
   `https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.dmg`
-- Current public release uses the old trusted-tester technical identity and
-  does not contain #953/#960.
-- Current repo `main` includes PR #953 and PR #960 at `7a40c86633`.
+- Current public package uses `ai.jarvis.mac`, Jarvis state, and
+  `ai.jarvis.gateway`.
+- Current repo `main` includes PR #953, PR #960, and docs closeout at
+  `0f717c4afb`.
 - Public release assets include `Jarvis.dmg`, `Jarvis.zip`, and
   `jarvis-appcast.xml`.
-- Appcast points to short version `2026.3.23`, build `2026061317`.
+- Appcast points to short version `2026.6.21`, build `2026062190`.
 - Same-user onboarding and 2026-06-09 Gate2 clean-user proof are accepted.
 - A separate user's Mac manually installed the public DMG and reached Settings
   -> AI access with `Continue with ChatGPT` selected and no helper-repair
   message.
-- Manual Jarvis migration proof exists, but the installed app does not contain
-  #960 until a new app is built and installed.
+- Manual Jarvis migration proof exists, and the installed app contains #960.
 
 Identity stance:
 
@@ -65,21 +64,18 @@ Keep this table to 5 or fewer real gates.
 
 | Gate                                   | Blocks trusted testers? | Blocks broad public launch? | Next proof                                                                                                          |
 | -------------------------------------- | ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| New packaged app build/install proof   | No                      | Yes                         | Build from current `main`, install it, and prove #960 behavior in the installed app.                                |
 | Full Sparkle update-cycle proof        | No                      | Yes                         | Prove download, signature verification, install, relaunch, and state preservation from older build to latest build. |
-| First real tester install/use feedback | Yes, after sending      | Yes                         | Send `v2026.3.23`; capture setup confusion, first useful task, and failure points.                                  |
+| First real tester install/use feedback | Yes, after sending      | Yes                         | Send current `Jarvis.dmg`; capture setup confusion, first useful task, and failure points.                          |
 | Onboarding copy/friction fixes         | Only if feedback blocks | Yes                         | Patch specific confusion found by testers.                                                                          |
 
 ## Next Actions
 
-1. Build/install the next Jarvis package from current `main`; prove #960 in the
-   installed app.
-2. Run full Sparkle update-cycle proof before relying on automatic updates.
-3. Send `v2026.3.23` to waiting trusted testers if that send has not already
+1. Run full Sparkle update-cycle proof before relying on automatic updates.
+2. Send current `Jarvis.dmg` to waiting trusted testers if that send has not already
    happened.
-4. Capture install, AI access, Telegram setup, first useful task, and first
+3. Capture install, AI access, Telegram setup, first useful task, and first
    confusing/broken moment.
-5. Fix only concrete onboarding friction found by that feedback.
+4. Fix only concrete onboarding friction found by that feedback.
 
 ## Done
 
@@ -89,6 +85,7 @@ Keep this table to 5 or fewer real gates.
 - Public `v2026.3.23` assets, local installed proof, separate-user manual DMG
   proof, and Gate2 clean-user proof are accepted.
 - PR #953 and PR #960 are merged into repo `main`.
+- Current public package/install proof passed for Jarvis `2026.6.21`.
 
 ## Cold Storage
 
