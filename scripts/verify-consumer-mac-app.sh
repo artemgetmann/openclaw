@@ -300,7 +300,7 @@ fi
 
 if [[ ! -d "$APP_PATH/Contents/Resources/OpenClaw_OpenClaw.bundle" ]]; then
   echo "ERROR: SwiftPM app resource bundle missing: Contents/Resources/OpenClaw_OpenClaw.bundle" >&2
-  echo "The packaged app uses Bundle.module and will crash on machines without the build tree." >&2
+  echo "Packaged startup paths must use Bundle.main resources; Bundle.module root lookup is not app-bundle safe." >&2
   exit 1
 fi
 
