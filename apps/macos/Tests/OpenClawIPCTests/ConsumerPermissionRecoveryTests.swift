@@ -226,14 +226,17 @@ struct ConsumerPermissionRecoveryTests {
         #expect(ConsumerPermissionCatalog.recommendedOnboardingCapabilities.contains(.location))
     }
 
-    @Test func `core request order asks for screen recording before accessibility`() {
-        let screenIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .screenRecording)
+    @Test func `core request order asks for accessibility before screen recording`() {
         let accessibilityIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .accessibility)
+        let screenIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .screenRecording)
+        let locationIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .location)
 
         #expect(!ConsumerPermissionCatalog.coreRequestOrder.contains(.appleScript))
-        #expect(screenIndex != nil)
         #expect(accessibilityIndex != nil)
-        #expect(screenIndex! < accessibilityIndex!)
+        #expect(screenIndex != nil)
+        #expect(locationIndex != nil)
+        #expect(accessibilityIndex! < screenIndex!)
+        #expect(screenIndex! < locationIndex!)
     }
 
     @Test func `core request flow pauses after unresolved special permission`() {

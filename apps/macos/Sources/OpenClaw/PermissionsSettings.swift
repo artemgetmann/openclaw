@@ -151,7 +151,15 @@ struct PermissionsSettings: View {
         self.requestingRecommended = true
         defer { self.requestingRecommended = false }
 
-        _ = await PermissionManager.ensure(Self.consumerRecommendedCapabilities, interactive: true)
+        for capability in ConsumerPermissionCatalog.coreRequestOrder {
+            let granted = await PermissionManager.ensure([capability], interactive: true)[capability] == true
+            if ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability) {
+                await self.refreshStatusTransitions()
+            }
+            if ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: capability, granted: granted) {
+                return
+            }
+        }
         await self.refreshStatusTransitions()
     }
 

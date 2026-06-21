@@ -228,12 +228,13 @@ enum ConsumerPermissionCatalog {
         .location,
     ]
 
-    // One CTA should request everything macOS will allow directly, then leave
-    // unresolved rows behind for the Settings-driven recovery path.
+    // Ask the two manual TCC permissions in the order users can actually
+    // recover. Accessibility first establishes app-control trust; Screen
+    // Recording then gets its own explicit prompt and Settings row.
     static let coreRequestOrder: [Capability] = [
-        .location,
-        .screenRecording,
         .accessibility,
+        .screenRecording,
+        .location,
     ]
 
     static func shouldPauseCoreRequestFlow(after capability: Capability, granted: Bool) -> Bool {
@@ -279,6 +280,20 @@ enum ConsumerPermissionCatalog {
             }
         case .speechRecognition:
             break
+        }
+    }
+
+    @MainActor
+    static func openSettingsAfterNativeRequest(for capability: Capability) async {
+        switch capability {
+        case .screenRecording:
+            // Screen Recording may not appear in Privacy settings until the
+            // signed app asks macOS for capture access. Do that from the
+            // running app before sending the user to System Settings.
+            await ScreenRecordingProbe.requestAuthorization()
+            ScreenRecordingPermissionHelper.openSettings()
+        default:
+            self.openSettings(for: capability)
         }
     }
 }
@@ -350,7 +365,9 @@ struct ConsumerCorePermissionsSection: View {
         }
         .sheet(item: self.$recoverySheet) { sheet in
             PermissionOnboardingRecoverySheet(capability: sheet.capability) {
-                ConsumerPermissionCatalog.openSettings(for: sheet.capability)
+                Task { @MainActor in
+                    await ConsumerPermissionCatalog.openSettingsAfterNativeRequest(for: sheet.capability)
+                }
             }
         }
     }
@@ -545,6 +562,9 @@ struct ConsumerCorePermissionsSection: View {
         for capability in ConsumerPermissionCatalog.coreRequestOrder {
             let result = await PermissionManager.ensure([capability], interactive: true)[capability] == true
             results[capability] = result
+            if ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability), result {
+                await self.refreshStatusTransitions()
+            }
             if ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: capability, granted: result) {
                 break
             }
@@ -580,7 +600,7 @@ struct ConsumerCorePermissionsSection: View {
                     self.recoverySheet = sheet
                     return
                 }
-                ConsumerPermissionCatalog.openSettings(for: capability)
+                await ConsumerPermissionCatalog.openSettingsAfterNativeRequest(for: capability)
                 return
             case .notRequested:
                 break
