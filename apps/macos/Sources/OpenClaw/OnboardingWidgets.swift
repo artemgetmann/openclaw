@@ -68,7 +68,7 @@ struct GlowingOpenClawIcon: View {
         // the generic macOS placeholder instead of the product icon. Prefer the
         // bundled Jarvis asset for first-run setup where brand recognition matters.
         if AppFlavor.current.isConsumer,
-           let url = Bundle.module.url(forResource: "Jarvis", withExtension: "icns"),
+           let url = Bundle.main.url(forResource: "Jarvis", withExtension: "icns"),
            let image = NSImage(contentsOf: url)
         {
             return image

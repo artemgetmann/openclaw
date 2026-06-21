@@ -67,6 +67,10 @@ describe("consumer product rename", () => {
       path.join(root, "scripts", "verify-consumer-mac-app.sh"),
       "utf8",
     );
+    const onboardingWidgets = fs.readFileSync(
+      path.join(root, "apps", "macos", "Sources", "OpenClaw", "OnboardingWidgets.swift"),
+      "utf8",
+    );
 
     expect(packageScript).toContain("OpenClaw_OpenClaw.bundle");
     expect(packageScript).toContain("OpenClaw app resource bundle not found");
@@ -74,7 +78,13 @@ describe("consumer product rename", () => {
     expect(verifierScript).toContain(
       "SwiftPM app resource bundle missing: Contents/Resources/OpenClaw_OpenClaw.bundle",
     );
-    expect(verifierScript).toContain("will crash on machines without the build tree");
+    expect(verifierScript).toContain("Packaged startup paths must use Bundle.main resources");
+    expect(onboardingWidgets).toContain(
+      'Bundle.main.url(forResource: "Jarvis", withExtension: "icns")',
+    );
+    expect(onboardingWidgets).not.toContain(
+      'Bundle.module.url(forResource: "Jarvis", withExtension: "icns")',
+    );
   });
 
   it("keeps the old consumer distribution command as a compatibility wrapper", () => {
