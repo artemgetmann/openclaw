@@ -1,6 +1,7 @@
 import fssync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { resolveCanonicalMainRepoRoot } from "../infra/telegram-live-token-claims.js";
@@ -60,6 +61,14 @@ function isDefaultSharedLaunchAgentTarget(env: GatewayServiceEnv): boolean {
   return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) === GATEWAY_LAUNCH_AGENT_LABEL;
 }
 
+function isPublicJarvisLaunchAgentTarget(env: GatewayServiceEnv): boolean {
+  const explicitLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (explicitLabel) {
+    return explicitLabel === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL;
+  }
+  return false;
+}
+
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -97,7 +106,7 @@ function isPackagedConsumerRuntimePath(
   if (!home) {
     return false;
   }
-  const appSupportRuntime = normalizePathForComparison(
+  const appSupportRuntimeRoots = [
     path.join(
       home,
       "Library",
@@ -107,8 +116,19 @@ function isPackagedConsumerRuntimePath(
       "lib",
       "openclaw-bundled",
     ),
-  );
-  return Boolean(appSupportRuntime && isPathInside(appSupportRuntime, candidate));
+    path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "lib",
+      "openclaw-bundled",
+    ),
+  ];
+  return appSupportRuntimeRoots
+    .map((runtimeRoot) => normalizePathForComparison(runtimeRoot))
+    .some((runtimeRoot) => Boolean(runtimeRoot && isPathInside(runtimeRoot, candidate)));
 }
 
 function commandUsesPackagedConsumerRuntime(args: {
@@ -261,6 +281,33 @@ async function bootoutSharedGatewayWatchdogLaunchAgent(env: GatewayServiceEnv): 
   const plistPath = resolveSharedGatewayWatchdogPlistPath(env);
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
+}
+
+async function disableAndBootoutLaunchAgentLabel(
+  env: GatewayServiceEnv,
+  label: string,
+): Promise<void> {
+  const domain = resolveGuiDomain();
+  const serviceTarget = `${domain}/${label}`;
+  const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
+  await execLaunchctl(["disable", serviceTarget]);
+  await execLaunchctl(["bootout", serviceTarget]);
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
+}
+
+async function disableConflictingOpenClawSharedAgentsForPublicJarvis(
+  env: GatewayServiceEnv,
+): Promise<void> {
+  if (!isPublicJarvisLaunchAgentTarget(env)) {
+    return;
+  }
+
+  // Public Jarvis owns the default consumer gateway port through ai.jarvis.gateway.
+  // Any old OpenClaw shared gateway/watchdog left from pre-migration installs must
+  // stay disabled, or it can keep respawning ai.openclaw.gateway and racing Jarvis.
+  await disableAndBootoutLaunchAgentLabel(env, GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL);
+  await disableAndBootoutLaunchAgentLabel(env, GATEWAY_LAUNCH_AGENT_LABEL);
 }
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
@@ -812,6 +859,7 @@ export async function installLaunchAgent({
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  await disableConflictingOpenClawSharedAgentsForPublicJarvis(serviceEnv);
   await bootoutSharedGatewayWatchdogLaunchAgent(serviceEnv);
   for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(serviceEnv.OPENCLAW_PROFILE)) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(serviceEnv, legacyLabel);

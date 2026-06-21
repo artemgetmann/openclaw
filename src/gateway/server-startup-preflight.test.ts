@@ -650,6 +650,108 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
     );
   });
 
+  it("allows packaged public Jarvis to own its protected app-support config", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const jarvisRuntime = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "lib",
+      "openclaw-bundled",
+    );
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(jarvisConfigPath), { recursive: true });
+    fs.writeFileSync(jarvisConfigPath, "{}\n", "utf8");
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      context: createGatewayStartupContext(createSnapshot({ path: jarvisConfigPath })),
+      isDiagnosticsEnabled: () => false,
+      startDiagnosticHeartbeat: vi.fn(),
+      isRestartEnabled: () => false,
+      setGatewaySigusr1RestartPolicy: vi.fn(),
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+      env: {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: jarvisConfigPath,
+        OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH: jarvisConfigPath,
+        OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+      },
+      runtimeFingerprint: {
+        branch: "unknown",
+        worktree: jarvisRuntime,
+        stateDir: path.dirname(jarvisConfigPath),
+        configPath: jarvisConfigPath,
+        serviceLabel: "ai.jarvis.gateway",
+      },
+    });
+
+    expect(result.diagnosticsEnabled).toBe(false);
+  });
+
+  it("still refuses public Jarvis label from feature worktrees", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(jarvisConfigPath), { recursive: true });
+    fs.writeFileSync(jarvisConfigPath, "{}\n", "utf8");
+
+    await expect(
+      runGatewayStartupRuntimePolicyPhase({
+        context: createGatewayStartupContext(createSnapshot({ path: jarvisConfigPath })),
+        isDiagnosticsEnabled: () => false,
+        startDiagnosticHeartbeat: vi.fn(),
+        isRestartEnabled: () => false,
+        setGatewaySigusr1RestartPolicy: vi.fn(),
+        setPreRestartDeferralCheck: vi.fn(),
+        getPendingWorkCount: () => 0,
+        seedControlUiAllowedOrigins: async (config) => config,
+        env: {
+          HOME: home,
+          OPENCLAW_CONFIG_PATH: jarvisConfigPath,
+          OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH: jarvisConfigPath,
+          OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+        },
+        runtimeFingerprint: {
+          branch: "codex/feature-runtime",
+          worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
+          stateDir: path.dirname(jarvisConfigPath),
+          configPath: jarvisConfigPath,
+          serviceLabel: "ai.jarvis.gateway",
+        },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "runtime_policy",
+        message: expect.stringContaining(
+          "Refusing to start the default shared gateway runtime from a non-canonical checkout.",
+        ),
+      }),
+    );
+  });
+
   it("allows isolated consumer runtime configs from feature worktrees", async () => {
     const home = makeTempDir();
     const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
