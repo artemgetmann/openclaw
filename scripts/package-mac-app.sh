@@ -1496,6 +1496,17 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "📦 Copying OpenClaw app resources"
+OPENCLAW_APP_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClaw_OpenClaw.bundle"
+if [ -d "$OPENCLAW_APP_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
+  cp -R "$OPENCLAW_APP_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
+else
+  echo "ERROR: OpenClaw app resource bundle not found at $OPENCLAW_APP_BUNDLE" >&2
+  echo "The packaged app uses Bundle.module and will crash on machines without the build tree." >&2
+  exit 1
+fi
+
 echo "📦 Copying consumer workspace templates"
 TEMPLATE_SRC="$ROOT_DIR/docs/reference/templates"
 TEMPLATE_DEST="$APP_ROOT/Contents/Resources/templates"

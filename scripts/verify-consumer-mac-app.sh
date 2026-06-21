@@ -298,6 +298,17 @@ if [[ -z "$actual_icon_basename" || ! -f "$APP_PATH/Contents/Resources/${actual_
   exit 1
 fi
 
+if [[ ! -d "$APP_PATH/Contents/Resources/OpenClaw_OpenClaw.bundle" ]]; then
+  echo "ERROR: SwiftPM app resource bundle missing: Contents/Resources/OpenClaw_OpenClaw.bundle" >&2
+  echo "The packaged app uses Bundle.module and will crash on machines without the build tree." >&2
+  exit 1
+fi
+
+if [[ ! -f "$APP_PATH/Contents/Resources/OpenClaw_OpenClaw.bundle/${actual_icon_basename}.icns" ]]; then
+  echo "ERROR: SwiftPM app resource bundle missing icon '${actual_icon_basename}.icns'" >&2
+  exit 1
+fi
+
 assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource templates"
 assert_required_templates \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \

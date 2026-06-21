@@ -61,6 +61,22 @@ describe("consumer product rename", () => {
     expect(verifierScript).toContain("icon_file=$actual_icon_file");
   });
 
+  it("packages and verifies the SwiftPM app resource bundle", () => {
+    const packageScript = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
+    const verifierScript = fs.readFileSync(
+      path.join(root, "scripts", "verify-consumer-mac-app.sh"),
+      "utf8",
+    );
+
+    expect(packageScript).toContain("OpenClaw_OpenClaw.bundle");
+    expect(packageScript).toContain("OpenClaw app resource bundle not found");
+    expect(packageScript).toContain("will crash on machines without the build tree");
+    expect(verifierScript).toContain(
+      "SwiftPM app resource bundle missing: Contents/Resources/OpenClaw_OpenClaw.bundle",
+    );
+    expect(verifierScript).toContain("will crash on machines without the build tree");
+  });
+
   it("keeps the old consumer distribution command as a compatibility wrapper", () => {
     const wrapperScript = fs.readFileSync(
       path.join(root, "scripts", "package-consumer-mac-dist.sh"),
