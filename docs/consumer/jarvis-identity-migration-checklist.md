@@ -15,13 +15,11 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
       without the noncanonical shared-runtime override, and Jarvis repair
       disables stale OpenClaw gateway LaunchAgents.
 - [x] Local manual migration/install proof exists.
-- [ ] A new package from current `main` still needs build/install proof. Do not
-      claim the installed/public app contains #960 before that.
+- [x] Current public package/install proof exists for `2026.6.21`, build
+      `2026062190`, from current `main`.
 
 ## Remaining Gates
 
-- [ ] Build/install a fresh Jarvis package from current `main`; prove #960 in
-      the installed app.
 - [ ] Complete full Sparkle update install proof through the public appcast and
       About -> Check for Updates.
 - [ ] Decide whether old trusted-tester state starts clean under
@@ -48,6 +46,9 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
 - [x] Manual install proof replaced `/Applications/Jarvis.app` with
       `ai.jarvis.mac` and kept the shared `ai.openclaw.gateway` on sacred
       `main`.
+- [x] Fresh installed app proof verified `ai.jarvis.gateway`, Jarvis state,
+      #960 behavior, and no `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME`
+      LaunchAgent override.
 
 ## Deferred
 
