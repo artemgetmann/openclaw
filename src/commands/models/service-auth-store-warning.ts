@@ -42,6 +42,7 @@ type ResolveWarningDeps = {
   homedir?: () => string;
   existsSync?: (filePath: string) => boolean;
   readPlistValue?: (plistPath: string, keyPath: string) => string | undefined;
+  env?: NodeJS.ProcessEnv;
 };
 
 function normalizePathForCompare(filePath: string | undefined): string | undefined {
@@ -70,6 +71,15 @@ function defaultReadPlistValue(plistPath: string, keyPath: string): string | und
   }
 }
 
+function candidateLaunchAgentLabels(env: NodeJS.ProcessEnv | undefined): string[] {
+  const configuredLabel = env?.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const labels = configuredLabel ? [configuredLabel] : [];
+  if (!labels.includes(DEFAULT_SHARED_GATEWAY_LABEL)) {
+    labels.push(DEFAULT_SHARED_GATEWAY_LABEL);
+  }
+  return labels;
+}
+
 function resolveLaunchAgentEnv(deps: ResolveWarningDeps = {}): LaunchAgentEnv | undefined {
   const platform = deps.platform ?? process.platform;
   if (platform !== "darwin") {
@@ -79,20 +89,23 @@ function resolveLaunchAgentEnv(deps: ResolveWarningDeps = {}): LaunchAgentEnv | 
   const homedir = deps.homedir ?? os.homedir;
   const existsSync = deps.existsSync ?? fs.existsSync;
   const readPlistValue = deps.readPlistValue ?? defaultReadPlistValue;
-  const label = DEFAULT_SHARED_GATEWAY_LABEL;
-  const plistPath = path.join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-  if (!existsSync(plistPath)) {
-    return undefined;
+  for (const label of candidateLaunchAgentLabels(deps.env ?? process.env)) {
+    const plistPath = path.join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+    if (!existsSync(plistPath)) {
+      continue;
+    }
+
+    const launchdLabel = readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL");
+    return {
+      label: launchdLabel?.trim() || label,
+      plistPath,
+      openclawHome: readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_HOME"),
+      stateDir: readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_STATE_DIR"),
+      configPath: readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_CONFIG_PATH"),
+    };
   }
 
-  const launchdLabel = readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL");
-  return {
-    label: launchdLabel?.trim() || label,
-    plistPath,
-    openclawHome: readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_HOME"),
-    stateDir: readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_STATE_DIR"),
-    configPath: readPlistValue(plistPath, "EnvironmentVariables:OPENCLAW_CONFIG_PATH"),
-  };
+  return undefined;
 }
 
 function resolveServiceStateDir(service: LaunchAgentEnv): string | undefined {

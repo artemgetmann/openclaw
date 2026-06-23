@@ -19,6 +19,22 @@ private func authMissingReadinessPayload() -> ConsumerModelsReadinessPayload {
         reasonCodes: ["missing_auth"])
 }
 
+private func anthropicAuthMissingReadinessPayload() -> ConsumerModelsReadinessPayload {
+    ConsumerModelsReadinessPayload(
+        status: "blocked",
+        defaultModel: "anthropic/claude-opus-4-6",
+        summary: "Anthropic auth is missing for the selected model.",
+        reasonCodes: ["missing_auth"],
+        probe: ConsumerModelsReadinessProbePayload(
+            provider: "anthropic",
+            model: "anthropic/claude-opus-4-6",
+            profileId: nil,
+            label: "anthropic",
+            source: "profile",
+            mode: "oauth",
+            status: "missing"))
+}
+
 private func refreshTokenReusedPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "blocked",
@@ -430,8 +446,9 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine?.contains("/Users/") == false)
         #expect(model.failureKind == .runtimeUpdateBlocked)
         #expect(model.canRestartOperator)
-        #expect(model.isAuthChoiceInteractionBlocked)
-        #expect(!model.canChooseAnotherAccessMethod)
+        #expect(model.authOptionsLoaded)
+        #expect(!model.isAuthChoiceInteractionBlocked)
+        #expect(model.canChooseAnotherAccessMethod)
     }
 
     @Test func `consumer model restart operator refreshes after runtime ownership repair`() async {
@@ -598,6 +615,36 @@ struct ConsumerSetupReadinessTests {
         #expect(!model.canRestartOperator)
     }
 
+    @Test func `consumer model keeps setup choices available when default Anthropic auth is missing`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                anthropicAuthMissingReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [
+                    subscriptionOptionPayload(),
+                    claudeSubscriptionOptionPayload(),
+                    authOptionPayload(),
+                    claudeApiKeyOptionPayload(),
+                ], activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+
+        #expect(!model.isComplete)
+        #expect(model.failureKind == .providerAuthFailed)
+        #expect(model.chatGPTSubscriptionOption?.id == "openai-codex-oauth")
+        #expect(model.claudeSubscriptionOption?.id == "anthropic-claude-cli")
+        #expect(model.hasAPIKeySupport)
+        #expect(model.apiKeyProviders.map(\.id) == ["openai", "anthropic"])
+        #expect(!model.isAuthChoiceInteractionBlocked)
+        #expect(model.canChooseAnotherAccessMethod)
+        #expect(model.selectedOptionId == "openai-codex-oauth")
+    }
+
     @Test func `consumer model choose another access method reveals api key editor when available`() async {
         let model = ConsumerModelSetupModel(
             probeReadiness: {
@@ -662,8 +709,9 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .failed("Jarvis is still starting. Restart Jarvis if it does not reconnect."))
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
-        #expect(model.isAuthChoiceInteractionBlocked)
-        #expect(!model.canChooseAnotherAccessMethod)
+        #expect(model.authOptionsLoaded)
+        #expect(!model.isAuthChoiceInteractionBlocked)
+        #expect(model.canChooseAnotherAccessMethod)
     }
 
     @Test func `consumer model loads auth options only once after blocked readiness`() async {
@@ -1187,7 +1235,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine?.contains("gateway connect") == false)
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
-        #expect(model.isAuthChoiceInteractionBlocked)
+        #expect(!model.isAuthChoiceInteractionBlocked)
         #expect(authLoads.value == 1)
         #expect(model.authOptionsLoaded)
         #expect(model.hasAPIKeySupport)
@@ -1216,7 +1264,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine?.contains("Swift.CancellationError") == false)
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
-        #expect(model.isAuthChoiceInteractionBlocked)
+        #expect(!model.isAuthChoiceInteractionBlocked)
         #expect(authLoads.value == 1)
         #expect(model.authOptionsLoaded)
         #expect(model.hasAPIKeySupport)
@@ -1259,7 +1307,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.selectedOptionId == "openai-codex-oauth")
         #expect(model.hasAPIKeySupport)
         #expect(model.apiKeyProviders.map(\.id) == ["openai", "anthropic"])
-        #expect(model.isAuthChoiceInteractionBlocked)
+        #expect(!model.isAuthChoiceInteractionBlocked)
 
         await model.refresh()
 
@@ -1351,6 +1399,7 @@ struct ConsumerSetupReadinessTests {
         await model.refresh()
 
         #expect(model.chatGPTSubscriptionOption?.id == "openai-codex-oauth")
+        #expect(model.claudeSubscriptionOption?.id == "anthropic-claude-cli")
         #expect(model.hasAPIKeySupport)
         #expect(model.apiKeyProviders.map(\.label) == ["OpenAI", "Claude"])
 
