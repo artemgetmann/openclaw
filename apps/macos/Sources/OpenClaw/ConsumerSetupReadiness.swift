@@ -335,8 +335,18 @@ final class ConsumerModelSetupModel {
         return !self.isRestartingOperator
     }
 
+    var hasLoadedAuthChoices: Bool {
+        self.authOptionsLoaded && !self.authOptions.isEmpty
+    }
+
     var isAuthChoiceInteractionBlocked: Bool {
-        self.failureKind == .gatewayUnreachable || self.failureKind == .runtimeUpdateBlocked
+        guard self.failureKind == .gatewayUnreachable || self.failureKind == .runtimeUpdateBlocked else {
+            return false
+        }
+        // Readiness can fail because the current/default model is not signed in yet.
+        // If the gateway already returned setup choices, keep those choices live so
+        // the user can fix auth instead of trapping them behind the failed probe.
+        return !self.hasLoadedAuthChoices
     }
 
     var canChooseAnotherAccessMethod: Bool {
@@ -444,6 +454,12 @@ final class ConsumerModelSetupModel {
     var chatGPTSubscriptionOption: ConsumerModelsAuthOptionPayload? {
         self.authOptions.first { option in
             option.providerId == "openai-codex" && option.inputKind == .none
+        }
+    }
+
+    var claudeSubscriptionOption: ConsumerModelsAuthOptionPayload? {
+        self.authOptions.first { option in
+            option.providerId == "anthropic" && option.inputKind == .none
         }
     }
 
@@ -847,7 +863,7 @@ final class ConsumerModelSetupModel {
             if await self.liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: blockerDetail) {
                 return true
             }
-            self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
+            await self.applyRuntimeOwnershipRepairFailureAfterLoadingAuthOptions(blockerDetail: blockerDetail)
             return false
         }
 
@@ -861,7 +877,7 @@ final class ConsumerModelSetupModel {
             if await self.liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: blockerDetail) {
                 return true
             }
-            self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
+            await self.applyRuntimeOwnershipRepairFailureAfterLoadingAuthOptions(blockerDetail: blockerDetail)
             return false
         }
 
@@ -870,7 +886,7 @@ final class ConsumerModelSetupModel {
             if await self.liveReadinessBypassesRuntimeOwnershipBlocker(blockerDetail: remainingBlocker) {
                 return true
             }
-            self.applyRuntimeOwnershipRepairFailure(blockerDetail: remainingBlocker)
+            await self.applyRuntimeOwnershipRepairFailureAfterLoadingAuthOptions(blockerDetail: remainingBlocker)
             return false
         }
 
@@ -916,6 +932,14 @@ final class ConsumerModelSetupModel {
         }
 
         return false
+    }
+
+    private func applyRuntimeOwnershipRepairFailureAfterLoadingAuthOptions(blockerDetail: String) async {
+        // A stale launchd/plist blocker is not the same as a dead setup API.
+        // If the running gateway can still list auth methods, preserve those
+        // controls so first-run users can connect ChatGPT/Claude/API keys.
+        await self.loadAuthOptionsIfNeeded(suppressError: true)
+        self.applyRuntimeOwnershipRepairFailure(blockerDetail: blockerDetail)
     }
 
     private func applyRuntimeOwnershipRepairFailure(blockerDetail: String) {
@@ -1130,6 +1154,10 @@ final class ConsumerModelSetupModel {
             return self.authOptions.first { $0.id == activeAuthOptionId }
         }
         guard let readiness = self.lastReadiness else { return nil }
+        // A failed readiness probe describes the broken current/default model,
+        // not the user's intended setup choice. Only map readiness back to an
+        // active option after the gateway has proven that option is actually ready.
+        guard readiness.status == "ready" else { return nil }
         guard let providerId = readiness.probe?.provider ?? Self.providerId(from: readiness.defaultModel) else {
             return nil
         }
@@ -1765,14 +1793,28 @@ struct ConsumerModelSetupCardContent: View {
                     action: {})
             }
 
-            self.choiceButton(
-                title: "Continue with Claude",
-                helper: "Use your Claude subscription.",
-                isSelected: false,
-                isDisabled: true,
-                badge: "Coming soon",
-                showsCheckmark: false,
-                action: {})
+            if let option = self.model.claudeSubscriptionOption {
+                self.choiceButton(
+                    title: "Continue with Claude",
+                    helper: "Use your Claude subscription.",
+                    isSelected: self.model.selectedOptionId == option.id,
+                    isDisabled: self.model.isApplyingAuth || self.model.isAuthChoiceInteractionBlocked,
+                    badge: nil,
+                    showsCheckmark: self.model.isActiveAuthOption(option))
+                {
+                    self.model.selectOption(option.id)
+                    Task { await self.model.submitSelectedAuth() }
+                }
+            } else {
+                self.choiceButton(
+                    title: "Continue with Claude",
+                    helper: "Use your Claude subscription.",
+                    isSelected: false,
+                    isDisabled: true,
+                    badge: self.model.authOptionsLoaded ? "Unavailable" : nil,
+                    showsCheckmark: false,
+                    action: {})
+            }
 
             self.choiceButton(
                 title: "API key",

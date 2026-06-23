@@ -3,16 +3,27 @@ import { resolveServiceAuthStoreProbeWarning } from "./service-auth-store-warnin
 
 const home = "/Users/tester";
 const plistPath = `${home}/Library/LaunchAgents/ai.openclaw.gateway.plist`;
+const jarvisPlistPath = `${home}/Library/LaunchAgents/ai.jarvis.gateway.plist`;
 const appStateDir = `${home}/Library/Application Support/OpenClaw/.openclaw`;
 const appConfigPath = `${appStateDir}/openclaw.json`;
 const appAuthStorePath = `${appStateDir}/agents/main/agent/auth-profiles.json`;
 
-function createDeps(values: Record<string, string | undefined>) {
+function createDeps(
+  values: Record<string, string | undefined>,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    plistPaths?: string[];
+    valuesByPlist?: Record<string, Record<string, string | undefined>>;
+  } = {},
+) {
+  const plistPaths = options.plistPaths ?? [plistPath];
   return {
     platform: "darwin" as const,
     homedir: () => home,
-    existsSync: (filePath: string) => filePath === plistPath,
-    readPlistValue: (_filePath: string, keyPath: string) => values[keyPath],
+    env: options.env,
+    existsSync: (filePath: string) => plistPaths.includes(filePath),
+    readPlistValue: (filePath: string, keyPath: string) =>
+      options.valuesByPlist?.[filePath]?.[keyPath] ?? values[keyPath],
   };
 }
 
@@ -53,6 +64,43 @@ describe("resolveServiceAuthStoreProbeWarning", () => {
     );
 
     expect(warning).toBeUndefined();
+  });
+
+  it("uses the configured Jarvis LaunchAgent label before the default OpenClaw label", () => {
+    const jarvisStateDir = `${home}/Library/Application Support/Jarvis/.jarvis`;
+    const jarvisConfigPath = `${jarvisStateDir}/openclaw.json`;
+    const jarvisAuthStorePath = `${jarvisStateDir}/agents/main/agent/auth-profiles.json`;
+
+    const warning = resolveServiceAuthStoreProbeWarning(
+      {
+        probe: true,
+        configPath: appConfigPath,
+        authStorePath: appAuthStorePath,
+      },
+      createDeps(
+        {},
+        {
+          env: { OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway" },
+          plistPaths: [jarvisPlistPath, plistPath],
+          valuesByPlist: {
+            [jarvisPlistPath]: {
+              "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL": "ai.jarvis.gateway",
+              "EnvironmentVariables:OPENCLAW_STATE_DIR": jarvisStateDir,
+              "EnvironmentVariables:OPENCLAW_CONFIG_PATH": jarvisConfigPath,
+            },
+            [plistPath]: {
+              "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL": "ai.openclaw.gateway",
+              "EnvironmentVariables:OPENCLAW_STATE_DIR": appStateDir,
+              "EnvironmentVariables:OPENCLAW_CONFIG_PATH": appConfigPath,
+            },
+          },
+        },
+      ),
+    );
+
+    expect(warning?.service.label).toBe("ai.jarvis.gateway");
+    expect(warning?.service.plistPath).toBe(jarvisPlistPath);
+    expect(warning?.service.authStorePath).toBe(jarvisAuthStorePath);
   });
 
   it("does not warn for status output without --probe", () => {
