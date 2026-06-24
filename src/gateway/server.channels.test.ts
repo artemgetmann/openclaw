@@ -287,7 +287,7 @@ describe("gateway server channels", () => {
     }
   });
 
-  test("channels.telegram.setup-replay reports disabled telegram distinctly from missing token", async () => {
+  test("channels.telegram.setup-replay allows disabled telegram during setup pause", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
     await writeConfigFile({
       channels: {
@@ -317,12 +317,11 @@ describe("gateway server channels", () => {
     expect(res.ok).toBe(true);
     expect(res.error?.message).toBeUndefined();
     expect(res.payload).toMatchObject({
-      ok: false,
-      replyStarted: false,
-      replyCompleted: false,
-      error:
-        "Telegram bot token is saved, but Telegram is disabled. Reopen Jarvis or run Telegram setup again to enable it.",
+      replyStarted: true,
     });
+    expect(res.payload?.error).not.toBe(
+      "Telegram bot token is saved, but Telegram is disabled. Reopen Jarvis or run Telegram setup again to enable it.",
+    );
   });
 
   test("channels.logout reports no session when missing", async () => {
