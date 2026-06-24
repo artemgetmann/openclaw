@@ -230,6 +230,21 @@ function sensitiveSurfaceText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function selectedMutationSurfaceText(input: GuiPolicyInput): string {
+  return [
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    input.element?.description,
+    input.element?.value,
+    input.reason,
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function intendedActionText(input: GuiPolicyInput): string {
   return [
     input.target.appName,
@@ -259,6 +274,18 @@ function isAllowedNonCommittalUiCardContext(haystack: string): boolean {
   return (
     /\b(fare|flight|result|search|suggestion)\s+card\b/.test(haystack) &&
     !hasAnyTerm(haystack, ["credit card", "payment card", "billing card"])
+  );
+}
+
+function isAllowedNonCommittalBookChrome(input: GuiPolicyInput): boolean {
+  const pageChrome = [input.target.windowTitle, input.snapshot?.windowTitle]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+  return (
+    pageChrome.includes("google flights") &&
+    pageChrome.includes("book your ticket") &&
+    !hasAnyTerm(selectedMutationSurfaceText(input), ["book"])
   );
 }
 
@@ -340,6 +367,13 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     blockedSurface === "card" &&
     taskPolicy.taskId === "non_committal_web_dry_run" &&
     isAllowedNonCommittalUiCardContext(text)
+  ) {
+    blockedSurface = undefined;
+  }
+  if (
+    blockedSurface === "book" &&
+    taskPolicy.taskId === "non_committal_web_dry_run" &&
+    isAllowedNonCommittalBookChrome(input)
   ) {
     blockedSurface = undefined;
   }

@@ -93,10 +93,13 @@ describe("evaluateGuiPolicy", () => {
   it("allows Google Flights destination writes under the non-committal web dry-run profile", () => {
     const decision = evaluateGuiPolicy({
       actionType: "setValue",
-      target: { appName: "Safari", windowTitle: "Google Flights" },
+      target: {
+        appName: "Safari",
+        windowTitle: "Find Cheap Flights Worldwide & Book Your Ticket - Google Flights",
+      },
       snapshot: snapshot({
         appName: "Safari",
-        windowTitle: "Google Flights",
+        windowTitle: "Find Cheap Flights Worldwide & Book Your Ticket - Google Flights",
         summary: "Flight search page showing Denpasar origin and destination field",
       }),
       element: { ref: "@destination", role: "textbox", label: "Where to?" },
