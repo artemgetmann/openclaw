@@ -17,12 +17,13 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
 - [x] Local manual migration/install proof exists.
 - [x] Current public package/appcast proof exists for `2026.6.24`, build
       `2026062402`, from current `main`.
+- [x] Clean shipped-build smoke passed on the public `2026062402` DMG with
+      isolated fake-home state and unchanged real user config.
 - [x] Real migrated-user proof found one missing legacy Telegram group allowlist
       carry-over; manual non-secret config migration restored group replies.
 
 ## Remaining Gates
 
-- [ ] Run one clean shipped-build smoke on the public `2026062402` artifact.
 - [ ] Open the narrow legacy Telegram group allowlist migration PR.
 - [ ] Decide whether old trusted-tester state starts clean under
       `ai.jarvis.mac` or gets a small manual migration runbook.

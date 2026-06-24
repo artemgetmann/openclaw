@@ -57,6 +57,9 @@ Accepted proof:
 - Public appcast advertises short version `2026.6.24`, build `2026062402`.
 - App and DMG notarization were accepted, stapled, and Gatekeeper-accepted as
   Notarized Developer ID.
+- Clean shipped-build smoke passed against the public DMG with
+  `fresh_user_smoke=passed`, `onboarding_window=observed`, and
+  `real_user_config_unchanged=yes`.
 - Installed LaunchAgent proof verified `ai.jarvis.gateway`, Jarvis state, and
   no `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME` override.
 - A separate user's Mac manually installed the public DMG from an older Jarvis
@@ -69,10 +72,9 @@ Accepted proof:
 
 Open release proof:
 
-- One clean shipped-build smoke is still needed before broader distribution.
-  Current proof covers live appcast metadata, public asset replacement,
-  notarization, and manual app/package verification; keep relying on tester
-  feedback for first-run friction.
+- Current proof covers live appcast metadata, public asset replacement,
+  notarization, manual app/package verification, and a clean shipped-build
+  smoke. Keep relying on tester feedback for first-run friction.
 
 Future broad-public Jarvis packages and updates must come from the canonical
 publish lane and verify as `ai.jarvis.mac`, Jarvis state path,
@@ -124,8 +126,8 @@ install/use feedback: where setup feels confusing, where Jarvis gets stuck, and
 whether the first useful task is obvious.
 ```
 
-Do not turn the trusted-tester send into a broad public launch. Broader launch
-still needs one clean shipped-build smoke and real tester feedback.
+Do not turn the trusted-tester send into a broad public launch without real
+tester feedback from the current package.
 
 ## Commercial Package
 
@@ -204,9 +206,9 @@ Honest limitations:
 - Done in current package: `ai.jarvis.mac`, Jarvis state, `ai.jarvis.gateway`,
   stale OpenClaw LaunchAgent cleanup, and no need for
   `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1`.
-- Before broad public launch: one clean shipped-build smoke, onboarding fixes
-  from tester feedback, and a narrow legacy Telegram group allowlist migration
-  follow-up for existing migrated users.
+- Before broad public launch: onboarding fixes from tester feedback and a narrow
+  legacy Telegram group allowlist migration follow-up for existing migrated
+  users.
 
 ## Launch Copy
 

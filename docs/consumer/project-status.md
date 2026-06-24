@@ -5,8 +5,8 @@ paying_users: 0
 active_beta_users_7d: TBD
 updated_at: 2026-06-24
 stale_after_days: 14
-source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof, 2026-06-24 Jarvis 2026.6.24 build 2026062402 release proof, public appcast proof, and repo main at e2f67c810a.
-decision_implication: Trusted-tester send is unblocked with the current hotfix; broader launch now needs one clean fresh-install/update smoke and real tester feedback.
+source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof, 2026-06-24 Jarvis 2026.6.24 build 2026062402 release proof, public appcast proof, clean shipped-build smoke, and repo main at e2f67c810a.
+decision_implication: Trusted-tester send is unblocked with the current hotfix; broader launch now needs real tester feedback and concrete onboarding fixes only if feedback blocks.
 ---
 
 # Jarvis Project Status
@@ -29,7 +29,8 @@ source is wired in.
 Trusted-tester send is unblocked. Current public Jarvis assets install as
 `2026.6.24` build `2026062402`; same-user onboarding, Gate2 clean-user proof,
 separate-user manual DMG install proof, and 2026-06-24 public appcast proof are
-accepted.
+accepted. A clean shipped-build smoke passed against the public DMG with
+isolated fake-home state and `real_user_config_unchanged=yes`.
 
 Repo `main` includes the public Jarvis identity migration, #960 packaged
 gateway ownership fix, #969 AI Access onboarding fix, #970 backend config
@@ -40,7 +41,6 @@ Next decision inputs:
 
 - first real tester install/use feedback
 - onboarding copy/friction fixes found from that feedback
-- one clean fresh-install/update smoke on the `2026062402` artifact
 
 Broad-public repo defaults now target `ai.jarvis.mac`, Jarvis state, and
 `ai.jarvis.gateway`. Keep old trusted-tester state separate unless Artem

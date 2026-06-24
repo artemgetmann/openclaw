@@ -15,9 +15,8 @@ strategy/history in `docs/consumer/archive/`.
 
 ## Now
 
-1. Run one clean fresh-install/update smoke on `2026.6.24` build `2026062402`.
-2. Open a narrow Telegram group allowlist migration PR for legacy migrated users.
-3. Collect real tester install/use feedback and fix only concrete onboarding
+1. Open a narrow Telegram group allowlist migration PR for legacy migrated users.
+2. Collect real tester install/use feedback and fix only concrete onboarding
    friction.
 
 ## Active Mission
@@ -32,7 +31,7 @@ to cold storage or let it die.
 ## Current Truth
 
 Trusted-tester send is unblocked on the current hotfix, but broad-public launch
-still needs one clean shipped-build smoke and tester-feedback proof.
+still needs tester-feedback proof.
 
 - Current Jarvis app version/build: `2026.6.24` / `2026062402`
 - Sendable DMG:
@@ -51,6 +50,9 @@ still needs one clean shipped-build smoke and tester-feedback proof.
 - Manual Jarvis migration proof exists. One legacy migrated user needed a manual
   non-secret Telegram group allowlist carry-over; a narrow follow-up PR should
   make that safer for similar legacy users.
+- Clean shipped-build smoke passed against the public `2026062402` DMG with
+  `fresh_user_smoke=passed`, `onboarding_window=observed`, and
+  `real_user_config_unchanged=yes`.
 
 Identity stance:
 
@@ -67,20 +69,18 @@ Keep this table to 5 or fewer real gates.
 
 | Gate                                   | Blocks trusted testers? | Blocks broad public launch? | Next proof                                                                                                     |
 | -------------------------------------- | ----------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Clean shipped-build smoke              | No                      | Yes                         | Validate the public `2026062402` artifact from a clean isolated state without touching real runtime state.     |
 | Legacy group allowlist migration PR    | No                      | No                          | Preserve non-secret Telegram group policy fields from old consumer config without copying tokens or old paths. |
 | First real tester install/use feedback | Yes, after sending      | Yes                         | Send current `Jarvis.dmg`; capture setup confusion, first useful task, and failure points.                     |
 | Onboarding copy/friction fixes         | Only if feedback blocks | Yes                         | Patch specific confusion found by testers.                                                                     |
 
 ## Next Actions
 
-1. Run clean shipped-build smoke on `2026062402`.
-2. Open the narrow Telegram group allowlist migration PR.
-3. Send current `Jarvis.dmg` to waiting trusted testers if that send has not already
+1. Open the narrow Telegram group allowlist migration PR.
+2. Send current `Jarvis.dmg` to waiting trusted testers if that send has not already
    happened.
-4. Capture install, AI access, Telegram setup, first useful task, and first
+3. Capture install, AI access, Telegram setup, first useful task, and first
    confusing/broken moment.
-5. Fix only concrete onboarding friction found by that feedback.
+4. Fix only concrete onboarding friction found by that feedback.
 
 ## Done
 
@@ -95,6 +95,8 @@ Keep this table to 5 or fewer real gates.
 - Public package/appcast proof passed for Jarvis `2026.6.24` build
   `2026062402`; release wrapper reported `release_sendable=true` and
   `sparkle_update_live=true`.
+- Clean shipped-build smoke passed on the public `2026062402` DMG without
+  touching the real user config.
 
 ## Cold Storage
 
