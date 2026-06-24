@@ -286,6 +286,198 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
+    func `default Jarvis runtime backfills Telegram group config from previous consumer config`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let previousState = home
+            .appendingPathComponent("Library/Application Support/OpenClaw Consumer/.openclaw", isDirectory: true)
+        let destinationState = home
+            .appendingPathComponent("Library/Application Support/Jarvis/.jarvis", isDirectory: true)
+        let previousConfig = previousState.appendingPathComponent("openclaw.json")
+        let destinationConfig = destinationState.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: home) }
+
+        try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: destinationState, withIntermediateDirectories: true)
+
+        try Self.writeJSON([
+            "channels": [
+                "telegram": [
+                    "botToken": "old-bot-token",
+                    "backend": ["accessToken": "old-backend-token"],
+                    "groupPolicy": "allowlist",
+                    "groupAllowFrom": ["319627125", "2060385474"],
+                    "groups": [
+                        "*": ["requireMention": false],
+                    ],
+                    "accounts": [
+                        "default": [
+                            "botToken": "old-account-token",
+                            "groupPolicy": "allowlist",
+                            "groupAllowFrom": ["319627125", "2060385474"],
+                            "groups": [
+                                "-100123": ["requireMention": true],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            "gateway": [
+                "path": "/old/openclaw-consumer/gateway",
+            ],
+        ], to: previousConfig)
+
+        try Self.writeJSON([
+            "channels": [
+                "telegram": [
+                    "botToken": "new-jarvis-token",
+                    "groups": [:],
+                    "accounts": [
+                        "default": [
+                            "groupAllowFrom": [],
+                        ],
+                    ],
+                ],
+            ],
+            "gateway": [
+                "path": "/new/jarvis/gateway",
+            ],
+            "jarvis": [
+                "accessToken": "new-jarvis-access-token",
+            ],
+        ], to: destinationConfig)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_MIGRATE_APP_RUNTIME": nil,
+            "OPENCLAW_DISABLE_APP_RUNTIME_MIGRATION": nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            OpenClawPaths.migrateConsumerRuntimeIfNeeded(
+                identity: RuntimeIdentity.current,
+                instanceID: ConsumerInstance.current.id)
+
+            let root = try Self.readJSON(destinationConfig)
+            let telegram = try #require((root["channels"] as? [String: Any])?["telegram"] as? [String: Any])
+            let defaultAccount = try #require((telegram["accounts"] as? [String: Any])?["default"] as? [String: Any])
+
+            #expect(telegram["groupPolicy"] as? String == "allowlist")
+            #expect(telegram["groupAllowFrom"] as? [String] == ["319627125", "2060385474"])
+            let groups = try #require(telegram["groups"] as? [String: Any])
+            #expect((groups["*"] as? [String: Any])?["requireMention"] as? Bool == false)
+
+            #expect(defaultAccount["groupPolicy"] as? String == "allowlist")
+            #expect(defaultAccount["groupAllowFrom"] as? [String] == ["319627125", "2060385474"])
+            let accountGroups = try #require(defaultAccount["groups"] as? [String: Any])
+            #expect((accountGroups["-100123"] as? [String: Any])?["requireMention"] as? Bool == true)
+
+            // Secrets and runtime paths must stay Jarvis-owned. The old
+            // consumer config is only a source for group authorization/routing.
+            #expect(telegram["botToken"] as? String == "new-jarvis-token")
+            #expect(telegram["backend"] == nil)
+            #expect(defaultAccount["botToken"] == nil)
+            #expect((root["gateway"] as? [String: Any])?["path"] as? String == "/new/jarvis/gateway")
+            #expect((root["jarvis"] as? [String: Any])?["accessToken"] as? String == "new-jarvis-access-token")
+        }
+    }
+
+    @Test
+    func `Telegram group config migration preserves existing target values`() async throws {
+        let instanceID = "migration-lane"
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let previousState = home
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw Consumer/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
+        let destinationState = home
+            .appendingPathComponent(
+                "Library/Application Support/OpenClaw/instances/\(instanceID)/.openclaw",
+                isDirectory: true)
+        let previousConfig = previousState.appendingPathComponent("openclaw.json")
+        let destinationConfig = destinationState.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: home) }
+
+        try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: destinationState, withIntermediateDirectories: true)
+
+        try Self.writeJSON([
+            "channels": [
+                "telegram": [
+                    "groupPolicy": "allowlist",
+                    "groupAllowFrom": ["old-user"],
+                    "groups": [
+                        "*": ["requireMention": false],
+                    ],
+                    "accounts": [
+                        "default": [
+                            "groupPolicy": "allowlist",
+                            "groupAllowFrom": ["old-account-user"],
+                            "groups": [
+                                "-100old": ["requireMention": true],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ], to: previousConfig)
+
+        try Self.writeJSON([
+            "channels": [
+                "telegram": [
+                    "groupPolicy": "open",
+                    "groupAllowFrom": ["target-user"],
+                    "groups": [
+                        "-100target": ["requireMention": true],
+                    ],
+                    "accounts": [
+                        "default": [
+                            "groupPolicy": "disabled",
+                            "groupAllowFrom": ["target-account-user"],
+                            "groups": [
+                                "-100target-account": ["requireMention": false],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ], to: destinationConfig)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": instanceID,
+            "OPENCLAW_MIGRATE_APP_RUNTIME": nil,
+            "OPENCLAW_DISABLE_APP_RUNTIME_MIGRATION": nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            OpenClawPaths.migrateConsumerRuntimeIfNeeded(
+                identity: RuntimeIdentity.current,
+                instanceID: ConsumerInstance.current.id)
+
+            let root = try Self.readJSON(destinationConfig)
+            let telegram = try #require((root["channels"] as? [String: Any])?["telegram"] as? [String: Any])
+            let defaultAccount = try #require((telegram["accounts"] as? [String: Any])?["default"] as? [String: Any])
+
+            #expect(telegram["groupPolicy"] as? String == "open")
+            #expect(telegram["groupAllowFrom"] as? [String] == ["target-user"])
+            #expect((telegram["groups"] as? [String: Any])?["-100target"] != nil)
+            #expect((telegram["groups"] as? [String: Any])?["*"] == nil)
+
+            #expect(defaultAccount["groupPolicy"] as? String == "disabled")
+            #expect(defaultAccount["groupAllowFrom"] as? [String] == ["target-account-user"])
+            #expect((defaultAccount["groups"] as? [String: Any])?["-100target-account"] != nil)
+            #expect((defaultAccount["groups"] as? [String: Any])?["-100old"] == nil)
+        }
+    }
+
+    @Test
     func `consumer instance runtime does not clobber existing OpenClaw config during migration`() async throws {
         let instanceID = "migration-lane"
         let home = FileManager().temporaryDirectory
@@ -369,5 +561,16 @@ struct OpenClawConfigFileTests {
             #expect(auditRoot?["result"] as? String == "success")
             #expect(auditRoot?["configPath"] as? String == configPath.path)
         }
+    }
+
+    private static func writeJSON(_ object: [String: Any], to url: URL) throws {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try FileManager().createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url)
+    }
+
+    private static func readJSON(_ url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
