@@ -201,6 +201,7 @@ final class ConsumerModelSetupModel {
     }
 
     private(set) var phase: Phase = .idle
+    private(set) var isReadinessRefreshInProgress = false
     private(set) var statusLine: String?
     private(set) var authOptions: [ConsumerModelsAuthOptionPayload] = []
     private(set) var authOptionsLoaded = false
@@ -561,11 +562,18 @@ final class ConsumerModelSetupModel {
         case .ready:
             return
         }
+        if self.phase == .idle {
+            // The auth-method list is the user-facing setup surface; readiness
+            // is only the safety gate for Next. Load choices first so a slow or
+            // blocked default-model probe does not make the page look broken
+            // before the user has had a chance to pick ChatGPT, Claude, or a key.
+            await self.loadAuthOptionsIfNeeded(suppressError: true)
+        }
         // A transient gateway/auth probe failure should not stick forever in the
         // Settings card. When the view appears again after the runtime recovers,
         // allow one more live readiness check without replacing the useful
         // failure copy with a spinner.
-        await self.refresh(preservingDisplayedResult: self.hasDisplayedReadinessResult)
+        await self.refresh(preservingDisplayedResult: self.hasPassiveSetupState)
     }
 
     func refreshOnAppActivationIfNeeded() async {
@@ -576,7 +584,7 @@ final class ConsumerModelSetupModel {
         guard !self.isApplyingAuth else { return }
         guard !self.isApplyingModel else { return }
         guard !self.isRestartingOperator else { return }
-        await self.refresh(preservingDisplayedResult: self.hasDisplayedReadinessResult)
+        await self.refresh(preservingDisplayedResult: self.hasPassiveSetupState)
     }
 
     func refresh() async {
@@ -592,11 +600,23 @@ final class ConsumerModelSetupModel {
         }
     }
 
+    private var hasPassiveSetupState: Bool {
+        // A displayed ready/failed result is worth preserving, and loaded auth
+        // choices are also useful setup state. Neither is treated as readiness;
+        // they only decide whether a background probe may avoid the blocking
+        // "checking" phase while the real gate is still running.
+        self.hasDisplayedReadinessResult || self.hasLoadedAuthChoices
+    }
+
     private func refresh(
         preservingDisplayedResult: Bool,
         automaticGatewayRecovery: Bool = false,
         allowRuntimeOwnershipRepair: Bool = true) async
     {
+        guard !self.isReadinessRefreshInProgress else { return }
+        self.isReadinessRefreshInProgress = true
+        defer { self.isReadinessRefreshInProgress = false }
+
         if !automaticGatewayRecovery {
             self.cancelRecoveryProbe(resetAttempt: true)
         }
@@ -604,7 +624,7 @@ final class ConsumerModelSetupModel {
         // Passive probes come from view re-appearance or app activation. They
         // should update stale data, but they should not make a healthy card look
         // like setup restarted unless there is no prior result to show.
-        if !preservingDisplayedResult || !self.hasDisplayedReadinessResult {
+        if !preservingDisplayedResult || !self.hasPassiveSetupState {
             self.phase = .checking
             self.statusLine = "Checking \(AppFlavor.current.appName)'s AI access…"
             self.failureKind = nil
