@@ -30,11 +30,16 @@ export type GuiTaskPolicy = {
   requiredVerificationMode: GuiVerificationMode;
 };
 
-export type GuiTaskPolicyProfile =
-  | "read_only_web_context"
-  | "send_message_to_approved_assistant"
-  | "local_fixture_write"
-  | "notes_write";
+export const GUI_TASK_POLICY_PROFILE_NAMES = [
+  "read_only_web_context",
+  "safe_local_settings_navigation",
+  "non_committal_web_dry_run",
+  "send_message_to_approved_assistant",
+  "local_fixture_write",
+  "notes_write",
+] as const;
+
+export type GuiTaskPolicyProfile = (typeof GUI_TASK_POLICY_PROFILE_NAMES)[number];
 
 export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "login",
@@ -51,6 +56,38 @@ export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "destructive",
 ];
 
+const LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "account",
+  "subscription",
+  "stop ai operator",
+  "stop operator",
+  "quit app only",
+  "quit",
+  "install update",
+  "install updates",
+  "update installation",
+  "download update",
+  "change plan",
+  "change account",
+];
+
+const NON_COMMITTAL_WEB_DRY_RUN_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "checkout",
+  "purchase",
+  "buy",
+  "book",
+  "confirm",
+  "passenger",
+  "traveler",
+  "card",
+  "credit card",
+  "passport",
+  "otp",
+  "2fa",
+];
+
 export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolicy> = {
   read_only_web_context: {
     taskId: "read_only_web_context",
@@ -59,6 +96,27 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
     grantedCapabilities: ["read_screen", "navigate_url"],
     deniedSurfaceTerms: DEFAULT_DENIED_GUI_SURFACE_TERMS,
     requiredVerificationMode: "observe_only",
+  },
+  safe_local_settings_navigation: {
+    taskId: "safe_local_settings_navigation",
+    taskName: "Navigate safe local Jarvis settings surfaces",
+    allowedApps: ["Jarvis", "OpenClaw"],
+    grantedCapabilities: ["read_screen", "click_verified_button"],
+    deniedSurfaceTerms: LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  non_committal_web_dry_run: {
+    taskId: "non_committal_web_dry_run",
+    taskName: "Non-committal browser navigation and search dry run",
+    allowedApps: ["Safari", "Google Chrome", "Chrome", "Arc", "Firefox"],
+    grantedCapabilities: [
+      "read_screen",
+      "navigate_url",
+      "write_text_to_target",
+      "click_verified_button",
+    ],
+    deniedSurfaceTerms: NON_COMMITTAL_WEB_DRY_RUN_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
   },
   send_message_to_approved_assistant: {
     taskId: "send_message_to_approved_assistant",
@@ -197,6 +255,13 @@ function hasAnyTerm(haystack: string, terms: string[]): string | undefined {
   return terms.find((term) => surfaceTermPattern(term).test(haystack));
 }
 
+function isAllowedNonCommittalUiCardContext(haystack: string): boolean {
+  return (
+    /\b(fare|flight|result|search|suggestion)\s+card\b/.test(haystack) &&
+    !hasAnyTerm(haystack, ["credit card", "payment card", "billing card"])
+  );
+}
+
 function targetMatchesAllowedTerm(
   value: string | undefined,
   allowed: string[] | undefined,
@@ -270,7 +335,14 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   // and destructive surfaces stay blocked even when a caller has mutation
   // approval, because those require a higher-trust flow than this verifier.
   const text = sensitiveSurfaceText(input);
-  const blockedSurface = hasAnyTerm(text, taskPolicy.deniedSurfaceTerms);
+  let blockedSurface = hasAnyTerm(text, taskPolicy.deniedSurfaceTerms);
+  if (
+    blockedSurface === "card" &&
+    taskPolicy.taskId === "non_committal_web_dry_run" &&
+    isAllowedNonCommittalUiCardContext(text)
+  ) {
+    blockedSurface = undefined;
+  }
   if (blockedSurface) {
     return {
       allowed: false,

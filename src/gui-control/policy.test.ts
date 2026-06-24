@@ -45,6 +45,123 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain("lacks capability write_text_to_target");
   });
 
+  it("allows Jarvis About-row navigation when unrelated settings controls are dangerous", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Jarvis", windowTitle: "Settings" },
+      snapshot: snapshot({
+        appName: "Jarvis",
+        windowTitle: "Settings",
+        summary: "Settings sidebar with General, Permissions, About, Stop AI Operator",
+        visibleText: ["General", "Permissions", "About", "Stop AI Operator", "Quit App Only"],
+      }),
+      element: { ref: "@about", role: "row", label: "About" },
+      reason: "Navigate to the About settings row.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("safe_local_settings_navigation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+    expect(decision.requiredCapability).toBe("click_verified_button");
+  });
+
+  it.each(["Stop AI Operator", "Quit App Only", "Destructive Settings"])(
+    "blocks dangerous Jarvis settings label %s under the local navigation profile",
+    (label) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Jarvis", windowTitle: "Settings" },
+        snapshot: snapshot({
+          appName: "Jarvis",
+          windowTitle: "Settings",
+          summary: "Jarvis settings",
+        }),
+        element: { ref: "@danger", role: "button", label },
+        reason: `Click ${label}.`,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("safe_local_settings_navigation"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it("allows Google Flights destination writes under the non-committal web dry-run profile", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "Safari", windowTitle: "Google Flights" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Google Flights",
+        summary: "Flight search page showing Denpasar origin and destination field",
+      }),
+      element: { ref: "@destination", role: "textbox", label: "Where to?" },
+      reason: "Set the destination field to Singapore for a dry-run search.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("non_committal_web_dry_run"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+    expect(decision.requiredCapability).toBe("write_text_to_target");
+  });
+
+  it("allows visible Google Flights suggestion-card clicks under the web dry-run profile", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Google Flights" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Google Flights",
+        summary: "Flight search page with visible DPS to SIN suggestion cards",
+      }),
+      element: { ref: "@suggestion", role: "button", label: "DPS to SIN" },
+      reason: "Click the already-visible Google Flights suggestion card.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("non_committal_web_dry_run"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+    expect(decision.requiredCapability).toBe("click_verified_button");
+  });
+
+  it.each([
+    "Log in",
+    "Payment",
+    "Passenger details",
+    "Traveler details",
+    "Checkout",
+    "Purchase",
+    "Book",
+    "Confirm",
+    "Card details",
+  ])("blocks committal web surface %s under the dry-run profile", (label) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Google Flights" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Google Flights",
+        summary: "Flight search page",
+      }),
+      element: { ref: "@commit", role: "button", label },
+      reason: `Click ${label}.`,
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("non_committal_web_dry_run"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
+
   it("blocks generic sensitive surfaces before capability approval can bypass them", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",
