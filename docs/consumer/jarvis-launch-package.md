@@ -2,7 +2,7 @@
 
 Status: Jarvis launch package truth
 Owner: Artem
-Last updated: 2026-06-21
+Last updated: 2026-06-24
 
 Purpose: launch-facing package, pricing, copy, and artifact truth.
 
@@ -39,19 +39,27 @@ tester identity into public launch creates update and support debt.
 
 Trusted-tester send is unblocked.
 
-- Current Jarvis app version/build: `2026.6.21` / `2026062190`
+- Current Jarvis app version/build: `2026.6.24` / `2026062402`
 - Sendable DMG:
   `https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.dmg`
 - Release page:
   `https://github.com/artemgetmann/openclaw/releases/tag/v2026.6.19`
 - Public assets: `Jarvis.dmg`, `Jarvis.zip`, `jarvis-appcast.xml`
-- Public asset metadata was checked on 2026-06-21.
-- This package contains the merged #953/#960 broad-public package/runtime fixes.
+- Public asset metadata was checked on 2026-06-24.
+- This package contains the merged #953/#960 broad-public package/runtime fixes
+  plus the #969-#972 AI Access and Telegram setup hotfixes.
 
 Accepted proof:
 
-- Local installed proof passed on Artem's Mac for app version `2026.6.21`,
-  build `2026062190`, commit `0f717c4afb`.
+- Local proof passed for app version `2026.6.24`, build `2026062402`, commit
+  `e2f67c810a`.
+- Release wrapper reported `release_sendable=true` and `sparkle_update_live=true`.
+- Public appcast advertises short version `2026.6.24`, build `2026062402`.
+- App and DMG notarization were accepted, stapled, and Gatekeeper-accepted as
+  Notarized Developer ID.
+- Clean shipped-build smoke passed against the public DMG with
+  `fresh_user_smoke=passed`, `onboarding_window=observed`, and
+  `real_user_config_unchanged=yes`.
 - Installed LaunchAgent proof verified `ai.jarvis.gateway`, Jarvis state, and
   no `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME` override.
 - A separate user's Mac manually installed the public DMG from an older Jarvis
@@ -64,11 +72,9 @@ Accepted proof:
 
 Open release proof:
 
-- Full Sparkle update-cycle proof is still needed before relying on updates for
-  recovery or broader distribution. Current proof covers live appcast metadata,
-  older-app prompt/download readiness, public asset replacement, and manual app
-  replacement, not a complete download/verify/install/relaunch/preserve-state
-  Sparkle update.
+- Current proof covers live appcast metadata, public asset replacement,
+  notarization, manual app/package verification, and a clean shipped-build
+  smoke. Keep relying on tester feedback for first-run friction.
 
 Future broad-public Jarvis packages and updates must come from the canonical
 publish lane and verify as `ai.jarvis.mac`, Jarvis state path,
@@ -120,8 +126,8 @@ install/use feedback: where setup feels confusing, where Jarvis gets stuck, and
 whether the first useful task is obvious.
 ```
 
-Do not turn the trusted-tester send into a broad public launch. Broader launch
-still needs real tester feedback and fuller Sparkle update-cycle proof.
+Do not turn the trusted-tester send into a broad public launch without real
+tester feedback from the current package.
 
 ## Commercial Package
 
@@ -200,9 +206,9 @@ Honest limitations:
 - Done in current package: `ai.jarvis.mac`, Jarvis state, `ai.jarvis.gateway`,
   stale OpenClaw LaunchAgent cleanup, and no need for
   `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1`.
-- Before broad public launch: fuller Sparkle update-cycle proof, onboarding
-  fixes from tester feedback, and Telegram cleanup only if tester feedback shows
-  confusion.
+- Before broad public launch: onboarding fixes from tester feedback and a narrow
+  legacy Telegram group allowlist migration follow-up for existing migrated
+  users.
 
 ## Launch Copy
 
@@ -228,3 +234,5 @@ Pricing one-liner:
   surfaces.
 - Decide whether old trusted-tester state starts clean under `ai.jarvis.mac` or
   gets a small manual migration runbook before broader distribution.
+- Decide whether the legacy Telegram group allowlist carry-over PR should merge
+  before the next packaged update or remain a support/runbook-only fix.

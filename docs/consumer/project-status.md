@@ -3,10 +3,10 @@ current_stage: private_beta
 users_total: 20
 paying_users: 0
 active_beta_users_7d: TBD
-updated_at: 2026-06-21
+updated_at: 2026-06-24
 stale_after_days: 14
-source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof, 2026-06-21 Jarvis 2026.6.21 public release/install proof, and repo main at 0f717c4afb.
-decision_implication: Trusted-tester send is unblocked; broader launch now needs fuller Sparkle update-cycle proof and real tester feedback.
+source_of_truth: Founder-reported beta snapshot plus 2026-06-09 Gate2 clean-user proof, 2026-06-24 Jarvis 2026.6.24 build 2026062402 release proof, public appcast proof, clean shipped-build smoke, and repo main at e2f67c810a.
+decision_implication: Trusted-tester send is unblocked with the current hotfix; broader launch now needs real tester feedback and concrete onboarding fixes only if feedback blocks.
 ---
 
 # Jarvis Project Status
@@ -27,17 +27,20 @@ The current planning snapshot is about 20 total users, 0 paying users, and
 source is wired in.
 
 Trusted-tester send is unblocked. Current public Jarvis assets install as
-`2026.6.21` build `2026062190`; same-user onboarding, Gate2 clean-user proof,
-and separate-user manual DMG install proof are accepted.
+`2026.6.24` build `2026062402`; same-user onboarding, Gate2 clean-user proof,
+separate-user manual DMG install proof, and 2026-06-24 public appcast proof are
+accepted. A clean shipped-build smoke passed against the public DMG with
+isolated fake-home state and `real_user_config_unchanged=yes`.
 
-Repo `main` includes the public Jarvis identity migration and #960 packaged
-gateway ownership fix. The current installed app contains that fix.
+Repo `main` includes the public Jarvis identity migration, #960 packaged
+gateway ownership fix, #969 AI Access onboarding fix, #970 backend config
+refresh fix, #971 Telegram metadata blocker fix, and #972 Telegram setup replay
+fix. The current public appcast contains those fixes.
 
 Next decision inputs:
 
 - first real tester install/use feedback
 - onboarding copy/friction fixes found from that feedback
-- fuller Sparkle update-cycle proof
 
 Broad-public repo defaults now target `ai.jarvis.mac`, Jarvis state, and
 `ai.jarvis.gateway`. Keep old trusted-tester state separate unless Artem
