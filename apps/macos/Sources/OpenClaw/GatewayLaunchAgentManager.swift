@@ -205,7 +205,12 @@ enum GatewayLaunchAgentManager {
     }
 
     static func runtimeOwnershipBlockerMessage(snapshot: LaunchAgentPlistSnapshot? = nil) -> String? {
-        let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
+        // Resolve the LaunchAgent plist once so every ownership gate evaluates
+        // the same service authority. Passing `nil` through to the service
+        // identity check made the normal UI path look like "no metadata" even
+        // when the current Jarvis LaunchAgent had the right version/build.
+        let resolvedSnapshot = snapshot ?? self.launchdConfigSnapshot()
+        let ownership = self.currentEntrypointOwnership(snapshot: resolvedSnapshot)
         if let expectedEntrypoint = ownership.expectedEntrypoint,
            let actualEntrypoint = ownership.actualEntrypoint,
            ownership.matchesCurrentEntrypoint == false
@@ -216,7 +221,7 @@ enum GatewayLaunchAgentManager {
                 actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
             """
         }
-        return self.serviceVersionBlockerMessage(snapshot: snapshot)
+        return self.serviceVersionBlockerMessage(snapshot: resolvedSnapshot)
     }
 
     static func launchAgentMatchesCurrentRuntime(snapshot: LaunchAgentPlistSnapshot? = nil) -> Bool {

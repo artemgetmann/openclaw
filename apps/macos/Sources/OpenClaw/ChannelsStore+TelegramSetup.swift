@@ -18,6 +18,22 @@ extension ChannelsStore {
         return GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
     }
 
+    static func telegramSetupStatusIsRuntimeOwnershipBlocker(_ status: String?) -> Bool {
+        guard let normalized = status?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !normalized.isEmpty
+        else {
+            return false
+        }
+
+        // Runtime ownership text is a live safety gate, not setup progress. If
+        // the current LaunchAgent later proves healthy, the card should stop
+        // showing an old blocker that was copied into telegramSetupStatus.
+        return normalized.contains("telegram live testing is blocked")
+            && normalized.contains("consumer gateway")
+    }
+
     func resetTelegramSetupProgressForEditedToken() {
         self.clearConsumerTelegramFirstTaskVerified()
         self.telegramSetupStatus = nil

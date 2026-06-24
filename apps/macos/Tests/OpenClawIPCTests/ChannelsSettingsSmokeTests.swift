@@ -215,6 +215,24 @@ struct ChannelsSettingsSmokeTests {
             presentation: .settings).body
     }
 
+    @Test func `consumer telegram setup card hides stale runtime blocker status after live blocker clears`() {
+        let staleStatus = """
+        Telegram live testing is blocked because this app expects service version 2026.6.23 build 2026062301, but the consumer gateway has no service version metadata. Restart the consumer gateway from this build before capturing the first DM.
+        """
+
+        #expect(ChannelsStore.telegramSetupStatusIsRuntimeOwnershipBlocker(staleStatus))
+        #expect(ConsumerTelegramSetupCardContent.visibleStatusText(
+            statusText: staleStatus,
+            runtimeOwnershipIssue: nil,
+            awaitingManagedApproval: false,
+            readyForFirstTaskVerification: true) == nil)
+        #expect(ConsumerTelegramSetupCardContent.visibleStatusText(
+            statusText: staleStatus,
+            runtimeOwnershipIssue: staleStatus,
+            awaitingManagedApproval: false,
+            readyForFirstTaskVerification: true) == staleStatus)
+    }
+
     @Test func `consumer telegram settings shows connected pending verification without internals`() async {
         await TestIsolation.withIsolatedState(
             env: ["OPENCLAW_APP_VARIANT": "consumer"],
