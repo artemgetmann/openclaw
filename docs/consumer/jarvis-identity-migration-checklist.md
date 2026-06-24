@@ -2,7 +2,7 @@
 
 Status: active closeout checklist
 Owner: Artem
-Last updated: 2026-06-21
+Last updated: 2026-06-24
 
 Purpose: move broad-public Jarvis runtime identity away from OpenClaw-branded
 defaults without breaking trusted-tester/debug lanes or the shared main runtime.
@@ -15,13 +15,16 @@ defaults without breaking trusted-tester/debug lanes or the shared main runtime.
       without the noncanonical shared-runtime override, and Jarvis repair
       disables stale OpenClaw gateway LaunchAgents.
 - [x] Local manual migration/install proof exists.
-- [x] Current public package/install proof exists for `2026.6.21`, build
-      `2026062190`, from current `main`.
+- [x] Current public package/appcast proof exists for `2026.6.24`, build
+      `2026062402`, from current `main`.
+- [x] Clean shipped-build smoke passed on the public `2026062402` DMG with
+      isolated fake-home state and unchanged real user config.
+- [x] Real migrated-user proof found one missing legacy Telegram group allowlist
+      carry-over; manual non-secret config migration restored group replies.
 
 ## Remaining Gates
 
-- [ ] Complete full Sparkle update install proof through the public appcast and
-      About -> Check for Updates.
+- [ ] Open the narrow legacy Telegram group allowlist migration PR.
 - [ ] Decide whether old trusted-tester state starts clean under
       `ai.jarvis.mac` or gets a small manual migration runbook.
 

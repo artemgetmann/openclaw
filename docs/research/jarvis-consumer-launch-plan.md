@@ -2,7 +2,7 @@
 
 Status: active mission tracker
 Owner: Artem
-Last updated: 2026-06-21
+Last updated: 2026-06-24
 
 Purpose: current mission, current truth, active gates, next actions, and cold
 storage pointers.
@@ -15,7 +15,7 @@ strategy/history in `docs/consumer/archive/`.
 
 ## Now
 
-1. Complete full Sparkle update-cycle proof.
+1. Open a narrow Telegram group allowlist migration PR for legacy migrated users.
 2. Collect real tester install/use feedback and fix only concrete onboarding
    friction.
 
@@ -30,24 +30,29 @@ to cold storage or let it die.
 
 ## Current Truth
 
-Trusted-tester send is unblocked, but broad-public launch still needs update
-and tester-feedback proof.
+Trusted-tester send is unblocked on the current hotfix, but broad-public launch
+still needs tester-feedback proof.
 
-- Current Jarvis app version/build: `2026.6.21` / `2026062190`
+- Current Jarvis app version/build: `2026.6.24` / `2026062402`
 - Sendable DMG:
   `https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.dmg`
 - Current public package uses `ai.jarvis.mac`, Jarvis state, and
   `ai.jarvis.gateway`.
-- Current repo `main` includes PR #953, PR #960, and docs closeout at
-  `0f717c4afb`.
+- Current repo `main` includes PR #953, PR #960, PR #969, PR #970, PR #971, and
+  PR #972 at `e2f67c810a`.
 - Public release assets include `Jarvis.dmg`, `Jarvis.zip`, and
   `jarvis-appcast.xml`.
-- Appcast points to short version `2026.6.21`, build `2026062190`.
+- Appcast points to short version `2026.6.24`, build `2026062402`.
 - Same-user onboarding and 2026-06-09 Gate2 clean-user proof are accepted.
 - A separate user's Mac manually installed the public DMG and reached Settings
   -> AI access with `Continue with ChatGPT` selected and no helper-repair
   message.
-- Manual Jarvis migration proof exists, and the installed app contains #960.
+- Manual Jarvis migration proof exists. One legacy migrated user needed a manual
+  non-secret Telegram group allowlist carry-over; a narrow follow-up PR should
+  make that safer for similar legacy users.
+- Clean shipped-build smoke passed against the public `2026062402` DMG with
+  `fresh_user_smoke=passed`, `onboarding_window=observed`, and
+  `real_user_config_unchanged=yes`.
 
 Identity stance:
 
@@ -62,15 +67,15 @@ Identity stance:
 
 Keep this table to 5 or fewer real gates.
 
-| Gate                                   | Blocks trusted testers? | Blocks broad public launch? | Next proof                                                                                                          |
-| -------------------------------------- | ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Full Sparkle update-cycle proof        | No                      | Yes                         | Prove download, signature verification, install, relaunch, and state preservation from older build to latest build. |
-| First real tester install/use feedback | Yes, after sending      | Yes                         | Send current `Jarvis.dmg`; capture setup confusion, first useful task, and failure points.                          |
-| Onboarding copy/friction fixes         | Only if feedback blocks | Yes                         | Patch specific confusion found by testers.                                                                          |
+| Gate                                   | Blocks trusted testers? | Blocks broad public launch? | Next proof                                                                                                     |
+| -------------------------------------- | ----------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Legacy group allowlist migration PR    | No                      | No                          | Preserve non-secret Telegram group policy fields from old consumer config without copying tokens or old paths. |
+| First real tester install/use feedback | Yes, after sending      | Yes                         | Send current `Jarvis.dmg`; capture setup confusion, first useful task, and failure points.                     |
+| Onboarding copy/friction fixes         | Only if feedback blocks | Yes                         | Patch specific confusion found by testers.                                                                     |
 
 ## Next Actions
 
-1. Run full Sparkle update-cycle proof before relying on automatic updates.
+1. Open the narrow Telegram group allowlist migration PR.
 2. Send current `Jarvis.dmg` to waiting trusted testers if that send has not already
    happened.
 3. Capture install, AI access, Telegram setup, first useful task, and first
@@ -85,7 +90,13 @@ Keep this table to 5 or fewer real gates.
 - Public `v2026.3.23` assets, local installed proof, separate-user manual DMG
   proof, and Gate2 clean-user proof are accepted.
 - PR #953 and PR #960 are merged into repo `main`.
-- Current public package/install proof passed for Jarvis `2026.6.21`.
+- AI Access and Telegram setup hotfix PRs #969, #970, #971, and #972 are merged
+  into repo `main`.
+- Public package/appcast proof passed for Jarvis `2026.6.24` build
+  `2026062402`; release wrapper reported `release_sendable=true` and
+  `sparkle_update_live=true`.
+- Clean shipped-build smoke passed on the public `2026062402` DMG without
+  touching the real user config.
 
 ## Cold Storage
 
