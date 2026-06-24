@@ -7,12 +7,19 @@ not load it for unrelated implementation tasks.
 
 ## Promise
 
-Jarvis is a local-first AI operator for Mac. The user talks to Jarvis in
-Telegram, and Jarvis gets real computer work done across apps, browser, files,
-tools, memory, and workflows.
+Jarvis is a local-first personal assistant/operator for Mac. The user talks to
+Jarvis in Telegram, and Jarvis gets real computer work done across apps,
+browser, files, email, messages, tools, memory, and workflows.
 
 Jarvis should feel like delegating to a capable assistant who already works in
 the user's real environment, not like managing infrastructure.
+
+The core thesis: Jarvis is for messy digital life, not a coding workbench.
+It packages cross-channel execution, memory, monitors, approvals, and guided
+setup so users do not need to assemble agent infrastructure themselves.
+
+Jarvis can use coding agents such as Codex- or Claude-like workers when that is
+useful, but Jarvis itself should still feel assistant-first, not terminal-first.
 
 ## User
 
@@ -20,9 +27,9 @@ Jarvis starts with high-intent people who want leverage now: founders,
 solo operators, solopreneurs, power users, and ambitious non-technical users
 with many small digital tasks.
 
-The strongest early user is a high-agency individual who owns their computer,
-owns the risk, and wants more execution capacity without building a team or a
-custom automation stack.
+The strongest early user is a high-agency operator who owns their computer,
+owns the risk, and wants more execution capacity without building a team,
+learning developer concepts, or assembling a custom automation stack.
 
 Useful shorthand:
 
@@ -41,6 +48,11 @@ power users room to go deeper.
   surface.
 - Local-first trust. Browser sessions, local files, installed tools, and machine
   context matter.
+- Cross-channel operator surface. Email, messages, browser, files, and local
+  tools should feel like one assistant surface, not disconnected automations.
+- Packaged capability, not DIY infra. Memory, monitors, approvals, and guided
+  setup are part of the product so the user does not have to wire an agent stack
+  together by hand.
 - Consumer-simple defaults. Advanced controls can exist, but they should not
   dominate the first experience.
 - Proof over theory. Do not claim readiness without install, runtime, or

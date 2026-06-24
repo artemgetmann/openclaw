@@ -5,6 +5,10 @@ This is the public repo map for Jarvis product docs.
 Jarvis is the consumer-facing product. OpenClaw is the engine, runtime, and
 developer/repo language.
 
+Positioning shorthand: Jarvis is a local-first personal assistant/operator for
+messy digital life, not a coding workbench. It can use coding agents when
+helpful, but the interface and product posture stay assistant-first.
+
 ## Docs Operating System
 
 Jarvis docs should create action, not emotional debt.
