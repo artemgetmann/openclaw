@@ -69,7 +69,7 @@ extension ChannelsStore {
 
         self.telegramSetupStatus = "Creating your Telegram bot..."
         do {
-            let configuration = try self.managedTelegramBotConfiguration()
+            let configuration = try await self.managedTelegramBotConfiguration()
             guard configuration.accountAccessToken?.isEmpty == false else {
                 self.telegramSetupStatus = "Create or sign in to Jarvis before creating a managed Telegram bot."
                 return
@@ -82,7 +82,9 @@ extension ChannelsStore {
             self.telegramManagedExpiresAt = response.expiresAt
             self.telegramSetupStatus = self.managedTelegramApprovalStatus(
                 suggestedUsername: response.suggestedBotUsername)
-            self.openTelegramURL(response.approvalUrl)
+            if !self.isPreview {
+                self.openTelegramURL(response.approvalUrl)
+            }
         } catch {
             self.handleManagedTelegramSetupStatusError(error)
         }
@@ -104,7 +106,7 @@ extension ChannelsStore {
 
         self.telegramSetupStatus = "Checking Telegram approval..."
         do {
-            let client = try self.managedTelegramBotClient()
+            let client = try await self.managedTelegramBotClient()
             let response = try await self.pollManagedTelegramSetupStatus(
                 client: client,
                 setupId: setupId,
@@ -449,11 +451,18 @@ extension ChannelsStore {
         } ?? "Token verified. Send one message to Jarvis, then click Verify Telegram."
     }
 
-    private func managedTelegramBotClient() throws -> JarvisTelegramManagedBotClient {
-        try JarvisTelegramManagedBotClient(configuration: self.managedTelegramBotConfiguration())
+    private func managedTelegramBotClient() async throws -> JarvisTelegramManagedBotClient {
+        try await JarvisTelegramManagedBotClient(configuration: self.managedTelegramBotConfiguration())
     }
 
-    private func managedTelegramBotConfiguration() throws -> JarvisTelegramManagedBotClient.Configuration {
+    private func managedTelegramBotConfiguration() async throws -> JarvisTelegramManagedBotClient.Configuration {
+        // Managed Telegram calls use the build-scoped Jarvis backend bearer.
+        // That token can be repaired by update/default seeding while this
+        // settings view is still alive, so do not trust a previously loaded
+        // configRoot snapshot here. Re-read the current app-owned config before
+        // each backend call to avoid surfacing stale "Invalid backend API token"
+        // failures after the disk config has already been fixed.
+        await self.restoreConfigDraftFromCurrentSource()
         let config = self.configRoot.isEmpty ? OpenClawConfigFile.loadDict() : self.configRoot
         return try JarvisTelegramManagedBotClient.resolveConfiguration(root: config)
     }

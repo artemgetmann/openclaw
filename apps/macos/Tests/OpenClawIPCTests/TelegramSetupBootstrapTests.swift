@@ -426,6 +426,77 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
+    @Test func `managed telegram start refreshes stale backend config before backend call`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "JARVIS_BACKEND_ACCESS_TOKEN": nil,
+            "JARVIS_BACKEND_API_TOKEN": nil,
+            "JARVIS_ACCOUNT_ACCESS_TOKEN": nil,
+        ]) {
+            let staleRoot: [String: Any] = [
+                "jarvis": [
+                    "backend": [
+                        "baseUrl": "https://jarvis.example.test",
+                        "accessToken": "stale-server-token",
+                        "accountAccessToken": "jat_account_token",
+                    ],
+                ],
+            ]
+            let freshRoot: [String: Any] = [
+                "jarvis": [
+                    "backend": [
+                        "baseUrl": "https://jarvis.example.test",
+                        "accessToken": "fresh-server-token",
+                        "accountAccessToken": "jat_account_token",
+                    ],
+                ],
+            ]
+
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: { freshRoot }))
+            await JarvisTelegramManagedBotClient._testSetTransportOverride { request in
+                #expect(request.url?.path == "/v1/telegram/managed/start")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-server-token")
+                let body = """
+                {
+                  "setupId": "tgms_test",
+                  "approvalUrl": "https://t.me/JarvisManagerBot?start=abc",
+                  "suggestedBotUsername": "jarvis_test_bot",
+                  "expiresAt": "2026-05-18T12:00:00Z",
+                  "status": "pending"
+                }
+                """
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil)
+                else {
+                    throw URLError(.badServerResponse)
+                }
+                return (
+                    Data(body.utf8),
+                    response)
+            }
+
+            let store = ChannelsStore(isPreview: true)
+            store.configRoot = staleRoot
+
+            await store.startManagedTelegramSetup()
+
+            #expect(store.telegramManagedSetupId == "tgms_test")
+            #expect(store.telegramSetupStatus?.contains("Invalid backend API token") != true)
+            let jarvis = try #require(store.configRoot["jarvis"] as? [String: Any])
+            let backend = try #require(jarvis["backend"] as? [String: Any])
+            #expect(backend["accessToken"] as? String == "fresh-server-token")
+
+            await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
     @Test func `managed telegram status installs child token as enabled usable config`() async throws {
         let savedRoot = SavedConfigRoot()
         let configPath = TestIsolation.tempConfigPath()
