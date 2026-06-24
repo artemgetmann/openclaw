@@ -1002,6 +1002,143 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @MainActor
+    @Test func `runtime ownership blocker reads current jarvis launch agent and ignores stale legacy plist`() async throws {
+        GatewayLaunchAgentManager._setTestingCurrentServiceVersion("2026.6.23")
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild("2026062301")
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let runtimeRoot = try self.makeRepoRoot(named: "jarvis-runtime-\(UUID().uuidString)")
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: runtimeRoot)
+        }
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": runtimeRoot.path,
+            ])
+        {
+            let identity = RuntimeIdentity.current
+            let launchAgentsURL = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            let currentEntrypoint = try #require(CommandResolver.gatewayEntrypoint(in: runtimeRoot))
+
+            try self.writeLaunchAgentPlist(
+                url: launchAgentsURL.appendingPathComponent("\(identity.gatewayLaunchdLabel).plist"),
+                programArguments: [
+                    "/usr/bin/node",
+                    currentEntrypoint,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                environment: [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_SERVICE_VERSION": "2026.6.23",
+                    "OPENCLAW_SERVICE_BUILD": "2026062301",
+                    "PATH": self.consumerLaunchdPath(for: identity),
+                ])
+
+            try self.writeLaunchAgentPlist(
+                url: launchAgentsURL.appendingPathComponent("ai.openclaw.gateway.plist"),
+                programArguments: [
+                    "/usr/bin/node",
+                    "/tmp/stale-openclaw/dist/index.js",
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                environment: [
+                    "OPENCLAW_HOME": home
+                        .appendingPathComponent("Library/Application Support/OpenClaw", isDirectory: true)
+                        .path,
+                    "OPENCLAW_SERVICE_VERSION": "2026.3.23",
+                    "OPENCLAW_SERVICE_BUILD": "2026061317",
+                ])
+
+            let snapshot = try #require(GatewayLaunchAgentManager.launchdConfigSnapshot())
+            let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
+
+            #expect(snapshot.environment["OPENCLAW_SERVICE_VERSION"] == "2026.6.23")
+            #expect(snapshot.environment["OPENCLAW_SERVICE_BUILD"] == "2026062301")
+            #expect(ownership.matchesCurrentEntrypoint)
+            #expect(GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime(snapshot: snapshot))
+            #expect(GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage() == nil)
+        }
+    }
+
+    @MainActor
+    @Test func `runtime ownership blocker still blocks when current jarvis launch agent lacks service metadata`() async throws {
+        GatewayLaunchAgentManager._setTestingCurrentServiceVersion("2026.6.23")
+        GatewayLaunchAgentManager._setTestingCurrentServiceBuild("2026062301")
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let runtimeRoot = try self.makeRepoRoot(named: "jarvis-runtime-\(UUID().uuidString)")
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: runtimeRoot)
+        }
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": runtimeRoot.path,
+            ])
+        {
+            let identity = RuntimeIdentity.current
+            let currentEntrypoint = try #require(CommandResolver.gatewayEntrypoint(in: runtimeRoot))
+            let currentPlistURL = home
+                .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+                .appendingPathComponent("\(identity.gatewayLaunchdLabel).plist")
+
+            try self.writeLaunchAgentPlist(
+                url: currentPlistURL,
+                programArguments: [
+                    "/usr/bin/node",
+                    currentEntrypoint,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                environment: [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                    "PATH": self.consumerLaunchdPath(for: identity),
+                ])
+
+            let message = GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+
+            #expect(message?.contains("expects service version 2026.6.23 build 2026062301") == true)
+            #expect(message?.contains("no service version metadata") == true)
+        }
+    }
+
+    @MainActor
     @Test func `daemon command environment marks app support config as canonical owner`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
@@ -1471,6 +1608,24 @@ extension GatewayLaunchAgentManagerTests {
         try Data().write(to: root.appendingPathComponent("package.json"))
         try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
         return root
+    }
+
+    private func writeLaunchAgentPlist(
+        url: URL,
+        programArguments: [String],
+        environment: [String: String]
+    ) throws {
+        // Tests use real plist parsing here because the production bug lived in
+        // the no-argument path that reads ConsumerRuntime.gatewayLaunchAgentPlistURL.
+        try FileManager().createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "ProgramArguments": programArguments,
+            "EnvironmentVariables": environment,
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: url, options: [.atomic])
     }
 
     private func writeBundledWorkspaceTemplates(into bundledRoot: URL) throws {
