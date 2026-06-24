@@ -839,6 +839,55 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .ready("openai-codex/gpt-5.5"))
     }
 
+    @Test func `consumer model shows loaded auth choices while first passive readiness probe is pending`() async {
+        let probeCalls = SendableCounter()
+        let authLoads = SendableCounter()
+        let pendingProbe = ReadinessContinuationBox()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return try await withCheckedThrowingContinuation { continuation in
+                    pendingProbe.continuation = continuation
+                }
+            },
+            listAuthOptions: {
+                authLoads.value += 1
+                return ConsumerModelsAuthListPayload(
+                    options: [
+                        subscriptionOptionPayload(),
+                        authOptionPayload(),
+                    ],
+                    activeOptionId: "openai-codex-oauth")
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        let refreshTask = Task {
+            await model.refreshIfNeeded()
+        }
+        while pendingProbe.continuation == nil {
+            await Task.yield()
+        }
+
+        #expect(authLoads.value == 1)
+        #expect(probeCalls.value == 1)
+        #expect(model.phase == .idle)
+        #expect(model.isReadinessRefreshInProgress)
+        #expect(!model.isComplete)
+        #expect(model.authOptionsLoaded)
+        #expect(model.chatGPTSubscriptionOption?.id == "openai-codex-oauth")
+        #expect(model.hasAPIKeySupport)
+        #expect(model.selectedOptionId == "openai-codex-oauth")
+        #expect(!model.isAuthChoiceInteractionBlocked)
+
+        pendingProbe.continuation?.resume(returning: readyReadinessPayload())
+        await refreshTask.value
+
+        #expect(model.isComplete)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+    }
+
     @Test func `consumer model refreshIfNeeded retries after transient failure`() async {
         let probeCalls = SendableCounter()
         let model = ConsumerModelSetupModel(
