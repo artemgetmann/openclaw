@@ -81,11 +81,29 @@ struct ConsumerTelegramSetupCardContent: View {
     }
 
     private var visibleStatusText: String? {
+        Self.visibleStatusText(
+            statusText: self.statusText,
+            runtimeOwnershipIssue: self.runtimeOwnershipIssue,
+            awaitingManagedApproval: self.awaitingManagedApproval,
+            readyForFirstTaskVerification: self.readyForFirstTaskVerification)
+    }
+
+    static func visibleStatusText(
+        statusText: String?,
+        runtimeOwnershipIssue: String?,
+        awaitingManagedApproval: Bool,
+        readyForFirstTaskVerification: Bool
+    ) -> String? {
         guard let statusText else { return nil }
-        if self.awaitingManagedApproval, self.isManagedApprovalInstruction(statusText) {
+        if runtimeOwnershipIssue == nil,
+           ChannelsStore.telegramSetupStatusIsRuntimeOwnershipBlocker(statusText)
+        {
             return nil
         }
-        if self.readyForFirstTaskVerification, self.isFirstTaskInstruction(statusText) {
+        if awaitingManagedApproval, self.isManagedApprovalInstruction(statusText) {
+            return nil
+        }
+        if readyForFirstTaskVerification, self.isFirstTaskInstruction(statusText) {
             return nil
         }
         return statusText
@@ -313,14 +331,14 @@ struct ConsumerTelegramSetupCardContent: View {
         }
     }
 
-    private func isManagedApprovalInstruction(_ text: String) -> Bool {
+    private static func isManagedApprovalInstruction(_ text: String) -> Bool {
         let normalized = text.lowercased()
         return normalized.contains("approve")
             && normalized.contains("click create")
             && (normalized.contains("check status") || normalized.contains("check again"))
     }
 
-    private func isFirstTaskInstruction(_ text: String) -> Bool {
+    private static func isFirstTaskInstruction(_ text: String) -> Bool {
         let normalized = text.lowercased()
         return normalized.contains("click verify first task")
             || normalized.contains("click verify telegram")
