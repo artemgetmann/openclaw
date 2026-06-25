@@ -179,6 +179,63 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("repairs stale Jarvis workspace pointers on doctor repair", async () => {
+    await withTempHome(
+      async (home) => {
+        const jarvisStateDir = path.join(
+          home,
+          "Library",
+          "Application Support",
+          "Jarvis",
+          ".jarvis",
+        );
+        const jarvisConfigPath = path.join(jarvisStateDir, "openclaw.json");
+        const legacyWorkspace = path.join(
+          home,
+          "Library",
+          "Application Support",
+          "OpenClaw",
+          ".openclaw",
+          "workspace",
+        );
+        const canonicalWorkspace = path.join(jarvisStateDir, "workspace");
+        await fs.mkdir(jarvisStateDir, { recursive: true });
+        await fs.writeFile(
+          jarvisConfigPath,
+          JSON.stringify(
+            {
+              agents: {
+                defaults: { workspace: legacyWorkspace },
+                list: [{ id: "main", workspace: legacyWorkspace }],
+              },
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const result = await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+
+        expect(result.shouldWriteConfig).toBe(true);
+        expect(result.path).toBe(jarvisConfigPath);
+        expect(result.cfg.agents?.defaults?.workspace).toBe(canonicalWorkspace);
+        expect(result.cfg.agents?.list?.[0]?.workspace).toBe(canonicalWorkspace);
+      },
+      {
+        env: {
+          OPENCLAW_STATE_DIR: (home) =>
+            path.join(home, "Library", "Application Support", "Jarvis", ".jarvis"),
+          OPENCLAW_CONFIG_PATH: (home) =>
+            path.join(home, "Library", "Application Support", "Jarvis", ".jarvis", "openclaw.json"),
+        },
+      },
+    );
+  });
+
   it("migrates legacy browser extension profiles to existing-session on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
