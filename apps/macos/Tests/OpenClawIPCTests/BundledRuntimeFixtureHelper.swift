@@ -27,6 +27,9 @@ enum BundledRuntimeFixtureHelper {
             at: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk", isDirectory: true),
             withIntermediateDirectories: true)
         try fileManager.createDirectory(
+            at: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e", isDirectory: true),
+            withIntermediateDirectories: true)
+        try fileManager.createDirectory(
             at: bundledRoot.appendingPathComponent("node/darwin-arm64/bin", isDirectory: true),
             withIntermediateDirectories: true)
         try fileManager.createDirectory(
@@ -54,6 +57,22 @@ enum BundledRuntimeFixtureHelper {
             encoding: .utf8)
         try "{\"name\":\"chalk\"}\n".write(
             to: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk/package.json"),
+            atomically: true,
+            encoding: .utf8)
+        try "TELEGRAM_API_ID=\nTELEGRAM_API_HASH=\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/.env.example"),
+            atomically: true,
+            encoding: .utf8)
+        try "telethon>=1.43.1\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/requirements.txt"),
+            atomically: true,
+            encoding: .utf8)
+        try "print('telegram user cli fixture')\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/telethon_cli.py"),
+            atomically: true,
+            encoding: .utf8)
+        try "# telegram compat fixture\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/telethon_compat.py"),
             atomically: true,
             encoding: .utf8)
 

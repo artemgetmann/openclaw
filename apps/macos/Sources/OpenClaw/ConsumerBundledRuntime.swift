@@ -29,6 +29,12 @@ enum ConsumerBundledRuntime {
         "BOOTSTRAP.md",
         "MEMORY.md",
     ]
+    private static let requiredTelegramUserToolingFiles = [
+        "scripts/telegram-e2e/.env.example",
+        "scripts/telegram-e2e/requirements.txt",
+        "scripts/telegram-e2e/telethon_cli.py",
+        "scripts/telegram-e2e/telethon_compat.py",
+    ]
 
     struct Manifest: Codable, Equatable {
         let format: Int
@@ -207,6 +213,18 @@ enum ConsumerBundledRuntime {
             fileManager.isReadableFile(
                 atPath: templateDirectoryURL.appendingPathComponent(templateName).path)
         }
+        let installedPayloadRootURL = installPrefixURL
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
+        let telegramUserToolingReady = self.requiredTelegramUserToolingFiles.allSatisfy { relativePath in
+            let fileURL = relativePath
+                .split(separator: "/")
+                .reduce(installedPayloadRootURL) { partialURL, component in
+                    partialURL.appendingPathComponent(String(component))
+                }
+            return fileManager.isReadableFile(
+                atPath: fileURL.path)
+        }
 
         return fileManager.isExecutableFile(atPath: wrapperURL.path)
             && fileManager.isExecutableFile(atPath: nodeURL.path)
@@ -215,6 +233,7 @@ enum ConsumerBundledRuntime {
             && fileManager.isReadableFile(atPath: chalkPackageURL.path)
             && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
             && templatesReady
+            && telegramUserToolingReady
     }
 
     private static func loadManifest(from resourceURL: URL) throws -> Manifest {
