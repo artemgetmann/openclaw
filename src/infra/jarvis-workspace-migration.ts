@@ -1,15 +1,30 @@
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
 
 export type JarvisWorkspacePointerMigrationResult = {
   config: OpenClawConfig;
   changes: string[];
 };
 
-function resolveHome(env: NodeJS.ProcessEnv, homedir: () => string): string {
-  return resolveRequiredHomeDir(env, homedir);
+function normalizeHomeCandidate(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveUserHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  // These migration paths are macOS user-home paths. OPENCLAW_HOME points at the
+  // app runtime root in packaged Jarvis, so using it here would create a bogus
+  // nested "Application Support/Jarvis/Library/Application Support/..." path.
+  const envHome = normalizeHomeCandidate(env.HOME) ?? normalizeHomeCandidate(env.USERPROFILE);
+  if (envHome) {
+    return path.resolve(envHome);
+  }
+  try {
+    return path.resolve(homedir());
+  } catch {
+    return path.resolve(process.cwd());
+  }
 }
 
 function appSupportPath(home: string, appName: "OpenClaw" | "Jarvis", stateDir: string): string {
@@ -73,7 +88,7 @@ export function migrateJarvisWorkspacePointers(params: {
   homedir?: () => string;
 }): JarvisWorkspacePointerMigrationResult {
   const env = params.env ?? process.env;
-  const home = resolveHome(env, params.homedir ?? os.homedir);
+  const home = resolveUserHomeDir(env, params.homedir ?? os.homedir);
   if (
     !shouldRepairJarvisWorkspacePointers({
       configPath: params.configPath,
