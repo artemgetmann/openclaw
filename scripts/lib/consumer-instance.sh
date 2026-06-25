@@ -42,6 +42,56 @@ consumer_instance_default_id_for_checkout() {
   consumer_instance_contract default-id --root "$root_dir"
 }
 
+consumer_instance_default_checkout_allowed() {
+  local root_dir="$1"
+  local absolute_root=""
+  local main_home=""
+  local consumer_home=""
+  local candidate=""
+
+  # Empty instance id means "the default Jarvis runtime", not a worktree lane.
+  # Worktrees derive an instance id before callers reach this guard, so only
+  # sacred home clones are allowed to use the unqualified local app identity.
+  if declare -F worktree_guard_sacred_home_clone_role >/dev/null 2>&1; then
+    case "$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)" in
+      main|consumer)
+        return 0
+        ;;
+    esac
+  fi
+
+  absolute_root="$(cd "$root_dir" && pwd -P 2>/dev/null)" || return 1
+  main_home="${OPENCLAW_MAIN_HOME_CLONE:-$HOME/Programming_Projects/openclaw}"
+  consumer_home="${OPENCLAW_CONSUMER_HOME_CLONE:-$HOME/Programming_Projects/openclaw-consumer}"
+
+  # Keep this fallback explicit so scripts that do not load worktree-guards.sh
+  # still follow the current two-clone model instead of the retired
+  # openclaw-consumer-openclaw-project checkout name.
+  for candidate in "$main_home" "$consumer_home"; do
+    [[ -n "$candidate" && -d "$candidate" ]] || continue
+    if [[ "$absolute_root" == "$(cd "$candidate" && pwd -P)" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+consumer_instance_default_checkout_hint() {
+  cat <<EOF
+Default local Jarvis app packaging/opening is allowed only from:
+  - ${OPENCLAW_MAIN_HOME_CLONE:-$HOME/Programming_Projects/openclaw} (sacred main home clone)
+  - ${OPENCLAW_CONSUMER_HOME_CLONE:-$HOME/Programming_Projects/openclaw-consumer} (legacy emergency fallback)
+
+From temp worktrees, pass --instance <id> so the app bundle, launchd label,
+state directory, and gateway port stay isolated.
+
+For a sendable Jarvis DMG or app update, use the public release lane instead:
+  bash scripts/jarvis-release-worktree.sh
+  bash scripts/jarvis-public-release.sh --dry-run
+EOF
+}
+
 consumer_instance_gateway_port() {
   local normalized="${1:-}"
   consumer_instance_identity_field gatewayPort "$normalized"
