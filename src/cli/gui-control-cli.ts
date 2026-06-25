@@ -7,7 +7,11 @@ import {
 } from "../gui-control/control.js";
 import type { ElementIntent } from "../gui-control/element-resolution.js";
 import { OpenComputerUseRuntime } from "../gui-control/open-computer-use-runtime.js";
-import { getGuiTaskPolicyProfile, type GuiTaskPolicyProfile } from "../gui-control/policy.js";
+import {
+  GUI_TASK_POLICY_PROFILE_NAMES,
+  getGuiTaskPolicyProfile,
+  type GuiTaskPolicyProfile,
+} from "../gui-control/policy.js";
 import type { GuiRuntimeName } from "../gui-control/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
@@ -33,6 +37,9 @@ type GuiControlCliOptions = {
   maxElements?: string | number;
   json?: boolean;
 };
+
+const GUI_TASK_POLICY_PROFILE_IDS = [...GUI_TASK_POLICY_PROFILE_NAMES];
+const GUI_TASK_POLICY_PROFILE_HELP = GUI_TASK_POLICY_PROFILE_IDS.join(", ");
 
 function parseRuntime(value?: string): GuiRuntimeName {
   if (!value) {
@@ -60,14 +67,13 @@ function readTaskPolicy(opts: GuiControlCliOptions) {
   if (!opts.taskPolicy) {
     return undefined;
   }
-  if (
-    opts.taskPolicy === "read_only_web_context" ||
-    opts.taskPolicy === "send_message_to_approved_assistant" ||
-    opts.taskPolicy === "local_fixture_write"
-  ) {
-    return getGuiTaskPolicyProfile(opts.taskPolicy as GuiTaskPolicyProfile);
+  const profile = opts.taskPolicy;
+  if (GUI_TASK_POLICY_PROFILE_IDS.includes(profile as GuiTaskPolicyProfile)) {
+    return getGuiTaskPolicyProfile(profile as GuiTaskPolicyProfile);
   }
-  throw new Error(`Unsupported GUI task policy profile: ${opts.taskPolicy}`);
+  throw new Error(
+    `Unsupported GUI task policy profile: ${profile}. Supported profiles: ${GUI_TASK_POLICY_PROFILE_HELP}`,
+  );
 }
 
 function readApp(opts: GuiControlCliOptions): string {
@@ -250,10 +256,7 @@ function addElementOptions(command: Command) {
 function addMutationOptions(command: Command) {
   return command
     .option("--reason <reason>", "Audit reason for the action")
-    .option(
-      "--task-policy <profile>",
-      "Task policy profile: read_only_web_context, send_message_to_approved_assistant, local_fixture_write",
-    )
+    .option("--task-policy <profile>", `Task policy profile: ${GUI_TASK_POLICY_PROFILE_HELP}`)
     .option("--approve-policy-risk", "Approve this specific mutating GUI action", false);
 }
 
