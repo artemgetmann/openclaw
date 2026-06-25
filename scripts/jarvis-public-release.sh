@@ -92,7 +92,11 @@ resolve_latest_github_release_tag() {
   # passes the resolved tag into the existing package-script safety gates. The
   # upload path still requires --publish-release-assets explicitly.
   set +e
-  latest_json="$(gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName 2>&1)"
+  latest_json="$(
+    jarvis_release_retry \
+      "gh release view latest for $GITHUB_RELEASE_REPO" \
+      gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName
+  )"
   status=$?
   set -e
   if [[ "$status" -ne 0 ]]; then

@@ -72,6 +72,16 @@ write_fake_latest_release_gh() {
         printf '  printf '"'"'{"tagName":"%s"}\\n'"'"'\n' "$tag"
         printf '  exit 0\n'
         ;;
+      transient-once)
+        printf '  state_file="${0}.state"\n'
+        printf '  if [[ ! -f "$state_file" ]]; then\n'
+        printf '    : >"$state_file"\n'
+        printf '    echo "net/http: TLS handshake timeout" >&2\n'
+        printf '    exit 1\n'
+        printf '  fi\n'
+        printf '  printf '"'"'{"tagName":"%s"}\\n'"'"'\n' "$tag"
+        printf '  exit 0\n'
+        ;;
       empty)
         printf '  printf '"'"'{}\\n'"'"'\n'
         printf '  exit 0\n'
@@ -206,6 +216,9 @@ test_wrapper_dry_run() {
   local latest_verify_root="$TMP_DIR/wrapper-latest-verify-assets"
   local latest_verify_out="$TMP_DIR/wrapper-latest-verify-assets.out"
   local latest_fake_bin="$TMP_DIR/fake-latest-gh"
+  local latest_retry_fake_bin="$TMP_DIR/fake-latest-retry-gh"
+  local latest_retry_out="$TMP_DIR/wrapper-latest-retry.out"
+  local missing_gh_bin="$TMP_DIR/no-gh-bin"
   local latest_conflict_err="$TMP_DIR/wrapper-latest-conflict.err"
   local missing_gh_err="$TMP_DIR/wrapper-missing-gh.err"
   local lookup_fail_err="$TMP_DIR/wrapper-latest-lookup-fail.err"
@@ -420,6 +433,22 @@ test_wrapper_dry_run() {
   fi
   pass "wrapper latest verify dry run resolves tag"
 
+  write_fake_latest_release_gh "$latest_retry_fake_bin" transient-once v-retry
+  PATH="$latest_retry_fake_bin:$PATH" \
+  OPENCLAW_GITHUB_RELEASE_RETRY_ATTEMPTS=2 \
+  OPENCLAW_GITHUB_RELEASE_RETRY_SLEEP_SECS=0 \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --verify-public-assets \
+      --latest-release-tag \
+      >"$latest_retry_out"
+  if ! grep -q 'resolved_github_release_tag=v-retry' "$latest_retry_out"; then
+    cat "$latest_retry_out" >&2
+    fail "wrapper latest tag did not retry a transient gh lookup failure"
+  fi
+  pass "wrapper latest tag retries transient gh lookup"
+
   set +e
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
@@ -439,10 +468,12 @@ test_wrapper_dry_run() {
   fi
   pass "wrapper latest tag rejects explicit tag conflict"
 
+  mkdir -p "$missing_gh_bin"
+  ln -s "$(command -v dirname)" "$missing_gh_bin/dirname"
   set +e
-  PATH="$TMP_DIR/no-gh:/usr/bin:/bin" \
+  PATH="$missing_gh_bin" \
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+    "$BASH" "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --dry-run \
       --latest-release-tag \
       >"$verify_out" 2>"$missing_gh_err"
