@@ -66,11 +66,17 @@ const normalizePathEntries = (value?: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+const normalizePathEntriesPreservingSpaces = (value?: string) =>
+  normalizeText(value)
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv(["PATH", "SHELL", "HOME", "OPENCLAW_CONFIG_PATH"]);
   });
 
   afterEach(() => {
@@ -93,6 +99,58 @@ describe("exec PATH login shell merge", () => {
 
     expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Jarvis managed CLI ahead of login-shell checkout paths", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-jarvis-path-home-"));
+    const jarvisBinDir = path.join(
+      homeDir,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "bin",
+    );
+    const sourceCheckoutBinDir = path.join(homeDir, "Programming_Projects", "openclaw");
+    fs.mkdirSync(jarvisBinDir, { recursive: true });
+    fs.mkdirSync(sourceCheckoutBinDir, { recursive: true });
+    fs.writeFileSync(path.join(jarvisBinDir, "openclaw"), "#!/bin/sh\nexit 0\n", {
+      encoding: "utf8",
+      mode: 0o755,
+    });
+
+    try {
+      process.env.HOME = homeDir;
+      process.env.PATH = "/usr/bin";
+      process.env.OPENCLAW_CONFIG_PATH = path.join(
+        homeDir,
+        "Library",
+        "Application Support",
+        "Jarvis",
+        ".jarvis",
+        "openclaw.json",
+      );
+
+      const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+      shellPathMock.mockClear();
+      shellPathMock.mockReturnValue(`${sourceCheckoutBinDir}:/opt/bin`);
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-jarvis-path", { command: "echo $PATH" });
+      const entries = normalizePathEntriesPreservingSpaces(
+        result.content.find((c) => c.type === "text")?.text,
+      );
+
+      expect(entries[0]).toBe(jarvisBinDir);
+      expect(entries.indexOf(sourceCheckoutBinDir)).toBeGreaterThan(0);
+      expect(shellPathMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("sets OPENCLAW_SHELL for host=gateway commands", async () => {

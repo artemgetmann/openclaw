@@ -5,6 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { detectDangerousExecCommand } from "../infra/exec-dangerous-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { resolveAppManagedOpenClawCliBinDirs } from "../infra/path-env.js";
 import { resolvePermissionDefaults } from "../infra/permissions-mode.js";
 import {
   getShellPathFromLoginShell,
@@ -490,6 +491,10 @@ export function createExecTool(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
         });
         applyShellPath(env, shellPath);
+        // Login shells can prepend developer checkout bins from dotfiles. In a
+        // Jarvis-managed runtime, put the app-owned CLI back on top so product
+        // dogfood commands hit the same runtime a real user has installed.
+        applyPathPrepend(env, resolveAppManagedOpenClawCliBinDirs({ env }));
       }
 
       // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
