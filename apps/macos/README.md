@@ -311,13 +311,13 @@ manifest, chooses the next safe package phase, and delegates to
 submission exists, while DMG polling remains a separate resumable step. This is
 local-only P2 parallelism: the appcast upload still stays last because it is the
 public go-live switch. If the wrapper selects
-`create-local-release-assets-only`, pass the latest release tag so the Sparkle
-appcast signs an immutable tagged `Jarvis.zip` URL:
+`create-local-release-assets-only`, let it resolve the latest release tag so
+the Sparkle appcast signs an immutable tagged `Jarvis.zip` URL:
 
 ```bash
 bash scripts/jarvis-public-release.sh \
   --parallel-safe-local-assets \
-  --github-release-tag "<latest-tag-from-gh-release-view>"
+  --latest-release-tag
 ```
 
 #### Publish Gate
@@ -328,11 +328,15 @@ accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
 
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
-gh release view --repo artemgetmann/openclaw --json tagName,url
 bash scripts/jarvis-public-release.sh \
   --publish-release-assets \
-  --github-release-tag "<latest-tag-from-gh-release-view>"
+  --latest-release-tag
 ```
+
+Use `--github-release-tag <tag>` only when you intentionally want to pin the
+wrapper to a specific known tag. The wrapper rejects combining it with
+`--latest-release-tag` so publish and verification commands cannot hide
+ambiguous operator intent.
 
 Before the large GitHub release asset upload, the package script runs a
 GitHub-specific network preflight. It checks routes to `github.com`,

@@ -17,6 +17,7 @@ PUBLISH_RELEASE_ASSETS=0
 VERIFY_PUBLIC_ASSETS=0
 FORCED_PHASE="auto"
 GITHUB_RELEASE_TAG=""
+LATEST_RELEASE_TAG=0
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
 TIMING_REPORT="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-public-release-summary.env}"
@@ -39,11 +40,16 @@ Options:
       the publish flags through to package-openclaw-mac-dist.sh.
   --verify-public-assets
       Choose verify-public-assets-only once local notarized assets are ready.
-      Real verification requires --github-release-tag because the appcast ZIP
-      enclosure is pinned to an immutable tagged release URL.
+      Real verification requires --github-release-tag or --latest-release-tag
+      because the appcast ZIP enclosure is pinned to an immutable tagged
+      release URL.
   --github-release-tag <tag>
       Required before any publish phase. Must be the latest release tag because
       Sparkle uses releases/latest/download/jarvis-appcast.xml.
+  --latest-release-tag
+      Resolve the latest release tag for GITHUB_RELEASE_REPO with GitHub CLI
+      before building the package command. Mutually exclusive with
+      --github-release-tag so publish intent stays unambiguous.
   --parallel-safe-local-assets
       Opt into the P2 safe overlap path. After app notarization is accepted and
       DMG notarization has a submitted receipt, create local Jarvis.zip/appcast
@@ -70,6 +76,48 @@ quote_cmd() {
     printf '%q ' "$arg"
   done
   printf '\n'
+}
+
+resolve_latest_github_release_tag() {
+  local latest_json=""
+  local latest_tag=""
+  local status=0
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "ERROR: --latest-release-tag requires the GitHub CLI (gh)." >&2
+    exit 1
+  fi
+
+  # Keep this wrapper read-only: it asks GitHub which release is latest, then
+  # passes the resolved tag into the existing package-script safety gates. The
+  # upload path still requires --publish-release-assets explicitly.
+  set +e
+  latest_json="$(
+    jarvis_release_retry \
+      "gh release view latest for $GITHUB_RELEASE_REPO" \
+      gh release view --repo "$GITHUB_RELEASE_REPO" --json tagName
+  )"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "ERROR: could not resolve the latest GitHub release tag for $GITHUB_RELEASE_REPO." >&2
+    printf '%s\n' "$latest_json" >&2
+    exit "$status"
+  fi
+
+  latest_tag="$(
+    printf '%s\n' "$latest_json" \
+      | /usr/bin/sed -n 's/.*"tagName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | /usr/bin/head -n 1
+  )"
+
+  if [[ -z "$latest_tag" ]]; then
+    echo "ERROR: no latest GitHub release tag found for $GITHUB_RELEASE_REPO." >&2
+    printf '%s\n' "$latest_json" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$latest_tag"
 }
 
 iso_now() {
@@ -168,6 +216,10 @@ while [[ $# -gt 0 ]]; do
       GITHUB_RELEASE_TAG="$2"
       shift 2
       ;;
+    --latest-release-tag)
+      LATEST_RELEASE_TAG=1
+      shift
+      ;;
     --phase)
       if [[ $# -lt 2 ]]; then
         echo "ERROR: --phase requires a value." >&2
@@ -199,6 +251,16 @@ done
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
   echo "ERROR: choose --publish-release-assets or --verify-public-assets, not both." >&2
   exit 1
+fi
+
+if [[ "$LATEST_RELEASE_TAG" == "1" && -n "$GITHUB_RELEASE_TAG" ]]; then
+  echo "ERROR: choose --latest-release-tag or --github-release-tag <tag>, not both." >&2
+  echo "The release wrapper refuses ambiguous tag intent before publish/verify commands." >&2
+  exit 1
+fi
+
+if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
+  GITHUB_RELEASE_TAG="$(resolve_latest_github_release_tag)"
 fi
 
 case "$FORCED_PHASE" in
@@ -236,7 +298,7 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   echo "Jarvis public release local assets are ready, but no public action was requested."
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  echo "  next_publish_command=bash scripts/jarvis-public-release.sh --publish-release-assets --github-release-tag <latest-tag>"
+  echo "  next_publish_command=bash scripts/jarvis-public-release.sh --publish-release-assets --latest-release-tag"
   echo "  appcast_upload_remains_last=true"
   exit 0
 fi
@@ -287,6 +349,10 @@ echo "  state_root=$STATE_ROOT"
 echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
 echo "  command=$COMMAND_TEXT"
 echo "  appcast_upload_remains_last=true"
+if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
+  echo "  latest_release_tag=true"
+  echo "  resolved_github_release_tag=$GITHUB_RELEASE_TAG"
+fi
 if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
   echo "  required_before_execute=--github-release-tag <latest-tag>"
 fi
