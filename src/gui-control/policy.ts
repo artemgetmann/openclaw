@@ -99,7 +99,7 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
   },
   safe_local_settings_navigation: {
     taskId: "safe_local_settings_navigation",
-    taskName: "Navigate safe local Jarvis settings surfaces",
+    taskName: "Navigate safe local app settings surfaces",
     allowedApps: ["Jarvis", "OpenClaw"],
     grantedCapabilities: ["read_screen", "click_verified_button"],
     deniedSurfaceTerms: LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS,

@@ -45,27 +45,43 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain("lacks capability write_text_to_target");
   });
 
-  it("allows Jarvis About-row navigation when unrelated settings controls are dangerous", () => {
-    const decision = evaluateGuiPolicy({
-      actionType: "click",
-      target: { appName: "Jarvis", windowTitle: "Settings" },
-      snapshot: snapshot({
-        appName: "Jarvis",
-        windowTitle: "Settings",
-        summary: "Settings sidebar with General, Permissions, About, Stop AI Operator",
-        visibleText: ["General", "Permissions", "About", "Stop AI Operator", "Quit App Only"],
-      }),
-      element: { ref: "@about", role: "row", label: "About" },
-      reason: "Navigate to the About settings row.",
-      approvedPolicyRisk: true,
-      taskPolicy: getGuiTaskPolicyProfile("safe_local_settings_navigation"),
-      verificationMode: "post_state",
-    });
+  it.each([
+    ["Jarvis", "About"],
+    ["Jarvis", "Permissions"],
+    ["Jarvis", "AI access"],
+    ["OpenClaw", "Browser"],
+  ])(
+    "allows safe local settings row navigation for %s / %s when unrelated controls are dangerous",
+    (appName, label) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName, windowTitle: "Settings" },
+        snapshot: snapshot({
+          appName,
+          windowTitle: "Settings",
+          summary: "Settings sidebar with General, Permissions, AI access, Browser, About",
+          visibleText: [
+            "General",
+            "Permissions",
+            "AI access",
+            "Browser",
+            "About",
+            "Stop AI Operator",
+            "Quit App Only",
+          ],
+        }),
+        element: { ref: `@${label.toLowerCase().replaceAll(" ", "-")}`, role: "row", label },
+        reason: `Navigate to the ${label} settings row.`,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("safe_local_settings_navigation"),
+        verificationMode: "post_state",
+      });
 
-    expect(decision.allowed).toBe(true);
-    expect(decision.risk).toBe("allowed-mutation");
-    expect(decision.requiredCapability).toBe("click_verified_button");
-  });
+      expect(decision.allowed).toBe(true);
+      expect(decision.risk).toBe("allowed-mutation");
+      expect(decision.requiredCapability).toBe("click_verified_button");
+    },
+  );
 
   it.each(["Stop AI Operator", "Quit App Only", "Destructive Settings"])(
     "blocks dangerous Jarvis settings label %s under the local navigation profile",
