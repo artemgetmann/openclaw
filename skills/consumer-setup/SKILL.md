@@ -1,6 +1,6 @@
 ---
 name: consumer-setup
-description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp messaging/search (`wacli`), non-Google email over IMAP/SMTP (`himalaya`), Google Gmail/Calendar/Drive/Docs/Sheets/Contacts (`gog`), Apple Notes, Apple Reminders, or Google Maps/Places search (`goplaces`). Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
+description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, or Places Search. Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -25,6 +25,10 @@ the problem is normal task execution rather than setup.
 ## Core Behavior
 
 - Explain the missing setup in plain product language, not raw CLI noise.
+- Use consumer-facing capability names first, such as Google Workspace, Email,
+  WhatsApp, Telegram as Me, Places Search, and Mac Screen Control. Mention raw
+  tool ids like `gog`, `himalaya`, `wacli`, or `peekaboo` only when the user is
+  debugging setup, reviewing a PR, or explicitly asks for the technical path.
 - Offer to help complete setup now.
 - Ask only for the information, approval, or login step the user must provide.
 - Prefer GUI, browser-assisted, or QR-based setup when that will be clearer than
@@ -154,17 +158,20 @@ explicitly ask for the CLI path.
 - After verification succeeds, continue the user's original Telegram-as-me task
   instead of stopping at "setup is done".
 
-### gog
+### Google Workspace (`gog`)
 
 - Missing states usually look like: no OAuth client credentials, no authorized
   account, or auth/account list coming back empty.
-- Tell the user Google is not connected yet.
+- Tell the user Google Workspace is not connected yet.
 - Ask which Google account and which surfaces they want enabled first
   (Gmail, Calendar, Drive, Docs, Sheets, Contacts).
 - Prefer a browser-assisted OAuth flow when available.
-- On runtimes where `gog` safe-bin execution is available, prefer a direct
-  `gog auth add <email> --services <csv>` launch first. That path can open the
-  browser itself without telling the user to use Terminal.
+- Check `gog --version` before assuming newer auth helpers exist. Treat
+  v0.31.0+ as the cutoff for `gog auth setup`, `GOG_HELP=agent`, classified
+  corrupt-token recovery, and global `--readonly` / `GOG_READONLY=1`.
+- On runtimes where `gog` safe-bin execution is available and the binary is
+  v0.31.0+, prefer `gog auth setup` first. If that helper is not present, fall
+  back to `gog auth add <email> --services <csv>`.
 - Prefer opening the real auth tab in Google Chrome when the runtime can do so.
   If Chrome is unavailable, use the default browser rather than dumping raw
   terminal instructions back to the user.
@@ -177,6 +184,9 @@ explicitly ask for the CLI path.
 - Say the secure step out loud: Google may require password entry, Touch ID,
   passkey approval, or 2FA in the browser, and the user may need to complete
   that manually even if the rest of the setup is automated.
+- If the flow reaches email-only fallback, use `himalaya` only after proving it
+  is the same mailbox the user meant. Never offer `himalaya` for Calendar,
+  Drive, Docs, Sheets, or Contacts.
 - If the local runtime cannot complete the consent click itself, say what the
   user must do in the browser. Do not translate that limitation into "go run
   this in Terminal."

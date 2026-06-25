@@ -59,7 +59,7 @@ They should come away knowing:
 - For broad intro questions, include the visible skill inventory instead of
   giving only a generic summary.
 - Then explain the relevant visible skills one by one:
-  - skill name
+  - consumer-facing skill name when available
   - short description in plain language
   - what it is useful for
 - Then mention broader capabilities if they are actually visible here, such as:
@@ -83,7 +83,11 @@ They should come away knowing:
 - If the list is large, keep it compact, but still mention each visible skill by
   name with a short plain-language use case.
 - Do not hide multiple skills behind vague summaries.
-- Tell the user the skill names and what each one is useful for.
+- Tell the user the consumer-facing skill names and what each one is useful for.
+  If a raw internal id is visible and the user is not asking for technical
+  details, translate it first: `gog` is Google Workspace, `himalaya` is Email,
+  `wacli` is WhatsApp, `goplaces` is Places Search, and `peekaboo` is Mac Screen
+  Control.
 - Prefer a compact, scannable list over a giant paragraph.
 - If a skill description is visible, use that description as the starting point,
   then translate it into user language.

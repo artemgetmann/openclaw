@@ -46,6 +46,7 @@ export type SkillToolVersionStatus = {
 
 export type SkillStatusEntry = {
   name: string;
+  displayName?: string;
   description: string;
   source: string;
   bundled: boolean;
@@ -82,6 +83,28 @@ export type SkillShadowDiagnostic = {
 
 function resolveSkillKey(entry: SkillEntry): string {
   return entry.metadata?.skillKey ?? entry.skill.name;
+}
+
+const CONSUMER_SKILL_DISPLAY_NAMES: Record<string, string> = {
+  gog: "Google Workspace",
+  goplaces: "Places Search",
+  himalaya: "Email",
+  "media-editor": "Audio & Video Editing",
+  mcporter: "MCP Connector Manager",
+  "nano-banana-pro": "Image Generation",
+  "nano-pdf": "PDF Editing",
+  "office-documents": "Documents, Spreadsheets & Presentations",
+  peekaboo: "Mac Screen Control",
+  "telegram-user": "Telegram as Me",
+  wacli: "WhatsApp",
+};
+
+function resolveSkillDisplayName(entry: SkillEntry): string | undefined {
+  const explicit = entry.metadata?.displayName?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return CONSUMER_SKILL_DISPLAY_NAMES[entry.skill.name];
 }
 
 function selectPreferredInstallSpec(
@@ -329,6 +352,7 @@ function buildSkillStatus(
 
   return {
     name: entry.skill.name,
+    displayName: resolveSkillDisplayName(entry),
     description: entry.skill.description,
     source: entry.skill.source,
     bundled,

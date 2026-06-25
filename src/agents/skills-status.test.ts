@@ -98,4 +98,45 @@ describe("buildWorkspaceSkillStatus", () => {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });
+
+  it("surfaces consumer display names separately from machine skill names", () => {
+    const entry: SkillEntry = {
+      skill: {
+        name: "gog",
+        description: "Google account access",
+        source: "test",
+        filePath: "/tmp/gog",
+        baseDir: "/tmp",
+        disableModelInvocation: false,
+      },
+      frontmatter: {},
+      metadata: {
+        displayName: "Google Workspace",
+      },
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+
+    expect(report.skills[0]?.name).toBe("gog");
+    expect(report.skills[0]?.displayName).toBe("Google Workspace");
+  });
+
+  it("uses consumer display names for known shadowed workspace skill ids", () => {
+    const entry: SkillEntry = {
+      skill: {
+        name: "wacli",
+        description: "Legacy workspace WhatsApp skill",
+        source: "openclaw-workspace",
+        filePath: "/tmp/wacli",
+        baseDir: "/tmp",
+        disableModelInvocation: false,
+      },
+      frontmatter: {},
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+
+    expect(report.skills[0]?.name).toBe("wacli");
+    expect(report.skills[0]?.displayName).toBe("WhatsApp");
+  });
 });

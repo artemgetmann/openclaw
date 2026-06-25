@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📍",
+        "displayName": "Places Search",
         "requires": { "bins": ["node"] },
         "primaryEnv": "GOOGLE_PLACES_API_KEY",
         "install":

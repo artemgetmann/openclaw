@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📄",
+        "displayName": "PDF Editing",
         "requires": { "bins": ["nano-pdf"] },
         "install":
           [

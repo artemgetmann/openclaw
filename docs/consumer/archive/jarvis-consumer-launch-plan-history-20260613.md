@@ -568,9 +568,9 @@ Problem: many current tool/skill names are developer-facing and confusing for no
 
 Decision direction:
 
-- [ ] Rename/relabel developer skill names into plain user-facing names in app/docs/onboarding.
-- [ ] Keep internal package/skill IDs if needed, but hide them from normal UX.
-- [ ] Make natural language routing work from user intent, not skill names.
+- [x] Rename/relabel developer skill names into plain user-facing names in app/docs/onboarding.
+- [x] Keep internal package/skill IDs if needed, but hide them from normal UX.
+- [x] Make natural language routing work from user intent, not skill names.
 
 Examples:
 
@@ -582,10 +582,16 @@ Examples:
 
 Investigation task:
 
-- [ ] Audit all bundled/default skills and tools for developer-facing names.
-- [ ] Mark deprecated/confusing names.
-- [ ] Propose user-facing labels, descriptions, and trigger phrases.
-- [ ] Ensure users can say things like “check my email”, “open WhatsApp”, “use my Google Calendar”, “find places nearby” and Jarvis routes correctly.
+- [x] Audit all bundled/default skills and tools for developer-facing names.
+- [x] Mark deprecated/confusing names.
+- [x] Propose user-facing labels, descriptions, and trigger phrases.
+- [x] Ensure users can say things like “check my email”, “open WhatsApp”, “use my Google Calendar”, “find places nearby” and Jarvis routes correctly.
+
+2026-06-25 implementation note: user-facing display labels now sit on bundled
+skill metadata while internal IDs remain stable. Google Workspace, Email,
+WhatsApp, Places Search, Telegram as Me, Mac Screen Control, media editing, PDF,
+and document/deck workflows have consumer-facing routing language in the default
+skill surface.
 
 ## 11. Onboarding roadmap
 

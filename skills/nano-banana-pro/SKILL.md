@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🍌",
+        "displayName": "Image Generation",
         "requires": { "bins": ["node"] },
         "install":
           [
