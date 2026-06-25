@@ -48,14 +48,22 @@ consumer_instance_default_checkout_allowed() {
   local main_home=""
   local consumer_home=""
   local candidate=""
+  local candidate_branch=""
+  local expected_branch=""
+  local role=""
 
   # Empty instance id means "the default Jarvis runtime", not a worktree lane.
   # Worktrees derive an instance id before callers reach this guard, so only
-  # sacred home clones are allowed to use the unqualified local app identity.
+  # sacred home clones on their protected base branch are allowed to use the
+  # unqualified local app identity.
   if declare -F worktree_guard_sacred_home_clone_role >/dev/null 2>&1; then
-    case "$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)" in
+    role="$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)"
+    case "$role" in
       main|consumer)
-        return 0
+        expected_branch="$(worktree_guard_sacred_home_clone_branch "$role" 2>/dev/null || true)"
+        candidate_branch="$(git -C "$root_dir" branch --show-current 2>/dev/null || true)"
+        [[ -n "$expected_branch" && "$candidate_branch" == "$expected_branch" ]] && return 0
+        return 1
         ;;
     esac
   fi
@@ -70,7 +78,20 @@ consumer_instance_default_checkout_allowed() {
   for candidate in "$main_home" "$consumer_home"; do
     [[ -n "$candidate" && -d "$candidate" ]] || continue
     if [[ "$absolute_root" == "$(cd "$candidate" && pwd -P)" ]]; then
-      return 0
+      case "$candidate" in
+        "$main_home")
+          expected_branch="main"
+          ;;
+        "$consumer_home")
+          expected_branch="codex/consumer-openclaw-project"
+          ;;
+        *)
+          return 1
+          ;;
+      esac
+      candidate_branch="$(git -C "$candidate" branch --show-current 2>/dev/null || true)"
+      [[ "$candidate_branch" == "$expected_branch" ]] && return 0
+      return 1
     fi
   done
 
