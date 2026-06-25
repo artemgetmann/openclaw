@@ -46,6 +46,32 @@ describe("migrateJarvisWorkspacePointers", () => {
     expect(cfg.agents?.defaults?.workspace).toBe(legacyWorkspace(home));
   });
 
+  it("uses the OS user home instead of OPENCLAW_HOME in packaged Jarvis", () => {
+    const home = "/tmp/openclaw-test-home";
+    const jarvisRuntimeRoot = path.join(home, "Library", "Application Support", "Jarvis");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: legacyWorkspace(home),
+        },
+      },
+    };
+
+    const result = migrateJarvisWorkspacePointers({
+      config: cfg,
+      configPath: jarvisConfigPath(home),
+      env: {
+        HOME: home,
+        OPENCLAW_HOME: jarvisRuntimeRoot,
+        OPENCLAW_STATE_DIR: path.join(jarvisRuntimeRoot, ".jarvis"),
+      } as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
+
+    expect(result.changes).toHaveLength(1);
+    expect(result.config.agents?.defaults?.workspace).toBe(canonicalWorkspace(home));
+  });
+
   it("does not repair non-Jarvis configs", () => {
     const home = "/tmp/openclaw-test-home";
     const cfg: OpenClawConfig = {
