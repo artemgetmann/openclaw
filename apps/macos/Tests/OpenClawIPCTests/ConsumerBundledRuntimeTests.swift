@@ -68,6 +68,77 @@ struct ConsumerBundledRuntimeTests {
         self.assertInstalledTelegramUserTooling(at: installPrefix, fileManager: fm)
     }
 
+    @Test func `seeding refuses to overwrite unknown CLI shim`() throws {
+        let resourceRoot = try makeTempDirForTests()
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let fm = FileManager.default
+        let bundledRoot = try self.writeBundledRuntimeResourceRoot(under: resourceRoot, fileManager: fm)
+
+        let existingCLI = installPrefix.appendingPathComponent("bin/openclaw")
+        try fm.createDirectory(at: existingCLI.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\necho user-owned-openclaw\n".write(to: existingCLI, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: existingCLI.path)
+
+        do {
+            _ = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+            Issue.record("Expected unknown CLI ownership conflict")
+        } catch {
+            let message = error.localizedDescription
+            #expect(message.contains("does not own"))
+            #expect(message.contains("explicit replace/--force"))
+        }
+
+        let preserved = try String(contentsOf: existingCLI, encoding: .utf8)
+        #expect(preserved.contains("user-owned-openclaw"))
+    }
+
+    @Test func `current install check refuses unknown CLI shim even when payload is ready`() throws {
+        let resourceRoot = try makeTempDirForTests()
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let fm = FileManager.default
+        let bundledRoot = try self.writeBundledRuntimeResourceRoot(under: resourceRoot, fileManager: fm)
+
+        _ = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+
+        let existingCLI = installPrefix.appendingPathComponent("bin/openclaw")
+        try "#!/bin/sh\necho user-owned-after-ready\n".write(to: existingCLI, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: existingCLI.path)
+
+        do {
+            _ = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+            Issue.record("Expected unknown CLI ownership conflict instead of ready")
+        } catch {
+            #expect(error.localizedDescription.contains("does not own"))
+        }
+
+        let preserved = try String(contentsOf: existingCLI, encoding: .utf8)
+        #expect(preserved.contains("user-owned-after-ready"))
+    }
+
+    @Test func `seeding refreshes Jarvis-owned legacy CLI shim and writes ownership marker`() throws {
+        let resourceRoot = try makeTempDirForTests()
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let fm = FileManager.default
+        let bundledRoot = try self.writeBundledRuntimeResourceRoot(under: resourceRoot, fileManager: fm)
+
+        let existingCLI = installPrefix.appendingPathComponent("bin/openclaw")
+        try fm.createDirectory(at: existingCLI.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        #!/bin/sh
+        set -eu
+        SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+        exec "$SCRIPT_DIR/../tools/node/bin/node" "$SCRIPT_DIR/../lib/openclaw-bundled/openclaw.mjs" "$@"
+        """.write(to: existingCLI, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: existingCLI.path)
+
+        let seeded = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+        #expect(seeded == .seeded)
+
+        let refreshed = try String(contentsOf: existingCLI, encoding: .utf8)
+        #expect(refreshed.contains("jarvis-managed-cli-shim"))
+        #expect(fm.isExecutableFile(atPath: existingCLI.path))
+    }
+
     @Test @MainActor func `bootstrap seeds bundled runtime when product bundle resources are available`() async throws {
         let instanceID = "consumer-bundled-runtime-hardening"
         let homeURL = try makeTempDirForTests()
@@ -185,6 +256,23 @@ struct ConsumerBundledRuntimeTests {
             #expect(fileManager.fileExists(atPath: fileURL.path))
             #expect(fileManager.isReadableFile(atPath: fileURL.path))
         }
+    }
+
+    private func writeBundledRuntimeResourceRoot(under resourceRoot: URL, fileManager: FileManager) throws -> URL {
+        let bundledRoot = resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
+        try fileManager.createDirectory(at: bundledRoot, withIntermediateDirectories: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
+        let manifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "123",
+            gitCommit: "abc123",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fileManager)
+        return bundledRoot
     }
 
     private func makeTempBundle(resourceRoot: URL, bundleIdentifier: String) throws -> Bundle {

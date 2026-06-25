@@ -152,7 +152,7 @@ enum ConsumerBundledRuntime {
             at: installPrefixURL.appendingPathComponent("lib", isDirectory: true),
             withIntermediateDirectories: true)
 
-        try self.replaceManagedPath(
+        try self.replaceCLIShim(
             at: installPrefixURL.appendingPathComponent("bin/openclaw"),
             with: wrapperURL,
             fileManager: fileManager)
@@ -226,7 +226,13 @@ enum ConsumerBundledRuntime {
                 atPath: fileURL.path)
         }
 
-        return fileManager.isExecutableFile(atPath: wrapperURL.path)
+        let wrapperInspection = CLIShimOwnership.inspect(
+            at: wrapperURL,
+            payloadDirectoryName: self.installedPayloadDirectoryName,
+            fileManager: fileManager)
+
+        return wrapperInspection.status == .managed
+            && fileManager.isExecutableFile(atPath: wrapperURL.path)
             && fileManager.isExecutableFile(atPath: nodeURL.path)
             && fileManager.isExecutableFile(atPath: uvURL.path)
             && fileManager.isReadableFile(atPath: entryURL.path)
@@ -308,14 +314,28 @@ enum ConsumerBundledRuntime {
     }
 
     private static func writeWrapperScript(at fileURL: URL) throws {
-        let script = """
-        #!/bin/sh
-        set -eu
-        SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-        exec "$SCRIPT_DIR/../tools/node/bin/node" "$SCRIPT_DIR/../lib/\(self.installedPayloadDirectoryName)/openclaw.mjs" "$@"
-        """
+        let script = CLIShimOwnership.managedWrapperScript(
+            payloadDirectoryName: self.installedPayloadDirectoryName)
         try script.write(to: fileURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fileURL.path)
+    }
+
+    private static func replaceCLIShim(at destinationURL: URL, with sourceURL: URL, fileManager: FileManager) throws {
+        let inspection = CLIShimOwnership.inspect(
+            at: destinationURL,
+            payloadDirectoryName: self.installedPayloadDirectoryName,
+            fileManager: fileManager)
+        if case .unknown = inspection.status {
+            // This is the user-owned binary guard: never delete an unknown
+            // `openclaw` command while repairing or refreshing the packaged
+            // runtime. A deliberate replace flow can be added above this helper.
+            throw NSError(
+                domain: "ConsumerBundledRuntime",
+                code: 9,
+                userInfo: [NSLocalizedDescriptionKey: CLIShimOwnership.conflictMessage(for: inspection)])
+        }
+
+        try self.replaceManagedPath(at: destinationURL, with: sourceURL, fileManager: fileManager)
     }
 
     private static func replaceManagedPath(at destinationURL: URL, with sourceURL: URL, fileManager: FileManager) throws {
