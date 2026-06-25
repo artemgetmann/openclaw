@@ -128,6 +128,31 @@ assert_required_templates() {
   done
 }
 
+assert_required_telegram_user_tooling() {
+  local tooling_dir="$1"
+  local context_label="$2"
+  local tooling_file=""
+  local required_tooling_files=(
+    ".env.example"
+    "requirements.txt"
+    "telethon_cli.py"
+    "telethon_compat.py"
+  )
+
+  if [[ ! -d "$tooling_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $tooling_dir" >&2
+    exit 1
+  fi
+
+  for tooling_file in "${required_tooling_files[@]}"; do
+    if [[ ! -f "$tooling_dir/$tooling_file" ]]; then
+      echo "ERROR: ${context_label} missing required file '$tooling_file'" >&2
+      echo "Expected directory: $tooling_dir" >&2
+      exit 1
+    fi
+  done
+}
+
 load_consumer_default_bundled_skills() {
   local skills_config_path="$ROOT_DIR/src/commands/onboard-non-interactive/local/skills-config.ts"
   local skills_output=""
@@ -313,6 +338,9 @@ assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource
 assert_required_templates \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
   "bundled runtime workspace templates"
+assert_required_telegram_user_tooling \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/scripts/telegram-e2e" \
+  "bundled runtime Telegram user tooling"
 assert_required_bundled_skills \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"

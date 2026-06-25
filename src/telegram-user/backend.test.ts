@@ -8,6 +8,29 @@ describe("telegram-user backend defaults", () => {
     vi.unstubAllEnvs();
   });
 
+  it("resolves Telegram tooling from a bundled runtime root next to dist", async () => {
+    const runtimeRoot = path.join(os.tmpdir(), `openclaw-telegram-runtime-${Date.now()}`);
+    const toolingDir = path.join(runtimeRoot, "scripts", "telegram-e2e");
+    await import("node:fs/promises").then(async ({ mkdir, writeFile }) => {
+      await mkdir(path.join(runtimeRoot, "dist"), { recursive: true });
+      await mkdir(toolingDir, { recursive: true });
+      await Promise.all([
+        writeFile(path.join(toolingDir, "requirements.txt"), "telethon>=1.43.1\n"),
+        writeFile(path.join(toolingDir, "telethon_cli.py"), "print('ok')\n"),
+        writeFile(path.join(toolingDir, "telethon_compat.py"), "# compat\n"),
+      ]);
+    });
+
+    const { resolveTelegramUserToolingRoot } = await import("./backend.js");
+
+    expect(
+      resolveTelegramUserToolingRoot({
+        cwd: path.join(runtimeRoot, "workspace"),
+        importDir: path.join(runtimeRoot, "dist"),
+      }),
+    ).toBe(runtimeRoot);
+  });
+
   it("uses OpenClaw state for fresh install mutable Telegram user files", async () => {
     const stateDir = path.join(os.tmpdir(), `openclaw-telegram-user-${Date.now()}`);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

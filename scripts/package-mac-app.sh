@@ -330,6 +330,40 @@ verify_required_workspace_templates() {
   fi
 }
 
+verify_required_telegram_user_tooling() {
+  local tooling_dir="$1"
+  local context_label="$2"
+  local missing=()
+  local tooling_file=""
+  local required_tooling_files=(
+    ".env.example"
+    "requirements.txt"
+    "telethon_cli.py"
+    "telethon_compat.py"
+  )
+
+  if [[ ! -d "$tooling_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $tooling_dir" >&2
+    return 1
+  fi
+
+  # Telegram-as-me is a bundled consumer skill, but its Python transport lives
+  # outside skills/. A reused runtime without these files makes the model pick
+  # the right skill and then fail at the first CLI call.
+  for tooling_file in "${required_tooling_files[@]}"; do
+    if [[ ! -f "$tooling_dir/$tooling_file" ]]; then
+      missing+=("$tooling_file")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: ${context_label} is missing required Telegram user tooling." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "Expected directory: $tooling_dir" >&2
+    return 1
+  fi
+}
+
 write_transitional_memory_template_if_missing() {
   local template_dir="$1"
 
@@ -1025,6 +1059,10 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "package.json"
       hash_consumer_runtime_path "pnpm-lock.yaml"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
+      hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
+      hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
+      hash_consumer_runtime_path "scripts/telegram-e2e/telethon_cli.py"
+      hash_consumer_runtime_path "scripts/telegram-e2e/telethon_compat.py"
       hash_consumer_runtime_path "dist"
       hash_consumer_runtime_path "extensions"
       hash_consumer_runtime_path "skills"
@@ -1105,6 +1143,7 @@ prepare_bundled_consumer_runtime() {
   local cache_key=""
   local cache_root=""
   local cache_templates_dir=""
+  local cache_telegram_user_tooling_dir=""
   local node_version=""
   local node_arm64_root=""
   local node_x64_root=""
@@ -1118,9 +1157,11 @@ prepare_bundled_consumer_runtime() {
   cache_key="$runtime_input_key"
   cache_root="${BUNDLED_RUNTIME_CACHE_ROOT}/${cache_key}"
   cache_templates_dir="${cache_root}/openclaw/docs/reference/templates"
+  cache_telegram_user_tooling_dir="${cache_root}/openclaw/scripts/telegram-e2e"
 
   if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
-    if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates"; then
+    if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates" \
+      && verify_required_telegram_user_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/scripts/telegram-e2e" "reused bundled consumer runtime Telegram user tooling"; then
       echo "📦 Reusing previous bundled consumer runtime (smoke-only)"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
@@ -1134,7 +1175,8 @@ prepare_bundled_consumer_runtime() {
   fi
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && -d "$cache_root" && -f "$cache_root/manifest.json" ]]; then
-    if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates"; then
+    if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates" \
+      && verify_required_telegram_user_tooling "$cache_telegram_user_tooling_dir" "cached bundled consumer runtime Telegram user tooling"; then
       echo "📦 Reusing cached bundled consumer runtime"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
@@ -1205,6 +1247,16 @@ prepare_bundled_consumer_runtime() {
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
   cp -R "$ROOT_DIR/extensions" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
   materialize_bundled_extension_node_modules
+
+  local telegram_user_tooling_dest="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/telegram-e2e"
+  local telegram_user_tooling_file=""
+  rm -rf "$telegram_user_tooling_dest"
+  mkdir -p "$telegram_user_tooling_dest"
+  for telegram_user_tooling_file in ".env.example" "requirements.txt" "telethon_cli.py" "telethon_compat.py"; do
+    cp "$ROOT_DIR/scripts/telegram-e2e/$telegram_user_tooling_file" \
+      "$telegram_user_tooling_dest/$telegram_user_tooling_file"
+  done
+
   if [[ -d "$ROOT_DIR/skills" ]]; then
     rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
     cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
