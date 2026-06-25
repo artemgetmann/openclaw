@@ -59,6 +59,48 @@ make_state_root() {
   printf '%s\n' "$root"
 }
 
+write_fake_latest_release_gh() {
+  local fake_bin="$1"
+  local mode="$2"
+  local tag="${3:-v-current}"
+  mkdir -p "$fake_bin"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [[ "$1" == "release" && "$2" == "view" ]]; then\n'
+    case "$mode" in
+      success)
+        printf '  printf '"'"'{"tagName":"%s"}\\n'"'"'\n' "$tag"
+        printf '  exit 0\n'
+        ;;
+      transient-once)
+        printf '  state_file="${0}.state"\n'
+        printf '  if [[ ! -f "$state_file" ]]; then\n'
+        printf '    : >"$state_file"\n'
+        printf '    echo "net/http: TLS handshake timeout" >&2\n'
+        printf '    exit 1\n'
+        printf '  fi\n'
+        printf '  printf '"'"'{"tagName":"%s"}\\n'"'"'\n' "$tag"
+        printf '  exit 0\n'
+        ;;
+      empty)
+        printf '  printf '"'"'{}\\n'"'"'\n'
+        printf '  exit 0\n'
+        ;;
+      fail)
+        printf '  echo "HTTP 404 release not found" >&2\n'
+        printf '  exit 4\n'
+        ;;
+      *)
+        fail "unknown fake gh mode: $mode"
+        ;;
+    esac
+    printf 'fi\n'
+    printf 'echo "unexpected gh invocation: $*" >&2\n'
+    printf 'exit 99\n'
+  } >"$fake_bin/gh"
+  chmod +x "$fake_bin/gh"
+}
+
 test_phase_selection() {
   local root
 
@@ -169,6 +211,18 @@ test_wrapper_dry_run() {
   local verify_timing="$TMP_DIR/wrapper-verify-timing.tsv"
   local stale_publish_root="$TMP_DIR/wrapper-stale-publish-assets"
   local stale_publish_out="$TMP_DIR/wrapper-stale-publish-assets.out"
+  local latest_publish_root="$TMP_DIR/wrapper-latest-publish-assets"
+  local latest_publish_out="$TMP_DIR/wrapper-latest-publish-assets.out"
+  local latest_verify_root="$TMP_DIR/wrapper-latest-verify-assets"
+  local latest_verify_out="$TMP_DIR/wrapper-latest-verify-assets.out"
+  local latest_fake_bin="$TMP_DIR/fake-latest-gh"
+  local latest_retry_fake_bin="$TMP_DIR/fake-latest-retry-gh"
+  local latest_retry_out="$TMP_DIR/wrapper-latest-retry.out"
+  local missing_gh_bin="$TMP_DIR/no-gh-bin"
+  local latest_conflict_err="$TMP_DIR/wrapper-latest-conflict.err"
+  local missing_gh_err="$TMP_DIR/wrapper-missing-gh.err"
+  local lookup_fail_err="$TMP_DIR/wrapper-latest-lookup-fail.err"
+  local empty_tag_err="$TMP_DIR/wrapper-latest-empty-tag.err"
   local p2_asset_root="$TMP_DIR/wrapper-p2-local-assets"
   local p2_asset_out="$TMP_DIR/wrapper-p2-local-assets.out"
   local p2_poll_root="$TMP_DIR/wrapper-p2-poll-dmg"
@@ -326,6 +380,154 @@ test_wrapper_dry_run() {
     fail "wrapper stale appcast publish dry run did not choose local asset regeneration"
   fi
   pass "wrapper stale publish appcast regenerates local assets first"
+
+  mkdir -p "$latest_publish_root/dist/Jarvis.app"
+  : >"$latest_publish_root/dist/Jarvis.dmg"
+  : >"$latest_publish_root/dist/Jarvis.zip"
+  printf '<rss><channel><item><enclosure url="https://github.com/artemgetmann/openclaw/releases/download/v-current/Jarvis.zip"/></item></channel></rss>\n' \
+    >"$latest_publish_root/dist/jarvis-appcast.xml"
+  write_manifest_status "$latest_publish_root" "Accepted" "Accepted"
+  write_fake_latest_release_gh "$latest_fake_bin" success v-current
+
+  PATH="$latest_fake_bin:$PATH" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_publish_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --publish-release-assets \
+      --latest-release-tag \
+      >"$latest_publish_out"
+  if ! grep -q 'selected_phase=publish-assets-only' "$latest_publish_out"; then
+    cat "$latest_publish_out" >&2
+    fail "wrapper latest publish dry run selected wrong phase"
+  fi
+  if ! grep -q 'resolved_github_release_tag=v-current' "$latest_publish_out"; then
+    cat "$latest_publish_out" >&2
+    fail "wrapper latest publish dry run did not print resolved tag"
+  fi
+  if ! grep -q -- '--github-release-tag v-current' "$latest_publish_out"; then
+    cat "$latest_publish_out" >&2
+    fail "wrapper latest publish dry run did not forward resolved tag"
+  fi
+  pass "wrapper latest publish dry run resolves tag"
+
+  mkdir -p "$latest_verify_root/dist/Jarvis.app"
+  : >"$latest_verify_root/dist/Jarvis.dmg"
+  : >"$latest_verify_root/dist/Jarvis.zip"
+  : >"$latest_verify_root/dist/jarvis-appcast.xml"
+  write_manifest_status "$latest_verify_root" "Accepted" "Accepted"
+
+  PATH="$latest_fake_bin:$PATH" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --verify-public-assets \
+      --latest-release-tag \
+      >"$latest_verify_out"
+  if ! grep -q 'selected_phase=verify-public-assets-only' "$latest_verify_out"; then
+    cat "$latest_verify_out" >&2
+    fail "wrapper latest verify dry run selected wrong phase"
+  fi
+  if ! grep -q -- '--github-release-tag v-current' "$latest_verify_out"; then
+    cat "$latest_verify_out" >&2
+    fail "wrapper latest verify dry run did not forward resolved tag"
+  fi
+  pass "wrapper latest verify dry run resolves tag"
+
+  write_fake_latest_release_gh "$latest_retry_fake_bin" transient-once v-retry
+  PATH="$latest_retry_fake_bin:$PATH" \
+  OPENCLAW_GITHUB_RELEASE_RETRY_ATTEMPTS=2 \
+  OPENCLAW_GITHUB_RELEASE_RETRY_SLEEP_SECS=0 \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --verify-public-assets \
+      --latest-release-tag \
+      >"$latest_retry_out"
+  if ! grep -q 'resolved_github_release_tag=v-retry' "$latest_retry_out"; then
+    cat "$latest_retry_out" >&2
+    fail "wrapper latest tag did not retry a transient gh lookup failure"
+  fi
+  pass "wrapper latest tag retries transient gh lookup"
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --latest-release-tag \
+      --github-release-tag v-manual \
+      >"$verify_out" 2>"$latest_conflict_err"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    cat "$verify_out" >&2
+    fail "wrapper should reject latest tag plus explicit github release tag"
+  fi
+  if ! grep -q 'choose --latest-release-tag or --github-release-tag' "$latest_conflict_err"; then
+    cat "$latest_conflict_err" >&2
+    fail "wrapper latest conflict failure did not explain ambiguity"
+  fi
+  pass "wrapper latest tag rejects explicit tag conflict"
+
+  mkdir -p "$missing_gh_bin"
+  ln -s "$(command -v dirname)" "$missing_gh_bin/dirname"
+  set +e
+  PATH="$missing_gh_bin" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    "$BASH" "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --latest-release-tag \
+      >"$verify_out" 2>"$missing_gh_err"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    cat "$verify_out" >&2
+    fail "wrapper latest tag should fail when gh is missing"
+  fi
+  if ! grep -q 'requires the GitHub CLI (gh)' "$missing_gh_err"; then
+    cat "$missing_gh_err" >&2
+    fail "wrapper missing gh failure did not explain dependency"
+  fi
+  pass "wrapper latest tag requires gh"
+
+  write_fake_latest_release_gh "$TMP_DIR/fake-failing-gh" fail
+  set +e
+  PATH="$TMP_DIR/fake-failing-gh:$PATH" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --latest-release-tag \
+      >"$verify_out" 2>"$lookup_fail_err"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    cat "$verify_out" >&2
+    fail "wrapper latest tag should fail when gh lookup fails"
+  fi
+  if ! grep -q 'could not resolve the latest GitHub release tag' "$lookup_fail_err"; then
+    cat "$lookup_fail_err" >&2
+    fail "wrapper gh lookup failure did not explain tag resolution failure"
+  fi
+  pass "wrapper latest tag reports gh lookup failure"
+
+  write_fake_latest_release_gh "$TMP_DIR/fake-empty-gh" empty
+  set +e
+  PATH="$TMP_DIR/fake-empty-gh:$PATH" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_verify_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --latest-release-tag \
+      >"$verify_out" 2>"$empty_tag_err"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    cat "$verify_out" >&2
+    fail "wrapper latest tag should fail when gh returns no tag"
+  fi
+  if ! grep -q 'no latest GitHub release tag found' "$empty_tag_err"; then
+    cat "$empty_tag_err" >&2
+    fail "wrapper empty tag failure did not mention missing release tag"
+  fi
+  pass "wrapper latest tag reports empty tag"
 }
 
 test_package_create_assets_rejects_stale_tag() {
