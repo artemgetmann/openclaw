@@ -151,6 +151,36 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.requiredCapability).toBe("click_verified_button");
   });
 
+  it("allows route exploration when the reason documents stop-before boundaries", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: {
+        appName: "Safari",
+        windowTitle: "Find Cheap Flights Worldwide & Book Your Ticket - Google Flights",
+      },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Find Cheap Flights Worldwide & Book Your Ticket - Google Flights",
+        summary: "Flight search page with a visible Denpasar to Singapore result",
+      }),
+      element: {
+        ref: "@result",
+        role: "button",
+        label:
+          "Find flights from Denpasar (DPS) to Singapore (SIN) from IDR 2,485,582. Operated by KLM.",
+      },
+      reason:
+        "Open the visible Google Flights Singapore result for route exploration only; stop before booking, passenger, checkout, payment, purchase, or confirmation.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("non_committal_web_dry_run"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+    expect(decision.requiredCapability).toBe("click_verified_button");
+  });
+
   it.each([
     "Log in",
     "Payment",
@@ -179,6 +209,50 @@ describe("evaluateGuiPolicy", () => {
 
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
+
+  it("blocks Google Flights passenger controls under the dry-run profile", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Google Flights" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Google Flights",
+        summary: "Flight search page",
+      }),
+      element: {
+        ref: "@passengers",
+        role: "pop up button",
+        label: "1 passenger, change number of passengers.",
+      },
+      reason: "Inspect the passenger menu.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("non_committal_web_dry_run"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface: passenger");
+  });
+
+  it("blocks direct committal intent in the reason even for an ambiguous button", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Cart" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Cart",
+        summary: "Shopping flow",
+      }),
+      element: { ref: "@continue", role: "button", label: "Continue" },
+      reason: "Continue to payment.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("non_committal_web_dry_run"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface: payment");
   });
 
   it("blocks generic sensitive surfaces before capability approval can bypass them", () => {

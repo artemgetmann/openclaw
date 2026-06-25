@@ -203,7 +203,23 @@ function searchableText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
-function sensitiveSurfaceText(input: GuiPolicyInput): string {
+function reasonAsDeniedSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): string {
+  const reason = normalizeText(input.reason);
+  if (!reason || !hasAnyTerm(reason, deniedTerms)) {
+    return "";
+  }
+
+  // Operators often state a boundary in the reason, for example "open this
+  // result; stop before booking or payment." That text should document the
+  // safety boundary, not make a harmless selected element look committal.
+  if (/\b(stop before|do not|don't|without|avoid|not|no)\b/.test(reason)) {
+    return "";
+  }
+
+  return reason;
+}
+
+function sensitiveSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): string {
   if (input.actionType === "observe") {
     return searchableText(input);
   }
@@ -223,7 +239,7 @@ function sensitiveSurfaceText(input: GuiPolicyInput): string {
     input.element?.label,
     input.element?.description,
     input.element?.value,
-    input.reason,
+    reasonAsDeniedSurfaceText(input, deniedTerms),
   ]
     .map(normalizeText)
     .filter(Boolean)
@@ -238,7 +254,6 @@ function selectedMutationSurfaceText(input: GuiPolicyInput): string {
     input.element?.label,
     input.element?.description,
     input.element?.value,
-    input.reason,
   ]
     .map(normalizeText)
     .filter(Boolean)
@@ -361,7 +376,7 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   // Denied surfaces are capability-proof. Login, payment, account settings,
   // and destructive surfaces stay blocked even when a caller has mutation
   // approval, because those require a higher-trust flow than this verifier.
-  const text = sensitiveSurfaceText(input);
+  const text = sensitiveSurfaceText(input, taskPolicy.deniedSurfaceTerms);
   let blockedSurface = hasAnyTerm(text, taskPolicy.deniedSurfaceTerms);
   if (
     blockedSurface === "card" &&
