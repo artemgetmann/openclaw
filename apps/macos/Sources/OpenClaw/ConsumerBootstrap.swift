@@ -45,6 +45,7 @@ enum ConsumerBootstrap {
         // present before onboarding starts. Merge only missing leaves so user
         // edits and recovered configs always win over bundled seed data.
         changed = self.applySeededDefaults(seededDefaults, to: &root) || changed
+        changed = self.refreshPackagedBackendAccessToken(seededDefaults: seededDefaults, root: &root) || changed
         changed = self.setDefaultValue(in: &root, path: ["gateway", "mode"], value: "local") || changed
         changed = self
             .setDefaultValue(in: &root, path: ["gateway", "port"], value: ConsumerRuntime.gatewayPort) || changed
@@ -58,6 +59,42 @@ enum ConsumerBootstrap {
         return changed
     }
 
+    @discardableResult
+    private static func refreshPackagedBackendAccessToken(
+        seededDefaults: [String: Any],
+        root: inout [String: Any])
+        -> Bool
+    {
+        guard let seededBackend = self.jarvisBackend(from: seededDefaults),
+              let seededAccessToken = self.trimmedString(seededBackend["accessToken"]),
+              let seededBaseURL = self.trimmedString(seededBackend["baseUrl"])
+        else {
+            return false
+        }
+
+        var jarvis = root["jarvis"] as? [String: Any] ?? [:]
+        var backend = jarvis["backend"] as? [String: Any] ?? [:]
+        let currentBaseURL = self.trimmedString(backend["baseUrl"])
+        let currentAccessToken = self.trimmedString(backend["accessToken"])
+
+        // The Jarvis backend bearer is build-owned, not a user account secret.
+        // When a user updates from a package with a stale bearer, missing-only
+        // merging keeps them broken forever. Refresh only the product backend
+        // surface; custom backends keep their existing non-empty token.
+        guard currentBaseURL == nil || currentBaseURL == seededBaseURL else {
+            return false
+        }
+        guard currentAccessToken != seededAccessToken else {
+            return false
+        }
+
+        backend["baseUrl"] = seededBaseURL
+        backend["accessToken"] = seededAccessToken
+        jarvis["backend"] = backend
+        root["jarvis"] = jarvis
+        return true
+    }
+
     private static func loadSeededDefaults(bundle: Bundle = .main) -> [String: Any] {
         guard let url = bundle.url(forResource: "consumer-seeded-defaults", withExtension: "json"),
               let data = try? Data(contentsOf: url),
@@ -66,6 +103,16 @@ enum ConsumerBootstrap {
             return [:]
         }
         return root
+    }
+
+    private static func jarvisBackend(from root: [String: Any]) -> [String: Any]? {
+        (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any]
+    }
+
+    private static func trimmedString(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     @discardableResult
