@@ -130,6 +130,35 @@ identities:
 - app icon: `Jarvis.icns` when that approved asset exists, otherwise the
   packaging scripts keep using `OpenClaw.icns` and print a warning
 
+## Jarvis CLI dogfooding
+
+For release dogfooding, ambient `openclaw` should resolve to the app-managed
+Jarvis runtime, not a source checkout that happens to be earlier in a developer
+shell startup file. The managed CLI lives here after the packaged app has
+seeded its runtime:
+
+```bash
+JARVIS_CLI_BIN="$HOME/Library/Application Support/Jarvis/.jarvis/bin"
+test -x "$JARVIS_CLI_BIN/openclaw"
+export PATH="$JARVIS_CLI_BIN:$PATH"
+command -v openclaw
+openclaw --version
+```
+
+Use source checkout commands only when you mean to test repo code:
+
+```bash
+pnpm openclaw:local --version
+pnpm openclaw --version
+./openclaw.mjs --version
+```
+
+When the gateway is already running with Jarvis state
+(`~/Library/Application Support/Jarvis/.jarvis/openclaw.json`), host exec
+commands preserve the app-managed CLI ahead of login-shell paths. That keeps
+agent-run `openclaw ...` checks on the same runtime a real Jarvis user has,
+while checkout-local commands remain explicit.
+
 If `verify-consumer-mac-app.sh` passes but `spctl` still rejects the app, that
 means the bundle assembly is fine and the remaining friction is distribution
 trust. Apple Development signing is enough for local/manual-trust demos, but

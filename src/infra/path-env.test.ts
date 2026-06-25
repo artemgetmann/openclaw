@@ -40,6 +40,9 @@ describe("ensureOpenClawCliOnPath", () => {
     "PATH",
     "OPENCLAW_PATH_BOOTSTRAPPED",
     "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
     "MISE_DATA_DIR",
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
@@ -87,6 +90,7 @@ describe("ensureOpenClawCliOnPath", () => {
     cwd: string;
     homeDir: string;
     platform: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
     allowProjectLocalBin?: boolean;
   }) {
     ensureOpenClawCliOnPath(params);
@@ -105,6 +109,75 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "darwin",
     });
     expect(updated[0]).toBe(appBinDir);
+  });
+
+  it("prefers the Jarvis managed runtime when the process is already in Jarvis state", () => {
+    const tmp = abs("/tmp/openclaw-path/case-jarvis-runtime");
+    const jarvisBinDir = path.join(
+      tmp,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "bin",
+    );
+    const sourceBinDir = path.join(tmp, "Programming_Projects", "openclaw");
+    setDir(tmp);
+    setDir(jarvisBinDir);
+    setDir(sourceBinDir);
+    setExe(path.join(jarvisBinDir, "openclaw"));
+
+    process.env.PATH = `${sourceBinDir}${path.delimiter}/usr/bin`;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(
+      tmp,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+
+    const updated = bootstrapPath({
+      execPath: path.join(tmp, "node"),
+      cwd: sourceBinDir,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expect(updated[0]).toBe(jarvisBinDir);
+    expect(updated.indexOf(sourceBinDir)).toBeGreaterThan(0);
+  });
+
+  it("does not prefer the Jarvis managed runtime from plain source-checkout state", () => {
+    const tmp = abs("/tmp/openclaw-path/case-source-runtime");
+    const jarvisBinDir = path.join(
+      tmp,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "bin",
+    );
+    const sourceBinDir = path.join(tmp, "Programming_Projects", "openclaw");
+    setDir(tmp);
+    setDir(jarvisBinDir);
+    setDir(sourceBinDir);
+    setExe(path.join(jarvisBinDir, "openclaw"));
+
+    process.env.PATH = `${sourceBinDir}${path.delimiter}/usr/bin`;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tmp, ".openclaw", "openclaw.json");
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+
+    const updated = bootstrapPath({
+      execPath: path.join(tmp, "node"),
+      cwd: sourceBinDir,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expect(updated.includes(jarvisBinDir)).toBe(false);
+    expect(updated.includes(sourceBinDir)).toBe(true);
   });
 
   it("is idempotent", () => {
