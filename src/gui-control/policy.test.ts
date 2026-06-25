@@ -429,6 +429,79 @@ describe("evaluateGuiPolicy", () => {
     },
   );
 
+  it.each(["Install Update", "Install on Quit", "Install and Relaunch", "Install Now"])(
+    "allows explicitly approved software update install control %s under the install-approved profile",
+    (label) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "ExampleApp", windowTitle: "Software Update" },
+        snapshot: snapshot({
+          appName: "ExampleApp",
+          windowTitle: "Software Update",
+          summary: "Update dialog",
+        }),
+        element: { ref: "@install", role: "button", label },
+        reason: `Click ${label} after explicit user approval for this visible app update.`,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(true);
+      expect(decision.risk).toBe("allowed-mutation");
+      expect(decision.requiredCapability).toBe("click_verified_button");
+    },
+  );
+
+  it("requires explicit mutation approval even under the software update install-approved profile", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "ExampleApp", windowTitle: "Software Update" },
+      snapshot: snapshot({
+        appName: "ExampleApp",
+        windowTitle: "Software Update",
+        summary: "Update dialog",
+      }),
+      element: { ref: "@install", role: "button", label: "Install and Relaunch" },
+      reason: "Click Install and Relaunch.",
+      approvedPolicyRisk: false,
+      taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("requires explicit task approval");
+  });
+
+  it.each([
+    "Download and Install",
+    "Update Now",
+    "Relaunch to Update",
+    "Replace App",
+    "Move to Applications",
+  ])(
+    "keeps broader software update controls blocked under the install-approved profile: %s",
+    (label) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "ExampleApp", windowTitle: "Software Update" },
+        snapshot: snapshot({
+          appName: "ExampleApp",
+          windowTitle: "Software Update",
+          summary: "Update dialog",
+        }),
+        element: { ref: "@install", role: "button", label },
+        reason: `Click ${label} after explicit user approval for this visible app update.`,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
   it.each(["Install Update", "Relaunch to Update", "Stop AI Operator", "Quit App Only"])(
     "keeps safe settings profile blocking update/operator final controls %s",
     (label) => {

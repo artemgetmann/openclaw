@@ -36,6 +36,7 @@ export const GUI_TASK_POLICY_PROFILE_NAMES = [
   "non_committal_web_dry_run",
   "commerce_flow_until_final_confirmation",
   "software_update_flow",
+  "software_update_install_approved",
   "send_message_to_approved_assistant",
   "local_fixture_write",
   "notes_write",
@@ -160,6 +161,24 @@ const SOFTWARE_UPDATE_FLOW_DENIED_TERMS = [
   "move to applications",
 ];
 
+// This profile is intentionally narrower than "anything updater-like." It
+// permits the Sparkle-style install controls we can prove after explicit user
+// approval, while keeping download/replace/move flows blocked until they have
+// their own proof and approval semantics.
+const SOFTWARE_UPDATE_INSTALL_APPROVED_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "download and install",
+  "download update",
+  "update now",
+  "upgrade now",
+  "restart to update",
+  "relaunch to update",
+  "quit and install",
+  "replace app",
+  "replace existing",
+  "move to applications",
+];
+
 export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolicy> = {
   read_only_web_context: {
     taskId: "read_only_web_context",
@@ -209,6 +228,14 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
     allowedApps: ["*"],
     grantedCapabilities: ["read_screen", "click_verified_button"],
     deniedSurfaceTerms: SOFTWARE_UPDATE_FLOW_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  software_update_install_approved: {
+    taskId: "software_update_install_approved",
+    taskName: "Approved software update install/relaunch",
+    allowedApps: ["*"],
+    grantedCapabilities: ["read_screen", "click_verified_button"],
+    deniedSurfaceTerms: SOFTWARE_UPDATE_INSTALL_APPROVED_DENIED_TERMS,
     requiredVerificationMode: "post_state",
   },
   send_message_to_approved_assistant: {

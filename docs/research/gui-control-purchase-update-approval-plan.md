@@ -16,6 +16,10 @@ Last updated: 2026-06-26
   progress until payment or final confirmation.
 - `software_update_flow` allows update discovery such as `Check for Updates`.
   Download, install, replacement, restart, and relaunch controls remain blocked.
+- `software_update_install_approved` is a narrow current-approval profile for
+  visible Sparkle-style install controls such as `Install and Relaunch` and
+  `Install on Quit`. It still requires explicit mutation approval and does not
+  unblock replacement, move-to-Applications, or broad updater flows.
 
 ## First-Principles Boundary
 
@@ -80,6 +84,26 @@ Blocked under `software_update_flow`:
 
 Why: app updates replace executable code. That is a different risk class from
 opening a settings row or checking availability.
+
+Allowed under `software_update_install_approved` after explicit current user
+approval:
+
+- `Install and Relaunch`
+- `Install on Quit`
+- `Install Update`
+- `Install Now`
+
+Still blocked under `software_update_install_approved`:
+
+- `Download and Install`
+- `Update Now`
+- `Relaunch to Update`
+- replacing an app bundle
+- moving an app into Applications
+
+This is intentionally not a generic app-update bypass. It exists so a live
+operator can approve and prove one visible Sparkle install control without
+turning the safe discovery profile into an installer.
 
 ## Approval UX Follow-Up
 
@@ -147,7 +171,22 @@ Software update smoke:
 - navigate to the app About/update surface
 - click `Check for Updates`
 - read available update state
-- stop before install, download, replace, restart, or relaunch
+- normally stop before install, download, replace, restart, or relaunch
+- for an explicitly approved dogfood update, switch to
+  `software_update_install_approved`, click the visible install control, and
+  report the exact app/version/source/control text
+
+Current live note, 2026-06-26:
+
+- normal `software_update_flow` blocked `Install and Relaunch` for Jarvis
+  2026.6.24 with `actionCount=0`
+- `software_update_install_approved` clicked the visible `Install and
+Relaunch` control after explicit user approval
+- Jarvis relaunched from pid `20105` to pid `5849`
+- post-update About screen showed `Version 2026.6.24`
+- the approved click command exited nonzero because immediate post-state
+  observation raced the app relaunch; the follow-up observe provided the final
+  version proof
 
 Use isolated tester Jarvis/Telegram proof first when approval UX is added. Real
 main Jarvis dogfood proof should happen only after tester proof passes.

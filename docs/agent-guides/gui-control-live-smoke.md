@@ -20,7 +20,8 @@ or coordinate fallbacks.
   profile only when the task class needs it.
 - Stop before login, sign-in, payment method entry, final purchase/booking
   confirmation, account changes, operator controls, app quit, or update
-  installation.
+  installation unless the smoke is explicitly running
+  `software_update_install_approved` with current user approval.
 - Passenger count is allowed only under
   `commerce_flow_until_final_confirmation`. Passenger, traveler, contact, or
   address detail entry is allowed only when the reason states the detail was
@@ -283,3 +284,54 @@ Accepted proof:
 - update availability, visible app name, visible version, and visible source are
   reported when available
 - no install, download, replacement, restart, or relaunch action is performed
+
+## Approved Software Update Install
+
+This proves `software_update_install_approved`: after current user approval,
+GUI-control can click a visible Sparkle-style install control without weakening
+the normal update-discovery profile.
+
+Hard preconditions:
+
+- the user explicitly approved installing the visible app update in the current
+  session
+- a fresh observe result shows the app, update window, and exact final control
+- the command uses `software_update_install_approved` and
+  `--approve-policy-risk`
+- the selected control text is a proven install control such as
+  `Install and Relaunch`, `Install on Quit`, `Install Update`, or `Install Now`
+
+Example:
+
+```bash
+pnpm jarvis gui-control click \
+  --runtime open-computer-use \
+  --runtime-command "$(cat /tmp/jarvis-ocu-stability-bin-path.txt)" \
+  --app Jarvis \
+  --ref @INSTALL_REF \
+  --intent button \
+  --task-policy software_update_install_approved \
+  --approve-policy-risk \
+  --allow-observed-click \
+  --reason "Click the visible Jarvis software update install control after explicit current user approval." \
+  --json
+```
+
+Required blocked checks under `software_update_install_approved`:
+
+- `Download and Install`
+- `Update Now`
+- `Relaunch to Update`
+- `Replace App`
+- `Move to Applications`
+
+Current live note, 2026-06-26:
+
+- normal `software_update_flow` blocked Jarvis `Install and Relaunch` with
+  `actionCount=0`
+- `software_update_install_approved` clicked the visible Jarvis 2026.6.24
+  `Install and Relaunch` control after explicit user approval
+- Jarvis relaunched from pid `20105` to pid `5849`
+- follow-up GUI-control observe on About showed `Version 2026.6.24`
+- the approved click command returned nonzero because immediate post-state
+  observation raced the relaunch; the follow-up observe is the version proof
