@@ -1,6 +1,6 @@
 # GUI Control OCU Stability
 
-Last updated: 2026-06-15
+Last updated: 2026-06-25
 Status: active stability slice, dev-only
 
 Use this checklist when proving OpenComputerUse-backed Jarvis GUI control. The
@@ -131,16 +131,36 @@ Latest live evidence for this slice:
 - restore diagnostic:
   `/tmp/jarvis-ocu-workspace-restore-20260614/workspace-restore-1781436673214.json`
 
-2026-06-15 native restore patch:
+2026-06-25 selectable row activation pin:
 
 - pinned OpenComputerUse fork:
   `https://github.com/artemgetmann/open-codex-computer-use`
 - pinned OpenComputerUse commit:
-  `d71101e6262460a62a96463c4a3c86747e3b3fc4`
+  `a8ad90ed703fbdc2095e900c2b2574bfa4d60f36`
 - pinned OpenComputerUse branch:
   `codex/raise-activates-frontmost`
 - reproducible bootstrap:
   `bash scripts/bootstrap-open-computer-use-runtime.sh`
+- code proof: OpenComputerUse `swift test` passed 137 tests after adding
+  generic selectable row/list activation for AX list, table, outline, and
+  browser-style containers
+- doc proof: OpenComputerUse `make check-docs` passed
+- app proof: OpenComputerUse debug app build passed through
+  `./scripts/build-open-computer-use-app.sh debug`
+- live proof: Jarvis Settings `About` row click passed through
+  `safe_local_settings_navigation` with `falseSuccesses=0`, `General` row
+  click also passed, and `Stop AI Operator` / `Quit App Only` remained blocked
+  before action
+- permission proof: the stable copied dev app reported Accessibility and
+  Screen Recording granted through
+  `$(cat /tmp/jarvis-ocu-stability-bin-path.txt) doctor`
+
+2026-06-15 native restore patch:
+
+- previous pinned OpenComputerUse commit:
+  `d71101e6262460a62a96463c4a3c86747e3b3fc4`
+- previous pinned OpenComputerUse branch:
+  `codex/raise-activates-frontmost`
 - local OpenComputerUse checkout used for the first proof:
   `/tmp/jarvis-ocu-stability-20260614-175656/open-codex-computer-use`
 - rebuilt OpenComputerUse dev app copied to stable permission path:

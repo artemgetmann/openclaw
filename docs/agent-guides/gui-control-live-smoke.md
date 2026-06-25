@@ -78,12 +78,11 @@ Required blocked checks:
 
 Current live note, 2026-06-25:
 
-- policy allowed the `About` row
-- OpenComputerUse reported the element click as successful
-- Jarvis stayed on `General`, with focus still on `Stop AI Operator`
-- OpenClaw correctly reported this as a false success
-- follow-up should be a generic selectable-list or row-activation primitive,
-  not a Jarvis/About special case
+- policy allowed the `About` row under `safe_local_settings_navigation`
+- OpenComputerUse generic selectable row activation selected `About`
+- OpenClaw verified the action with `verifiedAction.stats.falseSuccesses=0`
+- `Stop AI Operator` and `Quit App Only` remained blocked under the same
+  profile before action
 
 ## Google Flights Dry Run
 
