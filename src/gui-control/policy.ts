@@ -34,6 +34,8 @@ export const GUI_TASK_POLICY_PROFILE_NAMES = [
   "read_only_web_context",
   "safe_local_settings_navigation",
   "non_committal_web_dry_run",
+  "commerce_flow_until_final_confirmation",
+  "software_update_flow",
   "send_message_to_approved_assistant",
   "local_fixture_write",
   "notes_write",
@@ -66,8 +68,12 @@ const LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS = [
   "quit",
   "install update",
   "install updates",
+  "update now",
   "update installation",
   "download update",
+  "relaunch to update",
+  "restart to update",
+  "replace app",
   "change plan",
   "change account",
 ];
@@ -86,6 +92,72 @@ const NON_COMMITTAL_WEB_DRY_RUN_DENIED_TERMS = [
   "passport",
   "otp",
   "2fa",
+];
+
+const COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "payment method",
+  "change payment",
+  "add payment",
+  "credit card",
+  "debit card",
+  "payment card",
+  "card details",
+  "card number",
+  "security code",
+  "cvv",
+  "cvc",
+  "expiration date",
+  "expiry date",
+  "pay",
+  "pay now",
+  "place order",
+  "confirm booking",
+  "confirm order",
+  "confirm purchase",
+  "confirm payment",
+  "confirm charge",
+  "buy now",
+  "purchase",
+  "book now",
+  "complete booking",
+  "complete order",
+  "otp",
+  "one-time password",
+  "two-factor",
+  "2fa",
+  "login",
+  "log in",
+  "sign in",
+  "passkey",
+  "password",
+  "account settings",
+  "security settings",
+  "cancel booking",
+  "cancel order",
+  "delete order",
+  "refund",
+  "void",
+];
+
+const SOFTWARE_UPDATE_FLOW_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "install update",
+  "install updates",
+  "install now",
+  "install on quit",
+  "install and relaunch",
+  "download and install",
+  "download update",
+  "update now",
+  "upgrade now",
+  "relaunch",
+  "restart to update",
+  "relaunch to update",
+  "quit and install",
+  "replace app",
+  "replace existing",
+  "move to applications",
 ];
 
 export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolicy> = {
@@ -116,6 +188,27 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
       "click_verified_button",
     ],
     deniedSurfaceTerms: NON_COMMITTAL_WEB_DRY_RUN_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  commerce_flow_until_final_confirmation: {
+    taskId: "commerce_flow_until_final_confirmation",
+    taskName: "Commerce flow until payment or final confirmation",
+    allowedApps: ["Safari", "Google Chrome", "Chrome", "Arc", "Firefox"],
+    grantedCapabilities: [
+      "read_screen",
+      "navigate_url",
+      "write_text_to_target",
+      "click_verified_button",
+    ],
+    deniedSurfaceTerms: COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  software_update_flow: {
+    taskId: "software_update_flow",
+    taskName: "Software update discovery before install/relaunch",
+    allowedApps: ["*"],
+    grantedCapabilities: ["read_screen", "click_verified_button"],
+    deniedSurfaceTerms: SOFTWARE_UPDATE_FLOW_DENIED_TERMS,
     requiredVerificationMode: "post_state",
   },
   send_message_to_approved_assistant: {
@@ -304,6 +397,44 @@ function isAllowedNonCommittalBookChrome(input: GuiPolicyInput): boolean {
   );
 }
 
+function isExplicitUserSuppliedDetailReason(reason: string): boolean {
+  return /\b(explicitly supplied|user supplied|supplied by (the )?user|provided by (the )?user|user provided|given by (the )?user|from (the )?user)\b/.test(
+    reason,
+  );
+}
+
+function commerceDetailEntryRequiresExplicitSource(input: GuiPolicyInput): boolean {
+  if (
+    input.taskPolicy?.taskId !== "commerce_flow_until_final_confirmation" ||
+    input.actionType !== "setValue"
+  ) {
+    return false;
+  }
+
+  const selectedSurface = selectedMutationSurfaceText(input);
+  if (
+    /\b(passenger|traveler|traveller)\b/.test(selectedSurface) &&
+    /\b(count|number|quantity|adult|adults|child|children|infant|infants)\b/.test(selectedSurface)
+  ) {
+    return false;
+  }
+
+  return Boolean(
+    hasAnyTerm(selectedSurface, [
+      "passenger",
+      "traveler",
+      "traveller",
+      "contact",
+      "email",
+      "phone",
+      "address",
+      "first name",
+      "last name",
+      "full name",
+    ]) && !isExplicitUserSuppliedDetailReason(normalizeText(input.reason)),
+  );
+}
+
 function targetMatchesAllowedTerm(
   value: string | undefined,
   allowed: string[] | undefined,
@@ -397,6 +528,17 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
       allowed: false,
       risk: "blocked",
       reason: `Blocked sensitive GUI surface: ${blockedSurface}`,
+      requiredCapability,
+      taskPolicy,
+    };
+  }
+
+  if (commerceDetailEntryRequiresExplicitSource(input)) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason:
+        "Commerce detail entry requires the reason to state that the passenger, traveler, contact, or address detail was explicitly supplied by the user.",
       requiredCapability,
       taskPolicy,
     };
