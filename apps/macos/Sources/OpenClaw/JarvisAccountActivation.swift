@@ -339,6 +339,35 @@ enum JarvisAccountActivationConfig {
         Self.removeAccountAccessTokenSecretProvider(from: &root)
     }
 
+    @MainActor
+    static func loadCurrentRoot() async -> [String: Any] {
+        // First-run local onboarding needs the app-owned config file, not a
+        // possibly stale gateway snapshot. A stale snapshot can hold an old
+        // backend bearer and fail account activation before email logic runs.
+        if AppFlavor.current.isConsumer,
+           AppStateStore.shared.connectionMode != .remote
+        {
+            let localRoot = OpenClawConfigFile.loadDict()
+            if !localRoot.isEmpty {
+                return localRoot
+            }
+        }
+        return await ConfigStore.load()
+    }
+
+    @MainActor
+    static func saveCurrentRoot(_ root: [String: Any]) async throws {
+        // Keep activation summary writes on the same source used for reads so
+        // onboarding does not race a running gateway with stale config state.
+        if AppFlavor.current.isConsumer,
+           AppStateStore.shared.connectionMode != .remote
+        {
+            OpenClawConfigFile.saveDict(root)
+            return
+        }
+        try await ConfigStore.save(root)
+    }
+
     private static func configureManagedAudioTranscription(into root: inout [String: Any]) {
         var tools = root["tools"] as? [String: Any] ?? [:]
         var media = tools["media"] as? [String: Any] ?? [:]
@@ -403,9 +432,11 @@ final class JarvisAccountActivationModel {
         email: String = "",
         state: State = .idle,
         tokenStore: JarvisAccountAccessTokenStoring = JarvisAccountActivationKeychainStore.shared,
-        loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = { await ConfigStore.load() },
+        loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = {
+            await JarvisAccountActivationConfig.loadCurrentRoot()
+        },
         saveConfig: @escaping @MainActor @Sendable ([String: Any]) async throws -> Void = { root in
-            try await ConfigStore.save(root)
+            try await JarvisAccountActivationConfig.saveCurrentRoot(root)
         },
         makeClient: @escaping @MainActor @Sendable ([String: Any]) throws -> JarvisAccountActivationClient = { root in
             try JarvisAccountActivationClient(configuration: JarvisAccountActivationClient.resolveConfiguration(root: root))
