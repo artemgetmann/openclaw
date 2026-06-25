@@ -23,23 +23,45 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-function resolveRepoRoot(): string {
-  const importDir = path.dirname(fileURLToPath(import.meta.url));
+const telegramUserToolingFiles = [
+  "requirements.txt",
+  "telethon_cli.py",
+  "telethon_compat.py",
+] as const;
+
+function hasTelegramUserTooling(candidate: string): boolean {
+  const toolingDir = path.join(candidate, "scripts", "telegram-e2e");
+  return telegramUserToolingFiles.every((fileName) =>
+    fsSync.existsSync(path.join(toolingDir, fileName)),
+  );
+}
+
+export function resolveTelegramUserToolingRoot(
+  params: {
+    cwd?: string;
+    importDir?: string;
+  } = {},
+): string {
+  const cwd = params.cwd ?? process.cwd();
+  const importDir = params.importDir ?? path.dirname(fileURLToPath(import.meta.url));
   const directCandidates = [
-    process.cwd(),
+    cwd,
+    // Package/runtime layout: openclaw.mjs + dist/ + scripts/ live together.
+    path.resolve(importDir, ".."),
+    // Source/test layouts may execute from dist/ or transpiled subdirectories.
     path.resolve(importDir, "..", ".."),
     path.resolve(importDir, "..", "..", ".."),
   ];
 
-  for (const candidate of directCandidates) {
-    if (fsSync.existsSync(path.join(candidate, "scripts", "telegram-e2e", "requirements.txt"))) {
+  for (const candidate of new Set(directCandidates.map((entry) => path.resolve(entry)))) {
+    if (hasTelegramUserTooling(candidate)) {
       return candidate;
     }
   }
 
-  let current = path.resolve(process.cwd());
+  let current = path.resolve(cwd);
   while (true) {
-    if (fsSync.existsSync(path.join(current, "scripts", "telegram-e2e", "requirements.txt"))) {
+    if (hasTelegramUserTooling(current)) {
       return current;
     }
     const parent = path.dirname(current);
@@ -49,11 +71,11 @@ function resolveRepoRoot(): string {
     current = parent;
   }
 
-  throw new Error("Could not locate the repo root for Telegram user tooling.");
+  throw new Error("Could not locate Telegram user tooling assets.");
 }
 
-const repoRoot = resolveRepoRoot();
-const telegramE2eDir = path.join(repoRoot, "scripts", "telegram-e2e");
+const toolingRoot = resolveTelegramUserToolingRoot();
+const telegramE2eDir = path.join(toolingRoot, "scripts", "telegram-e2e");
 const backendScriptPath = path.join(telegramE2eDir, "telethon_cli.py");
 const requirementsPath = path.join(telegramE2eDir, "requirements.txt");
 const repoLocalEnvFilePath = path.join(telegramE2eDir, ".env.local");
@@ -369,7 +391,7 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
   const env = applyEnvOverrides(baseEnv, options.envOverrides);
   try {
     const { stdout } = await execFileAsync(python, [backendScriptPath, ...options.args], {
-      cwd: repoRoot,
+      cwd: toolingRoot,
       env,
       timeout: 60_000,
       maxBuffer: 4 * 1024 * 1024,
