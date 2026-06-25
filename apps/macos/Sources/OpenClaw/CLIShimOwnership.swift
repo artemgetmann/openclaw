@@ -65,9 +65,11 @@ enum CLIShimOwnership {
     }
 
     static func conflictMessage(for inspection: Inspection) -> String {
-        """
-        Jarvis found an existing CLI at \(inspection.path) that it does not own, so it did not replace it. Keep the existing CLI, choose another Jarvis CLI location, or use an explicit replace/--force flow after confirming Jarvis should own that path.
-        """
+        [
+            "Jarvis found an existing CLI at \(inspection.path) that it does not own, so it did not replace it.",
+            "Keep the existing CLI, choose another Jarvis CLI location, or use an explicit replace/--force flow",
+            "after confirming Jarvis should own that path.",
+        ].joined(separator: " ")
     }
 
     private static func legacyManagedWrapperScript(payloadDirectoryName: String) -> String {
