@@ -45,12 +45,15 @@ export function resolveTelegramUserToolingRoot(
   const cwd = params.cwd ?? process.cwd();
   const importDir = params.importDir ?? path.dirname(fileURLToPath(import.meta.url));
   const directCandidates = [
-    cwd,
     // Package/runtime layout: openclaw.mjs + dist/ + scripts/ live together.
     path.resolve(importDir, ".."),
     // Source/test layouts may execute from dist/ or transpiled subdirectories.
     path.resolve(importDir, "..", ".."),
     path.resolve(importDir, "..", "..", ".."),
+    // The caller's working directory is a compatibility fallback. It must not
+    // beat the runtime that loaded this module, or installed apps can pick up
+    // stale Telegram tooling from whatever checkout the shell happens to be in.
+    cwd,
   ];
 
   for (const candidate of new Set(directCandidates.map((entry) => path.resolve(entry)))) {
