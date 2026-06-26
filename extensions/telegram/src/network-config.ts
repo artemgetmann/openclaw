@@ -53,7 +53,7 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
     return { value: false, source: "default-wsl2" };
   }
   if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
-    return { value: true, source: "default-node22" };
+    return { value: false, source: "default-node22" };
   }
   return { value: null };
 }

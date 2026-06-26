@@ -310,6 +310,30 @@ function parseClaudeStreamingDelta(params: {
   };
 }
 
+function parseCodexStreamingDelta(params: {
+  providerId?: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (params.providerId?.trim().toLowerCase() !== "codex-cli") {
+    return null;
+  }
+  if (params.parsed.type !== "agent_message_delta" || typeof params.parsed.delta !== "string") {
+    return null;
+  }
+  if (!params.parsed.delta) {
+    return null;
+  }
+  return {
+    text: `${params.textSoFar}${params.parsed.delta}`,
+    delta: params.parsed.delta,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId?: string;
@@ -347,18 +371,25 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
 
-    // Claude stream-json exposes first visible text before the final result
-    // event. Keep the parser stateful so partial callbacks get full text plus
-    // the newest delta without waiting for process exit.
-    const delta = parseClaudeStreamingDelta({
-      backend: params.backend,
-      providerId: params.providerId,
-      parsed,
-      textSoFar: assistantText,
-      hasAssistantMessageBoundary,
-      sessionId,
-      usage,
-    });
+    // Streaming CLIs expose visible text before the final result event. Keep
+    // parser stateful so partial callbacks get full text plus the newest delta.
+    const delta =
+      parseClaudeStreamingDelta({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        textSoFar: assistantText,
+        hasAssistantMessageBoundary,
+        sessionId,
+        usage,
+      }) ??
+      parseCodexStreamingDelta({
+        providerId: params.providerId,
+        parsed,
+        textSoFar: assistantText,
+        sessionId,
+        usage,
+      });
     if (!delta) {
       return;
     }
