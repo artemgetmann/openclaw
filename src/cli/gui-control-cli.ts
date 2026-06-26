@@ -194,6 +194,9 @@ function humanSummary(result: Awaited<ReturnType<typeof runGuiControl>>): string
     lines.push(`stale-refs: ${result.verifiedAction.stats.staleRefs}`);
     lines.push(`false-successes: ${result.verifiedAction.stats.falseSuccesses}`);
     lines.push(`false-failures: ${result.verifiedAction.stats.falseFailures}`);
+    if (result.verifiedAction.stats.activationPath) {
+      lines.push(`activation-path: ${result.verifiedAction.stats.activationPath}`);
+    }
     if (result.verifiedAction.stats.postStateResult) {
       lines.push(`post-state: ${result.verifiedAction.stats.postStateResult}`);
     }

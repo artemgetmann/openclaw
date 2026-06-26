@@ -294,6 +294,8 @@ export async function performVerifiedAction(
   stats.actionCount += action.actionCount ?? 1;
   stats.usedClipboard ||= Boolean(action.usedClipboard);
   stats.movedFocus ||= Boolean(action.movedFocus);
+  stats.activationPath = action.activationPath;
+  stats.activationPaths = action.activationPath ? [action.activationPath] : undefined;
 
   // Executor status is advisory. A stale ref gets one fresh observation and one
   // retry; repeated stale state means the runtime no longer knows its target.
@@ -326,6 +328,8 @@ export async function performVerifiedAction(
     stats.actionCount += action.actionCount ?? 1;
     stats.usedClipboard ||= Boolean(action.usedClipboard);
     stats.movedFocus ||= Boolean(action.movedFocus);
+    stats.activationPath = action.activationPath;
+    stats.activationPaths = action.activationPath ? [action.activationPath] : undefined;
     if (action.staleRef) {
       stats.staleRefs += 1;
       return failedResult({
