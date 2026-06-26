@@ -69,6 +69,7 @@ export type ActionResult = {
   usedClipboard?: boolean;
   rawCoordinatesUsed?: boolean;
   movedFocus?: boolean;
+  activationPath?: string;
   message?: string;
   raw?: unknown;
 };
@@ -125,6 +126,8 @@ export type GuiVerifierStats = {
   movedFocus: boolean;
   falseSuccesses: number;
   falseFailures: number;
+  activationPath?: string;
+  activationPaths?: string[];
   postStateResult?: "verified" | "failed" | "blocked";
 };
 

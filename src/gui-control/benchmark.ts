@@ -54,6 +54,8 @@ export type GuiBenchmarkResult = {
   movedFocus: boolean;
   falseSuccesses: number;
   falseFailures: number;
+  activationPath?: string;
+  activationPaths?: string[];
   directRuntimeEscape: boolean;
   replyTextExtracted: boolean;
   replyExtractionMethod: "none" | "ax-visible-text" | "clipboard-copy";
@@ -294,15 +296,22 @@ function createBenchmarkRuntime(
 
 function mergeStats(stats: GuiVerifierStats[]): GuiVerifierStats {
   return stats.reduce(
-    (acc, stat) => ({
-      actionCount: acc.actionCount + stat.actionCount,
-      retries: acc.retries + stat.retries,
-      staleRefs: acc.staleRefs + stat.staleRefs,
-      usedClipboard: acc.usedClipboard || stat.usedClipboard,
-      movedFocus: acc.movedFocus || stat.movedFocus,
-      falseSuccesses: acc.falseSuccesses + stat.falseSuccesses,
-      falseFailures: acc.falseFailures + stat.falseFailures,
-    }),
+    (acc, stat) => {
+      const activationPaths = appendActivationPaths(acc.activationPaths, stat);
+      return {
+        actionCount: acc.actionCount + stat.actionCount,
+        retries: acc.retries + stat.retries,
+        staleRefs: acc.staleRefs + stat.staleRefs,
+        usedClipboard: acc.usedClipboard || stat.usedClipboard,
+        movedFocus: acc.movedFocus || stat.movedFocus,
+        falseSuccesses: acc.falseSuccesses + stat.falseSuccesses,
+        falseFailures: acc.falseFailures + stat.falseFailures,
+        // Keep the latest path for compact summaries, and the ordered unique
+        // list for benchmark JSON where multiple verified actions can run.
+        activationPath: activationPaths?.at(-1),
+        activationPaths,
+      };
+    },
     {
       actionCount: 0,
       retries: 0,
@@ -313,6 +322,18 @@ function mergeStats(stats: GuiVerifierStats[]): GuiVerifierStats {
       falseFailures: 0,
     },
   );
+}
+
+function appendActivationPaths(
+  existing: string[] | undefined,
+  stat: Pick<GuiVerifierStats, "activationPath" | "activationPaths">,
+): string[] | undefined {
+  const paths = [...(existing ?? []), ...(stat.activationPaths ?? [])];
+  if (stat.activationPath) {
+    paths.push(stat.activationPath);
+  }
+  const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+  return uniquePaths.length ? uniquePaths : undefined;
 }
 
 function emptyGuiVerifierStats(): GuiVerifierStats {
@@ -332,13 +353,17 @@ function statsFromActionResult(result: {
   staleRef?: boolean;
   usedClipboard?: boolean;
   movedFocus?: boolean;
+  activationPath?: string;
 }): GuiVerifierStats {
+  const activationPaths = result.activationPath ? [result.activationPath] : undefined;
   return {
     ...emptyGuiVerifierStats(),
     actionCount: result.actionCount ?? 0,
     staleRefs: result.staleRef ? 1 : 0,
     usedClipboard: Boolean(result.usedClipboard),
     movedFocus: Boolean(result.movedFocus),
+    activationPath: result.activationPath,
+    activationPaths,
   };
 }
 
@@ -350,6 +375,9 @@ function addStats(target: GuiVerifierStats, extra: GuiVerifierStats) {
   target.movedFocus ||= extra.movedFocus;
   target.falseSuccesses += extra.falseSuccesses;
   target.falseFailures += extra.falseFailures;
+  const activationPaths = appendActivationPaths(target.activationPaths, extra);
+  target.activationPath = activationPaths?.at(-1);
+  target.activationPaths = activationPaths;
 }
 
 function visibleSnapshotText(snapshot: { summary?: string; visibleText?: string[] }): string[] {
@@ -1561,6 +1589,9 @@ function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): str
     `- focus moved: ${result.movedFocus ? "yes" : "no"}`,
     `- false successes: ${result.falseSuccesses}`,
     `- false failures: ${result.falseFailures}`,
+    result.activationPaths?.length
+      ? `- activation paths: ${result.activationPaths.join(", ")}`
+      : "",
     `- direct runtime escape: ${result.directRuntimeEscape ? "yes" : "no"}`,
     `- opened X Home: ${result.xWindow.openAttempted ? result.xWindow.openSucceeded : "no"}`,
     `- X window id: ${result.xWindow.selectedWindowId ?? "unknown"}`,

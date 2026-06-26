@@ -284,6 +284,35 @@ describe("parseOpenComputerUseActionResult", () => {
       }),
     );
   });
+
+  it("uses the last batched tool result as the action result", () => {
+    const result = parseOpenComputerUseActionResult(
+      [
+        {
+          tool: "get_app_state",
+          result: { isError: false, content: [{ type: "text", text: "state" }] },
+        },
+        {
+          tool: "click",
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "invalidArguments(\"unknown element_index '71'\")" }],
+          },
+        },
+      ],
+      true,
+      "ocuBatchedStateAction",
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        actionCount: 1,
+        activationPath: "ocuBatchedStateAction",
+        message: "invalidArguments(\"unknown element_index '71'\")",
+      }),
+    );
+  });
 });
 
 describe("parseOpenComputerUseVirtualPointerEvidence", () => {
@@ -325,7 +354,7 @@ describe("parseOpenComputerUseVirtualPointerEvidence", () => {
 });
 
 describe("OpenComputerUseRuntime", () => {
-  it("clicks element-index targets through OCU click without raw coordinates", async () => {
+  it("clicks element-index targets through direct OCU actions without raw coordinates", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
     const argsPath = path.join(tempDir, "argv.json");
     const runtime = new OpenComputerUseRuntime({
@@ -352,6 +381,7 @@ describe("OpenComputerUseRuntime", () => {
         ok: true,
         usedClipboard: false,
         rawCoordinatesUsed: false,
+        activationPath: "ocuDirectAction",
       }),
     );
     expect(argv).toEqual([
@@ -362,7 +392,7 @@ describe("OpenComputerUseRuntime", () => {
     ]);
   });
 
-  it("maps secondary actions to OCU perform_secondary_action", async () => {
+  it("maps secondary actions to direct OCU actions", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
     const argsPath = path.join(tempDir, "argv.json");
     const runtime = new OpenComputerUseRuntime({
