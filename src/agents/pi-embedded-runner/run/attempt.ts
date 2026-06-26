@@ -1586,15 +1586,6 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
-    params.onLatencyTrace?.({
-      span: "mcp_tool_prep_started",
-      fields: {
-        backend: "embedded-pi",
-        provider: params.provider,
-        model: params.modelId,
-        toolsDisabled: params.disableTools === true,
-      },
-    });
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -1661,17 +1652,6 @@ export async function runEmbeddedAttempt(
       clientTools,
     });
     logToolSchemasForGoogle({ tools, provider: params.provider });
-    params.onLatencyTrace?.({
-      span: "mcp_tool_prep_finished",
-      fields: {
-        backend: "embedded-pi",
-        provider: params.provider,
-        model: params.modelId,
-        toolCount: tools.length,
-        clientToolCount: clientTools?.length ?? 0,
-        allowedToolCount: allowedToolNames.size,
-      },
-    });
 
     const machineName = await getMachineDisplayName();
     logPreLockStage("machine-name-resolved");
@@ -2378,16 +2358,6 @@ export async function runEmbeddedAttempt(
       };
 
       traceStage("pre-subscribe-embedded-session");
-      params.onLatencyTrace?.({
-        span: "backend_process_started_or_resumed",
-        fields: {
-          backend: "embedded-pi",
-          provider: params.provider,
-          model: params.modelId,
-          resumed: true,
-        },
-      });
-      let firstAssistantDeltaTraced = false;
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -2423,18 +2393,6 @@ export async function runEmbeddedAttempt(
         onPartialReply: params.onPartialReply
           ? async (payload) => {
               touchAttemptActivity();
-              if (!firstAssistantDeltaTraced) {
-                firstAssistantDeltaTraced = true;
-                params.onLatencyTrace?.({
-                  span: "first_assistant_delta_received",
-                  fields: {
-                    backend: "embedded-pi",
-                    provider: params.provider,
-                    model: params.modelId,
-                    textLength: payload.text?.length ?? 0,
-                  },
-                });
-              }
               await params.onPartialReply?.(payload);
             }
           : undefined,

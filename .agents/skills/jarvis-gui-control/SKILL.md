@@ -11,6 +11,10 @@ Use the repo CLI as the GUI-control surface. Treat the CLI result as the
 authority: if it says wrong target, ambiguous element, blocked policy risk, or
 missing verification, stop instead of working around it.
 
+Jarvis/OpenClaw GUI-control is not Codex native Computer Use. Do not acquire
+`cua-guard` for `pnpm jarvis gui-control` or `pnpm jarvis gui-benchmark` runs;
+that guard is only for native Codex Computer Use singleton ownership.
+
 Primary commands:
 
 ```bash

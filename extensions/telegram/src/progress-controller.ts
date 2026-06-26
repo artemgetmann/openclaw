@@ -4,7 +4,6 @@ import type { TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import {
   createTelegramDraftStream,
   type TelegramDraftDurableSendEvent,
-  type TelegramDraftPreviewTraceEvent,
   type TelegramDraftStream,
 } from "./draft-stream.js";
 
@@ -18,7 +17,6 @@ const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 
 export type TelegramProgressController = {
   update: (text: string) => void;
-  replace: (text: string) => void;
   clear: () => Promise<void>;
   messageId: () => number | undefined;
 };
@@ -40,8 +38,6 @@ export function createTelegramProgressController(params: {
   >;
   renderText: (text: string) => ProgressPreview;
   onMessageDelivered?: (messageId: number, event: TelegramDraftDurableSendEvent) => void;
-  onPreviewAttempt?: (event: TelegramDraftPreviewTraceEvent) => void;
-  onPreviewComplete?: (event: TelegramDraftPreviewTraceEvent) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramProgressController {
@@ -71,8 +67,6 @@ export function createTelegramProgressController(params: {
     },
     renderText: params.renderText,
     onMessageDelivered: params.onMessageDelivered,
-    onPreviewAttempt: params.onPreviewAttempt,
-    onPreviewComplete: params.onPreviewComplete,
     log: params.log,
     warn: params.warn,
   });
@@ -145,17 +139,6 @@ export function createTelegramProgressController(params: {
       }
       hasProgress = true;
       stream.update(cumulativeProgressText);
-    },
-    replace: (text: string) => {
-      if (cleared) {
-        return;
-      }
-      const progressText = text.trim();
-      if (!progressText) {
-        return;
-      }
-      hasProgress = true;
-      stream.update(progressText);
     },
     clear: async () => {
       if (cleared) {

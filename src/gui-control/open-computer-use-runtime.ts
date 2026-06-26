@@ -524,12 +524,26 @@ export function parseOpenComputerUseSnapshot(raw: unknown, target: AppTarget): G
   };
 }
 
-export function parseOpenComputerUseActionResult(raw: unknown, commandOk = true): ActionResult {
-  const record = asRecord(raw);
-  const payload = asRecord(unwrapPayload(raw));
+function readLastSequenceResult(raw: unknown): unknown {
+  if (!Array.isArray(raw)) {
+    return raw;
+  }
+  const last = raw.at(-1);
+  const lastRecord = asRecord(last);
+  return lastRecord.result ?? last;
+}
+
+export function parseOpenComputerUseActionResult(
+  raw: unknown,
+  commandOk = true,
+  activationPath?: string,
+): ActionResult {
+  const actionRaw = readLastSequenceResult(raw);
+  const record = asRecord(actionRaw);
+  const payload = asRecord(unwrapPayload(actionRaw));
   const isError = record.isError === true || payload.isError === true;
   const message = firstString(
-    payload.message ?? payload.error ?? record.message ?? record.error ?? readMcpText(raw),
+    payload.message ?? payload.error ?? record.message ?? record.error ?? readMcpText(actionRaw),
     undefined,
   );
   return {
@@ -548,6 +562,7 @@ export function parseOpenComputerUseActionResult(raw: unknown, commandOk = true)
       payload.rawCoordinatesUsed ?? payload.raw_coordinates_used ?? record.rawCoordinatesUsed,
     ),
     movedFocus: Boolean(payload.movedFocus ?? payload.moved_focus ?? record.movedFocus),
+    activationPath,
     message,
     raw,
   };
@@ -617,8 +632,14 @@ export class OpenComputerUseRuntime implements GuiRuntime {
     tool: string,
     args: Record<string, unknown> = {},
   ): Promise<ActionResult> {
+    // Do not wrap element-index actions in OCU's `--calls` sequence here. The
+    // sequence preserves OCU's in-process snapshot table, but OpenClaw cannot
+    // dynamically rebind the second call's element_index after the first
+    // get_app_state result. Pairing a fresh OCU snapshot with stale args would
+    // make broad browser activations look safer without actually making them
+    // more precise.
     const result = await this.runActionJson(["call", tool, "--args", JSON.stringify(args)]);
-    return parseOpenComputerUseActionResult(result.raw, result.ok);
+    return parseOpenComputerUseActionResult(result.raw, result.ok, "ocuDirectAction");
   }
 
   async getVirtualPointerEvidence(): Promise<VirtualPointerEvidence> {
