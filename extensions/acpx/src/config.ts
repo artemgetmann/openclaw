@@ -54,12 +54,7 @@ function resolvePinnedAcpxVersion(pluginRoot: string): string {
 
 export const ACPX_PINNED_VERSION = resolvePinnedAcpxVersion(ACPX_PLUGIN_ROOT);
 export const ACPX_BUNDLED_INSTALL_ROOT = resolveManagedAcpxInstallRoot(ACPX_PLUGIN_ROOT);
-export const ACPX_BUNDLED_BIN = path.join(
-  ACPX_BUNDLED_INSTALL_ROOT,
-  "node_modules",
-  ".bin",
-  ACPX_BIN_NAME,
-);
+export const ACPX_BUNDLED_BIN = resolveManagedAcpxCommand(ACPX_PLUGIN_ROOT);
 
 function isDistAcpxPluginRoot(pluginRoot: string): boolean {
   return (
@@ -94,7 +89,19 @@ export function resolveManagedAcpxInstallRoot(
 }
 
 function getManagedAcpxCommandCandidates(pluginRoot: string, installRoot: string): string[] {
-  const candidates = [path.join(installRoot, "node_modules", ".bin", ACPX_BIN_NAME)];
+  const candidates: string[] = [];
+
+  if (process.platform !== "win32") {
+    // pnpm's source tree exposes node_modules/.bin/acpx as a symlink to the real
+    // package entrypoint, but macOS packaging can materialize that symlink into
+    // a standalone file under .bin. The acpx CLI imports sibling chunks with
+    // relative paths, so the materialized .bin copy looks for those chunks in
+    // .bin and fails at startup. Prefer the package-owned entrypoint whenever it
+    // exists; keep .bin as a fallback for unusual installs.
+    candidates.push(path.join(installRoot, "node_modules", "acpx", "dist", "cli.js"));
+  }
+
+  candidates.push(path.join(installRoot, "node_modules", ".bin", ACPX_BIN_NAME));
 
   // When the plugin is loaded from dist/, local installs may still live under the worktree source
   // extension directory. Keep that source-local binary as the managed fallback before giving up.

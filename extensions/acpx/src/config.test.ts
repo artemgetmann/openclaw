@@ -68,6 +68,25 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
   });
 
+  it("prefers the package-owned acpx CLI over a packaged .bin copy", () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-packaged-bin-"));
+    const packageCli = path.join(pluginRoot, "node_modules", "acpx", "dist", "cli.js");
+    const binCopy = path.join(pluginRoot, "node_modules", ".bin", "acpx");
+
+    try {
+      fs.mkdirSync(path.dirname(packageCli), { recursive: true });
+      fs.mkdirSync(path.dirname(binCopy), { recursive: true });
+      fs.writeFileSync(packageCli, "#!/usr/bin/env node\n", "utf8");
+      fs.writeFileSync(binCopy, "#!/usr/bin/env node\n", "utf8");
+
+      expect(resolveManagedAcpxCommand(pluginRoot)).toBe(
+        process.platform === "win32" ? binCopy : packageCli,
+      );
+    } finally {
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
   it("falls back from dist-local acpx bin to source-local bin when dist bin is absent", () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-bundled-fallback-"));
     const distPluginRoot = path.join(repoRoot, "dist", "extensions", "acpx");
