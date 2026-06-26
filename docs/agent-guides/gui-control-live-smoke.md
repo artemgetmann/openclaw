@@ -91,6 +91,62 @@ Current live note, 2026-06-25:
 - `Stop AI Operator` and `Quit App Only` remained blocked under the same
   profile before action
 
+## Native App Benchmark Pack
+
+This proves the generic GUI-control surface against local macOS app classes
+before browser/Safari-specific adapter work. It is intentionally report-backed:
+do not promote a terminal-only success line as product evidence without the JSON
+report.
+
+Dry-run first:
+
+```bash
+pnpm jarvis gui-benchmark \
+  --runtime open-computer-use \
+  --runtime-command "$(cat /tmp/jarvis-ocu-stability-bin-path.txt)" \
+  --task native-apps \
+  --dry-run \
+  --write-report \
+  --report-dir artifacts/gui-benchmark/native-apps-dry-run \
+  --json
+```
+
+Live proof, after confirming the pinned OCU runtime exists:
+
+```bash
+test -x "$(cat /tmp/jarvis-ocu-stability-bin-path.txt)"
+
+pnpm jarvis gui-benchmark \
+  --runtime open-computer-use \
+  --runtime-command "$(cat /tmp/jarvis-ocu-stability-bin-path.txt)" \
+  --task native-apps \
+  --approve-native-app-write \
+  --write-report \
+  --report-dir artifacts/gui-benchmark/native-apps-live \
+  --json
+```
+
+Accepted native-app proof:
+
+- `nativeAppSlices` includes `textedit-scratch-write=passed`,
+  `finder-fixture-observe=passed`, and `policy-boundary=passed`
+- TextEdit writes only to a scratch temp fixture and verifies a per-run visible
+  nonce
+- Finder opens only a scratch temp folder/file and verifies the fixture filename
+- `policy-boundary` reports login, payment, account, and destructive labels
+  blocked before runtime mutation
+- Notes, document-suite apps, and Safari/browser work are reported as skipped
+  or gaps unless this run explicitly proves them safely
+- workspace fields still report `frontmostBefore`, `frontmostAfterTask`,
+  `frontmostRestored`, `restoreAttempted`, and `restoreSucceeded` when the
+  runtime exposes them
+
+Do not use this benchmark to justify login, payment, final booking/purchase,
+deletion, account/security setting changes, software install, or message-send
+policy broadening. Browser activation failures, including the Google Flights
+`Select flight` issue, belong to future Safari/browser-adapter work rather than
+blocking this native-app proof.
+
 ## Google Flights Dry Run
 
 This proves `non_committal_web_dry_run`: browser search and suggestion
