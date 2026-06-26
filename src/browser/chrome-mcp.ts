@@ -740,7 +740,7 @@ async function fetchChromeCdpTargets(browserHttpUrl: string): Promise<ChromeCdpT
   }
 }
 
-async function resolveChromeMcpPageWebSocketUrl(params: {
+export async function resolveChromeMcpPageWebSocketUrl(params: {
   profileName: string;
   userDataDir?: string;
   targetId: string;

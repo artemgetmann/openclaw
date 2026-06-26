@@ -19,7 +19,7 @@ const routeState = vi.hoisted(() => ({
   tab: {
     targetId: "7",
     url: "https://example.com",
-    wsUrl: "ws://127.0.0.1/devtools/page/7",
+    wsUrl: "ws://127.0.0.1/devtools/page/7" as string | undefined,
   },
 }));
 
@@ -32,6 +32,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   insertTextViaCdp: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   pressChromeMcpKey: vi.fn(async () => {}),
+  resolveChromeMcpPageWebSocketUrl: vi.fn(async () => "ws://127.0.0.1/devtools/page/7"),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
@@ -51,6 +52,7 @@ vi.mock("../chrome-mcp.js", () => ({
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
   pressChromeMcpKey: chromeMcpMocks.pressChromeMcpKey,
+  resolveChromeMcpPageWebSocketUrl: chromeMcpMocks.resolveChromeMcpPageWebSocketUrl,
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
@@ -153,8 +155,14 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.insertTextViaCdp.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.pressChromeMcpKey.mockClear();
+    chromeMcpMocks.resolveChromeMcpPageWebSocketUrl.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
+    routeState.tab = {
+      targetId: "7",
+      url: "https://example.com",
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
+    };
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
       .mockResolvedValueOnce(true);
@@ -804,6 +812,45 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       key: "Space",
       timeoutMs: 12_000,
+    });
+  });
+
+  it("derives a CDP websocket for existing-session repair when tab metadata omits wsUrl", async () => {
+    routeState.tab = {
+      targetId: "7",
+      url: "https://x.com/compose/post",
+      wsUrl: undefined,
+    };
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.pressChromeMcpKey.mockClear();
+    chromeMcpMocks.insertTextViaCdp.mockClear();
+    chromeMcpMocks.resolveChromeMcpPageWebSocketUrl.mockClear();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "type",
+          ref: "composer-1",
+          text: "caption plus media",
+          repairEdit: true,
+          timeoutMs: 12_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.resolveChromeMcpPageWebSocketUrl).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+    });
+    expect(chromeMcpMocks.insertTextViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
+      text: "caption plus media",
     });
   });
 

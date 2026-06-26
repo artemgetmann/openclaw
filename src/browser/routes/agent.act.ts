@@ -9,6 +9,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  resolveChromeMcpPageWebSocketUrl,
   takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
@@ -355,9 +356,20 @@ async function performExistingSessionKeyboardTextEntry(params: {
   replace: boolean;
   timeoutMs?: number;
 }): Promise<void> {
-  if (!params.wsUrl) {
+  const wsUrl =
+    params.wsUrl ??
+    // Chrome MCP tab metadata intentionally exposes stable page ids rather than
+    // raw DevTools URLs. For trusted rich-editor text entry we still need CDP's
+    // real Input.insertText command, so derive the page websocket from the same
+    // attach endpoint used by the screenshot fallback.
+    (await resolveChromeMcpPageWebSocketUrl({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+    }));
+  if (!wsUrl) {
     throw new Error(
-      "repairEdit requires a per-tab CDP websocket for trusted rich-editor text entry in existing-session profiles. Run a fresh tabs/snapshot call and retry on a tab with wsUrl, or use an isolated non-existing-session browser lane.",
+      "repairEdit requires a per-tab CDP websocket for trusted rich-editor text entry in existing-session profiles. Ensure the existing-session browser exposes a DevTools endpoint, then retry from a fresh composer.",
     );
   }
   const fn = buildExistingSessionFocusEditableScript({ selector: params.selector });
@@ -405,7 +417,7 @@ async function performExistingSessionKeyboardTextEntry(params: {
     });
   }
   await insertTextViaCdp({
-    wsUrl: params.wsUrl,
+    wsUrl,
     text: params.text,
   });
 }
