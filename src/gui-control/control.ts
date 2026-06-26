@@ -15,6 +15,7 @@ export const GUI_CONTROL_ACTIONS = [
   "resolve-element",
   "set-value",
   "click",
+  "secondary-action",
   "press",
   "scroll",
 ] as const;
@@ -33,6 +34,7 @@ export type GuiControlInput = {
   valueIncludes?: string;
   value?: string;
   keys?: string[];
+  secondaryAction?: string;
   scrollDirection?: "up" | "down" | "left" | "right";
   scrollAmount?: number;
   reason?: string;
@@ -399,6 +401,56 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
           : {
               ok: snapshotChanged(context.pre, post),
               summary: "Click executed and target was re-observed with changed visible state.",
+            },
+    });
+    return {
+      ok: result.ok,
+      action: input.action,
+      target,
+      summary: result.audit.postStateVerification,
+      verifiedAction: result,
+      blocked: result.audit.result === "blocked",
+      failureReason: result.failureReason,
+    };
+  }
+
+  if (input.action === "secondary-action") {
+    if (!input.secondaryAction?.trim()) {
+      throw new Error("gui-control secondary-action requires --secondary-action.");
+    }
+    if (!input.verifyText && !input.allowObservedClick) {
+      const summary =
+        "Secondary action requires --verify-text for task proof, or --allow-observed-click for an explicitly accepted changed-state proof.";
+      return {
+        ok: false,
+        action: input.action,
+        target,
+        snapshot: summarizeSnapshot(resolution.snapshot, input.maxElements),
+        summary,
+        element: resolution.element,
+        blocked: true,
+        failureReason: summary,
+      };
+    }
+    const result = await performVerifiedAction({
+      runtime: input.runtime,
+      target,
+      element: resolution.element,
+      actionType: "secondaryAction",
+      secondaryAction: input.secondaryAction.trim(),
+      reason: input.reason ?? `Perform GUI secondary action ${input.secondaryAction.trim()}.`,
+      approvedPolicyRisk: input.approvedPolicyRisk === true,
+      taskPolicy: input.taskPolicy,
+      verify: (post, context) =>
+        input.verifyText
+          ? {
+              ok: visibleTextContains(post, input.verifyText),
+              summary: `Post-state should contain ${JSON.stringify(input.verifyText)}.`,
+            }
+          : {
+              ok: snapshotChanged(context.pre, post),
+              summary:
+                "Secondary action executed and target was re-observed with changed visible state.",
             },
     });
     return {

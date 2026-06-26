@@ -28,6 +28,7 @@ type GuiControlCliOptions = {
   valueIncludes?: string;
   value?: string;
   keys?: string;
+  secondaryAction?: string;
   direction?: string;
   amount?: string | number;
   reason?: string;
@@ -214,6 +215,7 @@ async function runAction(action: GuiControlAction, opts: GuiControlCliOptions) {
       valueIncludes: opts.valueIncludes,
       value: opts.value,
       keys: readKeys(opts),
+      secondaryAction: opts.secondaryAction,
       scrollDirection: readScrollDirection(opts),
       scrollAmount: readScrollAmount(opts),
       reason: opts.reason,
@@ -291,6 +293,22 @@ export function registerGuiControlCli(program: Command) {
       false,
     )
     .action((opts) => runAction("click", opts));
+
+  addMutationOptions(
+    addElementOptions(
+      addSharedOptions(
+        gui.command("secondary-action").description("Perform an element secondary action"),
+      ),
+    ),
+  )
+    .requiredOption("--secondary-action <action>", "Secondary action name, e.g. AXPress")
+    .option("--verify-text <text>", "Text that must be visible after the secondary action")
+    .option(
+      "--allow-observed-click",
+      "Accept changed target state as verification when no text proof exists",
+      false,
+    )
+    .action((opts) => runAction("secondary-action", opts));
 
   addMutationOptions(
     addSharedOptions(gui.command("press").description("Press an app-scoped key combo")),

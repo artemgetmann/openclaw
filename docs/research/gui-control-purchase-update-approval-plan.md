@@ -211,5 +211,22 @@ Travel proof update, 2026-06-26:
   loosen the commerce profile broadly, and do not treat generic `return` as safe
   when a final charge, login, or destructive control might be focused.
 
+Activation follow-up, 2026-06-26:
+
+- Implemented a minimal semantic activation surface by exposing existing runtime
+  secondary actions as `gui-control secondary-action --secondary-action
+AXPress`.
+- The new path reuses fresh element resolution, GUI policy evaluation, explicit
+  mutation approval, and post-state verification; it does not relax commerce or
+  update policies.
+- Read-only exploration of macOS Automator-style tooling, Peekaboo, and related
+  open computer-use designs pointed to the same pattern: prefer AX actions such
+  as `AXPress`/`Raise` before geometry, keep discovery separate from delivery,
+  and fail closed on ambiguous targets.
+- Live Google Flights rerun is still pending because `cua-guard acquire`
+  refused GUI ownership with multiple MCP clients attached. Next proof should
+  observe the fresh `Select flight` element, confirm it exposes `AXPress`, then
+  run the secondary-action command with `--verify-text "Returning flights"`.
+
 Use isolated tester Jarvis/Telegram proof first when approval UX is added. Real
 main Jarvis dogfood proof should happen only after tester proof passes.

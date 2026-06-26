@@ -208,6 +208,26 @@ pnpm jarvis gui-control click \
   --json
 ```
 
+Semantic activation example for broad result links:
+
+```bash
+pnpm jarvis gui-control secondary-action \
+  --runtime open-computer-use \
+  --runtime-command "$(cat /tmp/jarvis-ocu-stability-bin-path.txt)" \
+  --app Safari \
+  --ref @SELECT_FLIGHT_REF \
+  --secondary-action AXPress \
+  --task-policy commerce_flow_until_final_confirmation \
+  --approve-policy-risk \
+  --verify-text "Returning flights" \
+  --reason "Activate the visible Select flight result link without entering payment or final booking." \
+  --json
+```
+
+Use this only when the fresh observe output shows the selected element exposes
+the requested secondary action. This is the preferred follow-up for broad AX
+links where a plain click can land on the wrong subcontrol.
+
 Explicitly supplied contact detail example:
 
 ```bash
@@ -260,6 +280,11 @@ required taxes + fees for 2 adults.`, and the first KLM round-trip fare
   commerce-policy denial. Do not claim payment/final-booking boundary proof
   unless the live flow reaches a visible payment, booking, or final charge
   control.
+- Follow-up patch exposed `gui-control secondary-action --secondary-action
+AXPress` through the same verifier and policy gates as `click`, so a rerun can
+  test semantic activation before falling back to geometry.
+- Rerun was blocked locally by `cua-guard acquire`: multiple MCP clients were
+  attached, so the lane did not take live GUI control.
 
 ## Software Update Flow
 
