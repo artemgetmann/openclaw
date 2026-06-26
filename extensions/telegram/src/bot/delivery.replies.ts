@@ -714,10 +714,14 @@ export async function deliverReplies(params: {
           typeof reply.text === "string" &&
           reply.text.trim().length > 0
         ) {
-          // Final TTS is already an audio supplement to durable text. Keeping
-          // the final answer as a voice caption creates the visible duplicate
-          // bubble seen in Telegram, so suppress only the supplement caption.
-          reply = { ...reply, text: undefined };
+          // Final TTS is already an audio supplement to durable text. Keep only
+          // a bounded caption preview so Telegram topic/chat-list snippets have
+          // context without rendering a second full answer.
+          const voiceCaptionPreview = buildFinalTtsCaptionPreview(reply.text);
+          logVerbose(
+            `telegram: final TTS supplement caption previewed captionLength=${voiceCaptionPreview?.length ?? 0}`,
+          );
+          reply = { ...reply, text: voiceCaptionPreview };
         }
         const shouldSplitVoiceSupplement =
           !finalTtsSupplement &&

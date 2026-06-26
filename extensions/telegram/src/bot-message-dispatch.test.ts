@@ -500,17 +500,12 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("retires a speculative answer preview when structure reclassifies it as progress", async () => {
-    const clearedAnswerPreviewIds: Array<number | undefined> = [];
+  it("adopts a speculative answer preview when structure reclassifies it as progress", async () => {
     const answerStream = createTestDraftStream({
       messageId: 9301,
       clearMessageIdOnForceNew: true,
     });
-    answerStream.clear.mockImplementation(async () => {
-      clearedAnswerPreviewIds.push(answerStream.messageId());
-    });
-    const progressStream = createDraftStream(9302);
-    createTelegramDraftStream.mockReturnValueOnce(answerStream).mockReturnValueOnce(progressStream);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({
@@ -537,18 +532,16 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(answerStream.update).toHaveBeenCalledWith("Inspecting the workspace state.");
-    expect(answerStream.clear).toHaveBeenCalledTimes(1);
-    expect(clearedAnswerPreviewIds).toEqual([9301]);
-    expect(answerStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(progressStream.update).toHaveBeenCalledWith(
+    expect(answerStream.update).toHaveBeenCalledWith(
       "Checking the current branch and recent edits.",
     );
-    expect(answerStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
-      progressStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(answerStream.clear).toHaveBeenCalledTimes(1);
+    expect(answerStream.update.mock.invocationCallOrder[1]).toBeLessThan(
+      answerStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(answerStream.forceNewMessage).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -567,11 +560,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       messageId: 9401,
       clearMessageIdOnForceNew: true,
     });
-    const progressStream = createDraftStream(9402);
     const finalAnswerStream = createDraftStream(9403);
     createTelegramDraftStream
       .mockReturnValueOnce(speculativeAnswerStream)
-      .mockReturnValueOnce(progressStream)
       .mockReturnValueOnce(finalAnswerStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -605,10 +596,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(speculativeAnswerStream.clear).toHaveBeenCalledTimes(1);
-    expect(progressStream.update).toHaveBeenCalledWith(
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    expect(speculativeAnswerStream.update).toHaveBeenCalledWith(
       "Checking the current branch and recent edits.",
     );
+    expect(speculativeAnswerStream.forceNewMessage).not.toHaveBeenCalled();
     expect(finalAnswerStream.update).toHaveBeenCalledWith(
       "The branch is clean enough to patch safely.",
     );
@@ -618,7 +610,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "The branch is clean enough to patch safely.",
       expect.any(Object),
     );
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(speculativeAnswerStream.clear).toHaveBeenCalledTimes(1);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -1389,7 +1381,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("finalizes a phase-less answer block before a captionless TTS voice supplement and does not reuse progress on the next turn", async () => {
+  it("finalizes a phase-less answer block before a preview-captioned TTS voice supplement and does not reuse progress on the next turn", async () => {
     const leakedProgressDraftStream = createSequencedDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
     dispatchReplyWithBufferedBlockDispatcher
@@ -1435,9 +1427,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context });
 
     // The phase-less text block is the visible final answer when the next
-    // boundary is the TTS media supplement. That supplement must stay
-    // captionless here: the voice bubble is additive audio, not another visible
-    // answer copy, and it must never feed the mutable progress controller.
+    // boundary is the TTS media supplement. That supplement keeps only a short
+    // caption preview for context and must never feed the mutable progress
+    // controller as another text answer.
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(leakedProgressDraftStream.update).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenNthCalledWith(
@@ -1457,7 +1449,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
-            text: undefined,
+            text: "hi Sir. Still suspiciously operational. This caption should stay attached to the voice supplement.",
           }),
         ],
       }),
@@ -1479,14 +1471,14 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
-            text: undefined,
+            text: "Princess Fiona repeat. This caption should also stay attached to the voice supplement.",
           }),
         ],
       }),
     );
   });
 
-  it("logs body-free preview ledger events for captionless final TTS supplements", async () => {
+  it("logs bounded-caption preview ledger events for final TTS supplements", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         {
@@ -1542,7 +1534,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/final-voice.ogg",
             audioAsVoice: true,
-            text: undefined,
+            text: "Final answer.",
           }),
         ],
       }),
@@ -1557,7 +1549,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           line.includes("lane=tts") &&
           line.includes("phase=tts_send_completed") &&
           line.includes("message=42") &&
-          line.includes("textLength=0"),
+          line.includes("textLength=13"),
       ),
     ).toBe(true);
   });

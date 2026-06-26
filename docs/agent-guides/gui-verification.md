@@ -74,3 +74,35 @@ For transient progress proof, record:
 
 If GUI capture is unavailable, classify the run as diagnostic only unless the
 acceptance criteria explicitly allow structured evidence alone.
+
+### Telegram progress preview video proof
+
+Use this flow when the acceptance bar includes progress-bubble churn, final
+answer stability, or TTS voice-caption snippets:
+
+1. Create a unique run directory under `.artifacts/` and include the nonce in
+   the Telegram prompt.
+2. Prove the isolated tester runtime owns the bot before sending anything.
+3. Start a native macOS recording:
+
+   ```bash
+   screencapture -v -V 60 -D 1 -k ".artifacts/<run>/telegram-preview.mov"
+   ```
+
+4. Send the benchmark prompt, wait for final delivery, then extract review
+   frames:
+
+   ```bash
+   ffmpeg -hide_banner -loglevel error -i ".artifacts/<run>/telegram-preview.mov" -vf fps=2 ".artifacts/<run>/frame-%03d.png"
+   ```
+
+5. Save the matching structured proof beside the video:
+   - `telegram.preview.ledger` lines for the nonce or trace id
+   - prompt/progress/final/TTS Telegram message ids
+   - `telegram-user read` transcript after cleanup
+   - isolated runtime status with branch, commit, and worktree
+
+Optional fallback: use `peekaboo capture live --mode screen --duration <seconds>
+--video-out <path> --path <frames-dir> --json` when native capture is not
+enough. Do not use Computer Use unless the local `cua-guard acquire` check
+passes in the same process.

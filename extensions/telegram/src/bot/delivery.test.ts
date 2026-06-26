@@ -512,7 +512,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("sends marked final TTS supplements without duplicating final text as a caption", async () => {
+  it("sends marked final TTS supplements with a short caption preview", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn(async () => ({ message_id: 10, chat: { id: "123" } }));
     const sendVoice = vi.fn(async () => ({ message_id: 11, chat: { id: "123" } }));
@@ -542,8 +542,10 @@ describe("deliverReplies", () => {
     const sendVoiceCalls = sendVoice.mock.calls as unknown as Array<
       [unknown, unknown, Record<string, unknown>?]
     >;
-    expect(sendVoiceCalls[0]?.[2]).not.toHaveProperty("caption");
-    expect(sendVoiceCalls[0]?.[2]).not.toHaveProperty("parse_mode");
+    expect(sendVoiceCalls[0]?.[2]).toMatchObject({
+      caption: "Final answer.",
+      parse_mode: "HTML",
+    });
   });
 
   it("skips text fallback when a marked final TTS supplement cannot be sent as voice", async () => {

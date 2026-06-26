@@ -9,6 +9,7 @@ import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
+import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../src/channels/logging.js";
@@ -36,7 +37,7 @@ import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { guardedTelegramDeleteMessage } from "./delete-guard.js";
-import { createTelegramDraftStream } from "./draft-stream.js";
+import { createTelegramDraftStream, type TelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
@@ -294,6 +295,7 @@ type TelegramPreviewLedgerPhase =
   | "preview_edit_completed"
   | "preview_delete_attempt"
   | "preview_delete_completed"
+  | "preview_adopted"
   | "draft_update_attempt"
   | "draft_update_completed"
   | "progress_update"
@@ -767,15 +769,28 @@ export const dispatchTelegramMessage = async ({
   const transientProgressPreviewTexts: string[] = [];
   const transientProgressPreviewKeys = new Set<string>();
   let draftLaneEventQueue = Promise.resolve();
+  let processingDraftLaneEvent = false;
   let progressController: TelegramProgressController | undefined;
   let sawAssistantPartial = false;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
-    const next = draftLaneEventQueue.then(task);
+    const next = draftLaneEventQueue.then(async () => {
+      processingDraftLaneEvent = true;
+      try {
+        await task();
+      } finally {
+        processingDraftLaneEvent = false;
+      }
+    });
     draftLaneEventQueue = next.catch((err) => {
       logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
     });
     return draftLaneEventQueue;
+  };
+  const waitForDraftLaneIdle = async () => {
+    if (!processingDraftLaneEvent) {
+      await draftLaneEventQueue;
+    }
   };
   type SplitLaneSegment = { lane: LaneName; text: string };
   type SplitLaneSegmentsResult = {
@@ -842,20 +857,21 @@ export const dispatchTelegramMessage = async ({
     }
     return { text: remaining.trim(), stripped };
   };
-  const getProgressController = () => {
+  const getProgressController = (adoptedStream?: TelegramDraftStream) => {
     if (!canStreamProgressDraft) {
       return undefined;
     }
     const existingController = activeTelegramProgressControllers.get(progressControllerKey);
-    if (existingController) {
+    if (existingController && !adoptedStream) {
       progressController = existingController;
       return existingController;
     }
-    if (!progressController) {
+    if (adoptedStream || !progressController) {
       progressController = createTelegramProgressController({
         api: bot.api,
         chatId,
         maxChars: draftMaxChars,
+        stream: adoptedStream,
         thread: threadSpec,
         previewTransport: progressPreviewTransport,
         replyToMessageId: draftReplyToMessageId,
@@ -1237,55 +1253,40 @@ export const dispatchTelegramMessage = async ({
     }
     await lane.stream.flush();
   };
-  const retireSpeculativeAnswerPreviewBeforeProgress = async (callsite: string) => {
-    if (
-      !answerLane.stream ||
-      !answerLane.hasStreamedMessage ||
-      activePreviewLifecycleByLane.answer !== "transient"
-    ) {
-      return false;
+  const adoptSpeculativeAnswerPreviewAsProgress = (callsite: string) => {
+    if (!answerLane.stream || !answerLane.hasStreamedMessage) {
+      return undefined;
     }
     const stream = answerLane.stream;
     const previewMessageId = stream.messageId();
     recordTransientProgressPreviewText(answerLane.lastPartialText);
+    const controller = getProgressController(stream);
+    if (!controller) {
+      return undefined;
+    }
+    // The first assistant deltas are speculative. If later structure proves
+    // they were progress/commentary, keep the same Telegram bubble and let the
+    // progress controller edit/clear it. Deleting here creates the churn users
+    // see as a disappearing answer preview followed by a new progress bubble.
+    answerLane.stream = undefined;
+    resetDraftLaneState(answerLane);
+    activePreviewLifecycleByLane.answer = "transient";
+    retainPreviewOnCleanupByLane.answer = false;
     logPreviewLedger({
-      lane: "answer",
-      phase: "preview_delete_attempt",
+      lane: "progress",
+      phase: "preview_adopted",
       source: "cleanup",
       messageId: previewMessageId,
-      operation: "delete",
+      operation: "edit",
+      previewTransport: stream.previewMode?.() ?? progressPreviewTransport,
+      textLength: stream.lastDeliveredText?.().length,
+      result: "answer_to_progress",
       callsite,
     });
-    try {
-      // Early assistant deltas are speculative until a structural boundary
-      // proves whether they are final-answer text or commentary. Once a
-      // block/tool/commentary event takes ownership, delete that answer preview
-      // before updating progress so Telegram never shows both lanes at once.
-      await stream.clear();
-      logPreviewLedger({
-        lane: "answer",
-        phase: "preview_delete_completed",
-        source: "cleanup",
-        messageId: previewMessageId,
-        operation: "delete",
-        result: "deleted",
-        callsite,
-      });
-    } catch (err) {
-      logVerbose(
-        `telegram: speculative answer preview cleanup failed callsite=${callsite}: ${String(err)}`,
-      );
-    } finally {
-      // clear() consumes the current preview id. Only reset the stream after
-      // cleanup, otherwise message-transport previews lose their delete target
-      // and remain visible next to the progress bubble.
-      stream.forceNewMessage();
-      answerLane.stream = undefined;
-      resetDraftLaneState(answerLane);
-      activePreviewLifecycleByLane.answer = "transient";
-      retainPreviewOnCleanupByLane.answer = false;
-    }
-    return true;
+    logVerbose(
+      `telegram: adopted speculative answer preview as progress message=${previewMessageId ?? "unknown"} callsite=${callsite} trace=${latencyTrace?.id ?? "none"}`,
+    );
+    return controller;
   };
   const updateAnswerProgressFromBlock = async (text: string | undefined) => {
     if (!text) {
@@ -1295,7 +1296,12 @@ export const dispatchTelegramMessage = async ({
     if (!progressText) {
       return false;
     }
-    const controller = getProgressController();
+    // Assistant partial callbacks are queued to preserve stream order. A later
+    // structural progress boundary must wait for them before it decides whether
+    // there is an existing visible answer bubble to adopt.
+    await waitForDraftLaneIdle();
+    const controller =
+      adoptSpeculativeAnswerPreviewAsProgress("before-progress-update") ?? getProgressController();
     if (!controller) {
       return false;
     }
@@ -1304,7 +1310,6 @@ export const dispatchTelegramMessage = async ({
     // answer stream does appear, final delivery may safely finalize that active
     // answer bubble instead of deleting/re-sending it.
     forceNextAnswerFinalSend = true;
-    await retireSpeculativeAnswerPreviewBeforeProgress("before-progress-update");
     recordTransientProgressPreviewText(progressText);
     logPreviewLedger({
       lane: "progress",
@@ -1519,9 +1524,13 @@ export const dispatchTelegramMessage = async ({
       normalizedPayload.text.trim().length > 0
     ) {
       // Marked TTS payloads are audio supplements to already-visible final
-      // text. Drop the caption before delivery so the voice bubble cannot
-      // duplicate the final answer in Telegram history.
-      normalizedPayload = { ...normalizedPayload, text: undefined };
+      // text. Keep a bounded caption preview for Telegram snippets, but never
+      // duplicate the full final answer as a voice caption.
+      const captionPreview = buildFinalTtsCaptionPreview(normalizedPayload.text);
+      logVerbose(
+        `telegram: final TTS supplement caption ${captionPreview ? "previewed" : "omitted"} captionLength=${captionPreview?.length ?? 0}`,
+      );
+      normalizedPayload = { ...normalizedPayload, text: captionPreview };
     }
     const durableReason =
       classification?.reason ??

@@ -8,6 +8,8 @@ For Telegram UX bugs with visual acceptance criteria, use
 `docs/agent-guides/gui-verification.md` for screenshot/video capture. Pair GUI
 artifacts with transcript or log proof; screenshots alone do not prove Telegram
 delivery semantics.
+For progress-preview churn, final-answer stability, or TTS caption snippets,
+follow the Telegram progress preview video proof subsection in that guide.
 
 Do not use Telegram as the default first-pass E2E path for non-Telegram bugs.
 For most agent/tool/browser issues, local OpenClaw CLI validation is the faster

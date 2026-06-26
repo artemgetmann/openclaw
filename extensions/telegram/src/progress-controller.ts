@@ -27,6 +27,7 @@ export function createTelegramProgressController(params: {
   api: Bot["api"];
   chatId: number;
   maxChars: number;
+  stream?: TelegramDraftStream;
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
   replyToMessageId?: number;
@@ -51,31 +52,33 @@ export function createTelegramProgressController(params: {
       ? params.maxChars - PROGRESS_RENDER_HEADROOM_CHARS
       : params.maxChars,
   );
-  const stream: TelegramDraftStream = createTelegramDraftStream({
-    api: params.api,
-    chatId: params.chatId,
-    maxChars: params.maxChars,
-    thread: params.thread,
-    previewTransport: params.previewTransport ?? "auto",
-    replyToMessageId: params.replyToMessageId,
-    ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
-    minInitialChars: params.minInitialChars,
-    deleteAudit: {
-      callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",
-      reason: params.deleteAudit?.reason ?? "progress_cleanup",
-      accountId: params.deleteAudit?.accountId,
-      lane: params.deleteAudit?.lane ?? "answer",
-      classification: params.deleteAudit?.classification ?? "progress",
-      sessionId: params.deleteAudit?.sessionId,
-      topicId: params.deleteAudit?.topicId,
-    },
-    renderText: params.renderText,
-    onMessageDelivered: params.onMessageDelivered,
-    onPreviewAttempt: params.onPreviewAttempt,
-    onPreviewComplete: params.onPreviewComplete,
-    log: params.log,
-    warn: params.warn,
-  });
+  const stream: TelegramDraftStream =
+    params.stream ??
+    createTelegramDraftStream({
+      api: params.api,
+      chatId: params.chatId,
+      maxChars: params.maxChars,
+      thread: params.thread,
+      previewTransport: params.previewTransport ?? "auto",
+      replyToMessageId: params.replyToMessageId,
+      ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
+      minInitialChars: params.minInitialChars,
+      deleteAudit: {
+        callsite: params.deleteAudit?.callsite ?? "telegram-progress-controller-clear",
+        reason: params.deleteAudit?.reason ?? "progress_cleanup",
+        accountId: params.deleteAudit?.accountId,
+        lane: params.deleteAudit?.lane ?? "answer",
+        classification: params.deleteAudit?.classification ?? "progress",
+        sessionId: params.deleteAudit?.sessionId,
+        topicId: params.deleteAudit?.topicId,
+      },
+      renderText: params.renderText,
+      onMessageDelivered: params.onMessageDelivered,
+      onPreviewAttempt: params.onPreviewAttempt,
+      onPreviewComplete: params.onPreviewComplete,
+      log: params.log,
+      warn: params.warn,
+    });
   let hasProgress = false;
   let cleared = false;
   const progressEntries: string[] = [];
