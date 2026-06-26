@@ -27,6 +27,7 @@ import {
 } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { executeBrowserContractAction } from "./browser-contracts.js";
 import {
   executeActAction,
   executeConsoleAction,
@@ -453,6 +454,8 @@ export function createBrowserTool(opts?: {
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. After every mutating act in a multi-step browser flow (click/type/fill/press/select/chooseOption), set includeSnapshot=true unless the next step is terminal; this returns the action result plus a fresh structured aria-ref snapshot, usually faster and safer than a separate snapshot call.",
+      'For third-party external mutations such as posting, sending, publishing, checkout, account changes, or deleting remote data, call action="contract" with the current url and intent before the final commit; if a site contract exists, follow it, otherwise follow the generic external-mutation contract.',
+      "For rich editors, social composers, and media posts, never treat visible composer/form state, an enabled button, a closed modal, or a successful click as proof; after the external commit, verify the final artifact itself contains the expected text/media/target before reporting success.",
       "For forms, prefer one act kind=fill request with fields[] from snapshot refs over many separate type calls; each field should use value, though text is accepted as a value alias.",
       'For Ant Design/searchable select/combobox/listbox controls, use act kind="chooseOption" with the wrapper/input ref or selector plus optionText. optionText is the semantic target to verify; query only filters the search input. It opens the control, fills the inner search input, waits for portal/listbox options, clicks the matching optionText, and can return includeSnapshot=true.',
       'For searchable dropdowns, first use query to filter, then match optionText against the actual visible option label; if the user wording fails, use the fresh snapshot/options and retry with the visible label or a stable unique visible substring like "DPS", not a guessed human shorthand like "Denpasar".',
@@ -761,6 +764,15 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
           });
+        case "contract": {
+          const contractUrl =
+            readStringParam(params, "targetUrl") ?? readStringParam(params, "url");
+          const intent = readStringParam(params, "intent");
+          return executeBrowserContractAction({
+            url: contractUrl,
+            intent,
+          });
+        }
         case "pdf": {
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const result = proxyRequest

@@ -31,6 +31,7 @@ const BROWSER_TOOL_ACTIONS = [
   "screenshot",
   "navigate",
   "console",
+  "contract",
   "pdf",
   "upload",
   "dialog",
@@ -200,6 +201,12 @@ export const BrowserToolSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
+  intent: Type.Optional(
+    Type.String({
+      description:
+        'For action=contract, describe the browser workflow intent, for example "external_mutation", "post", "send", "checkout", or "account_change".',
+    }),
+  ),
   // Legacy flattened act params (preferred: request={...})
   kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
   includeSnapshot: Type.Optional(
