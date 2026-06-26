@@ -188,5 +188,28 @@ Relaunch` control after explicit user approval
   observation raced the app relaunch; the follow-up observe provided the final
   version proof
 
+Travel proof update, 2026-06-26:
+
+- Google Flights under `commerce_flow_until_final_confirmation` proved:
+  - passenger menu open
+  - `Add adult`
+  - `Done`
+  - Denpasar to Singapore route suggestion activation
+  - results page with `2 passengers`
+  - `16 results returned`
+  - `Prices include required taxes + fees for 2 adults.`
+  - first KLM round-trip fare visible as `4976964 Indonesian rupiahs`
+- The live flow did not reach the return-flight or payment boundary because the
+  visible first KLM `Select flight` link did not activate through the current
+  OCU click path:
+  - ref click and exact-label click were allowed by policy but did not advance
+  - row-container click opened the safe climate/emissions dialog
+  - `return` activation was blocked as `submit_message_to_target` with
+    `actionCount=0`
+- Follow-up should fix semantic activation for Google Flights result links or
+  add a narrowly-scoped safe activation model for focused links/buttons. Do not
+  loosen the commerce profile broadly, and do not treat generic `return` as safe
+  when a final charge, login, or destructive control might be focused.
+
 Use isolated tester Jarvis/Telegram proof first when approval UX is added. Real
 main Jarvis dogfood proof should happen only after tester proof passes.
