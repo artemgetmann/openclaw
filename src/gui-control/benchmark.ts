@@ -248,10 +248,11 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
         };
       }
       if (target.appName === "TextEdit") {
+        const textEditWindowTitle = target.windowTitle ?? "jarvis-gui-native-fixture.txt";
         return {
           id: "dry-textedit",
           appName: "TextEdit",
-          windowTitle: "jarvis-gui-native-fixture.txt",
+          windowTitle: textEditWindowTitle,
           summary: textEditValue
             ? `Dry-run TextEdit document contains ${textEditValue}`
             : "Dry-run TextEdit scratch document ready.",
@@ -263,25 +264,26 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
               label: "TextEdit document body",
               value: textEditValue,
               appName: "TextEdit",
-              windowTitle: "jarvis-gui-native-fixture.txt",
+              windowTitle: textEditWindowTitle,
             },
           ],
         };
       }
       if (target.appName === "Finder") {
+        const finderWindowTitle = target.windowTitle ?? "openclaw-gui-native-fixture";
         return {
           id: "dry-finder",
           appName: "Finder",
-          windowTitle: "openclaw-gui-native-fixture",
+          windowTitle: finderWindowTitle,
           summary: `Dry-run Finder window shows ${finderFixtureName}`,
-          visibleText: ["openclaw-gui-native-fixture", finderFixtureName],
+          visibleText: [finderWindowTitle, finderFixtureName],
           elements: [
             {
               ref: "@finder-file",
               role: "text",
               label: finderFixtureName,
               appName: "Finder",
-              windowTitle: "openclaw-gui-native-fixture",
+              windowTitle: finderWindowTitle,
             },
           ],
         };
@@ -342,7 +344,13 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
       }
       return { ok: true, actionCount: 1 };
     },
-    async openUrl() {
+    async openUrl(target, url) {
+      if (target.appName === "Finder") {
+        const fixtureNames = await fs.readdir(new URL(url)).catch(() => []);
+        finderFixtureName =
+          fixtureNames.find((name) => name.startsWith("jarvis-gui-native-finder-proof-")) ??
+          finderFixtureName;
+      }
       return { ok: true, actionCount: 1, movedFocus: true };
     },
     async press() {
@@ -1869,23 +1877,30 @@ function visibleTextContaining(
 }
 
 function resolveTextEditBody(snapshot: GuiSnapshot) {
+  const textInput = (element: ElementRef) => {
+    const role = normalizeVisibleText(element.role ?? "");
+    return role.includes("text") || role.includes("edit") || role.includes("input");
+  };
+  const auxiliaryField = (element: ElementRef) => {
+    const text = normalizeVisibleText(elementSemanticText(element));
+    return text.includes("search") || text.includes("find") || text.includes("replace");
+  };
   const candidates = snapshot.elements
     .map((element) => {
-      const role = normalizeVisibleText(element.role ?? "");
       const text = normalizeVisibleText(elementSemanticText(element));
-      const editable =
-        role.includes("text") ||
-        role.includes("edit") ||
-        role.includes("input") ||
-        text.includes("document body");
-      if (!editable || role.includes("button") || text.includes("search")) {
+      const looksLikeDocumentBody =
+        text.includes("document body") ||
+        text.includes("textedit document body") ||
+        text.includes("body text view");
+      const role = normalizeVisibleText(element.role ?? "");
+      if (!looksLikeDocumentBody || !textInput(element) || role.includes("button")) {
         return { element, score: 0 };
       }
-      let score = 10;
+      let score = 40;
       if (role.includes("text area") || role.includes("text entry area")) {
         score += 50;
       }
-      if (text.includes("document body") || text.includes("textedit")) {
+      if (text.includes("document body") || text.includes("body text view")) {
         score += 25;
       }
       return { element, score };
@@ -1903,10 +1918,18 @@ function resolveTextEditBody(snapshot: GuiSnapshot) {
     };
   }
 
-  const fallback = resolveElementRef(snapshot, { intent: "text-input" });
-  if (fallback.ok) {
-    return fallback;
+  if (!best) {
+    const fallback = resolveElementRef(snapshot, { intent: "text-input" });
+    if (fallback.ok && !auxiliaryField(fallback.element)) {
+      return {
+        ok: true,
+        element: fallback.element,
+        candidates: fallback.candidates,
+        summary: `Resolved sole TextEdit text-input element ${fallback.element.ref} after scratch-window target proof.`,
+      };
+    }
   }
+
   return {
     ok: false,
     candidates: candidates.map((candidate) => candidate.element),
@@ -1918,13 +1941,17 @@ function resolveTextEditBody(snapshot: GuiSnapshot) {
 
 async function createNativeFixture(): Promise<{
   dir: string;
+  dirName: string;
   textFilePath: string;
+  textFileName: string;
   finderFilePath: string;
   finderFileName: string;
 }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gui-native-"));
-  const textFilePath = path.join(dir, "jarvis-gui-native-textedit.txt");
-  const finderFileName = "jarvis-gui-native-finder-proof.txt";
+  const dirName = path.basename(dir);
+  const textFileName = `jarvis-gui-native-textedit-${uniqueBenchmarkToken()}.txt`;
+  const textFilePath = path.join(dir, textFileName);
+  const finderFileName = `jarvis-gui-native-finder-proof-${uniqueBenchmarkToken()}.txt`;
   const finderFilePath = path.join(dir, finderFileName);
   await fs.writeFile(textFilePath, "", "utf8");
   await fs.writeFile(
@@ -1932,7 +1959,7 @@ async function createNativeFixture(): Promise<{
     "OpenClaw/Jarvis native GUI benchmark Finder fixture.\n",
     "utf8",
   );
-  return { dir, textFilePath, finderFilePath, finderFileName };
+  return { dir, dirName, textFilePath, textFileName, finderFilePath, finderFileName };
 }
 
 function buildPolicyBoundarySlice(): GuiNativeAppBenchmarkSlice {
@@ -1979,7 +2006,10 @@ async function runTextEditNativeSlice(input: {
 }): Promise<{ slice: GuiNativeAppBenchmarkSlice; stats: GuiVerifierStats }> {
   const policy = getGuiTaskPolicyProfile("local_fixture_write");
   const stats = emptyGuiVerifierStats();
-  const target: AppTarget = { appName: "TextEdit" };
+  const target: AppTarget = {
+    appName: "TextEdit",
+    windowTitle: input.fixture.textFileName,
+  };
   const value = [
     "Jarvis GUI benchmark native-apps",
     `Visible token: ${input.token}`,
@@ -2073,6 +2103,25 @@ async function runTextEditNativeSlice(input: {
       },
     };
   }
+  if (!guiTargetMatchesSnapshot(target, snapshot)) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.textFilePath,
+        failureReason: describeGuiTargetMismatch(target, snapshot),
+        notes:
+          "TextEdit opened, but the observed window was not the scratch fixture; stopped before writing.",
+      },
+    };
+  }
   const resolution = resolveTextEditBody(snapshot);
   if (!resolution.ok) {
     return {
@@ -2142,6 +2191,7 @@ async function runFinderNativeSlice(input: {
   fixture: Awaited<ReturnType<typeof createNativeFixture>>;
 }): Promise<{ slice: GuiNativeAppBenchmarkSlice; stats: GuiVerifierStats }> {
   const stats = emptyGuiVerifierStats();
+  const target: AppTarget = { appName: "Finder", windowTitle: input.fixture.dirName };
   if (!input.runtime.openUrl) {
     return {
       stats,
@@ -2161,10 +2211,7 @@ async function runFinderNativeSlice(input: {
     };
   }
 
-  const opened = await input.runtime.openUrl(
-    { appName: "Finder" },
-    pathToFileURL(input.fixture.dir).toString(),
-  );
+  const opened = await input.runtime.openUrl(target, pathToFileURL(input.fixture.dir).toString());
   addStats(stats, statsFromActionResult(opened));
   if (!opened.ok) {
     return {
@@ -2189,7 +2236,25 @@ async function runFinderNativeSlice(input: {
   }
 
   try {
-    const snapshot = await input.runtime.observe({ appName: "Finder" });
+    const snapshot = await input.runtime.observe(target);
+    if (!guiTargetMatchesSnapshot(target, snapshot)) {
+      return {
+        stats,
+        slice: {
+          id: "finder-fixture-observe",
+          appName: "Finder",
+          appClass: "file-manager",
+          status: "failed",
+          required: true,
+          safe: true,
+          mutationAttempted: false,
+          actionCount: stats.actionCount,
+          artifactPath: input.fixture.finderFilePath,
+          failureReason: describeGuiTargetMismatch(target, snapshot),
+          notes: "Finder opened, but the observed window was not the scratch fixture folder.",
+        },
+      };
+    }
     const verified = snapshotContainsText(snapshot, input.fixture.finderFileName);
     return {
       stats,

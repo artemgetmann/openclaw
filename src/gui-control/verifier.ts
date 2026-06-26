@@ -421,6 +421,20 @@ export async function performVerifiedAction(
         failureReason: refreshedSecondaryActionBlock,
       });
     }
+    const refreshedAmbiguousActivation = ambiguousBrowserActivationReason(
+      input,
+      refreshed,
+      element,
+    );
+    if (refreshedAmbiguousActivation) {
+      return failedResult({
+        input,
+        risk: policy.risk,
+        stats,
+        pre,
+        failureReason: refreshedAmbiguousActivation,
+      });
+    }
     action = await executeRuntimeAction(input, element);
     stats.actionCount += action.actionCount ?? 1;
     stats.usedClipboard ||= Boolean(action.usedClipboard);

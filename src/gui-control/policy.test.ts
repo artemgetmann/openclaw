@@ -376,6 +376,18 @@ describe("evaluateGuiPolicy", () => {
       visibleText: ["PayPal"] as string[],
       blockedTerm: "paypal",
     },
+    {
+      windowTitle: "Delete account",
+      summary: "Account deletion step",
+      visibleText: [] as string[],
+      blockedTerm: "delete account",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Switch account before continuing",
+      visibleText: [] as string[],
+      blockedTerm: "switch account",
+    },
   ])(
     "blocks generic commerce controls on hard-stop $blockedTerm context",
     ({ windowTitle, summary, visibleText, blockedTerm }) => {
