@@ -48,7 +48,6 @@ import {
   type LanePreviewLifecycle,
   normalizeAdjacentProgressBoundaries,
 } from "./lane-delivery.js";
-import type { TelegramReplyLatencyTrace } from "./latency-trace.js";
 import {
   createTelegramProgressController,
   type TelegramProgressController,
@@ -69,8 +68,6 @@ const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
 /** Keep fast DM previews responsive after the first send without token-by-token API spam. */
 const DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS = 250;
 const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
-const TELEGRAM_EARLY_PROGRESS_PREVIEW_DELAY_MS = 250;
-const TELEGRAM_EARLY_PROGRESS_PREVIEW_TEXT = "Working...";
 
 // Continuation-style agent runs can re-enter Telegram delivery between tool
 // turns. A function-local progress controller gets cleared at the end of each
@@ -268,7 +265,6 @@ type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "token">;
-  latencyTrace?: TelegramReplyLatencyTrace;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -359,7 +355,6 @@ export const dispatchTelegramMessage = async ({
   textLimit,
   telegramCfg,
   opts,
-  latencyTrace,
 }: DispatchTelegramMessageParams) => {
   const {
     ctxPayload,
@@ -389,14 +384,6 @@ export const dispatchTelegramMessage = async ({
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode }),
     parseMode: "HTML" as const,
-  });
-  latencyTrace?.mark("route_account_session_selected", {
-    accountId: route.accountId,
-    agentId: route.agentId,
-    sessionKey: typeof ctxPayload.SessionKey === "string" ? ctxPayload.SessionKey : undefined,
-    chatId,
-    threadId: threadSpec?.id,
-    threadScope: threadSpec?.scope,
   });
   const accountBlockStreamingEnabled =
     typeof telegramCfg.blockStreaming === "boolean"
@@ -464,10 +451,6 @@ export const dispatchTelegramMessage = async ({
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
-  let partialCallbackCount = 0;
-  let firstPartialTextLength: number | undefined;
-  let firstTelegramPreviewAttemptLogged = false;
-  let firstTelegramPreviewCompleteLogged = false;
   // Draft streams only know that they created a real Telegram message. The
   // dispatcher owns the semantic reason, so it tags the next real send before
   // each update/materialize path that can allocate a message id.
@@ -534,35 +517,6 @@ export const dispatchTelegramMessage = async ({
               direction: "outbound",
             });
           },
-          onPreviewAttempt: (event) => {
-            if (firstTelegramPreviewAttemptLogged) {
-              return;
-            }
-            firstTelegramPreviewAttemptLogged = true;
-            latencyTrace?.mark("first_telegram_preview_send_edit_attempted", {
-              lane: laneName,
-              previewTransport: event.previewTransport,
-              operation: event.operation,
-              textLength: event.textLength,
-              partialCallbackCount,
-              firstPartialTextLength,
-            });
-          },
-          onPreviewComplete: (event) => {
-            if (firstTelegramPreviewCompleteLogged) {
-              return;
-            }
-            firstTelegramPreviewCompleteLogged = true;
-            latencyTrace?.mark("first_telegram_preview_send_edit_completed", {
-              lane: laneName,
-              previewTransport: event.previewTransport,
-              operation: event.operation,
-              textLength: event.textLength,
-              messageId: event.messageId,
-              partialCallbackCount,
-              firstPartialTextLength,
-            });
-          },
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
@@ -613,8 +567,6 @@ export const dispatchTelegramMessage = async ({
   let forceNextAnswerFinalSend = false;
   let draftLaneEventQueue = Promise.resolve();
   let progressController: TelegramProgressController | undefined;
-  let sawAssistantPartial = false;
-  let earlyProgressPreviewTimer: ReturnType<typeof setTimeout> | undefined;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(task);
@@ -699,35 +651,6 @@ export const dispatchTelegramMessage = async ({
             channel: "telegram",
             accountId: route.accountId,
             direction: "outbound",
-          });
-        },
-        onPreviewAttempt: (event) => {
-          if (firstTelegramPreviewAttemptLogged) {
-            return;
-          }
-          firstTelegramPreviewAttemptLogged = true;
-          latencyTrace?.mark("first_telegram_preview_send_edit_attempted", {
-            lane: "answer",
-            previewTransport: event.previewTransport,
-            operation: event.operation,
-            textLength: event.textLength,
-            partialCallbackCount,
-            firstPartialTextLength,
-          });
-        },
-        onPreviewComplete: (event) => {
-          if (firstTelegramPreviewCompleteLogged) {
-            return;
-          }
-          firstTelegramPreviewCompleteLogged = true;
-          latencyTrace?.mark("first_telegram_preview_send_edit_completed", {
-            lane: "answer",
-            previewTransport: event.previewTransport,
-            operation: event.operation,
-            textLength: event.textLength,
-            messageId: event.messageId,
-            partialCallbackCount,
-            firstPartialTextLength,
           });
         },
         log: logVerbose,
@@ -908,17 +831,7 @@ export const dispatchTelegramMessage = async ({
     if (!laneStream || !text) {
       return;
     }
-    partialCallbackCount += 1;
-    firstPartialTextLength ??= text.length;
     let previewText = lane === answerLane ? normalizeAnswerPreviewText(text) : text;
-    latencyTrace?.mark("telegram_partial_callback", {
-      partialCallbackCount,
-      firstPartialTextLength,
-      textLength: text.length,
-      lane: lane === answerLane ? "answer" : "reasoning",
-      previewTransport:
-        lane === answerLane ? answerPreviewTransport : (laneStream.previewMode?.() ?? "unknown"),
-    });
     if (previewText === lane.lastPartialText) {
       return;
     }
@@ -1014,48 +927,6 @@ export const dispatchTelegramMessage = async ({
     controller.update(progressText);
     return true;
   };
-  const replaceAnswerProgressFromPartial = (text: string | undefined) => {
-    if (!text) {
-      return false;
-    }
-    const progressText = normalizeAnswerPreviewText(text);
-    if (!progressText) {
-      return false;
-    }
-    const controller = getProgressController();
-    if (!controller) {
-      return false;
-    }
-    forceNextAnswerFinalSend = true;
-    controller.replace(progressText);
-    return true;
-  };
-  const cancelEarlyProgressPreview = () => {
-    if (!earlyProgressPreviewTimer) {
-      return;
-    }
-    clearTimeout(earlyProgressPreviewTimer);
-    earlyProgressPreviewTimer = undefined;
-  };
-  const scheduleEarlyProgressPreview = () => {
-    if (!canStreamProgressDraft || accountBlockStreamingEnabled || earlyProgressPreviewTimer) {
-      return;
-    }
-    earlyProgressPreviewTimer = setTimeout(() => {
-      earlyProgressPreviewTimer = undefined;
-      void enqueueDraftLaneEvent(async () => {
-        if (sawAssistantPartial) {
-          return;
-        }
-        latencyTrace?.mark("telegram_early_progress_preview_due", {
-          delayMs: TELEGRAM_EARLY_PROGRESS_PREVIEW_DELAY_MS,
-          previewTransport: progressPreviewTransport,
-        });
-        updateAnswerProgressFromBlock(TELEGRAM_EARLY_PROGRESS_PREVIEW_TEXT);
-      });
-    }, TELEGRAM_EARLY_PROGRESS_PREVIEW_DELAY_MS);
-    earlyProgressPreviewTimer.unref?.();
-  };
   const renderTextWithToolProgress = (text: string) => {
     return normalizeAdjacentProgressBoundaries(text);
   };
@@ -1081,14 +952,6 @@ export const dispatchTelegramMessage = async ({
     channel: "telegram",
     accountId: route.accountId,
   });
-  const tracedOnModelSelected: typeof onModelSelected = (modelCtx) => {
-    latencyTrace?.mark("model_selected", {
-      provider: modelCtx.provider,
-      model: modelCtx.model,
-      thinkLevel: modelCtx.thinkLevel,
-    });
-    onModelSelected?.(modelCtx);
-  };
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
   // Handle uncached stickers: get a dedicated vision description before dispatch
@@ -1381,14 +1244,6 @@ export const dispatchTelegramMessage = async ({
       });
     }
     if (result !== "skipped") {
-      latencyTrace?.mark("final_telegram_send_edit_completed", {
-        result,
-        textLength: preparedText.length,
-        hasMedia: Boolean(hasMedia),
-        partialCallbackCount,
-        firstPartialTextLength,
-        previewReplacedOrCleaned: result !== "sent",
-      });
       await clearProgressController("after-final", {
         timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
       });
@@ -1407,14 +1262,6 @@ export const dispatchTelegramMessage = async ({
   ) => {
     const delivered = await sendPayload(payload, classification);
     if (delivered) {
-      latencyTrace?.mark("final_telegram_send_edit_completed", {
-        result: "sent",
-        textLength: payload.text?.length ?? 0,
-        hasMedia: Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0,
-        partialCallbackCount,
-        firstPartialTextLength,
-        previewReplacedOrCleaned: false,
-      });
       await clearProgressController(`${classification.callsite ?? "final"}-after-final`, {
         timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
       });
@@ -1483,15 +1330,6 @@ export const dispatchTelegramMessage = async ({
 
   let dispatchError: unknown;
   try {
-    latencyTrace?.mark("reply_dispatch_started", {
-      streamMode,
-      answerPreviewTransport,
-      progressPreviewTransport,
-      canStreamAnswerDraft,
-      canStreamProgressDraft,
-      canStreamReasoningDraft,
-    });
-    scheduleEarlyProgressPreview();
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
@@ -1841,26 +1679,9 @@ export const dispatchTelegramMessage = async ({
             await sendToolPayload(payload);
           }),
         onPartialReply:
-          answerLane.stream ||
-          reasoningLane.stream ||
-          (canStreamProgressDraft && !accountBlockStreamingEnabled)
+          answerLane.stream || reasoningLane.stream
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
-                  sawAssistantPartial = true;
-                  cancelEarlyProgressPreview();
-                  if (!answerLane.stream && !reasoningLane.stream && payload.text) {
-                    partialCallbackCount += 1;
-                    firstPartialTextLength ??= payload.text.length;
-                    latencyTrace?.mark("telegram_partial_callback", {
-                      partialCallbackCount,
-                      firstPartialTextLength,
-                      textLength: payload.text.length,
-                      lane: "answer",
-                      previewTransport: progressPreviewTransport,
-                    });
-                    replaceAnswerProgressFromPartial(payload.text);
-                    return;
-                  }
                   await ingestDraftLaneSegments(payload.text);
                 })
             : undefined,
@@ -1920,16 +1741,13 @@ export const dispatchTelegramMessage = async ({
               await statusReactionController.setThinking();
             }
           : undefined,
-        onModelSelected: tracedOnModelSelected,
-        onLatencyTrace: (event) => latencyTrace?.mark(event.span, event.fields),
+        onModelSelected,
       },
     }));
   } catch (err) {
-    cancelEarlyProgressPreview();
     dispatchError = err;
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
-    cancelEarlyProgressPreview();
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
     await draftLaneEventQueue;
