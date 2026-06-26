@@ -764,6 +764,8 @@ export const dispatchTelegramMessage = async ({
   let retainedAnswerProgressPreviewText = "";
   let retainedAnswerProgressFromExplicitBoundary = false;
   let forceNextAnswerFinalSend = false;
+  const transientProgressPreviewTexts: string[] = [];
+  const transientProgressPreviewKeys = new Set<string>();
   let draftLaneEventQueue = Promise.resolve();
   let progressController: TelegramProgressController | undefined;
   let sawAssistantPartial = false;
@@ -803,6 +805,42 @@ export const dispatchTelegramMessage = async ({
       retainedAnswerProgressPreviewText = "";
       retainedAnswerProgressFromExplicitBoundary = false;
     }
+  };
+  const recordTransientProgressPreviewText = (text: string | undefined) => {
+    const normalized = normalizeAdjacentProgressBoundaries(text ?? "").trim();
+    if (!normalized) {
+      return;
+    }
+    for (const rawEntry of normalized.split(/\n+/)) {
+      const entry = rawEntry.trim();
+      if (!entry) {
+        continue;
+      }
+      const key = entry.replace(/\s+/g, " ");
+      if (transientProgressPreviewKeys.has(key)) {
+        continue;
+      }
+      transientProgressPreviewKeys.add(key);
+      transientProgressPreviewTexts.push(entry);
+    }
+  };
+  const stripTransientProgressPrefixFromFinal = (text: string) => {
+    let remaining = normalizeAdjacentProgressBoundaries(text).trimStart();
+    let stripped = false;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const progressText of transientProgressPreviewTexts) {
+        if (!remaining.startsWith(progressText)) {
+          continue;
+        }
+        remaining = remaining.slice(progressText.length).trimStart();
+        stripped = true;
+        changed = true;
+        break;
+      }
+    }
+    return { text: remaining.trim(), stripped };
   };
   const getProgressController = () => {
     if (!canStreamProgressDraft) {
@@ -1030,7 +1068,11 @@ export const dispatchTelegramMessage = async ({
     return didForceNewMessage;
   };
   const stripRetainedProgressFromFinal = (text: string) => {
-    return { text: normalizeAdjacentProgressBoundaries(text).trim(), stripped: false };
+    const transientStripped = stripTransientProgressPrefixFromFinal(text);
+    return {
+      text: normalizeAdjacentProgressBoundaries(transientStripped.text).trim(),
+      stripped: transientStripped.stripped,
+    };
   };
   const materializeAnswerProgressBeforeFinal = async () => {
     if (
@@ -1071,6 +1113,7 @@ export const dispatchTelegramMessage = async ({
       });
     }
     answerLane.stream.forceNewMessage();
+    answerLane.stream = undefined;
     resetDraftLaneState(answerLane);
     // The retained progress bubble is now permanent. The paired final answer
     // must be delivered as a fresh outbound message, not routed back through
@@ -1194,7 +1237,57 @@ export const dispatchTelegramMessage = async ({
     }
     await lane.stream.flush();
   };
-  const updateAnswerProgressFromBlock = (text: string | undefined) => {
+  const retireSpeculativeAnswerPreviewBeforeProgress = async (callsite: string) => {
+    if (
+      !answerLane.stream ||
+      !answerLane.hasStreamedMessage ||
+      activePreviewLifecycleByLane.answer !== "transient"
+    ) {
+      return false;
+    }
+    const stream = answerLane.stream;
+    const previewMessageId = stream.messageId();
+    recordTransientProgressPreviewText(answerLane.lastPartialText);
+    logPreviewLedger({
+      lane: "answer",
+      phase: "preview_delete_attempt",
+      source: "cleanup",
+      messageId: previewMessageId,
+      operation: "delete",
+      callsite,
+    });
+    try {
+      // Early assistant deltas are speculative until a structural boundary
+      // proves whether they are final-answer text or commentary. Once a
+      // block/tool/commentary event takes ownership, delete that answer preview
+      // before updating progress so Telegram never shows both lanes at once.
+      await stream.clear();
+      logPreviewLedger({
+        lane: "answer",
+        phase: "preview_delete_completed",
+        source: "cleanup",
+        messageId: previewMessageId,
+        operation: "delete",
+        result: "deleted",
+        callsite,
+      });
+    } catch (err) {
+      logVerbose(
+        `telegram: speculative answer preview cleanup failed callsite=${callsite}: ${String(err)}`,
+      );
+    } finally {
+      // clear() consumes the current preview id. Only reset the stream after
+      // cleanup, otherwise message-transport previews lose their delete target
+      // and remain visible next to the progress bubble.
+      stream.forceNewMessage();
+      answerLane.stream = undefined;
+      resetDraftLaneState(answerLane);
+      activePreviewLifecycleByLane.answer = "transient";
+      retainPreviewOnCleanupByLane.answer = false;
+    }
+    return true;
+  };
+  const updateAnswerProgressFromBlock = async (text: string | undefined) => {
     if (!text) {
       return false;
     }
@@ -1207,9 +1300,12 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     // Progress owns the transient bubble. The final answer must be sent as its
-    // own durable message after progress cleanup, not routed through the answer
-    // preview lane that caused the old staircase retention.
+    // own durable message if no later answer stream appears. When a later
+    // answer stream does appear, final delivery may safely finalize that active
+    // answer bubble instead of deleting/re-sending it.
     forceNextAnswerFinalSend = true;
+    await retireSpeculativeAnswerPreviewBeforeProgress("before-progress-update");
+    recordTransientProgressPreviewText(progressText);
     logPreviewLedger({
       lane: "progress",
       phase: "progress_update",
@@ -1504,7 +1600,7 @@ export const dispatchTelegramMessage = async ({
       // Same-chat message-tool progress is model-authored working state. Render
       // it through the mutable progress controller so it never becomes durable
       // Telegram text and never reaches TTS as a tool result.
-      updateAnswerProgressFromBlock(payload.text);
+      await updateAnswerProgressFromBlock(payload.text);
       return;
     }
 
@@ -1627,7 +1723,7 @@ export const dispatchTelegramMessage = async ({
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    if (forceNextAnswerFinalSend) {
+    if (forceNextAnswerFinalSend && !answerLane.hasStreamedMessage) {
       forceNextAnswerFinalSend = false;
       const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
         reason: classifyPayloadDurableSendReason(payload, "final"),
@@ -1637,6 +1733,7 @@ export const dispatchTelegramMessage = async ({
       });
       result = delivered ? "sent" : "skipped";
     } else {
+      forceNextAnswerFinalSend = false;
       result = await deliverLaneText({
         laneName: "answer",
         text: preparedText,
@@ -1702,14 +1799,14 @@ export const dispatchTelegramMessage = async ({
     logVerbose("telegram: buffered phase-unknown answer block until lifecycle boundary");
   };
 
-  const flushAmbiguousAnswerBlockAsProgress = (callsite: string) => {
+  const flushAmbiguousAnswerBlockAsProgress = async (callsite: string) => {
     const pending = pendingAmbiguousAnswerBlock;
     if (!pending) {
       return;
     }
     pendingAmbiguousAnswerBlock = undefined;
     logVerbose(`telegram: routing phase-unknown answer block as progress callsite=${callsite}`);
-    updateAnswerProgressFromBlock(renderTextWithToolProgress(pending.text));
+    await updateAnswerProgressFromBlock(renderTextWithToolProgress(pending.text));
   };
 
   const flushAmbiguousAnswerBlockAsFinal = async (callsite: string) => {
@@ -1841,7 +1938,7 @@ export const dispatchTelegramMessage = async ({
                 // A later structural boundary proves the previous phase-less
                 // block was in-flight commentary. Route it through the mutable
                 // progress controller before handling the new event.
-                flushAmbiguousAnswerBlockAsProgress(`before-${deliveryKind}`);
+                await flushAmbiguousAnswerBlockAsProgress(`before-${deliveryKind}`);
               }
             }
             if (
@@ -1941,7 +2038,7 @@ export const dispatchTelegramMessage = async ({
                     hasMedia,
                   });
                 } else {
-                  updateAnswerProgressFromBlock(renderTextWithToolProgress(segment.text));
+                  await updateAnswerProgressFromBlock(renderTextWithToolProgress(segment.text));
                 }
                 continue;
               }
@@ -2044,7 +2141,7 @@ export const dispatchTelegramMessage = async ({
                   hasMedia,
                 });
               } else {
-                updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
+                await updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
               }
               return;
             }
@@ -2125,7 +2222,7 @@ export const dispatchTelegramMessage = async ({
         disableBlockStreaming,
         onToolResult: (payload) =>
           enqueueDraftLaneEvent(async () => {
-            flushAmbiguousAnswerBlockAsProgress("before-tool-result");
+            await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
             await sendToolPayload(payload);
           }),
         onPartialReply:
@@ -2177,7 +2274,7 @@ export const dispatchTelegramMessage = async ({
               })
           : undefined,
         onToolStart: async (payload) => {
-          flushAmbiguousAnswerBlockAsProgress("before-tool-start");
+          await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
           if (!statusReactionController) {
             return;
           }

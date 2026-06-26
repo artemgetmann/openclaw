@@ -500,6 +500,128 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("retires a speculative answer preview when structure reclassifies it as progress", async () => {
+    const clearedAnswerPreviewIds: Array<number | undefined> = [];
+    const answerStream = createTestDraftStream({
+      messageId: 9301,
+      clearMessageIdOnForceNew: true,
+    });
+    answerStream.clear.mockImplementation(async () => {
+      clearedAnswerPreviewIds.push(answerStream.messageId());
+    });
+    const progressStream = createDraftStream(9302);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream).mockReturnValueOnce(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Inspecting the workspace state.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Checking the current branch and recent edits.",
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            text: "The branch is clean enough to patch safely.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    expect(answerStream.update).toHaveBeenCalledWith("Inspecting the workspace state.");
+    expect(answerStream.clear).toHaveBeenCalledTimes(1);
+    expect(clearedAnswerPreviewIds).toEqual([9301]);
+    expect(answerStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "Checking the current branch and recent edits.",
+    );
+    expect(answerStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      progressStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "The branch is clean enough to patch safely.",
+          }),
+        ],
+      }),
+    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("keeps a final answer stream durable after progress and strips transient progress prefixes", async () => {
+    const speculativeAnswerStream = createTestDraftStream({
+      messageId: 9401,
+      clearMessageIdOnForceNew: true,
+    });
+    const progressStream = createDraftStream(9402);
+    const finalAnswerStream = createDraftStream(9403);
+    createTelegramDraftStream
+      .mockReturnValueOnce(speculativeAnswerStream)
+      .mockReturnValueOnce(progressStream)
+      .mockReturnValueOnce(finalAnswerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Inspecting the workspace state.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Checking the current branch and recent edits.",
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+        await replyOptions?.onPartialReply?.({
+          text: "The branch is clean enough to patch safely.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text:
+              "Inspecting the workspace state.Checking the current branch and recent edits.\n\n" +
+              "The branch is clean enough to patch safely.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9403" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(speculativeAnswerStream.clear).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "Checking the current branch and recent edits.",
+    );
+    expect(finalAnswerStream.update).toHaveBeenCalledWith(
+      "The branch is clean enough to patch safely.",
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9403,
+      "The branch is clean enough to patch safely.",
+      expect.any(Object),
+    );
+    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("treats a terminal ambiguous block as the final answer", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Only answer." }, { kind: "block" });
