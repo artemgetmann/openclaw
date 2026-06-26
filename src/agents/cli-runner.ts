@@ -4,7 +4,6 @@ import type { ImageContent, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
-import type { ReplyLatencyTraceEvent } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
@@ -97,25 +96,6 @@ const ZERO_CLI_TRANSCRIPT_USAGE: Usage = {
     total: 0,
   },
 };
-
-type CliRunOverride = {
-  resumeArgs?: string[];
-  resumeOutput?: "json" | "text" | "jsonl";
-};
-
-function isUnsupportedJsonResumeError(message: string): boolean {
-  const normalized = message.toLowerCase();
-  if (!normalized.includes("--json")) {
-    return false;
-  }
-  return (
-    normalized.includes("unexpected argument") ||
-    normalized.includes("unknown option") ||
-    normalized.includes("unrecognized option") ||
-    normalized.includes("wasn't expected") ||
-    normalized.includes("was not expected")
-  );
-}
 
 type ClaudeBridgePromptMode =
   | "neutral_full"
@@ -899,7 +879,6 @@ export async function runCliAgent(params: {
   onAssistantMessageStart?: () => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onBlockReply?: (payload: import("../auto-reply/types.js").ReplyPayload) => Promise<void> | void;
-  onLatencyTrace?: (event: ReplyLatencyTraceEvent) => void;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -942,14 +921,6 @@ export async function runCliAgent(params: {
           config: params.config,
         })
       : undefined;
-  params.onLatencyTrace?.({
-    span: "mcp_tool_prep_started",
-    fields: {
-      provider: params.provider,
-      backendId: backendResolved.id,
-    },
-  });
-  const mcpPrepStartedAt = Date.now();
   const preparedBackend = await prepareCliBundleMcpConfig({
     backendId: backendResolved.id,
     backend: backendResolved.config,
@@ -973,15 +944,6 @@ export async function runCliAgent(params: {
         }
       : undefined,
     warn: (message) => log.warn(message),
-  });
-  params.onLatencyTrace?.({
-    span: "mcp_tool_prep_finished",
-    fields: {
-      provider: params.provider,
-      backendId: backendResolved.id,
-      durationMs: Date.now() - mcpPrepStartedAt,
-      hasMcpConfig: Boolean(preparedBackend.mcpConfigHash),
-    },
   });
   const backend = preparedBackend.backend;
   const modelId = (params.model ?? "default").trim() || "default";
@@ -1169,7 +1131,6 @@ export async function runCliAgent(params: {
   // Helper function to execute CLI with given session ID
   const executeCliWithSession = async (
     cliSessionIdToUse?: string,
-    overrides: CliRunOverride = {},
   ): Promise<{
     text: string;
     sessionId?: string;
@@ -1228,9 +1189,7 @@ export async function runCliAgent(params: {
       prompt,
     });
     const stdinPayload = stdin ?? "";
-    const baseArgs = useResume
-      ? (overrides.resumeArgs ?? backend.resumeArgs ?? backend.args ?? [])
-      : (backend.args ?? []);
+    const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
     const resolvedArgs = useResume
       ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
       : baseArgs;
@@ -1305,12 +1264,9 @@ export async function runCliAgent(params: {
           timeoutMs: params.timeoutMs,
           useResume,
         });
-        const outputMode = useResume
-          ? (overrides.resumeOutput ?? backend.resumeOutput ?? backend.output)
-          : backend.output;
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         let streamingCallbackChain = Promise.resolve();
         let streamedAssistantStarted = false;
-        let firstAssistantDeltaTraced = false;
         const enqueueStreamingCallback = (task: () => Promise<void> | void) => {
           streamingCallbackChain = streamingCallbackChain.then(async () => {
             if (params.abortSignal?.aborted) {
@@ -1328,18 +1284,6 @@ export async function runCliAgent(params: {
                 backend,
                 providerId: backendResolved.id,
                 onAssistantDelta: ({ text }) => {
-                  if (!firstAssistantDeltaTraced) {
-                    firstAssistantDeltaTraced = true;
-                    params.onLatencyTrace?.({
-                      span: "first_assistant_delta_received",
-                      fields: {
-                        provider: params.provider,
-                        backendId: backendResolved.id,
-                        textLength: text.length,
-                        resumed: useResume,
-                      },
-                    });
-                  }
                   enqueueStreamingCallback(async () => {
                     if (params.abortSignal?.aborted) {
                       return;
@@ -1389,16 +1333,6 @@ export async function runCliAgent(params: {
           // after this turn. Handing cleanup to the live-session owner keeps
           // that temp file alive until the process is closed or replaced.
           preparedBackendCleanupOwnedByLiveSession = true;
-          params.onLatencyTrace?.({
-            span: "backend_process_started_or_resumed",
-            fields: {
-              provider: params.provider,
-              backendId: backendResolved.id,
-              resumed: useResume,
-              outputMode,
-              transport: "live-session",
-            },
-          });
           if (isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)) {
             log.info(`claude-live: invoking live turn session=${params.sessionId}`);
           }
@@ -1426,18 +1360,6 @@ export async function runCliAgent(params: {
             noOutputTimeoutMs,
             getProcessSupervisor,
             onAssistantDelta: ({ text }) => {
-              if (!firstAssistantDeltaTraced) {
-                firstAssistantDeltaTraced = true;
-                params.onLatencyTrace?.({
-                  span: "first_assistant_delta_received",
-                  fields: {
-                    provider: params.provider,
-                    backendId: backendResolved.id,
-                    textLength: text.length,
-                    resumed: useResume,
-                  },
-                });
-              }
               enqueueStreamingCallback(async () => {
                 if (params.abortSignal?.aborted) {
                   return;
@@ -1457,16 +1379,6 @@ export async function runCliAgent(params: {
           return liveResult.output;
         }
 
-        params.onLatencyTrace?.({
-          span: "backend_process_started_or_resumed",
-          fields: {
-            provider: params.provider,
-            backendId: backendResolved.id,
-            resumed: useResume,
-            outputMode,
-            transport: "child-process",
-          },
-        });
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
           backendId: backendResolved.id,
@@ -1638,48 +1550,6 @@ export async function runCliAgent(params: {
       return result;
     } catch (err) {
       if (err instanceof FailoverError) {
-        const defaultResumeArgs = backend.resumeArgs ?? [];
-        const shouldRetryCodexResumeAsText =
-          backendResolved.id === "codex-cli" &&
-          params.cliSessionId &&
-          defaultResumeArgs.includes("--json") &&
-          isUnsupportedJsonResumeError(err.message);
-        if (shouldRetryCodexResumeAsText) {
-          log.warn(
-            `codex resume rejected JSONL streaming, retrying once with text output: session=${redactRunIdentifier(params.cliSessionId)}`,
-          );
-          const output = await executeCliWithSession(params.cliSessionId, {
-            resumeArgs: defaultResumeArgs.filter((entry) => entry !== "--json"),
-            resumeOutput: "text",
-          });
-          const text = output.text?.trim();
-          const payloads = text ? [{ text }] : undefined;
-
-          const result = {
-            payloads,
-            meta: {
-              durationMs: Date.now() - started,
-              systemPromptReport,
-              agentMeta: {
-                sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
-                provider: params.provider,
-                model: modelId,
-                usage: output.usage,
-              },
-            },
-          };
-          await persistCliTranscriptTurn({
-            sessionFile: params.sessionFile,
-            sessionId: params.sessionId,
-            workspaceDir,
-            provider: params.provider,
-            model: modelId,
-            prompt: params.prompt,
-            assistantText: text,
-            timeoutMs: params.timeoutMs,
-          });
-          return result;
-        }
         // Check if this is a session expired error and we have a session to clear
         if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
           log.warn(
