@@ -103,6 +103,33 @@ export function registerBrowserElementCommands(
     });
 
   browser
+    .command("paste")
+    .description("Paste text into an editable element by ref from snapshot")
+    .argument("<ref>", "Ref id from snapshot")
+    .argument("<text>", "Text to paste")
+    .option("--clear", "Clear editable text before pasting", false)
+    .option("--submit", "Press Enter after pasting", false)
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .action(async (ref: string | undefined, text: string, opts, cmd) => {
+      const refValue = requireRef(ref);
+      if (!refValue) {
+        return;
+      }
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "paste",
+          ref: refValue,
+          text,
+          clear: Boolean(opts.clear),
+          submit: Boolean(opts.submit),
+          targetId: opts.targetId?.trim() || undefined,
+        },
+        successMessage: `pasted into ref ${refValue}`,
+      });
+    });
+
+  browser
     .command("press")
     .description("Press a key")
     .argument("<key>", "Key to press (e.g. Enter)")

@@ -224,6 +224,22 @@ describe("browser control server", () => {
       slowly: false,
     });
 
+    const paste = await postJson<{ ok: boolean }>(`${base}/act`, {
+      kind: "paste",
+      ref: "composer",
+      text: "caption plus media",
+      clear: true,
+    });
+    expect(paste.ok).toBe(true);
+    expect(pwMocks.pasteViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "composer",
+      text: "caption plus media",
+      clear: true,
+      submit: false,
+    });
+
     const press = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "press",
       key: "Enter",

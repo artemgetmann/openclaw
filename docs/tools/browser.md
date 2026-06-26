@@ -637,11 +637,11 @@ Notes:
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
   - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
-- `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
+- `click`/`type`/`paste`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 - Agent tool calls can pass `includeSnapshot: true` on mutating `act` requests
   to get a fresh structured snapshot immediately after the action. Use this
-  after `click`, `type`, `fill`, `press`, or `select` when the next step depends
+  after `click`, `type`, `paste`, `fill`, `press`, or `select` when the next step depends
   on the updated UI; use a separate `snapshot` call for read-only inspection.
 - For forms, prefer one `act` request with `kind: "fill"` and `fields[]` refs
   from the snapshot instead of many single-field calls.
@@ -674,7 +674,7 @@ other risky surfaces stricter proof requirements on demand.
 Contract rules are intentionally about final proof, not just input mechanics:
 
 - Capture the pre-commit state with a fresh snapshot or screenshot.
-- Prefer real keyboard paste/type over `fill` for rich editors when the next
+- Prefer `act` `kind: "paste"` or real keyboard type over `fill` for rich editors when the next
   click creates a public or external artifact.
 - Ask for explicit approval before irreversible or public commits.
 - After committing, open or inspect the final artifact and verify the expected
@@ -687,7 +687,7 @@ OpenClaw supports two “snapshot” styles:
 
 - **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
   - Output: a text snapshot that includes numeric refs.
-  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
+  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`, `openclaw browser paste 23 "hello" --clear`.
   - Internally, the ref is resolved via Playwright’s `aria-ref`.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)

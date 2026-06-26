@@ -114,6 +114,42 @@ async function fillEditableTarget(params: {
   }
 }
 
+async function pasteTextIntoFocusedTarget(params: {
+  page: Page;
+  locator: Locator;
+  text: string;
+  clear: boolean;
+  timeout: number;
+}): Promise<void> {
+  await params.locator.click({ timeout: params.timeout });
+  if (params.clear) {
+    await params.page.keyboard.press("ControlOrMeta+A");
+    await params.page.keyboard.press("Backspace");
+  }
+
+  // Rich React editors often update their internal draft state through input
+  // and paste events rather than raw DOM value writes. Dispatch a paste event
+  // first, then insert keyboard text only if the app did not consume it.
+  const consumedPaste = await params.page.evaluate((text) => {
+    const target = document.activeElement;
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    return !target.dispatchEvent(event);
+  }, params.text);
+
+  if (!consumedPaste) {
+    await params.page.keyboard.insertText(params.text);
+  }
+}
+
 async function fillSearchableControlTarget(params: {
   page: Page;
   locator: Locator;
@@ -574,6 +610,39 @@ export async function typeViaPlaywright(opts: {
     } else {
       await fillEditableTarget({ page, locator, value: text, timeout });
     }
+    if (opts.submit) {
+      await locator.press("Enter", { timeout });
+    }
+  } catch (err) {
+    throw toAIFriendlyError(err, label);
+  }
+}
+
+export async function pasteViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ref?: string;
+  selector?: string;
+  text: string;
+  clear?: boolean;
+  submit?: boolean;
+  timeoutMs?: number;
+}): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
+  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  try {
+    await pasteTextIntoFocusedTarget({
+      page,
+      locator,
+      text: String(opts.text ?? ""),
+      clear: opts.clear === true,
+      timeout,
+    });
     if (opts.submit) {
       await locator.press("Enter", { timeout });
     }
@@ -1081,6 +1150,18 @@ async function executeSingleAction(
         text: action.text,
         submit: action.submit,
         slowly: action.slowly,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "paste":
+      await pasteViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        text: action.text,
+        clear: action.clear,
+        submit: action.submit,
         timeoutMs: action.timeoutMs,
       });
       break;

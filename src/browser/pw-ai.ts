@@ -37,6 +37,7 @@ export {
   highlightViaPlaywright,
   hoverViaPlaywright,
   navigateViaPlaywright,
+  pasteViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,
