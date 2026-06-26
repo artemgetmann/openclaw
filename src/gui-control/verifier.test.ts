@@ -17,6 +17,7 @@ class MockGuiRuntime implements GuiRuntime {
   readonly name = "agent-desktop" as const;
   observations: GuiSnapshot[];
   actions: ActionResult[];
+  secondaryActions: Array<{ target: ElementRef; action: string }> = [];
 
   constructor(params: { observations: GuiSnapshot[]; actions: ActionResult[] }) {
     this.observations = [...params.observations];
@@ -48,6 +49,11 @@ class MockGuiRuntime implements GuiRuntime {
   }
 
   async scroll(_target: ElementRef): Promise<ActionResult> {
+    return this.actions.shift() ?? { ok: true };
+  }
+
+  async performSecondaryAction(target: ElementRef, action: string): Promise<ActionResult> {
+    this.secondaryActions.push({ target, action });
     return this.actions.shift() ?? { ok: true };
   }
 }
@@ -338,6 +344,117 @@ describe("performVerifiedAction", () => {
 
     expect(result.ok).toBe(true);
     expect(result.audit.elementRef).toBe("@send-new");
+  });
+
+  it("blocks secondary actions when the fresh element no longer advertises the action", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          elements: [{ ref: "@send", role: "button", label: "Send" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Claude" },
+      element: { ref: "@send", role: "button", label: "Send", secondaryActions: ["AXPress"] },
+      actionType: "secondaryAction",
+      secondaryAction: "AXPress",
+      reason: "Submit a Claude message.",
+      approvedPolicyRisk: true,
+      taskPolicy: assistantSendPolicy,
+      verify: () => ({ ok: true, summary: "should not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("does not advertise secondary action AXPress");
+    expect(result.stats.actionCount).toBe(0);
+    expect(runtime.secondaryActions).toEqual([]);
+  });
+
+  it("rechecks secondary actions before stale-ref retry", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          elements: [
+            { ref: "@send", role: "button", label: "Send", secondaryActions: ["AXPress"] },
+          ],
+        }),
+        snapshot({
+          id: "refresh",
+          elements: [{ ref: "@send", role: "button", label: "Send" }],
+        }),
+      ],
+      actions: [{ ok: false, staleRef: true }, { ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Claude" },
+      element: { ref: "@send", role: "button", label: "Send", secondaryActions: ["AXPress"] },
+      actionType: "secondaryAction",
+      secondaryAction: "AXPress",
+      reason: "Submit a Claude message.",
+      approvedPolicyRisk: true,
+      taskPolicy: assistantSendPolicy,
+      verify: () => ({ ok: true, summary: "should not run after stale retry block" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("does not advertise secondary action AXPress");
+    expect(result.stats.actionCount).toBe(1);
+    expect(result.stats.staleRefs).toBe(1);
+    expect(runtime.secondaryActions).toEqual([
+      {
+        target: { ref: "@send", role: "button", label: "Send", secondaryActions: ["AXPress"] },
+        action: "AXPress",
+      },
+    ]);
+  });
+
+  it("blocks advertised secondary actions when the action name is sensitive", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          elements: [
+            {
+              ref: "@file",
+              role: "row",
+              label: "Scratch document",
+              secondaryActions: ["Delete"],
+            },
+          ],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Claude" },
+      element: {
+        ref: "@file",
+        role: "row",
+        label: "Scratch document",
+        secondaryActions: ["Delete"],
+      },
+      actionType: "secondaryAction",
+      secondaryAction: "Delete",
+      reason: "Activate the selected row.",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+      verify: () => ({ ok: true, summary: "should not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("Blocked sensitive GUI surface");
+    expect(result.stats.actionCount).toBe(0);
+    expect(runtime.secondaryActions).toEqual([]);
   });
 
   it("fails closed before acting when the observed app/window is wrong", async () => {

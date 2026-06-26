@@ -17,6 +17,7 @@ class MockGuiRuntime implements GuiRuntime {
   readonly name = "agent-desktop" as const;
   observations: GuiSnapshot[];
   actions: ActionResult[];
+  secondaryActions: Array<{ target: ElementRef; action: string }> = [];
 
   constructor(params: { observations: GuiSnapshot[]; actions?: ActionResult[] }) {
     this.observations = [...params.observations];
@@ -40,6 +41,11 @@ class MockGuiRuntime implements GuiRuntime {
   }
 
   async click(_target: ElementRef): Promise<ActionResult> {
+    return this.actions.shift() ?? { ok: true };
+  }
+
+  async performSecondaryAction(target: ElementRef, action: string): Promise<ActionResult> {
+    this.secondaryActions.push({ target, action });
     return this.actions.shift() ?? { ok: true };
   }
 
@@ -210,6 +216,131 @@ describe("runGuiControl", () => {
 
     expect(result.ok).toBe(false);
     expect(result.verifiedAction?.stats.falseSuccesses).toBe(1);
+  });
+
+  it("fails closed when secondary action has no task-specific verification", async () => {
+    const result = await runGuiControl({
+      runtime: new MockGuiRuntime({
+        observations: [
+          snapshot({
+            elements: [{ ref: "@link", role: "link", label: "Select flight" }],
+          }),
+        ],
+      }),
+      action: "secondary-action",
+      appName: "Claude",
+      ref: "@link",
+      secondaryAction: "AXPress",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.failureReason).toContain("--verify-text");
+  });
+
+  it("fails closed when the runtime does not support secondary actions", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          elements: [
+            { ref: "@link", role: "link", label: "Select flight", secondaryActions: ["AXPress"] },
+          ],
+        }),
+      ],
+    });
+    runtime.performSecondaryAction = undefined as never;
+
+    const result = await runGuiControl({
+      runtime,
+      action: "secondary-action",
+      appName: "Claude",
+      ref: "@link",
+      secondaryAction: "AXPress",
+      verifyText: "Returning flights",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.failureReason).toContain("Runtime does not support secondary actions");
+    expect(runtime.secondaryActions).toEqual([]);
+  });
+
+  it("performs a verified element secondary action through the shared verifier path", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "resolve",
+          elements: [
+            { ref: "@link", role: "link", label: "Select flight", secondaryActions: ["AXPress"] },
+          ],
+        }),
+        snapshot({
+          id: "pre",
+          elements: [
+            { ref: "@link", role: "link", label: "Select flight", secondaryActions: ["AXPress"] },
+          ],
+        }),
+        snapshot({
+          id: "post",
+          summary: "Returning flights",
+          visibleText: ["Returning flights"],
+          elements: [{ ref: "@back", role: "button", label: "Back" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await runGuiControl({
+      runtime,
+      action: "secondary-action",
+      appName: "Claude",
+      ref: "@link",
+      secondaryAction: "AXPress",
+      verifyText: "Returning flights",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.verifiedAction?.audit.actionType).toBe("secondaryAction");
+    expect(runtime.secondaryActions).toEqual([
+      {
+        target: expect.objectContaining({ ref: "@link" }),
+        action: "AXPress",
+      },
+    ]);
+  });
+
+  it("fails closed before runtime mutation when the element does not advertise the secondary action", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "resolve",
+          elements: [{ ref: "@link", role: "link", label: "Select flight" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await runGuiControl({
+      runtime,
+      action: "secondary-action",
+      appName: "Claude",
+      ref: "@link",
+      secondaryAction: "AXPress",
+      verifyText: "Returning flights",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.failureReason).toContain("does not advertise");
+    expect(runtime.secondaryActions).toEqual([]);
   });
 
   it("runs scroll through the verified action path with changed post-state", async () => {
