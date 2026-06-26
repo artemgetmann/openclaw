@@ -42,6 +42,8 @@ const chromeMcpMocks = vi.hoisted(() => ({
   })),
 }));
 
+const selectAllKey = process.platform === "darwin" ? "Meta+A" : "Control+A";
+
 vi.mock("../chrome-mcp.js", () => ({
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -750,7 +752,7 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(1, {
       profileName: "chrome-live",
       targetId: "7",
-      key: "ControlOrMeta+A",
+      key: selectAllKey,
       timeoutMs: 12_000,
     });
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(2, {
@@ -804,7 +806,7 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(1, {
       profileName: "chrome-live",
       targetId: "7",
-      key: "ControlOrMeta+A",
+      key: selectAllKey,
       timeoutMs: 12_000,
     });
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(3, {

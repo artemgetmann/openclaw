@@ -221,6 +221,13 @@ function buildExistingSessionFocusEditableScript(params: { selector?: string }):
   }`;
 }
 
+function selectAllKeyForChromeMcp(): string {
+  // Chrome MCP forwards keys through a stricter key parser than Playwright.
+  // `ControlOrMeta+A` is a Playwright alias, so choose the real platform
+  // modifier before sending the repair path through existing-session Chrome.
+  return process.platform === "darwin" ? "Meta+A" : "Control+A";
+}
+
 function buildExistingSessionPasteScript(params: {
   selector?: string;
   value: string;
@@ -405,7 +412,7 @@ async function performExistingSessionKeyboardTextEntry(params: {
       profileName: params.profileName,
       userDataDir: params.userDataDir,
       targetId: params.targetId,
-      key: "ControlOrMeta+A",
+      key: selectAllKeyForChromeMcp(),
       timeoutMs: params.timeoutMs,
     });
     await pressChromeMcpKey({
