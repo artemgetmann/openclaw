@@ -283,8 +283,21 @@ required taxes + fees for 2 adults.`, and the first KLM round-trip fare
 - Follow-up patch exposed `gui-control secondary-action --secondary-action
 AXPress` through the same verifier and policy gates as `click`, so a rerun can
   test semantic activation before falling back to geometry.
-- Rerun was blocked locally by `cua-guard acquire`: multiple MCP clients were
-  attached, so the lane did not take live GUI control.
+- Rerun proof after unlock:
+  - no `cua-guard` was used; Jarvis/OpenClaw GUI-control is separate from
+    native Codex Computer Use.
+  - CLI activated an already-open Google Flights Safari tab from Fast.com with
+    post-state proof `Google Flights`.
+  - `secondary-action --secondary-action AXPress --ref @71 --verify-text
+"Returning flights"` executed one allowed mutation but failed post-state;
+    the page remained on departing-flight results.
+  - `secondary-action --secondary-action Press --ref @71 --verify-text
+"Returning flights"` also executed one allowed mutation and failed
+    post-state.
+  - raw OCU state did not list `Secondary Actions` on the `Select flight` link
+    itself, only on unrelated window/toolbar/tab controls.
+  - next fix belongs below the policy profile: OCU/link activation precision or
+    a structured activation ladder that can target the actual link text safely.
 
 ## Software Update Flow
 

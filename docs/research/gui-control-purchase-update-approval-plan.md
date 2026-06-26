@@ -223,10 +223,18 @@ AXPress`.
   open computer-use designs pointed to the same pattern: prefer AX actions such
   as `AXPress`/`Raise` before geometry, keep discovery separate from delivery,
   and fail closed on ambiguous targets.
-- Live Google Flights rerun is still pending because `cua-guard acquire`
-  refused GUI ownership with multiple MCP clients attached. Next proof should
-  observe the fresh `Select flight` element, confirm it exposes `AXPress`, then
-  run the secondary-action command with `--verify-text "Returning flights"`.
+- Live Google Flights rerun was performed through Jarvis/OpenClaw GUI-control
+  directly, without `cua-guard`:
+  - switched from Fast.com to an already-open Google Flights tab through
+    `gui-control click --ref @124 --verify-text "Google Flights"`
+  - observed first `Select flight` as fresh ref `@71`
+  - `secondary-action --secondary-action AXPress --ref @71 --verify-text
+"Returning flights"` executed one action and failed post-state
+  - `secondary-action --secondary-action Press --ref @71 --verify-text
+"Returning flights"` executed one action and failed post-state
+  - raw OCU state did not expose `Secondary Actions` on the Google Flights
+    result link, so the next fix is OCU/link activation precision rather than a
+    policy-profile change
 
 Use isolated tester Jarvis/Telegram proof first when approval UX is added. Real
 main Jarvis dogfood proof should happen only after tester proof passes.
