@@ -818,6 +818,7 @@ describe("browser tool act compatibility", () => {
       ref: "composer-1",
       text: "caption plus media",
       clear: true,
+      repairEdit: true,
       targetId: "tab-1",
       timeoutMs: 5000,
     });
@@ -829,6 +830,7 @@ describe("browser tool act compatibility", () => {
         ref: "composer-1",
         text: "caption plus media",
         clear: true,
+        repairEdit: true,
         targetId: "tab-1",
         timeoutMs: 5000,
       }),

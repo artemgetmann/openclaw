@@ -150,6 +150,33 @@ async function pasteTextIntoFocusedTarget(params: {
   }
 }
 
+async function performRichEditorRepairEdit(page: Page): Promise<void> {
+  // Some app-controlled editors display the pasted text while their React/Draft
+  // state remains stale until a trusted keyboard mutation happens. Insert then
+  // delete one space so the final text stays unchanged while the app sees keys.
+  await page.keyboard.insertText(" ");
+  await page.keyboard.press("Backspace");
+}
+
+async function typeTextIntoFocusedTarget(params: {
+  page: Page;
+  locator: Locator;
+  text: string;
+  replace: boolean;
+  slowly: boolean;
+  timeout: number;
+}): Promise<void> {
+  await params.locator.click({ timeout: params.timeout });
+  if (params.replace) {
+    await params.page.keyboard.press("ControlOrMeta+A");
+    await params.page.keyboard.press("Backspace");
+  }
+  await params.locator.type(params.text, {
+    timeout: params.timeout,
+    delay: params.slowly ? 75 : 0,
+  });
+}
+
 async function fillSearchableControlTarget(params: {
   page: Page;
   locator: Locator;
@@ -593,6 +620,7 @@ export async function typeViaPlaywright(opts: {
   text: string;
   submit?: boolean;
   slowly?: boolean;
+  repairEdit?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -604,11 +632,32 @@ export async function typeViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
-    if (opts.slowly) {
-      await locator.click({ timeout });
-      await locator.type(text, { timeout, delay: 75 });
+    if (opts.repairEdit) {
+      // repairEdit is for app-controlled rich editors such as X. DOM fill can
+      // make text visible while leaving the app-owned publish payload empty, so
+      // use real keyboard text entry for the whole value before the repair key.
+      await typeTextIntoFocusedTarget({
+        page,
+        locator,
+        text,
+        replace: true,
+        slowly: opts.slowly === true,
+        timeout,
+      });
+    } else if (opts.slowly) {
+      await typeTextIntoFocusedTarget({
+        page,
+        locator,
+        text,
+        replace: false,
+        slowly: true,
+        timeout,
+      });
     } else {
       await fillEditableTarget({ page, locator, value: text, timeout });
+    }
+    if (opts.repairEdit) {
+      await performRichEditorRepairEdit(page);
     }
     if (opts.submit) {
       await locator.press("Enter", { timeout });
@@ -626,6 +675,7 @@ export async function pasteViaPlaywright(opts: {
   text: string;
   clear?: boolean;
   submit?: boolean;
+  repairEdit?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -643,6 +693,9 @@ export async function pasteViaPlaywright(opts: {
       clear: opts.clear === true,
       timeout,
     });
+    if (opts.repairEdit) {
+      await performRichEditorRepairEdit(page);
+    }
     if (opts.submit) {
       await locator.press("Enter", { timeout });
     }
@@ -1150,6 +1203,7 @@ async function executeSingleAction(
         text: action.text,
         submit: action.submit,
         slowly: action.slowly,
+        repairEdit: action.repairEdit,
         timeoutMs: action.timeoutMs,
       });
       break;
@@ -1162,6 +1216,7 @@ async function executeSingleAction(
         text: action.text,
         clear: action.clear,
         submit: action.submit,
+        repairEdit: action.repairEdit,
         timeoutMs: action.timeoutMs,
       });
       break;

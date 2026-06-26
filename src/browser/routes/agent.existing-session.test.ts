@@ -13,11 +13,13 @@ const routeState = vi.hoisted(() => ({
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "7",
       url: "https://example.com",
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
     })),
   },
   tab: {
     targetId: "7",
     url: "https://example.com",
+    wsUrl: "ws://127.0.0.1/devtools/page/7",
   },
 }));
 
@@ -27,6 +29,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
+  insertTextViaCdp: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   pressChromeMcpKey: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
@@ -55,6 +58,7 @@ vi.mock("../chrome-mcp.js", () => ({
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
+  insertTextViaCdp: chromeMcpMocks.insertTextViaCdp,
   snapshotAria: vi.fn(),
 }));
 
@@ -146,6 +150,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.insertTextViaCdp.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.pressChromeMcpKey.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
@@ -698,8 +703,10 @@ describe("existing-session browser routes", () => {
     });
   });
 
-  it("pastes into existing-session rich editor refs through evaluate_script", async () => {
+  it("pastes into existing-session rich editor refs through CDP text entry when repair is requested", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.pressChromeMcpKey.mockClear();
+    chromeMcpMocks.insertTextViaCdp.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
@@ -712,6 +719,7 @@ describe("existing-session browser routes", () => {
           ref: "composer-1",
           text: "caption plus media",
           clear: true,
+          repairEdit: true,
           timeoutMs: 12_000,
         },
       },
@@ -723,8 +731,78 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
       profileName: "chrome-live",
       targetId: "7",
-      fn: expect.stringContaining("ClipboardEvent"),
+      fn: expect.stringContaining("editable target"),
       args: ["composer-1"],
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.insertTextViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
+      text: "caption plus media",
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(1, {
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "ControlOrMeta+A",
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(2, {
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Backspace",
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(3, {
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Space",
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(4, {
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Backspace",
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("types into existing-session rich editor refs through CDP text entry when repair is requested", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.pressChromeMcpKey.mockClear();
+    chromeMcpMocks.insertTextViaCdp.mockClear();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "type",
+          ref: "composer-1",
+          text: "caption plus media",
+          repairEdit: true,
+          timeoutMs: 12_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.insertTextViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
+      text: "caption plus media",
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(1, {
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "ControlOrMeta+A",
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenNthCalledWith(3, {
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Space",
       timeoutMs: 12_000,
     });
   });

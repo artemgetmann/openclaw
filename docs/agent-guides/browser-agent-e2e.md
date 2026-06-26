@@ -20,6 +20,13 @@ Do not start with Telegram unless the bug is clearly Telegram-specific.
 - Use isolated config, state, and bot credentials when a bot is involved.
 - Do not repoint the long-lived primary bot or LaunchAgent at a feature worktree.
 
+For public social-posting benchmarks, default to the isolated tester lane even
+when the final product proof will eventually use the main bot. Use the main bot
+only when the user explicitly wants production-thread proof, and treat that as a
+final validation step after the browser/tool path is already proven. Shared
+runtime restarts, other agents, and chat-history state can otherwise turn a
+browser-editor bug into transport noise.
+
 ## Recommended order
 
 1. Prove runtime ownership.
