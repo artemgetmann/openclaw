@@ -589,7 +589,7 @@ Investigation task:
 
 2026-06-25 implementation note: user-facing display labels now sit on bundled
 skill metadata while internal IDs remain stable. Google Workspace, Email,
-WhatsApp, Places Search, Telegram as Me, Mac Screen Control, media editing, PDF,
+WhatsApp as Me, Google Maps Search, Telegram as Me, Mac Screen Control, media editing, PDF,
 and document/deck workflows have consumer-facing routing language in the default
 skill surface.
 

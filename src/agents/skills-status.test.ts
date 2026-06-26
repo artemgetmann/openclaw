@@ -137,6 +137,6 @@ describe("buildWorkspaceSkillStatus", () => {
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
 
     expect(report.skills[0]?.name).toBe("wacli");
-    expect(report.skills[0]?.displayName).toBe("WhatsApp");
+    expect(report.skills[0]?.displayName).toBe("WhatsApp as Me");
   });
 });

@@ -1,6 +1,6 @@
 ---
 name: consumer-setup
-description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, or Places Search. Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
+description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp as Me, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, Google Maps Search, or creative audio. Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -16,7 +16,7 @@ Trigger it for requests like:
 - "read my email" when mail is not connected yet
 - "check my calendar" when Google auth is missing
 - "send a Telegram message as me" when Telegram-as-me still needs login
-- "send a WhatsApp message" when QR pairing or live sync is not ready
+- "send a WhatsApp message" when WhatsApp-as-me QR pairing or live sync is not ready
 - "create a reminder" when macOS access has not been granted yet
 
 Do not use it when the underlying skill is already connected and ready, or when
@@ -26,7 +26,7 @@ the problem is normal task execution rather than setup.
 
 - Explain the missing setup in plain product language, not raw CLI noise.
 - Use consumer-facing capability names first, such as Google Workspace, Email,
-  WhatsApp, Telegram as Me, Places Search, and Mac Screen Control. Mention raw
+  WhatsApp as Me, Telegram as Me, Google Maps Search, and Mac Screen Control. Mention raw
   tool ids like `gog`, `himalaya`, `wacli`, or `peekaboo` only when the user is
   debugging setup, reviewing a PR, or explicitly asks for the technical path.
 - Offer to help complete setup now.
@@ -67,13 +67,13 @@ explicitly ask for the CLI path.
   `himalaya folder list -a <account>`, or
   `himalaya envelope list -a <account>`.
 
-### WhatsApp CLI
+### WhatsApp as Me
 
 - Missing states usually look like: `wacli` not installed, QR pairing not
   completed, or
   `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` reporting
   `not_authenticated`.
-- Tell the user WhatsApp is not connected yet.
+- Tell the user WhatsApp as Me is not connected yet.
 - Offer to help pair it now, usually by showing the QR login flow and waiting
   for the phone to approve it.
 - If the normalized health check reports `paired_not_connected_readable`,

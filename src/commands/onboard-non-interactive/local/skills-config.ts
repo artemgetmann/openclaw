@@ -11,7 +11,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "apple-notes",
   "apple-reminders",
   "media-editor",
-  "office-documents",
+  "elevenlabs-creative",
   "gog",
   "goplaces",
   "himalaya",

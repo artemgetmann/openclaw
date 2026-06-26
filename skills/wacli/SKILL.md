@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📱",
-        "displayName": "WhatsApp",
+        "displayName": "WhatsApp as Me",
         "requires":
           {
             "bins":

@@ -87,16 +87,16 @@ function resolveSkillKey(entry: SkillEntry): string {
 
 const CONSUMER_SKILL_DISPLAY_NAMES: Record<string, string> = {
   gog: "Google Workspace",
-  goplaces: "Places Search",
+  goplaces: "Google Maps Search",
   himalaya: "Email",
+  "elevenlabs-creative": "ElevenLabs Creative",
   "media-editor": "Audio & Video Editing",
   mcporter: "MCP Connector Manager",
   "nano-banana-pro": "Image Generation",
   "nano-pdf": "PDF Editing",
-  "office-documents": "Documents, Spreadsheets & Presentations",
   peekaboo: "Mac Screen Control",
   "telegram-user": "Telegram as Me",
-  wacli: "WhatsApp",
+  wacli: "WhatsApp as Me",
 };
 
 function resolveSkillDisplayName(entry: SkillEntry): string | undefined {

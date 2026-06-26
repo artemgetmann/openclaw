@@ -86,8 +86,11 @@ They should come away knowing:
 - Tell the user the consumer-facing skill names and what each one is useful for.
   If a raw internal id is visible and the user is not asking for technical
   details, translate it first: `gog` is Google Workspace, `himalaya` is Email,
-  `wacli` is WhatsApp, `goplaces` is Places Search, and `peekaboo` is Mac Screen
-  Control.
+  `wacli` is WhatsApp as Me, `goplaces` is Google Maps Search, and `peekaboo` is
+  Mac Screen Control.
+- If ElevenLabs Creative is visible and configured, mention voice, music, sound
+  effects, dubbing, audio cleanup, and speech-to-text. Treat image/video
+  generation as exploratory unless a tested ElevenCreative route is connected.
 - Prefer a compact, scannable list over a giant paragraph.
 - If a skill description is visible, use that description as the starting point,
   then translate it into user language.

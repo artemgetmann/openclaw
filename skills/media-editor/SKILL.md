@@ -35,7 +35,9 @@ thumbnails, prepare voice notes, or burn/strip subtitles.
   dimensions, rotation, or audio layout.
 - Use existing narrow skills when they match better:
   - `video-frames` for quick frame extraction.
-  - `openai-whisper` or `openai-whisper-api` for transcription.
+  - `openclaw media transcribe --file <path> --json` for transcription. This
+    uses the configured managed audio/transcription route first and only falls
+    back to local tools such as Whisper when that is how the runtime is set up.
   - `songsee` for spectrograms or audio feature visualizations.
 - Prefer deterministic FFmpeg commands over GUI automation for file conversion
   and clipping.
