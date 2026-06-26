@@ -326,6 +326,11 @@ describe("evaluateGuiPolicy", () => {
     "Credit card number",
     "Card details",
     "Pay now",
+    "Book",
+    "Confirm",
+    "Order",
+    "Order now",
+    "Reserve",
     "Place order",
     "Confirm booking",
     "Buy now",
@@ -471,6 +476,26 @@ describe("evaluateGuiPolicy", () => {
 
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("requires explicit task approval");
+  });
+
+  it("blocks generic installer controls under the software update install-approved profile", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Browser extension installer" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Browser extension installer",
+        summary: "Extension installer",
+      }),
+      element: { ref: "@install", role: "button", label: "Install" },
+      reason: "Click Install after explicit user approval.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("visible software-update context");
   });
 
   it.each([

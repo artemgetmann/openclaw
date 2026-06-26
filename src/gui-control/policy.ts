@@ -112,6 +112,11 @@ const COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS = [
   "expiry date",
   "pay",
   "pay now",
+  "book",
+  "confirm",
+  "order",
+  "order now",
+  "reserve",
   "place order",
   "confirm booking",
   "confirm order",
@@ -323,6 +328,26 @@ function searchableText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function visibleSurfaceText(input: GuiPolicyInput): string {
+  return [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.summary,
+    ...(input.snapshot?.visibleText ?? []),
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    input.element?.description,
+    input.element?.value,
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function reasonAsDeniedSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): string {
   const reason = normalizeText(input.reason);
   if (!reason || !hasAnyTerm(reason, deniedTerms)) {
@@ -462,6 +487,22 @@ function commerceDetailEntryRequiresExplicitSource(input: GuiPolicyInput): boole
   );
 }
 
+function hasVisibleSoftwareUpdateInstallContext(input: GuiPolicyInput): boolean {
+  if (
+    input.taskPolicy?.taskId !== "software_update_install_approved" ||
+    input.actionType === "observe"
+  ) {
+    return true;
+  }
+
+  // Explicit approval is not enough for the broad install-approved profile. The
+  // visible target also has to look like an updater surface, otherwise a generic
+  // "Install" button in another installer could inherit update privileges.
+  return /\b(software update|update available|new version|release notes|install update|install updates|install and relaunch|install on quit|relaunch to update)\b/.test(
+    visibleSurfaceText(input),
+  );
+}
+
 function targetMatchesAllowedTerm(
   value: string | undefined,
   allowed: string[] | undefined,
@@ -566,6 +607,16 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
       risk: "blocked",
       reason:
         "Commerce detail entry requires the reason to state that the passenger, traveler, contact, or address detail was explicitly supplied by the user.",
+      requiredCapability,
+      taskPolicy,
+    };
+  }
+
+  if (!hasVisibleSoftwareUpdateInstallContext(input)) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason: "Approved software update install requires a visible software-update context.",
       requiredCapability,
       taskPolicy,
     };

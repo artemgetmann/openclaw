@@ -94,6 +94,34 @@ function findElement(snapshot: GuiSnapshot, element: ElementRef): ElementRef | u
   return semanticMatches.length === 1 ? semanticMatches[0] : undefined;
 }
 
+function secondaryActionIsAdvertised(element: ElementRef, action: string): boolean {
+  const requested = action.trim().toLowerCase();
+  return (
+    element.secondaryActions?.some((candidate) => candidate.trim().toLowerCase() === requested) ===
+    true
+  );
+}
+
+function blockedSecondaryActionReason(
+  input: VerifiedActionInput,
+  element?: ElementRef,
+): string | undefined {
+  if (input.actionType !== "secondaryAction") {
+    return undefined;
+  }
+  const action = input.secondaryAction?.trim();
+  if (!action) {
+    return "secondaryAction requires an action name.";
+  }
+  if (!element) {
+    return "secondaryAction requires an element.";
+  }
+  if (!secondaryActionIsAdvertised(element, action)) {
+    return `Element ${element.ref} does not advertise secondary action ${action}.`;
+  }
+  return undefined;
+}
+
 function createAudit(params: {
   target: AppTarget;
   element?: ElementRef;
@@ -220,6 +248,19 @@ export async function performVerifiedAction(
     });
   }
 
+  // Secondary actions are AX/runtime-advertised affordances on the current
+  // element, so stale caller metadata cannot authorize a mutation on re-observe.
+  const secondaryActionBlock = blockedSecondaryActionReason(input, element);
+  if (secondaryActionBlock) {
+    return failedResult({
+      input,
+      risk: "blocked",
+      stats,
+      pre,
+      failureReason: secondaryActionBlock,
+    });
+  }
+
   const policy = evaluateGuiPolicy({
     actionType: input.actionType,
     target: input.target,
@@ -268,6 +309,16 @@ export async function performVerifiedAction(
         stats,
         pre,
         failureReason: "Stale ref recovery failed during re-observe.",
+      });
+    }
+    const refreshedSecondaryActionBlock = blockedSecondaryActionReason(input, element);
+    if (refreshedSecondaryActionBlock) {
+      return failedResult({
+        input,
+        risk: policy.risk,
+        stats,
+        pre,
+        failureReason: refreshedSecondaryActionBlock,
       });
     }
     action = await executeRuntimeAction(input, element);
