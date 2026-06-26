@@ -698,6 +698,37 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("pastes into existing-session rich editor refs through evaluate_script", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "paste",
+          ref: "composer-1",
+          text: "caption plus media",
+          clear: true,
+          timeoutMs: 12_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("ClipboardEvent"),
+      args: ["composer-1"],
+      timeoutMs: 12_000,
+    });
+  });
+
   it("passes only real element refs as evaluate_script args for chooseOption", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({

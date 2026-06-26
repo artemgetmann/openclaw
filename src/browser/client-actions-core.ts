@@ -65,6 +65,16 @@ type BrowserActRequestBase =
       timeoutMs?: number;
     }
   | {
+      kind: "paste";
+      ref?: string;
+      selector?: string;
+      text: string;
+      targetId?: string;
+      clear?: boolean;
+      submit?: boolean;
+      timeoutMs?: number;
+    }
+  | {
       kind: "press";
       key: string;
       ref?: string;

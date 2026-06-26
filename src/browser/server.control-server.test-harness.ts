@@ -129,6 +129,7 @@ const pwMocks = vi.hoisted(() => ({
   hoverViaPlaywright: vi.fn(async () => {}),
   scrollIntoViewViaPlaywright: vi.fn(async () => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
+  pasteViaPlaywright: vi.fn(async () => {}),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
   pressKeyViaPlaywright: vi.fn(async () => {}),
   responseBodyViaPlaywright: vi.fn(async () => ({

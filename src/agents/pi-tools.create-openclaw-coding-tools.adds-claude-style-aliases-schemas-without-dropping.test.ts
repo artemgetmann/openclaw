@@ -174,6 +174,7 @@ describe("createOpenClawCodingTools", () => {
     expect(browser.description).toMatch(/do not silently fall back/i);
     expect(browser.description).toMatch(/chrome:\/\/inspect\/#remote-debugging/i);
     expect(browser.description).toMatch(/action="contract"/i);
+    expect(browser.description).toMatch(/kind="paste"/i);
     expect(browser.description).toMatch(/verify the final artifact/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
