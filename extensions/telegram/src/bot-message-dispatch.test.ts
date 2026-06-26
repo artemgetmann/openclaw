@@ -401,6 +401,52 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("streams assistant partials through the durable answer lane instead of transient progress", async () => {
+    const answerStream = createDraftStream(9101);
+    createTelegramDraftStream.mockImplementation((params) => {
+      expect(params).toEqual(
+        expect.objectContaining({
+          previewTransport: "message",
+          deleteAudit: expect.objectContaining({
+            callsite: "telegram-answer-preview-clear",
+          }),
+        }),
+      );
+      return answerStream;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Once upon a time, the answer began streaming.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Once upon a time, the answer began streaming and stayed in the same bubble.",
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9101" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(answerStream.update).toHaveBeenCalledWith(
+      "Once upon a time, the answer began streaming.",
+    );
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9101,
+      "Once upon a time, the answer began streaming and stayed in the same bubble.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("treats a terminal ambiguous block as the final answer", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Only answer." }, { kind: "block" });
