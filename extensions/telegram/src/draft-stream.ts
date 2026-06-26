@@ -100,6 +100,13 @@ export type TelegramDraftDurableSendEvent = {
   threadFallback: boolean;
 };
 
+export type TelegramDraftPreviewTraceEvent = {
+  previewTransport: "message" | "draft";
+  operation: "send" | "edit" | "draft";
+  textLength: number;
+  messageId?: number;
+};
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: number;
@@ -123,6 +130,10 @@ export function createTelegramDraftStream(params: {
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
   /** Called when the stream creates a real Telegram message, not a draft/edit. */
   onMessageDelivered?: (messageId: number, event: TelegramDraftDurableSendEvent) => void;
+  /** Called before a preview transport attempt so latency proof can see stalls. */
+  onPreviewAttempt?: (event: TelegramDraftPreviewTraceEvent) => void;
+  /** Called after a preview transport attempt completes successfully. */
+  onPreviewComplete?: (event: TelegramDraftPreviewTraceEvent) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -223,6 +234,12 @@ export function createTelegramDraftStream(params: {
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
+      params.onPreviewAttempt?.({
+        previewTransport,
+        operation: "edit",
+        textLength: renderedText.length,
+        messageId: streamMessageId,
+      });
       if (renderedParseMode) {
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
           parse_mode: renderedParseMode,
@@ -230,11 +247,22 @@ export function createTelegramDraftStream(params: {
       } else {
         await params.api.editMessageText(chatId, streamMessageId, renderedText);
       }
+      params.onPreviewComplete?.({
+        previewTransport,
+        operation: "edit",
+        textLength: renderedText.length,
+        messageId: streamMessageId,
+      });
       return true;
     }
     messageSendAttempted = true;
     let sendResult: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>;
     try {
+      params.onPreviewAttempt?.({
+        previewTransport,
+        operation: "send",
+        textLength: renderedText.length,
+      });
       sendResult = await sendRenderedMessageWithThreadFallback({
         renderedText,
         renderedParseMode,
@@ -258,6 +286,12 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     const normalizedMessageId = Math.trunc(sentMessageId);
+    params.onPreviewComplete?.({
+      previewTransport,
+      operation: "send",
+      textLength: renderedText.length,
+      messageId: normalizedMessageId,
+    });
     params.onMessageDelivered?.(normalizedMessageId, {
       callsite: "preview-send",
       previewTransport,
@@ -287,12 +321,22 @@ export function createTelegramDraftStream(params: {
         : {}),
       ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
     };
+    params.onPreviewAttempt?.({
+      previewTransport,
+      operation: "draft",
+      textLength: renderedText.length,
+    });
     await resolvedDraftApi!(
       chatId,
       draftId,
       renderedText,
       Object.keys(draftParams).length > 0 ? draftParams : undefined,
     );
+    params.onPreviewComplete?.({
+      previewTransport,
+      operation: "draft",
+      textLength: renderedText.length,
+    });
     return true;
   };
   const clearNativeDraftPreview = async (opts?: { usedThreadParams?: boolean }): Promise<void> => {

@@ -50,6 +50,7 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+import { createTelegramReplyLatencyTrace } from "./latency-trace.js";
 
 describe("dispatchTelegramMessage Telegram delivery", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
@@ -215,6 +216,108 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("emits one correlation id across Telegram, auto-reply, CLI, preview, and final spans", async () => {
+    const runtime = createRuntime();
+    const previewStream = createDraftStream(9001);
+    createTelegramDraftStream.mockImplementation((params) => ({
+      ...previewStream,
+      update: vi.fn((text: string) => {
+        params.onPreviewAttempt?.({
+          previewTransport: "message",
+          operation: "send",
+          textLength: text.length,
+        });
+        params.onPreviewComplete?.({
+          previewTransport: "message",
+          operation: "send",
+          textLength: text.length,
+          messageId: 9001,
+        });
+        previewStream.update(text);
+      }),
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions.onModelSelected?.({
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          thinkLevel: undefined,
+        });
+        replyOptions.onLatencyTrace?.({
+          span: "mcp_tool_prep_started",
+          fields: { provider: "codex-cli" },
+        });
+        replyOptions.onLatencyTrace?.({
+          span: "mcp_tool_prep_finished",
+          fields: { provider: "codex-cli", durationMs: 12 },
+        });
+        replyOptions.onLatencyTrace?.({
+          span: "backend_process_started_or_resumed",
+          fields: { provider: "codex-cli", resumed: true, outputMode: "jsonl" },
+        });
+        replyOptions.onLatencyTrace?.({
+          span: "first_assistant_delta_received",
+          fields: { provider: "codex-cli", textLength: 5 },
+        });
+        await replyOptions.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello final." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchTelegramMessage({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      bot: createBot(),
+      cfg: {},
+      runtime,
+      replyToMode: "first",
+      streamMode: "partial",
+      textLimit: 4096,
+      telegramCfg: {},
+      opts: { token: "token" },
+      latencyTrace: createTelegramReplyLatencyTrace({
+        runtime,
+        traceId: "latency-test-1",
+        startedAtMs: Date.now(),
+      }),
+    });
+
+    const traceLines = vi
+      .mocked(runtime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .filter((line) => line.startsWith("telegram.reply.latency"));
+    const spans = traceLines.map((line) => /span=([^ ]+)/.exec(line)?.[1]).filter(Boolean);
+
+    expect(traceLines.length).toBeGreaterThan(0);
+    expect(traceLines.every((line) => line.includes("trace=latency-test-1"))).toBe(true);
+    expect(spans).toEqual(
+      expect.arrayContaining([
+        "route_account_session_selected",
+        "reply_dispatch_started",
+        "model_selected",
+        "mcp_tool_prep_started",
+        "mcp_tool_prep_finished",
+        "backend_process_started_or_resumed",
+        "first_assistant_delta_received",
+        "telegram_partial_callback",
+        "first_telegram_preview_send_edit_attempted",
+        "first_telegram_preview_send_edit_completed",
+        "final_telegram_send_edit_completed",
+      ]),
+    );
+    expect(
+      traceLines.some(
+        (line) =>
+          line.includes("span=first_telegram_preview_send_edit_completed") &&
+          line.includes("partialCallbackCount=1") &&
+          line.includes("firstPartialTextLength=5") &&
+          line.includes("previewTransport=message"),
+      ),
+    ).toBe(true);
   });
 
   it("does not wait for a sentence before surfacing same-chat DM source previews", async () => {

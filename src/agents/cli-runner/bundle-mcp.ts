@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
-  loadEnabledBundleMcpConfig,
+  loadEnabledBundleMcpConfigAsync,
   type BundleMcpConfig,
   type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
@@ -179,7 +179,7 @@ export async function prepareCliBundleMcpConfig(params: {
     ) as BundleMcpConfig;
   }
 
-  const bundleConfig = loadEnabledBundleMcpConfig({
+  const bundleConfig = await loadEnabledBundleMcpConfigAsync({
     workspaceDir: params.workspaceDir,
     cfg: params.config,
   });

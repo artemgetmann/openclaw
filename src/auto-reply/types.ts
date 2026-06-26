@@ -23,6 +23,11 @@ export type TypingPolicy =
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type ReplyLatencyTraceEvent = {
+  span: string;
+  fields?: Record<string, string | number | boolean | null | undefined>;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -34,6 +39,8 @@ export type GetReplyOptions = {
   onAgentRunStart?: (runId: string) => void;
   /** Notifies when the active agent produces real activity that should renew UI-side run leases. */
   onAgentActivity?: () => void;
+  /** Emits cross-layer reply latency milestones under the channel-owned correlation id. */
+  onLatencyTrace?: (event: ReplyLatencyTraceEvent) => void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
