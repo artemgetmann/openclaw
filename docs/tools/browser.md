@@ -643,6 +643,11 @@ Notes:
   to get a fresh structured snapshot immediately after the action. Use this
   after `click`, `type`, `paste`, `fill`, `press`, or `select` when the next step depends
   on the updated UI; use a separate `snapshot` call for read-only inspection.
+- For React/DraftJS-style rich editors, `type` and `paste` accept
+  `repairEdit: true`. For `type`, OpenClaw focuses the target and enters the
+  full value through keyboard text entry before the tiny repair edit [insert one
+  space, then delete it]. This avoids DOM-only drafts that look correct but
+  publish as image-only or empty-text artifacts.
 - For forms, prefer one `act` request with `kind: "fill"` and `fields[]` refs
   from the snapshot instead of many single-field calls.
 
@@ -676,6 +681,13 @@ Contract rules are intentionally about final proof, not just input mechanics:
 - Capture the pre-commit state with a fresh snapshot or screenshot.
 - Prefer `act` `kind: "paste"` or real keyboard type over `fill` for rich editors when the next
   click creates a public or external artifact.
+- On X/Twitter and similar rich editors, visible text is not enough. Verify the
+  app-owned state through an enabled Post/submit button, non-empty sane
+  counter/progress ring, clean non-overlapped screenshot text, intended
+  audience, and media. An empty X counter/progress ring means the caption may not
+  be in the publish payload even if text is visible. If a mutation fails or
+  corrupts the draft, discard it, rebuild fresh, and ask for fresh approval
+  before posting.
 - Ask for explicit approval before irreversible or public commits.
 - After committing, open or inspect the final artifact and verify the expected
   text, media, target, and state before reporting success.

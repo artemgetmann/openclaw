@@ -95,6 +95,12 @@ const BrowserActSchema = Type.Object({
   text: Type.Optional(Type.String()),
   submit: Type.Optional(Type.Boolean()),
   slowly: Type.Optional(Type.Boolean()),
+  repairEdit: Type.Optional(
+    Type.Boolean({
+      description:
+        "For kind=type or kind=paste in rich editors, perform a tiny real keyboard edit after input to wake app-controlled editor state. Defaults to false.",
+    }),
+  ),
   clear: Type.Optional(
     Type.Boolean({
       description:
@@ -233,6 +239,12 @@ export const BrowserToolSchema = Type.Object({
   text: Type.Optional(Type.String()),
   submit: Type.Optional(Type.Boolean()),
   slowly: Type.Optional(Type.Boolean()),
+  repairEdit: Type.Optional(
+    Type.Boolean({
+      description:
+        "Legacy flattened act option for kind=type or kind=paste. Perform a tiny real keyboard edit after input for rich editors.",
+    }),
+  ),
   clear: Type.Optional(
     Type.Boolean({
       description:

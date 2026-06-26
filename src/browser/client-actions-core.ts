@@ -62,6 +62,7 @@ type BrowserActRequestBase =
       targetId?: string;
       submit?: boolean;
       slowly?: boolean;
+      repairEdit?: boolean;
       timeoutMs?: number;
     }
   | {
@@ -72,6 +73,7 @@ type BrowserActRequestBase =
       targetId?: string;
       clear?: boolean;
       submit?: boolean;
+      repairEdit?: boolean;
       timeoutMs?: number;
     }
   | {

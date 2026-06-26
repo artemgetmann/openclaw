@@ -295,6 +295,12 @@ export async function snapshotAria(opts: {
   });
 }
 
+export async function insertTextViaCdp(opts: { wsUrl: string; text: string }): Promise<void> {
+  await withCdpSocket(opts.wsUrl, async (send) => {
+    await send("Input.insertText", { text: opts.text });
+  });
+}
+
 function normalizeAriaRef(ref: string): string {
   const trimmed = ref.trim();
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
