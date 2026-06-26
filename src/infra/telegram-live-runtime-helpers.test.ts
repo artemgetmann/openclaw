@@ -32,6 +32,17 @@ function makeTempDir(): string {
   return dir;
 }
 
+function resolveAcpxCommandFixturePath(repoRoot: string, layout: "dist" | "source"): string {
+  const pluginRoot =
+    layout === "dist"
+      ? path.join(repoRoot, "dist", "extensions", "acpx")
+      : path.join(repoRoot, "extensions", "acpx");
+  if (process.platform === "win32") {
+    return path.join(pluginRoot, "node_modules", ".bin", "acpx.cmd");
+  }
+  return path.join(pluginRoot, "node_modules", "acpx", "dist", "cli.js");
+}
+
 function unsignedJwtWithExp(expSeconds: number): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url");
@@ -776,13 +787,15 @@ describe("telegram live runtime helpers", () => {
   });
 
   it("keeps external CLI auth sync compatible with ACP validation Codex lanes", () => {
-    const acpxBinDir = path.resolve("dist", "extensions", "acpx", "node_modules", ".bin");
-    const acpxCommand = path.join(acpxBinDir, process.platform === "win32" ? "acpx.cmd" : "acpx");
-    fs.mkdirSync(acpxBinDir, { recursive: true });
+    const repoRoot = makeTempDir();
+    const acpxCommand = resolveAcpxCommandFixturePath(repoRoot, "dist");
+    const acpxCommandDir = path.dirname(acpxCommand);
+    fs.mkdirSync(acpxCommandDir, { recursive: true });
     fs.writeFileSync(acpxCommand, "");
     expect(
       buildTelegramLiveRuntimeChildEnv({
         acpValidation: "true",
+        repoRoot,
         parentEnv: {
           ACPX_CMD: "/usr/local/bin/acpx",
           OPENAI_API_KEY: "sk-live-test",
@@ -793,15 +806,22 @@ describe("telegram live runtime helpers", () => {
       ACPX_CMD: acpxCommand,
       OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
       OTHER_VALUE: "kept",
-      PATH: acpxBinDir,
+      PATH: acpxCommandDir,
     });
   });
 
-  it("exports the plugin-local acpx command into ACP validation child env", () => {
+  it("exports the preferred bundled acpx command into ACP validation child env", () => {
     const repoRoot = makeTempDir();
-    const acpxBinDir = path.join(repoRoot, "dist", "extensions", "acpx", "node_modules", ".bin");
-    const acpxCommand = path.join(acpxBinDir, process.platform === "win32" ? "acpx.cmd" : "acpx");
-    fs.mkdirSync(acpxBinDir, { recursive: true });
+    const staleBinDir = path.join(repoRoot, "dist", "extensions", "acpx", "node_modules", ".bin");
+    const staleBinCommand = path.join(
+      staleBinDir,
+      process.platform === "win32" ? "acpx.cmd" : "acpx",
+    );
+    const acpxCommand = resolveAcpxCommandFixturePath(repoRoot, "dist");
+    const acpxCommandDir = path.dirname(acpxCommand);
+    fs.mkdirSync(staleBinDir, { recursive: true });
+    fs.mkdirSync(acpxCommandDir, { recursive: true });
+    fs.writeFileSync(staleBinCommand, "");
     fs.writeFileSync(acpxCommand, "");
 
     expect(
@@ -816,16 +836,16 @@ describe("telegram live runtime helpers", () => {
     ).toEqual({
       ACPX_CMD: acpxCommand,
       OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
-      PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
+      PATH: `${acpxCommandDir}${path.delimiter}/usr/bin`,
       OTHER_VALUE: "kept",
     });
   });
 
-  it("falls back to the source acpx command when the bundled dist binary is missing", () => {
+  it("falls back to the source acpx command when the bundled dist command is missing", () => {
     const repoRoot = makeTempDir();
-    const acpxBinDir = path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin");
-    const acpxCommand = path.join(acpxBinDir, process.platform === "win32" ? "acpx.cmd" : "acpx");
-    fs.mkdirSync(acpxBinDir, { recursive: true });
+    const acpxCommand = resolveAcpxCommandFixturePath(repoRoot, "source");
+    const acpxCommandDir = path.dirname(acpxCommand);
+    fs.mkdirSync(acpxCommandDir, { recursive: true });
     fs.writeFileSync(acpxCommand, "");
 
     expect(
@@ -840,7 +860,7 @@ describe("telegram live runtime helpers", () => {
     ).toEqual({
       ACPX_CMD: acpxCommand,
       OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
-      PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
+      PATH: `${acpxCommandDir}${path.delimiter}/usr/bin`,
       OTHER_VALUE: "kept",
     });
   });

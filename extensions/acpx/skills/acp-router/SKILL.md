@@ -128,8 +128,11 @@ For this repo, direct `acpx` calls must follow the same pinned policy as the `@o
 
 1. Prefer plugin-local binary, not global PATH:
    - `${ACPX_CMD}` when already injected into the environment
+   - otherwise `./dist/extensions/acpx/node_modules/acpx/dist/cli.js`
    - otherwise `./dist/extensions/acpx/node_modules/.bin/acpx`
+   - otherwise `./extensions/acpx/node_modules/acpx/dist/cli.js`
    - otherwise `./extensions/acpx/node_modules/.bin/acpx`
+   - Package-owned `dist/cli.js` is preferred because packaged `.bin/acpx` copies can lose ACPX's sibling chunk layout.
 2. Resolve pinned version from extension dependency:
    - `node -e "console.log(require('./extensions/acpx/package.json').dependencies.acpx)"`
 3. If binary is missing or version mismatched, install plugin-local pinned version:
@@ -144,8 +147,12 @@ Set and reuse:
 
 ```bash
 if [[ -z "${ACPX_CMD:-}" ]]; then
-  if [[ -x "./dist/extensions/acpx/node_modules/.bin/acpx" ]]; then
+  if [[ -x "./dist/extensions/acpx/node_modules/acpx/dist/cli.js" ]]; then
+    ACPX_CMD="./dist/extensions/acpx/node_modules/acpx/dist/cli.js"
+  elif [[ -x "./dist/extensions/acpx/node_modules/.bin/acpx" ]]; then
     ACPX_CMD="./dist/extensions/acpx/node_modules/.bin/acpx"
+  elif [[ -x "./extensions/acpx/node_modules/acpx/dist/cli.js" ]]; then
+    ACPX_CMD="./extensions/acpx/node_modules/acpx/dist/cli.js"
   elif [[ -x "./extensions/acpx/node_modules/.bin/acpx" ]]; then
     ACPX_CMD="./extensions/acpx/node_modules/.bin/acpx"
   else

@@ -1386,10 +1386,47 @@ export function buildTelegramLiveRuntimeChildEnv(params) {
     env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET = "1";
 
     const acpxExecutable = process.platform === "win32" ? "acpx.cmd" : "acpx";
-    const acpxCandidatePaths = [
-      path.join(repoRoot, "dist", "extensions", "acpx", "node_modules", ".bin", acpxExecutable),
-      path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", acpxExecutable),
-    ];
+    const acpxCandidatePaths =
+      process.platform === "win32"
+        ? [
+            path.join(
+              repoRoot,
+              "dist",
+              "extensions",
+              "acpx",
+              "node_modules",
+              ".bin",
+              acpxExecutable,
+            ),
+            path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", acpxExecutable),
+          ]
+        : [
+            // Packaged macOS apps may materialize pnpm's .bin symlink into a
+            // standalone file. The ACPX CLI imports relative chunks next to the
+            // package entrypoint, so prefer the package-owned cli.js when it is
+            // present and keep .bin only as an unusual-install fallback.
+            path.join(
+              repoRoot,
+              "dist",
+              "extensions",
+              "acpx",
+              "node_modules",
+              "acpx",
+              "dist",
+              "cli.js",
+            ),
+            path.join(
+              repoRoot,
+              "dist",
+              "extensions",
+              "acpx",
+              "node_modules",
+              ".bin",
+              acpxExecutable,
+            ),
+            path.join(repoRoot, "extensions", "acpx", "node_modules", "acpx", "dist", "cli.js"),
+            path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", acpxExecutable),
+          ];
     const acpxCommand = acpxCandidatePaths.find((candidatePath) => fs.existsSync(candidatePath));
 
     // Direct ACPX fallback commands run through the agent shell, not the plugin
