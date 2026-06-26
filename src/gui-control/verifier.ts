@@ -122,6 +122,92 @@ function blockedSecondaryActionReason(
   return undefined;
 }
 
+function numericElementRef(element: ElementRef): number | undefined {
+  const match = /^@?(\d+)$/.exec(element.ref);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function browserAppName(value: string | undefined): boolean {
+  return /^(safari|google chrome|chrome|arc|firefox)$/i.test((value ?? "").trim());
+}
+
+function elementText(element: ElementRef): string {
+  return [
+    element.role,
+    element.label,
+    element.name,
+    element.title,
+    element.description,
+    element.value,
+  ]
+    .map((value) => (value ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function hasSemanticPressAction(element: ElementRef): boolean {
+  return Boolean(element.secondaryActions?.some((action) => /^(?:AX)?Press$/i.test(action.trim())));
+}
+
+function isInteractiveSibling(element: ElementRef): boolean {
+  const text = elementText(element).toLowerCase();
+  return /\b(button|pop up button|link|switch|combo box|text field|tab)\b/.test(text);
+}
+
+function ambiguousBrowserActivationReason(
+  input: VerifiedActionInput,
+  snapshot: GuiSnapshot,
+  element: ElementRef | undefined,
+): string | undefined {
+  if (input.actionType !== "click" || !element || !browserAppName(input.target.appName)) {
+    return undefined;
+  }
+
+  const selectedText = elementText(element);
+  const selectedRef = numericElementRef(element);
+  if (
+    selectedRef === undefined ||
+    element.bounds ||
+    hasSemanticPressAction(element) ||
+    selectedText.length < 160 ||
+    !/\blink\b/i.test(selectedText)
+  ) {
+    return undefined;
+  }
+
+  // Safari/OCU can expose a whole web result row as one long AX link while
+  // sibling controls inside the same visual card remain separate AX elements.
+  // Without bounds, secondary actions, or hit-test proof, a generic click can
+  // land on a sibling such as "emissions" or "details" even though policy
+  // approved the row link. Block that class before mutation; post-state
+  // verification is too late because the wrong reversible control has already
+  // been activated.
+  const nearbyInteractiveSiblings = snapshot.elements.filter((candidate) => {
+    const candidateRef = numericElementRef(candidate);
+    return (
+      candidateRef !== undefined &&
+      candidateRef > selectedRef &&
+      candidateRef <= selectedRef + 12 &&
+      candidate.ref !== element.ref &&
+      isInteractiveSibling(candidate)
+    );
+  });
+
+  if (!nearbyInteractiveSiblings.length) {
+    return undefined;
+  }
+
+  const refs = nearbyInteractiveSiblings
+    .slice(0, 3)
+    .map((candidate) => candidate.ref)
+    .join(", ");
+  return `Refusing blind click on broad browser link ${element.ref}: no bounds or semantic Press action are exposed, and nearby interactive sibling controls (${refs}) make exact activation ambiguous.`;
+}
+
 function createAudit(params: {
   target: AppTarget;
   element?: ElementRef;
@@ -288,6 +374,17 @@ export async function performVerifiedAction(
       stats,
       failureReason: policy.reason ?? "Blocked by GUI policy.",
     };
+  }
+
+  const ambiguousActivation = ambiguousBrowserActivationReason(input, pre, element);
+  if (ambiguousActivation) {
+    return failedResult({
+      input,
+      risk: policy.risk,
+      stats,
+      pre,
+      failureReason: ambiguousActivation,
+    });
   }
 
   let action = await executeRuntimeAction(input, element);
