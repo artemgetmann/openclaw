@@ -427,6 +427,19 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
     if (!input.secondaryAction?.trim()) {
       throw new Error("gui-control secondary-action requires --secondary-action.");
     }
+    if (!input.runtime.performSecondaryAction) {
+      const summary = "Runtime does not support secondary actions.";
+      return {
+        ok: false,
+        action: input.action,
+        target,
+        snapshot: summarizeSnapshot(resolution.snapshot, input.maxElements),
+        summary,
+        element: resolution.element,
+        blocked: true,
+        failureReason: summary,
+      };
+    }
     if (!input.verifyText && !input.allowObservedClick) {
       const summary =
         "Secondary action requires --verify-text for task proof, or --allow-observed-click for an explicitly accepted changed-state proof.";

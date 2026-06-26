@@ -10,7 +10,6 @@ const GUI_CONTROL_ACTIONS = [
   "resolve_element",
   "set_value",
   "click",
-  "secondary_action",
   "press",
   "scroll",
 ] as const;
@@ -44,9 +43,6 @@ const GuiControlToolSchema = Type.Object({
     }),
   ),
   value: Type.Optional(Type.String({ description: "Text for action=set_value." })),
-  secondaryAction: Type.Optional(
-    Type.String({ description: "Secondary action name for action=secondary_action." }),
-  ),
   keys: Type.Optional(
     Type.Array(Type.String(), {
       description: "Key combo list for action=press, e.g. ['cmd+return'].",
@@ -95,9 +91,6 @@ function normalizeAction(action: string): GuiControlAction {
   if (action === "set_value") {
     return "set-value";
   }
-  if (action === "secondary_action") {
-    return "secondary-action";
-  }
   if (action === "observe" || action === "click" || action === "press" || action === "scroll") {
     return action;
   }
@@ -141,7 +134,6 @@ export function createGuiControlTool(): AnyAgentTool {
                   trim: false,
                 })
               : readStringParam(params, "value", { trim: false }),
-          secondaryAction: readStringParam(params, "secondaryAction"),
           keys: Array.isArray(params.keys)
             ? (params.keys as unknown[]).filter((key): key is string => typeof key === "string")
             : undefined,

@@ -266,6 +266,7 @@ export async function performVerifiedAction(
     target: input.target,
     snapshot: pre,
     element,
+    secondaryAction: input.secondaryAction,
     reason: input.reason,
     approvedPolicyRisk: input.approvedPolicyRisk,
     taskPolicy: input.taskPolicy,

@@ -416,6 +416,47 @@ describe("performVerifiedAction", () => {
     ]);
   });
 
+  it("blocks advertised secondary actions when the action name is sensitive", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          elements: [
+            {
+              ref: "@file",
+              role: "row",
+              label: "Scratch document",
+              secondaryActions: ["Delete"],
+            },
+          ],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Claude" },
+      element: {
+        ref: "@file",
+        role: "row",
+        label: "Scratch document",
+        secondaryActions: ["Delete"],
+      },
+      actionType: "secondaryAction",
+      secondaryAction: "Delete",
+      reason: "Activate the selected row.",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+      verify: () => ({ ok: true, summary: "should not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("Blocked sensitive GUI surface");
+    expect(result.stats.actionCount).toBe(0);
+    expect(runtime.secondaryActions).toEqual([]);
+  });
+
   it("fails closed before acting when the observed app/window is wrong", async () => {
     const runtime = new MockGuiRuntime({
       observations: [snapshot({ appName: "Telegram", windowTitle: "Telegram" })],

@@ -240,6 +240,35 @@ describe("runGuiControl", () => {
     expect(result.failureReason).toContain("--verify-text");
   });
 
+  it("fails closed when the runtime does not support secondary actions", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          elements: [
+            { ref: "@link", role: "link", label: "Select flight", secondaryActions: ["AXPress"] },
+          ],
+        }),
+      ],
+    });
+    runtime.performSecondaryAction = undefined as never;
+
+    const result = await runGuiControl({
+      runtime,
+      action: "secondary-action",
+      appName: "Claude",
+      ref: "@link",
+      secondaryAction: "AXPress",
+      verifyText: "Returning flights",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.failureReason).toContain("Runtime does not support secondary actions");
+    expect(runtime.secondaryActions).toEqual([]);
+  });
+
   it("performs a verified element secondary action through the shared verifier path", async () => {
     const runtime = new MockGuiRuntime({
       observations: [

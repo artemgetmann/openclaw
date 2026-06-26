@@ -287,7 +287,7 @@ describe("evaluateGuiPolicy", () => {
       snapshot: snapshot({
         appName: "Safari",
         windowTitle: "Airline traveler details",
-        summary: "Traveler detail form before payment",
+        summary: "Traveler detail form",
       }),
       element: { ref: "@email", role: "textbox", label: "Contact email" },
       reason: "Enter the contact email explicitly supplied by the user for this booking flow.",
@@ -322,6 +322,129 @@ describe("evaluateGuiPolicy", () => {
   });
 
   it.each([
+    {
+      windowTitle: "Payment",
+      summary: "Payment method required",
+      visibleText: [] as string[],
+      blockedTerm: "payment",
+    },
+    {
+      windowTitle: "Sign in",
+      summary: "Sign in to continue",
+      visibleText: [] as string[],
+      blockedTerm: "sign in",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Payment method required",
+      visibleText: [] as string[],
+      blockedTerm: "payment",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Checkout step",
+      visibleText: ["Sign in to continue"] as string[],
+      blockedTerm: "sign in",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Review and confirm order",
+      visibleText: [] as string[],
+      blockedTerm: "review and confirm",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Checkout step",
+      visibleText: ["Final confirmation"] as string[],
+      blockedTerm: "final confirmation",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Checkout step",
+      visibleText: ["Pay with Visa"] as string[],
+      blockedTerm: "pay",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Checkout step",
+      visibleText: ["Apple Pay"] as string[],
+      blockedTerm: "apple pay",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Checkout step",
+      visibleText: ["PayPal"] as string[],
+      blockedTerm: "paypal",
+    },
+  ])(
+    "blocks generic commerce controls on hard-stop $blockedTerm context",
+    ({ windowTitle, summary, visibleText, blockedTerm }) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle,
+          summary,
+          visibleText,
+        }),
+        element: { ref: "@continue", role: "button", label: "Continue" },
+        reason: "Continue this reversible commerce flow without entering payment or final booking.",
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain(`Blocked sensitive GUI context: ${blockedTerm}`);
+    },
+  );
+
+  it("blocks visible payment-method instructions even when phrased as before-you-continue copy", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Checkout" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Checkout",
+        summary: "Checkout step",
+        visibleText: ["Before you continue, add a payment method"],
+      }),
+      element: { ref: "@continue", role: "button", label: "Continue" },
+      reason: "Continue this reversible commerce flow without entering payment or final booking.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI context: payment");
+  });
+
+  it.each(["Given name", "Surname", "Date of birth", "Mobile number"])(
+    "blocks traveler detail field %s without explicit user-supplied source",
+    (label) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "setValue",
+        target: { appName: "Safari", windowTitle: "Traveler details" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Traveler details",
+          summary: "Traveler detail form",
+        }),
+        element: { ref: "@field", role: "textbox", label },
+        reason: `Fill the ${label}.`,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("explicitly supplied by the user");
+    },
+  );
+
+  it.each([
     "Payment method",
     "Credit card number",
     "Card details",
@@ -335,6 +458,10 @@ describe("evaluateGuiPolicy", () => {
     "Confirm booking",
     "Buy now",
     "Purchase",
+    "Subscribe",
+    "Upgrade",
+    "Start trial",
+    "Start free trial",
     "OTP verification",
     "Password",
     "Security settings",
@@ -369,7 +496,7 @@ describe("evaluateGuiPolicy", () => {
         snapshot: snapshot({
           appName: "Safari",
           windowTitle: "Checkout setup",
-          summary: "Commerce setup before payment",
+          summary: "Commerce setup",
         }),
         element: { ref: "@continue", role: "button", label },
         reason: `Click ${label} without entering a payment method or final charge step.`,
@@ -380,6 +507,59 @@ describe("evaluateGuiPolicy", () => {
 
       expect(decision.allowed).toBe(true);
       expect(decision.risk).toBe("allowed-mutation");
+    },
+  );
+
+  it("allows checkout continuation when cart context contains an unrelated remove link", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Cart" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Cart",
+        summary: "Cart has an item remove link",
+        visibleText: ["Item A", "Remove", "Continue to checkout"],
+      }),
+      element: { ref: "@continue", role: "button", label: "Continue to checkout" },
+      reason: "Click Continue to checkout without entering a payment method or final charge step.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each([
+    "Continue to payment without entering card details.",
+    "Continue to pay without entering card details.",
+    "Go to final booking without paying.",
+    "Click Subscribe to start the plan.",
+    "Book this ticket without entering payment.",
+    "Click Book flight, not pay yet.",
+    "Reserve this flight without payment.",
+    "Confirm the booking without paying yet.",
+  ])(
+    "blocks reasons that proceed to payment/final booking even with negative clauses: %s",
+    (reason) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Checkout setup" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Checkout setup",
+          summary: "Commerce setup",
+        }),
+        element: { ref: "@continue", role: "button", label: "Continue" },
+        reason,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
     },
   );
 
@@ -409,6 +589,8 @@ describe("evaluateGuiPolicy", () => {
     "Install on Quit",
     "Install and Relaunch",
     "Download and Install",
+    "Download & Install",
+    "Download/Install",
     "Update Now",
     "Relaunch to Update",
     "Skip This Version",
@@ -520,6 +702,27 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain("visible software-update context");
   });
 
+  it("does not treat generic release notes as software update install context", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Browser extension installer" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Browser extension installer",
+        summary: "Extension installer with release notes",
+        visibleText: ["Release notes"],
+      }),
+      element: { ref: "@install", role: "button", label: "Install" },
+      reason: "Click Install after explicit user approval.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("visible software-update context");
+  });
+
   it.each(["Skip This Version", "Remind Me Later", "View Later"])(
     "blocks updater preference control %s under the install-approved profile",
     (label) => {
@@ -545,6 +748,8 @@ describe("evaluateGuiPolicy", () => {
 
   it.each([
     "Download and Install",
+    "Download & Install",
+    "Download/Install",
     "Update Now",
     "Relaunch to Update",
     "Replace App",
@@ -572,28 +777,32 @@ describe("evaluateGuiPolicy", () => {
     },
   );
 
-  it.each(["Install Update", "Relaunch to Update", "Stop AI Operator", "Quit App Only"])(
-    "keeps safe settings profile blocking update/operator final controls %s",
-    (label) => {
-      const decision = evaluateGuiPolicy({
-        actionType: "click",
-        target: { appName: "Jarvis", windowTitle: "Settings" },
-        snapshot: snapshot({
-          appName: "Jarvis",
-          windowTitle: "Settings",
-          summary: "Jarvis settings",
-        }),
-        element: { ref: "@danger", role: "button", label },
-        reason: `Click ${label}.`,
-        approvedPolicyRisk: true,
-        taskPolicy: getGuiTaskPolicyProfile("safe_local_settings_navigation"),
-        verificationMode: "post_state",
-      });
+  it.each([
+    "Install Update",
+    "Install Now",
+    "Install and Relaunch",
+    "Relaunch to Update",
+    "Stop AI Operator",
+    "Quit App Only",
+  ])("keeps safe settings profile blocking update/operator final controls %s", (label) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Jarvis", windowTitle: "Settings" },
+      snapshot: snapshot({
+        appName: "Jarvis",
+        windowTitle: "Settings",
+        summary: "Jarvis settings",
+      }),
+      element: { ref: "@danger", role: "button", label },
+      reason: `Click ${label}.`,
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("safe_local_settings_navigation"),
+      verificationMode: "post_state",
+    });
 
-      expect(decision.allowed).toBe(false);
-      expect(decision.reason).toContain("Blocked sensitive GUI surface");
-    },
-  );
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
 
   it("blocks generic sensitive surfaces before capability approval can bypass them", () => {
     const decision = evaluateGuiPolicy({

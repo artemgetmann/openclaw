@@ -69,6 +69,8 @@ const LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS = [
   "quit",
   "install update",
   "install updates",
+  "install now",
+  "install and relaunch",
   "update now",
   "update installation",
   "download update",
@@ -113,6 +115,7 @@ const COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS = [
   "pay",
   "pay now",
   "book",
+  "final booking",
   "confirm",
   "order",
   "order now",
@@ -125,6 +128,11 @@ const COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS = [
   "confirm charge",
   "buy now",
   "purchase",
+  "subscribe",
+  "subscription",
+  "upgrade",
+  "start trial",
+  "start free trial",
   "book now",
   "complete booking",
   "complete order",
@@ -146,6 +154,73 @@ const COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS = [
   "void",
 ];
 
+// Commerce flows need two different safety lenses:
+// - the selected control/reason should block final booking, purchase, payment,
+//   auth, and destructive controls;
+// - the broader page context should block hard-stop auth/payment/security pages
+//   even when the selected button is generically labeled "Continue".
+//
+// Keep final-booking words like "book" out of the context-only list because
+// normal search/result pages can legitimately have titles like "Book your
+// ticket" while still being reversible pre-payment navigation.
+const COMMERCE_HARD_STOP_CONTEXT_TERMS = [
+  "login",
+  "log in",
+  "sign in",
+  "auth",
+  "password",
+  "passkey",
+  "payment",
+  "billing",
+  "account settings",
+  "payment method",
+  "change payment",
+  "add payment",
+  "credit card",
+  "debit card",
+  "payment card",
+  "card details",
+  "card number",
+  "security code",
+  "cvv",
+  "cvc",
+  "expiration date",
+  "expiry date",
+  "pay with",
+  "apple pay",
+  "paypal",
+  "pay now",
+  "pay",
+  "final confirmation",
+  "review and confirm",
+  "place order",
+  "confirm order",
+  "confirm purchase",
+  "confirm payment",
+  "confirm charge",
+  "buy now",
+  "purchase",
+  "subscribe",
+  "subscription",
+  "upgrade",
+  "start trial",
+  "start free trial",
+  "book now",
+  "complete booking",
+  "complete order",
+  "otp",
+  "one-time password",
+  "two-factor",
+  "2fa",
+  "account settings",
+  "security settings",
+  "cancel booking",
+  "cancel order",
+  "delete order",
+  "refund",
+  "void",
+];
+
 const SOFTWARE_UPDATE_FLOW_DENIED_TERMS = [
   ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
   "install update",
@@ -154,6 +229,8 @@ const SOFTWARE_UPDATE_FLOW_DENIED_TERMS = [
   "install on quit",
   "install and relaunch",
   "download and install",
+  "download & install",
+  "download/install",
   "download update",
   "update now",
   "upgrade now",
@@ -173,6 +250,8 @@ const SOFTWARE_UPDATE_FLOW_DENIED_TERMS = [
 const SOFTWARE_UPDATE_INSTALL_APPROVED_DENIED_TERMS = [
   ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
   "download and install",
+  "download & install",
+  "download/install",
   "download update",
   "update now",
   "upgrade now",
@@ -297,6 +376,7 @@ export type GuiPolicyInput = {
   target: AppTarget;
   snapshot?: GuiSnapshot;
   element?: ElementRef;
+  secondaryAction?: string;
   reason: string;
   approvedPolicyRisk?: boolean;
   taskPolicy?: GuiTaskPolicy;
@@ -321,6 +401,7 @@ function searchableText(input: GuiPolicyInput): string {
     input.element?.label,
     input.element?.description,
     input.element?.value,
+    input.secondaryAction,
     input.reason,
   ]
     .map(normalizeText)
@@ -342,10 +423,50 @@ function visibleContextText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function commerceHardStopContextText(input: GuiPolicyInput): string {
+  return [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.summary,
+    ...(input.snapshot?.visibleText ?? []),
+  ]
+    .map(commerceHardStopContextPart)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function commerceHardStopContextPart(value: string | undefined): string {
+  const text = normalizeText(value);
+  if (!text || !hasAnyTerm(text, COMMERCE_HARD_STOP_CONTEXT_TERMS)) {
+    return "";
+  }
+  return text;
+}
+
 function reasonAsDeniedSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): string {
   const reason = normalizeText(input.reason);
   if (!reason || !hasAnyTerm(reason, deniedTerms)) {
     return "";
+  }
+  const hasStopBeforeBoundary = /\bstop before\b/.test(reason);
+
+  // A boundary phrase only helps when the action itself remains reversible. If
+  // the request says to proceed into payment/card/final-confirmation territory,
+  // the negative clause after it cannot launder the transition into a safe
+  // pre-payment click.
+  if (
+    /\b(continue|proceed|go|advance|navigate|move|open)\s+(?:to|into|through|toward|towards)\s+(?:the\s+)?(pay|payment|billing|card details|final confirmation|final booking|purchase confirmation|booking confirmation)\b/.test(
+      reason,
+    ) ||
+    /\b(enter|add|provide|submit|save|use)\s+(?:a\s+|the\s+|this\s+)?(payment|payment method|card|credit card|debit card|card details|card number)\b/.test(
+      reason,
+    ) ||
+    (!hasStopBeforeBoundary &&
+      /\b(book|reserve|confirm|purchase|buy|order|subscribe|upgrade)\b/.test(reason))
+  ) {
+    return reason;
   }
 
   // Operators often state a boundary in the reason, for example "open this
@@ -385,6 +506,7 @@ function sensitiveSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): str
     input.element?.label,
     input.element?.description,
     input.element?.value,
+    input.secondaryAction,
     reasonAsDeniedSurfaceText(input, deniedTerms),
   ]
     .map(normalizeText)
@@ -400,6 +522,7 @@ function selectedMutationSurfaceText(input: GuiPolicyInput): string {
     input.element?.label,
     input.element?.description,
     input.element?.value,
+    input.secondaryAction,
   ]
     .map(normalizeText)
     .filter(Boolean)
@@ -415,6 +538,7 @@ function intendedActionText(input: GuiPolicyInput): string {
     input.element?.title,
     input.element?.label,
     input.element?.description,
+    input.secondaryAction,
     input.reason,
   ]
     .map(normalizeText)
@@ -472,18 +596,35 @@ function commerceDetailEntryRequiresExplicitSource(input: GuiPolicyInput): boole
     return false;
   }
 
+  const detailSurface = [selectedSurface, visibleContextText(input)]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+
   return Boolean(
-    hasAnyTerm(selectedSurface, [
+    hasAnyTerm(detailSurface, [
       "passenger",
       "traveler",
       "traveller",
       "contact",
       "email",
+      "email address",
       "phone",
+      "phone number",
+      "mobile",
+      "mobile number",
       "address",
+      "name",
+      "given name",
       "first name",
       "last name",
       "full name",
+      "surname",
+      "date of birth",
+      "birth date",
+      "dob",
+      "nationality",
+      "passport",
     ]) && !isExplicitUserSuppliedDetailReason(normalizeText(input.reason)),
   );
 }
@@ -499,7 +640,7 @@ function hasVisibleSoftwareUpdateInstallContext(input: GuiPolicyInput): boolean 
   // Explicit approval is not enough for the broad install-approved profile. The
   // visible target also has to look like an updater surface, otherwise a generic
   // "Install" button in another installer could inherit update privileges.
-  return /\b(software update|update available|new version|release notes|install update|install updates|install and relaunch|install on quit|relaunch to update)\b/.test(
+  return /\b(software update|update available|new version|install update|install updates|install and relaunch|install on quit|relaunch to update)\b/.test(
     visibleContextText(input),
   );
 }
@@ -657,6 +798,22 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
       requiredCapability,
       taskPolicy,
     };
+  }
+
+  if (taskPolicy.taskId === "commerce_flow_until_final_confirmation") {
+    const hardStopContext = hasAnyTerm(
+      commerceHardStopContextText(input),
+      COMMERCE_HARD_STOP_CONTEXT_TERMS,
+    );
+    if (hardStopContext) {
+      return {
+        allowed: false,
+        risk: "blocked",
+        reason: `Blocked sensitive GUI context: ${hardStopContext}`,
+        requiredCapability,
+        taskPolicy,
+      };
+    }
   }
 
   if (!taskPolicy.grantedCapabilities.includes(requiredCapability)) {
