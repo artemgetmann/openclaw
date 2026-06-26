@@ -185,6 +185,15 @@ function snapshotChanged(pre: GuiSnapshot, post: GuiSnapshot): boolean {
   );
 }
 
+function secondaryActionIsAdvertised(element: ElementRef, action: string): boolean {
+  const requested = action.trim().toLowerCase();
+  return (
+    requested.length > 0 &&
+    element.secondaryActions?.some((candidate) => candidate.trim().toLowerCase() === requested) ===
+      true
+  );
+}
+
 async function resolveFromFreshSnapshot(
   input: GuiControlInput,
   target: AppTarget,
@@ -432,13 +441,32 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
         failureReason: summary,
       };
     }
+    const secondaryAction = input.secondaryAction.trim();
+    // Secondary actions are runtime-advertised affordances, not free-form
+    // commands. If the fresh element does not expose the action, failing here
+    // keeps OCU/browser adapters from mutating an ambiguous target anyway.
+    if (!secondaryActionIsAdvertised(resolution.element, secondaryAction)) {
+      const summary = `Refusing secondary action ${JSON.stringify(
+        secondaryAction,
+      )} because fresh element ${resolution.element.ref} does not advertise it.`;
+      return {
+        ok: false,
+        action: input.action,
+        target,
+        snapshot: summarizeSnapshot(resolution.snapshot, input.maxElements),
+        summary,
+        element: resolution.element,
+        blocked: true,
+        failureReason: summary,
+      };
+    }
     const result = await performVerifiedAction({
       runtime: input.runtime,
       target,
       element: resolution.element,
       actionType: "secondaryAction",
-      secondaryAction: input.secondaryAction.trim(),
-      reason: input.reason ?? `Perform GUI secondary action ${input.secondaryAction.trim()}.`,
+      secondaryAction,
+      reason: input.reason ?? `Perform GUI secondary action ${secondaryAction}.`,
       approvedPolicyRisk: input.approvedPolicyRisk === true,
       taskPolicy: input.taskPolicy,
       verify: (post, context) =>

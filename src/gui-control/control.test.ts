@@ -286,6 +286,34 @@ describe("runGuiControl", () => {
     ]);
   });
 
+  it("fails closed before runtime mutation when the element does not advertise the secondary action", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "resolve",
+          elements: [{ ref: "@link", role: "link", label: "Select flight" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await runGuiControl({
+      runtime,
+      action: "secondary-action",
+      appName: "Claude",
+      ref: "@link",
+      secondaryAction: "AXPress",
+      verifyText: "Returning flights",
+      approvedPolicyRisk: true,
+      taskPolicy: localFixturePolicy,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.failureReason).toContain("does not advertise");
+    expect(runtime.secondaryActions).toEqual([]);
+  });
+
   it("runs scroll through the verified action path with changed post-state", async () => {
     const result = await runGuiControl({
       runtime: new MockGuiRuntime({
