@@ -369,6 +369,13 @@ function sensitiveSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): str
     return searchableText(input);
   }
 
+  if (input.taskPolicy?.taskId === "commerce_flow_until_final_confirmation") {
+    return [selectedMutationSurfaceText(input), reasonAsDeniedSurfaceText(input, deniedTerms)]
+      .map(normalizeText)
+      .filter(Boolean)
+      .join(" ");
+  }
+
   // Mutations should be judged against the target and selected element, not
   // every unrelated AX string in the app snapshot. Browser/toolbars often
   // expose generic items like "Remove from toolbar"; treating that as the
@@ -503,6 +510,31 @@ function hasVisibleSoftwareUpdateInstallContext(input: GuiPolicyInput): boolean 
   );
 }
 
+function allowedSoftwareUpdateControlReason(input: GuiPolicyInput): string | undefined {
+  if (
+    input.actionType === "observe" ||
+    (input.taskPolicy?.taskId !== "software_update_flow" &&
+      input.taskPolicy?.taskId !== "software_update_install_approved")
+  ) {
+    return undefined;
+  }
+
+  const selectedSurface = selectedMutationSurfaceText(input);
+  if (input.taskPolicy.taskId === "software_update_flow") {
+    return /\b(check for updates?|check updates?|release notes?|view release notes?|more info|details)\b/.test(
+      selectedSurface,
+    )
+      ? undefined
+      : "Software update discovery only allows check/update-info controls.";
+  }
+
+  return /\b(install|install update|install updates|install now|install on quit|install and relaunch|relaunch)\b/.test(
+    selectedSurface,
+  )
+    ? undefined
+    : "Approved software update install only allows install or relaunch controls.";
+}
+
 function targetMatchesAllowedTerm(
   value: string | undefined,
   allowed: string[] | undefined,
@@ -617,6 +649,17 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
       allowed: false,
       risk: "blocked",
       reason: "Approved software update install requires a visible software-update context.",
+      requiredCapability,
+      taskPolicy,
+    };
+  }
+
+  const softwareUpdateControlBlock = allowedSoftwareUpdateControlReason(input);
+  if (softwareUpdateControlBlock) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason: softwareUpdateControlBlock,
       requiredCapability,
       taskPolicy,
     };

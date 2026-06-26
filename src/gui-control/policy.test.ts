@@ -258,10 +258,10 @@ describe("evaluateGuiPolicy", () => {
   it("allows passenger count controls under the commerce-until-final-confirmation profile", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",
-      target: { appName: "Safari", windowTitle: "Google Flights" },
+      target: { appName: "Safari", windowTitle: "Find Cheap Flights & Book Your Ticket" },
       snapshot: snapshot({
         appName: "Safari",
-        windowTitle: "Google Flights",
+        windowTitle: "Find Cheap Flights & Book Your Ticket",
         summary: "Flight checkout setup with passenger count controls",
       }),
       element: {
@@ -411,6 +411,8 @@ describe("evaluateGuiPolicy", () => {
     "Download and Install",
     "Update Now",
     "Relaunch to Update",
+    "Skip This Version",
+    "Remind Me Later",
   ])(
     "blocks software update final install/relaunch control %s without higher-trust approval",
     (label) => {
@@ -430,7 +432,7 @@ describe("evaluateGuiPolicy", () => {
       });
 
       expect(decision.allowed).toBe(false);
-      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+      expect(decision.reason).toMatch(/Blocked sensitive GUI surface|discovery only allows/);
     },
   );
 
@@ -497,6 +499,29 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("visible software-update context");
   });
+
+  it.each(["Skip This Version", "Remind Me Later", "View Later"])(
+    "blocks updater preference control %s under the install-approved profile",
+    (label) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "ExampleApp", windowTitle: "Software Update" },
+        snapshot: snapshot({
+          appName: "ExampleApp",
+          windowTitle: "Software Update",
+          summary: "Update dialog",
+        }),
+        element: { ref: "@preference", role: "button", label },
+        reason: `Click ${label} after explicit user approval for this visible app update.`,
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("only allows install or relaunch controls");
+    },
+  );
 
   it.each([
     "Download and Install",
