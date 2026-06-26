@@ -500,6 +500,26 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain("visible software-update context");
   });
 
+  it("does not let an install-labeled control provide its own updater context", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Browser extension installer" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Browser extension installer",
+        summary: "Extension installer",
+      }),
+      element: { ref: "@install", role: "button", label: "Install Update" },
+      reason: "Click Install Update after explicit user approval.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("visible software-update context");
+  });
+
   it.each(["Skip This Version", "Remind Me Later", "View Later"])(
     "blocks updater preference control %s under the install-approved profile",
     (label) => {

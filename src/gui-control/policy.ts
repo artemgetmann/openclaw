@@ -328,7 +328,7 @@ function searchableText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
-function visibleSurfaceText(input: GuiPolicyInput): string {
+function visibleContextText(input: GuiPolicyInput): string {
   return [
     input.target.appName,
     input.target.windowTitle,
@@ -336,12 +336,6 @@ function visibleSurfaceText(input: GuiPolicyInput): string {
     input.snapshot?.windowTitle,
     input.snapshot?.summary,
     ...(input.snapshot?.visibleText ?? []),
-    input.element?.role,
-    input.element?.name,
-    input.element?.title,
-    input.element?.label,
-    input.element?.description,
-    input.element?.value,
   ]
     .map(normalizeText)
     .filter(Boolean)
@@ -506,7 +500,7 @@ function hasVisibleSoftwareUpdateInstallContext(input: GuiPolicyInput): boolean 
   // visible target also has to look like an updater surface, otherwise a generic
   // "Install" button in another installer could inherit update privileges.
   return /\b(software update|update available|new version|release notes|install update|install updates|install and relaunch|install on quit|relaunch to update)\b/.test(
-    visibleSurfaceText(input),
+    visibleContextText(input),
   );
 }
 
