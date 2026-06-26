@@ -173,6 +173,8 @@ describe("createOpenClawCodingTools", () => {
     expect(browser.description).toMatch(/legacy profile="user" aliases to profile="signed-in"/i);
     expect(browser.description).toMatch(/do not silently fall back/i);
     expect(browser.description).toMatch(/chrome:\/\/inspect\/#remote-debugging/i);
+    expect(browser.description).toMatch(/action="contract"/i);
+    expect(browser.description).toMatch(/verify the final artifact/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
     const browser = defaultTools.find((tool) => tool.name === "browser");
@@ -185,6 +187,7 @@ describe("createOpenClawCodingTools", () => {
     expect(parameters.properties?.action).toBeDefined();
     expect(parameters.properties?.target).toBeDefined();
     expect(parameters.properties?.targetUrl).toBeDefined();
+    expect(parameters.properties?.intent).toBeDefined();
     expect(parameters.properties?.request).toBeDefined();
     expect(parameters.required ?? []).toContain("action");
   });

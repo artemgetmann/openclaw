@@ -274,7 +274,7 @@ export function buildAgentSystemPrompt(params: {
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser:
-      'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks or last-resort non-session fallback, and profile="user-live" only when actual live Chrome state is explicitly needed; never switch lanes when session semantics matter',
+      'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks or last-resort non-session fallback, and profile="user-live" only when actual live Chrome state is explicitly needed; never switch lanes when session semantics matter; before third-party external mutations, call browser action="contract" and verify the final artifact after commit',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
