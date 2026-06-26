@@ -12,6 +12,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-fast-gateway-proof.sh"
 
 APP_PATH="$ROOT_DIR/dist/Jarvis.app"
 BUILD_TRUSTED_RING=0
@@ -372,11 +373,13 @@ fi
 
 LAUNCHAGENT_PLIST="$HOME/Library/LaunchAgents/${EXPECTED_LABEL}.plist"
 LAUNCHAGENT_PRESENT=0
-LAUNCHAGENT_MATCHES_EXPECTED=0
+LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED=0
+LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED=0
 PROTECTED_DRIFT=0
 STATUS_PROBE_OK=0
 WRITE_DISABLED_LAUNCH_OK=0
 PROOF_GAP=""
+PROOF_WARNING=""
 
 echo "Jarvis fast gateway package facts:"
 echo "  app_path=$APP_PATH"
@@ -429,18 +432,34 @@ if [[ -f "$LAUNCHAGENT_PLIST" ]]; then
     PROTECTED_DRIFT=1
   fi
 
-  if [[ "$ACTUAL_PORT" == "$EXPECTED_PORT" &&
-    "$ACTUAL_HOME" == "$EXPECTED_RUNTIME_ROOT" &&
-    "$ACTUAL_STATE_DIR" == "$EXPECTED_STATE_DIR" &&
-    "$ACTUAL_CONFIG_PATH" == "$EXPECTED_CONFIG_PATH" &&
-    "$ACTUAL_ENTRYPOINT" == "$EXPECTED_INSTALLED_ENTRYPOINT" &&
-    "$ACTUAL_SERVICE_VERSION" == "$VERSION" &&
-    "$ACTUAL_SERVICE_BUILD" == "$BUILD" &&
-    "$ACTUAL_PATH" == *"$EXPECTED_NODE_PATH_ENTRY"* ]]; then
-    if [[ -z "$EXPECTED_CANONICAL_CONFIG" || "$ACTUAL_CANONICAL_CONFIG" == "$EXPECTED_CANONICAL_CONFIG" ]]; then
-      LAUNCHAGENT_MATCHES_EXPECTED=1
-    fi
+  if jarvis_fast_gateway_launchagent_runtime_matches \
+    "$EXPECTED_PORT" \
+    "$EXPECTED_RUNTIME_ROOT" \
+    "$EXPECTED_STATE_DIR" \
+    "$EXPECTED_CONFIG_PATH" \
+    "$EXPECTED_INSTALLED_ENTRYPOINT" \
+    "$EXPECTED_NODE_PATH_ENTRY" \
+    "$EXPECTED_CANONICAL_CONFIG" \
+    "$ACTUAL_PORT" \
+    "$ACTUAL_HOME" \
+    "$ACTUAL_STATE_DIR" \
+    "$ACTUAL_CONFIG_PATH" \
+    "$ACTUAL_ENTRYPOINT" \
+    "$ACTUAL_PATH" \
+    "$ACTUAL_CANONICAL_CONFIG"; then
+    LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED=1
   fi
+
+  if jarvis_fast_gateway_launchagent_service_metadata_matches \
+    "$VERSION" \
+    "$BUILD" \
+    "$ACTUAL_SERVICE_VERSION" \
+    "$ACTUAL_SERVICE_BUILD"; then
+    LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED=1
+  fi
+
+  echo "  runtime_matches_expected=$([[ "$LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED" == "1" ]] && printf true || printf false)"
+  echo "  service_metadata_matches_expected=$([[ "$LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED" == "1" ]] && printf true || printf false)"
 else
   echo "Jarvis fast gateway LaunchAgent facts:"
   echo "  launchagent_plist=$LAUNCHAGENT_PLIST"
@@ -451,7 +470,7 @@ if [[ "$PROTECTED_DRIFT" == "1" ]]; then
   die "protected shared gateway appears pinned to this feature worktree: $ACTUAL_ENTRYPOINT"
 fi
 
-if [[ "$LAUNCHAGENT_MATCHES_EXPECTED" == "1" && "$RUN_STATUS" == "1" ]]; then
+if [[ "$LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED" == "1" && "$RUN_STATUS" == "1" ]]; then
   if run_gateway_status_probe \
     "$NORMALIZED_INSTANCE_ID" \
     "$EXPECTED_LABEL" \
@@ -477,12 +496,18 @@ if [[ "$LAUNCH_WRITE_DISABLED" == "1" ]]; then
   fi
 fi
 
-if [[ "$LAUNCHAGENT_PRESENT" == "0" ]]; then
-  PROOF_GAP="gateway LaunchAgent is not present for $EXPECTED_LABEL"
-elif [[ "$LAUNCHAGENT_MATCHES_EXPECTED" != "1" ]]; then
-  PROOF_GAP="gateway LaunchAgent does not yet point at the packaged Jarvis installed runtime"
-elif [[ "$RUN_STATUS" == "1" && "$STATUS_PROBE_OK" != "1" ]]; then
-  PROOF_GAP="gateway LaunchAgent matches packaged runtime, but RPC status did not pass"
+PROOF_GAP="$(jarvis_fast_gateway_proof_gap \
+  "$LAUNCHAGENT_PRESENT" \
+  "$LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED" \
+  "$LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED" \
+  "$RUN_STATUS" \
+  "$STATUS_PROBE_OK" \
+  "$EXPECTED_LABEL")"
+
+if [[ -z "$PROOF_GAP" &&
+  "$LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED" == "1" &&
+  "$LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED" != "1" ]]; then
+  PROOF_WARNING="gateway LaunchAgent service metadata differs from inspected app bundle; app-owned restart can refresh OPENCLAW_SERVICE_VERSION/OPENCLAW_SERVICE_BUILD"
 fi
 
 if [[ -n "$PROOF_GAP" ]]; then
@@ -503,6 +528,9 @@ else
   echo "jarvis_fast_gateway_static=true"
   echo "jarvis_fast_gateway_live=true"
   echo "proof_gap=none"
+  if [[ -n "$PROOF_WARNING" ]]; then
+    echo "proof_warning=$PROOF_WARNING"
+  fi
 fi
 
 echo "protected_surfaces=preserved"
