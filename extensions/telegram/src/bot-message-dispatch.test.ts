@@ -447,6 +447,58 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not promote phase-less answer blocks to progress after assistant partials started", async () => {
+    const answerStream = createDraftStream(9201);
+    createTelegramDraftStream.mockImplementation((params) => {
+      expect(params).toEqual(
+        expect.objectContaining({
+          deleteAudit: expect.objectContaining({
+            callsite: "telegram-answer-preview-clear",
+          }),
+        }),
+      );
+      return answerStream;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "The durable story starts here.",
+        });
+        await dispatcherOptions.deliver(
+          { text: "The durable story starts here." },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          { text: "The durable story starts here. It continues as a block snapshot." },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            text: "The durable story starts here. It continues as a block snapshot.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9201" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(answerStream.update).toHaveBeenCalledWith("The durable story starts here.");
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9201,
+      "The durable story starts here. It continues as a block snapshot.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("treats a terminal ambiguous block as the final answer", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Only answer." }, { kind: "block" });

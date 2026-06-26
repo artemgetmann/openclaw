@@ -1469,6 +1469,11 @@ export const dispatchTelegramMessage = async ({
           logVerbose(
             `telegram: block stream finalize hook buffered=${String(Boolean(pendingAmbiguousAnswerBlock))}`,
           );
+          if (sawAssistantPartial) {
+            pendingAmbiguousAnswerBlock = undefined;
+            logVerbose("telegram: dropped phase-unknown block buffer after assistant partials");
+            return;
+          }
           await flushAmbiguousAnswerBlockAsFinal("after-block-stream-final");
         },
         deliver: async (payload, info) => {
@@ -1502,6 +1507,20 @@ export const dispatchTelegramMessage = async ({
               // and again as durable final text.
               pendingAmbiguousAnswerBlock = undefined;
               logVerbose("telegram: dropped phase-unknown answer buffer before marked final");
+            } else if (
+              pendingAmbiguousAnswerBlock &&
+              sawAssistantPartial &&
+              !isTtsMediaFinalBoundary &&
+              (deliveryKind === "final" || (deliveryKind === "block" && !assistantPhase))
+            ) {
+              // Codex can emit both raw assistant deltas and phase-less block
+              // snapshots for the same final answer. Once answer deltas are
+              // already driving the durable answer lane, those block snapshots
+              // are duplicate answer text, not process progress.
+              pendingAmbiguousAnswerBlock = undefined;
+              logVerbose(
+                `telegram: dropped phase-unknown answer buffer after assistant partial before ${deliveryKind}`,
+              );
             } else if (
               pendingAmbiguousAnswerBlock &&
               (deliveryKind === "final" ||
