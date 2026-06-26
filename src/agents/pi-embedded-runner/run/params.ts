@@ -1,10 +1,6 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type {
-  ReplyLatencyTraceEvent,
-  ReplyPayload,
-  SourceReplyDeliveryMode,
-} from "../../../auto-reply/types.js";
+import type { ReplyPayload, SourceReplyDeliveryMode } from "../../../auto-reply/types.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
@@ -120,7 +116,6 @@ export type RunEmbeddedPiAgentParams = {
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
-  onLatencyTrace?: (event: ReplyLatencyTraceEvent) => void;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
