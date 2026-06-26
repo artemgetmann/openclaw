@@ -27,7 +27,17 @@ RUNTIME_OWNERSHIP="fail"
 RUNTIME_HEALTH="fail"
 RUNTIME_START_ACTION="not-started"
 RUNTIME_START_TIMEOUT_SECS="unknown"
-RUNTIME_PLUGIN_MODE="telegram-only"
+RUNTIME_PLUGIN_MODE="main-parity"
+PARITY_REPORT_PATH=""
+PARITY_CONFIG_DIFF_ALLOWED_ONLY="unknown"
+PARITY_BROWSER_SIDECAR_ENABLED="unknown"
+PARITY_BROWSER_PROFILES_MATCH="unknown"
+PARITY_TOOLS_MATCH="unknown"
+PARITY_PLUGINS_MATCH="unknown"
+PARITY_MODEL_CONFIG_MATCH="unknown"
+PARITY_UPLOAD_DIR="/tmp/openclaw/uploads"
+PARITY_UPLOAD_DIR_READY="unknown"
+PARITY_UNEXPECTED_DIFFS="unknown"
 RUNTIME_STOP_RESULT="skip"
 STOPPED_RUNTIME_PID=""
 TOKEN_PRESENT="no"
@@ -773,6 +783,97 @@ NODE
   fi
 }
 
+write_parity_report() {
+  PARITY_REPORT_PATH="${RUNTIME_STATE_DIR}/tester-runtime-parity.json"
+  mkdir -p "$RUNTIME_STATE_DIR" "$PARITY_UPLOAD_DIR"
+
+  local main_commit="unknown"
+  local tester_commit="unknown"
+  main_commit="$(git rev-parse origin/main 2>/dev/null || printf 'unknown')"
+  tester_commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+
+  if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    PARITY_REPORT_PATH="$PARITY_REPORT_PATH" \
+    MAIN_COMMIT="$main_commit" \
+    TESTER_COMMIT="$tester_commit" \
+    WORKTREE="$WORKTREE" \
+    RUNTIME_PORT="$RUNTIME_PORT" \
+    CURRENT_LANE_BOT="$CURRENT_LANE_BOT" \
+    PARITY_UPLOAD_DIR="$PARITY_UPLOAD_DIR" \
+    BROWSER_SIDECAR_SKIPPED="${OPENCLAW_SKIP_BROWSER_CONTROL_SERVER:-0}" \
+    HELPER_MODULE="$HELPER_MODULE" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.HELPER_MODULE;
+const { buildTelegramLiveRuntimeParityReport } = await import(pathToFileURL(helperPath).href);
+const report = buildTelegramLiveRuntimeParityReport({
+  baseConfigPath: process.env.BASE_CONFIG_PATH,
+  runtimeConfigPath: process.env.RUNTIME_CONFIG_PATH,
+  mainCommit: process.env.MAIN_COMMIT,
+  testerCommit: process.env.TESTER_COMMIT,
+  runtimeWorktree: process.env.WORKTREE,
+  runtimePort: process.env.RUNTIME_PORT,
+  currentLaneBot: process.env.CURRENT_LANE_BOT,
+  uploadDir: process.env.PARITY_UPLOAD_DIR,
+  browserSidecarSkipped: process.env.BROWSER_SIDECAR_SKIPPED,
+});
+fs.writeFileSync(process.env.PARITY_REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+NODE
+  then
+    add_failure "parity_report_failed"
+    return
+  fi
+
+  local report_json=""
+  report_json="$(cat "$PARITY_REPORT_PATH" 2>/dev/null || true)"
+  PARITY_CONFIG_DIFF_ALLOWED_ONLY="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.config_diff_allowed_only))}catch{process.stdout.write("unknown")}})')"
+  PARITY_BROWSER_SIDECAR_ENABLED="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.browser_sidecar_enabled))}catch{process.stdout.write("unknown")}})')"
+  PARITY_BROWSER_PROFILES_MATCH="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.browser_profiles_match))}catch{process.stdout.write("unknown")}})')"
+  PARITY_TOOLS_MATCH="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.tools_match))}catch{process.stdout.write("unknown")}})')"
+  PARITY_PLUGINS_MATCH="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.plugins_match))}catch{process.stdout.write("unknown")}})')"
+  PARITY_MODEL_CONFIG_MATCH="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.model_config_match))}catch{process.stdout.write("unknown")}})')"
+  PARITY_UPLOAD_DIR_READY="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.upload_dir_ready))}catch{process.stdout.write("unknown")}})')"
+  PARITY_UNEXPECTED_DIFFS="$(printf '%s' "$report_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j.config_diff_unexpected_paths||[]).join(","))}catch{process.stdout.write("unknown")}})')"
+
+  if [[ "$PARITY_CONFIG_DIFF_ALLOWED_ONLY" != "true" ]]; then
+    add_failure "parity_config_diff:${PARITY_UNEXPECTED_DIFFS}"
+  fi
+  if [[ "$PARITY_BROWSER_SIDECAR_ENABLED" != "true" ]]; then
+    add_failure "parity_browser_sidecar_disabled"
+  fi
+  if [[ "$PARITY_BROWSER_PROFILES_MATCH" != "true" ]]; then
+    add_failure "parity_browser_profiles_mismatch"
+  fi
+  if [[ "$PARITY_TOOLS_MATCH" != "true" ]]; then
+    add_failure "parity_tools_mismatch"
+  fi
+}
+
+stage_upload_command() {
+  local source_path="${1:-}"
+  if [[ -z "$source_path" ]]; then
+    echo "Usage: scripts/telegram-live-runtime.sh stage-upload <file>" >&2
+    return 2
+  fi
+  if [[ ! -f "$source_path" ]]; then
+    echo "error=upload_source_missing:${source_path}" >&2
+    return 1
+  fi
+
+  mkdir -p "$PARITY_UPLOAD_DIR"
+  local file_name target_path
+  file_name="$(basename "$source_path")"
+  target_path="${PARITY_UPLOAD_DIR}/${file_name}"
+  cp "$source_path" "$target_path"
+  echo "upload_source=${source_path}"
+  echo "upload_path=${target_path}"
+  echo "upload_dir=${PARITY_UPLOAD_DIR}"
+  echo "upload_allowed=yes"
+}
+
 sync_runtime_auth_profiles() {
   local acp_validation="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}"
   local normalized_acp_validation
@@ -1292,7 +1393,6 @@ const child = spawn(
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_DISABLE_BONJOUR: "1",
         OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
         OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
@@ -1342,6 +1442,16 @@ emit_ensure_proof_lines() {
   echo "telegram_sender_preflight=${TELEGRAM_SENDER_PREFLIGHT_STATUS}"
   echo "telegram_sender_user_id=${TELEGRAM_SENDER_USER_ID}"
   echo "telegram_sender_access=${TELEGRAM_SENDER_ACCESS_STATUS}"
+  echo "parity_report_path=${PARITY_REPORT_PATH}"
+  echo "config_diff_allowed_only=${PARITY_CONFIG_DIFF_ALLOWED_ONLY}"
+  echo "browser_sidecar_enabled=${PARITY_BROWSER_SIDECAR_ENABLED}"
+  echo "browser_profiles_match=${PARITY_BROWSER_PROFILES_MATCH}"
+  echo "tools_match=${PARITY_TOOLS_MATCH}"
+  echo "plugins_match=${PARITY_PLUGINS_MATCH}"
+  echo "model_config_match=${PARITY_MODEL_CONFIG_MATCH}"
+  echo "upload_dir=${PARITY_UPLOAD_DIR}"
+  echo "upload_dir_ready=${PARITY_UPLOAD_DIR_READY}"
+  echo "parity_unexpected_diffs=${PARITY_UNEXPECTED_DIFFS}"
   for claim_path in "${TOKEN_CLAIM_PATHS[@]-}"; do
     if [[ -z "$claim_path" ]]; then
       continue
@@ -1370,6 +1480,9 @@ ensure_command() {
   ensure_tester_bot_claim
   if [[ "$FAIL" -eq 0 ]]; then
     prepare_isolated_runtime_config
+  fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    write_parity_report
   fi
   if [[ "$FAIL" -eq 0 ]]; then
     sync_runtime_auth_profiles
@@ -1567,12 +1680,13 @@ release_command() {
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/telegram-live-runtime.sh [ensure|handoff-main|release]
+  scripts/telegram-live-runtime.sh [ensure|handoff-main|release|stage-upload <file>]
 
 Commands:
   ensure       Validate and ensure isolated Telegram live runtime ownership for this worktree.
   handoff-main Stop isolated worktree runtime (if owned) and recover stable main runtime.
   release      Stop isolated worktree runtime (if owned) and clear this worktree tester bot claim.
+  stage-upload Copy a benchmark asset under /tmp/openclaw/uploads for browser upload tools.
 USAGE
 }
 
@@ -1587,6 +1701,10 @@ main() {
       ;;
     release)
       release_command
+      ;;
+    stage-upload)
+      shift
+      stage_upload_command "$@"
       ;;
     -h|--help|help)
       usage
