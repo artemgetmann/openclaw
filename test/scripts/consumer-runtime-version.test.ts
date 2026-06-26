@@ -67,10 +67,14 @@ describe("consumer bundled runtime version verification", () => {
     expect(packageScript).toContain("sync_bundled_runtime_package_version()");
     expect(packageScript).toContain("refresh_bundled_runtime_metadata");
     expect(packageScript).toContain("sync_bundled_runtime_package_version");
+    expect(packageScript).toContain("consumer-capabilities-manifest.mjs");
+    expect(packageScript).toContain("capabilities.manifest.json");
+    expect(packageScript).toContain("--fail-on-local-drift");
     expect(packageScript.match(/refresh_bundled_runtime_metadata/g)?.length).toBeGreaterThanOrEqual(
       3,
     );
     expect(verifier).toContain("verify-consumer-runtime-package-version.mjs");
     expect(verifier).toContain("runtime_package_version=$runtime_package_version");
+    expect(verifier).toContain("assert_capabilities_manifest_present");
   });
 });
