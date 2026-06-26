@@ -102,7 +102,7 @@ export type TelegramDraftDurableSendEvent = {
 
 export type TelegramDraftPreviewTraceEvent = {
   previewTransport: "message" | "draft";
-  operation: "send" | "edit" | "draft";
+  operation: "send" | "edit" | "draft" | "delete";
   textLength: number;
   messageId?: number;
 };
@@ -456,6 +456,12 @@ export function createTelegramDraftStream(params: {
       // The final-vs-preview classifier is useful for UX, but it is not a
       // deletion safety boundary. All Telegram deletes go through the central
       // guard so cleanup is audited and suppressed unless the operator opts in.
+      params.onPreviewAttempt?.({
+        previewTransport,
+        operation: "delete",
+        textLength: lastDeliveredText.length,
+        messageId,
+      });
       const result = await guardedTelegramDeleteMessage({
         api: params.api,
         chatId,
@@ -472,6 +478,14 @@ export function createTelegramDraftStream(params: {
           thread: params.thread,
         },
       });
+      if (result.deleted) {
+        params.onPreviewComplete?.({
+          previewTransport,
+          operation: "delete",
+          textLength: lastDeliveredText.length,
+          messageId,
+        });
+      }
       return result.deleted;
     },
     onDeleteSuccess: (messageId) => {

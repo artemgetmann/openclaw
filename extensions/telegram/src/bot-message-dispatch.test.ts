@@ -144,13 +144,14 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
     bot?: Bot;
+    runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
       context: params.context,
       bot,
       cfg: params.cfg ?? {},
-      runtime: createRuntime(),
+      runtime: params.runtime ?? createRuntime(),
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
@@ -1266,7 +1267,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("finalizes a phase-less answer block before a captioned TTS voice supplement and does not reuse progress on the next turn", async () => {
+  it("finalizes a phase-less answer block before a captionless TTS voice supplement and does not reuse progress on the next turn", async () => {
     const leakedProgressDraftStream = createSequencedDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
     dispatchReplyWithBufferedBlockDispatcher
@@ -1312,10 +1313,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context });
 
     // The phase-less text block is the visible final answer when the next
-    // boundary is the TTS media supplement. Even with a Telegram caption, that
-    // supplement must never make the full answer enter the mutable progress
-    // controller, because that controller edits one Telegram bubble across
-    // callbacks and can be reused by the next user turn.
+    // boundary is the TTS media supplement. That supplement must stay
+    // captionless here: the voice bubble is additive audio, not another visible
+    // answer copy, and it must never feed the mutable progress controller.
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(leakedProgressDraftStream.update).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenNthCalledWith(
@@ -1335,7 +1335,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/hi-voice.ogg",
             audioAsVoice: true,
-            text: "hi Sir. Still suspiciously operational. This caption should stay attached to the voice supplement.",
+            text: undefined,
           }),
         ],
       }),
@@ -1357,11 +1357,87 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           expect.objectContaining({
             mediaUrl: "file:///tmp/fiona-voice.ogg",
             audioAsVoice: true,
-            text: "Princess Fiona repeat. This caption should also stay attached to the voice supplement.",
+            text: undefined,
           }),
         ],
       }),
     );
+  });
+
+  it("logs body-free preview ledger events for captionless final TTS supplements", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Final answer.",
+          channelData: { openclaw: { assistantPhase: "final_answer" } },
+        },
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver(
+        {
+          mediaUrl: "file:///tmp/final-voice.ogg",
+          audioAsVoice: true,
+          text: "Final answer.",
+          channelData: { openclaw: { finalTtsSupplement: true } },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockImplementation(async (options) => {
+      const reply = (options as { replies?: Array<{ text?: string; mediaUrl?: string }> })
+        .replies?.[0];
+      const deliveredHook = (
+        options as {
+          onReplyDelivered?: (event: {
+            messageId?: number;
+            textLength: number;
+            hasMedia: boolean;
+            audioAsVoice: boolean;
+            finalTtsSupplement: boolean;
+            delivered: boolean;
+          }) => void;
+        }
+      ).onReplyDelivered;
+      deliveredHook?.({
+        messageId: reply?.mediaUrl ? 42 : 41,
+        textLength: reply?.text?.length ?? 0,
+        hasMedia: Boolean(reply?.mediaUrl),
+        audioAsVoice: Boolean(reply?.mediaUrl),
+        finalTtsSupplement: Boolean(reply?.mediaUrl),
+        delivered: true,
+      });
+      return { delivered: true };
+    });
+    const runtime = createRuntime();
+
+    await dispatchWithContext({ context: createContext(), runtime });
+
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            mediaUrl: "file:///tmp/final-voice.ogg",
+            audioAsVoice: true,
+            text: undefined,
+          }),
+        ],
+      }),
+    );
+    const logLines = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes("telegram.preview.ledger"));
+    expect(logLines.some((line) => line.includes("lane=tts phase=tts_send_attempt"))).toBe(true);
+    expect(
+      logLines.some(
+        (line) =>
+          line.includes("lane=tts") &&
+          line.includes("phase=tts_send_completed") &&
+          line.includes("message=42") &&
+          line.includes("textLength=0"),
+      ),
+    ).toBe(true);
   });
 
   it("delivers tool-result media without falling back to empty response", async () => {
