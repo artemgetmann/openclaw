@@ -83,26 +83,59 @@ answer stability, or TTS voice-caption snippets:
 1. Create a unique run directory under `.artifacts/` and include the nonce in
    the Telegram prompt.
 2. Prove the isolated tester runtime owns the bot before sending anything.
-3. Start a native macOS recording:
+3. Open the actual tester-bot thread before recording. Prefer targeting the
+   Telegram app bundle directly so browser URL handlers do not steal the deep
+   link:
+
+   ```bash
+   open -b ru.keepcoder.Telegram "tg://resolve?domain=<tester-bot-username-without-at>"
+   ```
+
+4. If screenshots or recordings are black, do not keep retrying capture tools.
+   Check whether another automation owner is currently using the desktop, then
+   check the macOS lock state through the canonical Application Support unlock
+   script. Only unlock when it reports `locked=true`, then start a short GUI
+   lease long enough for the proof run:
+
+   ```bash
+   SCRIPT="$HOME/Library/Application Support/OpenClaw/.openclaw/workspace/bin/openclaw-unlock.sh"
+   LEASE="$HOME/Library/Application Support/OpenClaw/.openclaw/workspace/bin/openclaw-gui-lease.sh"
+
+   "$SCRIPT" status
+   "$LEASE" start 900
+   "$LEASE" status
+   ```
+
+   A usable lease shows `locked=false`, live lease processes, and
+   `PreventUserIdleDisplaySleep 1`. Stop the lease and lock the screen again
+   after proof if the run required unlocking.
+
+5. Start a native macOS recording:
 
    ```bash
    screencapture -v -V 60 -D 1 -k ".artifacts/<run>/telegram-preview.mov"
    ```
 
-4. Send the benchmark prompt, wait for final delivery, then extract review
+6. Send the benchmark prompt, wait for final delivery, then extract review
    frames:
 
    ```bash
    ffmpeg -hide_banner -loglevel error -i ".artifacts/<run>/telegram-preview.mov" -vf fps=2 ".artifacts/<run>/frame-%03d.png"
    ```
 
-5. Save the matching structured proof beside the video:
+7. If Telegram shows a new-message down arrow, click it and capture a final
+   still. The video proves the actual GUI run; the still makes the final text
+   and voice caption easy to inspect later.
+8. Save the matching structured proof beside the video:
    - `telegram.preview.ledger` lines for the nonce or trace id
    - prompt/progress/final/TTS Telegram message ids
    - `telegram-user read` transcript after cleanup
    - isolated runtime status with branch, commit, and worktree
 
-Optional fallback: use `peekaboo capture live --mode screen --duration <seconds>
---video-out <path> --path <frames-dir> --json` when native capture is not
-enough. Do not use Computer Use unless the local `cua-guard acquire` check
-passes in the same process.
+Use native `screencapture -v` as the primary recorder for this proof. Peekaboo
+still screenshots are useful for quick checks, but Peekaboo live capture can
+produce black frames even when native stills and video are usable. If you do use
+`peekaboo capture live --mode screen --duration <seconds> --video-out <path>
+--path <frames-dir> --json`, inspect the contact sheet before trusting it.
+Do not use Computer Use unless the local `cua-guard acquire` check passes in the
+same process.

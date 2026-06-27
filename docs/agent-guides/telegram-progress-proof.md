@@ -197,7 +197,11 @@ and report that GUI proof is blocked. Do not improvise from broken GUI state.
 
 ## Cleanup
 
-Always clean up test state:
+Always clean up test state, but restore state instead of blindly changing the
+tester bot. If a scenario or manual proof enabled `/tts on` and the prior state
+was off or unknown, send `/tts off` and confirm the acknowledgement. If the user
+explicitly wanted TTS to remain on before the proof, leave it on and record that
+choice in the evidence.
 
 ```bash
 openclaw telegram-user send \
@@ -208,4 +212,5 @@ openclaw telegram-user send \
 pnpm openclaw:local telegram runtime release
 ```
 
-Confirm the `/tts off` acknowledgement when TTS was enabled.
+Confirm the `/tts off` acknowledgement when the proof enabled TTS only for the
+scenario.
