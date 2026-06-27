@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
@@ -21,6 +22,7 @@ type OpenComputerUseRuntimeOptions = {
 
 const OPEN_COMPUTER_USE_DEV_BUNDLE_ID = "com.ifuryst.opencomputeruse.dev";
 const OPEN_COMPUTER_USE_DEV_APP_NAME = "Open Computer Use (Dev).app";
+const OPEN_COMPUTER_USE_EXECUTABLE = "Contents/MacOS/OpenComputerUse";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -130,6 +132,37 @@ function inferOpenComputerUseDevAppPath(command: string): string {
   return home
     ? path.join(home, "Applications", OPEN_COMPUTER_USE_DEV_APP_NAME)
     : `~/Applications/${OPEN_COMPUTER_USE_DEV_APP_NAME}`;
+}
+
+export function resolveOpenComputerUseCommand(
+  command?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (command?.trim()) {
+    return command;
+  }
+
+  const envCommand = env.OPENCLAW_OPEN_COMPUTER_USE_BIN?.trim();
+  if (envCommand) {
+    return envCommand;
+  }
+
+  const home = env.HOME?.trim();
+  if (home) {
+    const devAppCommand = path.join(
+      home,
+      "Applications",
+      OPEN_COMPUTER_USE_DEV_APP_NAME,
+      OPEN_COMPUTER_USE_EXECUTABLE,
+    );
+    if (fsSync.existsSync(devAppCommand)) {
+      return devAppCommand;
+    }
+  }
+
+  // Preserve the PATH shim fallback for developer installs, CI fakes, and
+  // hosts that intentionally provide OCU outside the default dev app path.
+  return "open-computer-use";
 }
 
 function isOpenComputerUseTccPermissionFailure(text: string): boolean {
@@ -676,7 +709,7 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   private readonly visualCursorObservationFile?: string;
 
   constructor(options: OpenComputerUseRuntimeOptions = {}) {
-    this.command = options.command ?? "open-computer-use";
+    this.command = resolveOpenComputerUseCommand(options.command);
     this.baseArgs = options.baseArgs ?? [];
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.visualCursorObservationFile = options.visualCursorObservationFile;
