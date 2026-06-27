@@ -19,8 +19,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("prefers workspace skills over managed skills", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const managedDir = path.join(workspaceDir, ".managed");
+    const productManagedDir = path.join(workspaceDir, ".product-managed");
     const bundledDir = path.join(workspaceDir, ".bundled");
     const managedSkillDir = path.join(managedDir, "demo-skill");
+    const productManagedSkillDir = path.join(productManagedDir, "demo-skill");
     const bundledSkillDir = path.join(bundledDir, "demo-skill");
     const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");
 
@@ -37,6 +39,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Managed\n",
     });
     await writeSkill({
+      dir: productManagedSkillDir,
+      name: "demo-skill",
+      description: "Product managed version",
+      body: "# Product managed\n",
+    });
+    await writeSkill({
       dir: workspaceSkillDir,
       name: "demo-skill",
       description: "Workspace version",
@@ -46,14 +54,54 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: managedDir,
+        productManagedSkillsDir: productManagedDir,
         bundledSkillsDir: bundledDir,
       }),
     );
 
     expect(prompt).toContain("Workspace version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
+    expect(prompt).not.toContain("Product managed version");
     expect(prompt).not.toContain("Managed version");
     expect(prompt).not.toContain("Bundled version");
+  });
+
+  it("prefers product-managed skills over stale user-managed and bundled skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace-product-managed");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const productManagedDir = path.join(workspaceDir, ".product-managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+
+    await writeSkill({
+      dir: path.join(bundledDir, "gog"),
+      name: "gog",
+      description: "Bundled Google Workspace",
+      body: "# Bundled\n",
+    });
+    await writeSkill({
+      dir: path.join(managedDir, "gog"),
+      name: "gog",
+      description: "Stale user-managed Google Workspace",
+      body: "# Stale\n",
+    });
+    await writeSkill({
+      dir: path.join(productManagedDir, "gog"),
+      name: "gog",
+      description: "Fresh product-managed Google Workspace",
+      body: "# Fresh\n",
+    });
+
+    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        managedSkillsDir: managedDir,
+        productManagedSkillsDir: productManagedDir,
+        bundledSkillsDir: bundledDir,
+      }),
+    );
+
+    expect(prompt).toContain("Fresh product-managed Google Workspace");
+    expect(prompt).not.toContain("Stale user-managed Google Workspace");
+    expect(prompt).not.toContain("Bundled Google Workspace");
   });
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");

@@ -14,6 +14,7 @@ describe("resolveGatewaySidecarStartupPolicy", () => {
     expect(policy.skipInternalHookLoading).toBe(true);
     expect(policy.skipPluginServices).toBe(true);
     expect(policy.skipMemoryBackendStartup).toBe(true);
+    expect(policy.skipStartupReconciler).toBe(false);
   });
 
   it("still respects an explicit browser-control skip override", () => {
@@ -23,5 +24,13 @@ describe("resolveGatewaySidecarStartupPolicy", () => {
     });
 
     expect(policy.skipBrowserControl).toBe(true);
+  });
+
+  it("respects an explicit startup reconciler skip override", () => {
+    const policy = resolveGatewaySidecarStartupPolicy({
+      OPENCLAW_DEBUG_SKIP_STARTUP_RECONCILER: "1",
+    });
+
+    expect(policy.skipStartupReconciler).toBe(true);
   });
 });
