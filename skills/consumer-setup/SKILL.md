@@ -1,13 +1,13 @@
 ---
 name: consumer-setup
-description: Use when the user asks to use a consumer integration or local capability that is not set up yet: WhatsApp as Me, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, Google Maps Search, Documents, Presentations, Spreadsheets, PDF, or creative audio. Route here only when the right capability exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
+description: Use when the right consumer integration or local capability exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials. Keep the response focused on setup in product language instead of listing capabilities or dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
 # Consumer Setup
 
-Use this skill when another consumer-facing skill is the correct match for the
-user's request, but that skill cannot proceed yet because the account,
+Use this skill when another consumer-facing skill is already the correct match
+for the user's request, but that skill cannot proceed yet because the account,
 permissions, OAuth session, QR pairing, local dependency, API credential, or
 product-side configuration is not ready.
 
@@ -22,8 +22,8 @@ Trigger it for requests like:
 - "turn this into a PowerPoint" when presentation tools are missing
 - "convert this CSV to Excel" when spreadsheet tools are missing
 
-Do not use it when the underlying skill is already connected and ready, or when
-the problem is normal task execution rather than setup.
+Do not use it for broad "what can you do?" questions, capability tours, or
+normal task execution when the underlying skill is already connected and ready.
 
 ## Core Behavior
 

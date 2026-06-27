@@ -89,8 +89,9 @@ They should come away knowing:
   `wacli` is WhatsApp as Me, `goplaces` is Google Maps Search, and `peekaboo` is
   Mac Screen Control.
 - If Documents, Presentations, or Spreadsheets are visible, describe them as
-  practical file skills for Word documents, PowerPoint decks, and Excel-style
-  spreadsheets. Mention local tool setup only when it is missing or relevant.
+  practical file skills for Word documents, editable PowerPoint decks,
+  polished HTML/PDF presentations, and Excel-style spreadsheets. Mention local
+  tool setup only when it is missing or relevant.
 - If ElevenLabs Creative is visible and configured, mention voice, music, sound
   effects, dubbing, audio cleanup, and speech-to-text. Treat image/video
   generation as exploratory unless a tested ElevenCreative route is connected.
