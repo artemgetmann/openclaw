@@ -18,6 +18,7 @@ const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 
 export type TelegramProgressController = {
   update: (text: string) => void;
+  preview: (text: string) => void;
   replace: (text: string) => void;
   clear: () => Promise<void>;
   messageId: () => number | undefined;
@@ -107,25 +108,27 @@ export function createTelegramProgressController(params: {
     return didAppend;
   };
 
-  const renderProgressHistory = () => {
-    const fullText = progressEntries.join(PROGRESS_ENTRY_SEPARATOR);
+  const renderProgressHistory = (previewText?: string) => {
+    const previewEntry = previewText?.trim();
+    const entries = previewEntry ? [...progressEntries, previewEntry] : progressEntries;
+    const fullText = entries.join(PROGRESS_ENTRY_SEPARATOR);
     if (fullText.length <= maxProgressChars) {
       return fullText;
     }
 
-    const latestEntry = progressEntries[progressEntries.length - 1] ?? "";
+    const latestEntry = entries[entries.length - 1] ?? "";
     const retained: string[] = [
       latestEntry.length > maxProgressChars ? latestEntry.slice(0, maxProgressChars) : latestEntry,
     ];
-    for (let index = progressEntries.length - 2; index >= 0; index -= 1) {
-      const candidate = [progressEntries[index], ...retained].join(PROGRESS_ENTRY_SEPARATOR);
+    for (let index = entries.length - 2; index >= 0; index -= 1) {
+      const candidate = [entries[index], ...retained].join(PROGRESS_ENTRY_SEPARATOR);
       // This text is shown directly in Telegram previews/drafts. Do not add a
       // synthetic "omitted" marker here; users can see it before cleanup, and
       // the final answer delivery owns the durable transcript.
       if (candidate.length > maxProgressChars) {
         continue;
       }
-      retained.unshift(progressEntries[index]);
+      retained.unshift(entries[index]);
     }
     return retained.join(PROGRESS_ENTRY_SEPARATOR);
   };
@@ -148,6 +151,21 @@ export function createTelegramProgressController(params: {
       }
       hasProgress = true;
       stream.update(cumulativeProgressText);
+    },
+    preview: (text: string) => {
+      if (cleared) {
+        return;
+      }
+      const progressText = text.trim();
+      if (!progressText) {
+        return;
+      }
+      const previewProgressText = renderProgressHistory(progressText);
+      if (!previewProgressText) {
+        return;
+      }
+      hasProgress = true;
+      stream.update(previewProgressText);
     },
     replace: (text: string) => {
       if (cleared) {

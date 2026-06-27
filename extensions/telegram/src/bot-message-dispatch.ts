@@ -772,6 +772,11 @@ export const dispatchTelegramMessage = async ({
   let processingDraftLaneEvent = false;
   let progressController: TelegramProgressController | undefined;
   let sawAssistantPartial = false;
+  // Once a tool boundary proves the assistant is narrating work, later
+  // phase-less assistant partials should keep editing that same progress
+  // bubble. Without this, every natural "Browser is up..." style update starts
+  // a fresh answer preview that can survive as a stale Telegram message.
+  let routeToolStatusPartialsToProgress = false;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(async () => {
@@ -975,6 +980,8 @@ export const dispatchTelegramMessage = async ({
     }
     return progressController;
   };
+  const getActiveProgressController = () =>
+    activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
   const clearProgressController = async (callsite: string, options?: { timeoutMs?: number }) => {
     const controller =
       activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
@@ -1161,10 +1168,30 @@ export const dispatchTelegramMessage = async ({
     }
     return prepared.text;
   };
+  const updateActiveProgressPreviewFromPartial = (text: string, callsite: string) => {
+    const controller = getActiveProgressController();
+    if (!controller) {
+      return false;
+    }
+    const progressText = normalizeAdjacentProgressBoundaries(text).trim();
+    if (!progressText) {
+      return false;
+    }
+    controller.preview(progressText);
+    logPreviewLedger({
+      lane: "progress",
+      phase: "progress_update",
+      source: "partial",
+      messageId: controller.messageId(),
+      textLength: progressText.length,
+      previewTransport: progressPreviewTransport,
+      callsite,
+    });
+    return true;
+  };
   const updateDraftFromPartial = (laneName: LaneName, text: string | undefined) => {
     const lane = lanes[laneName];
-    const laneStream = lane.stream ?? ensureDraftLaneStream(laneName);
-    if (!laneStream || !text) {
+    if (!text) {
       return;
     }
     partialCallbackCount += 1;
@@ -1176,7 +1203,11 @@ export const dispatchTelegramMessage = async ({
       textLength: text.length,
       lane: laneName,
       previewTransport:
-        laneName === "answer" ? answerPreviewTransport : (laneStream.previewMode?.() ?? "unknown"),
+        laneName === "answer"
+          ? getActiveProgressController()
+            ? progressPreviewTransport
+            : answerPreviewTransport
+          : (lane.stream?.previewMode?.() ?? "unknown"),
     });
     if (previewText === lane.lastPartialText) {
       return;
@@ -1204,6 +1235,21 @@ export const dispatchTelegramMessage = async ({
       }
     }
     if (previewText === lane.lastPartialText) {
+      return;
+    }
+    if (
+      lane === answerLane &&
+      routeToolStatusPartialsToProgress &&
+      updateActiveProgressPreviewFromPartial(previewText, "answer-partial-progress-preview")
+    ) {
+      // This is a live preview of the current assistant text, not committed
+      // progress history. The final payload still owns the durable answer, so
+      // do not record this text as a transient prefix to strip from final.
+      lane.lastPartialText = previewText;
+      return;
+    }
+    const laneStream = lane.stream ?? ensureDraftLaneStream(laneName);
+    if (!laneStream) {
       return;
     }
     setDraftDurableSendClassification(laneName, {
@@ -1253,13 +1299,43 @@ export const dispatchTelegramMessage = async ({
     }
     await lane.stream.flush();
   };
-  const adoptSpeculativeAnswerPreviewAsProgress = (callsite: string) => {
+  const adoptSpeculativeAnswerPreviewAsProgress = async (callsite: string) => {
     if (!answerLane.stream || !answerLane.hasStreamedMessage) {
       return undefined;
     }
     const stream = answerLane.stream;
     const previewMessageId = stream.messageId();
     recordTransientProgressPreviewText(answerLane.lastPartialText);
+    const existingController = getActiveProgressController();
+    if (existingController) {
+      updateActiveProgressPreviewFromPartial(
+        answerLane.lastPartialText,
+        `${callsite}-existing-progress`,
+      );
+      answerLane.stream = undefined;
+      resetDraftLaneState(answerLane);
+      activePreviewLifecycleByLane.answer = "transient";
+      retainPreviewOnCleanupByLane.answer = false;
+      logPreviewLedger({
+        lane: "progress",
+        phase: "preview_adopted",
+        source: "cleanup",
+        messageId: previewMessageId,
+        operation: "delete",
+        previewTransport: stream.previewMode?.() ?? progressPreviewTransport,
+        textLength: stream.lastDeliveredText?.().length,
+        result: "answer_to_existing_progress",
+        callsite,
+      });
+      try {
+        await stream.clear();
+      } catch (err) {
+        logVerbose(
+          `telegram: adopted stray answer preview cleanup failed message=${previewMessageId ?? "unknown"} callsite=${callsite}: ${String(err)}`,
+        );
+      }
+      return existingController;
+    }
     const controller = getProgressController(stream);
     if (!controller) {
       return undefined;
@@ -1301,7 +1377,8 @@ export const dispatchTelegramMessage = async ({
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
     const controller =
-      adoptSpeculativeAnswerPreviewAsProgress("before-progress-update") ?? getProgressController();
+      (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??
+      getProgressController();
     if (!controller) {
       return false;
     }
@@ -2232,6 +2309,9 @@ export const dispatchTelegramMessage = async ({
         onToolResult: (payload) =>
           enqueueDraftLaneEvent(async () => {
             await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
+            if (getActiveProgressController()) {
+              routeToolStatusPartialsToProgress = true;
+            }
             await sendToolPayload(payload);
           }),
         onPartialReply:
@@ -2284,6 +2364,9 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: async (payload) => {
           await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
+          if (getActiveProgressController()) {
+            routeToolStatusPartialsToProgress = true;
+          }
           if (!statusReactionController) {
             return;
           }

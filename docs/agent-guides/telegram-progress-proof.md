@@ -117,11 +117,20 @@ Failure examples:
 - screenshots suppressed to make the transcript cleaner
 - final text replaced by audio-only output
 
-## Natural stress prompt
+## Natural stress prompts
 
-Synthetic scenarios can miss model-authored progress. For a stronger natural
-proof, use a prompt that exercises browser work, media delivery, file IO,
-progress narration, finalization, and TTS:
+Synthetic scenarios can miss model-authored progress. Start with a prompt that
+exercises real agent work without opening browser or GUI apps. That keeps the
+visual proof focused on Telegram progress delivery instead of unrelated app
+windows stealing the recording:
+
+```text
+Inspect only this repository's local files for Telegram progress-preview delivery. Do not open or control browser, Chrome, Safari, Notes, or any GUI app. Find the relevant docs, tests, and code; write a short local report under /tmp; create a harmless Desktop temp file and delete it; then summarize what you verified.
+```
+
+Use the browser/media stress prompt only when the change under test needs those
+surfaces too. It exercises browser work, media delivery, file IO, progress
+narration, finalization, and TTS:
 
 ```text
 open example.com, then open iana.org/domains/example, then open developer.mozilla.org/en-US/docs/Web/HTML, take one screenshot after the IANA page and one after the MDN page, write the key info from all three pages into a temporary file, read it back, remove the file after you are done, keep me updated with brief progress updates along the way, then tell me in one short final answer what each page is for and confirm the temporary file was removed

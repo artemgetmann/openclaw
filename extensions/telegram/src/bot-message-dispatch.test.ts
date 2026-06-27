@@ -376,6 +376,77 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("keeps natural multi-tool status partials in one transient progress bubble", async () => {
+    const progressStream = createDraftStream(9010);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "I'll inspect browser support, write a report, and clean up the temp file.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "I'll inspect browser support, write a report, and clean up the temp file.",
+          },
+          { kind: "block" },
+        );
+        await replyOptions?.onToolStart?.({ name: "browser.open" });
+
+        await replyOptions?.onPartialReply?.({
+          text: "Browser is up. I'm checking docs and code now.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Browser is up. I'm checking docs and code now.",
+          },
+          { kind: "block" },
+        );
+        await replyOptions?.onToolStart?.({ name: "notes.write" });
+
+        await replyOptions?.onPartialReply?.({
+          text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "I'll inspect browser support, write a report, and clean up the temp file.",
+    );
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "I'll inspect browser support, write a report, and clean up the temp file.\n\n" +
+        "Browser is up. I'm checking docs and code now.",
+    );
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "I'll inspect browser support, write a report, and clean up the temp file.\n\n" +
+        "Browser is up. I'm checking docs and code now.\n\n" +
+        "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+    );
+    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("routes sourcePreview tool text through transient progress", async () => {
     const progressStream = createDraftStream(9003);
     createTelegramDraftStream.mockReturnValue(progressStream);
