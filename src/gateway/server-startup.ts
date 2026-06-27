@@ -20,6 +20,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { runStartupReconciler } from "../infra/startup-reconciler.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -49,6 +50,7 @@ export function resolveGatewaySidecarStartupPolicy(env: NodeJS.ProcessEnv) {
       consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_PLUGIN_SERVICES),
     skipMemoryBackendStartup:
       consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_MEMORY_BACKEND_STARTUP),
+    skipStartupReconciler: isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_STARTUP_RECONCILER),
   };
 }
 
@@ -77,6 +79,7 @@ export async function startGatewaySidecars(params: {
   const skipInternalHookLoading = policy.skipInternalHookLoading;
   const skipPluginServices = policy.skipPluginServices;
   const skipMemoryBackendStartup = policy.skipMemoryBackendStartup;
+  const skipStartupReconciler = policy.skipStartupReconciler;
   const logPhase = (message: string) => {
     if (debugStartupPhasesRaw) {
       process.stderr.write(`[startup/sidecars/raw] ${message}\n`);
@@ -105,6 +108,26 @@ export async function startGatewaySidecars(params: {
     logPhase("session cleanup complete");
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+  }
+
+  if (!skipStartupReconciler) {
+    try {
+      const result = await runStartupReconciler({ log: params.log });
+      if (result.status === "reconciled") {
+        logPhase(
+          `startup reconciler complete (${result.report.notifications.length} notification(s))`,
+        );
+      } else {
+        logPhase(`startup reconciler skipped (${result.reason})`);
+      }
+    } catch (err) {
+      // Reconciliation improves packaged capability freshness, but it must not
+      // make the gateway unavailable. The deterministic status file captures
+      // actionable failures when the manifest can be read.
+      params.log.warn(`startup reconciler failed: ${String(err)}`);
+    }
+  } else {
+    logPhase("startup reconciler skipped");
   }
 
   // Start OpenClaw browser control server (unless disabled via config).
