@@ -56,6 +56,37 @@ pnpm jarvis gui-benchmark --runtime agent-desktop --task x-to-claude --open-x-ho
    `falseFailures`, `replyExtractionMethod`, `workspace`, `qualityGate`,
    `postStateResult`, and elapsed time when present.
 
+## Locked Session / cgWindowNotFound
+
+`Apple event error -10005: cgWindowNotFound` usually means the GUI session is
+not presenting capturable windows to the runtime. On Artem's Mac, the first
+suspect is a locked or sleeping local session, not a Jarvis policy failure.
+
+When `gui-control`, `gui-benchmark`, OpenComputerUse, or agent-desktop returns
+`cgWindowNotFound` across normal visible apps such as TextEdit, Finder, Telegram,
+Safari, or System Settings:
+
+1. Stop the benchmark/proof loop and check lock state before debugging TCC,
+   app adapters, or resolver code.
+2. Use the `macos-remote-unlock` skill and run its status check first:
+
+   ```bash
+   SCRIPT='/Users/user/Library/Application Support/OpenClaw/.openclaw/workspace/bin/openclaw-unlock.sh'
+   "$SCRIPT" status
+   ```
+
+3. If `locked=true`, ask the user for current approval before running unlock or
+   keep-awake commands. Do not unlock automatically from stale approval.
+4. After approval, follow the canonical unlock and optional GUI lease commands
+   in `macos-remote-unlock/SKILL.md`, then rerun the exact failing GUI command.
+5. If `locked=false`, continue normal debugging: verify TCC permission health,
+   stale helper processes, runtime command discovery, and app/window-specific
+   snapshot behavior.
+
+Report `cgWindowNotFound` as blocked only after the lock status is known. Include
+whether the Mac was locked, whether unlock approval was requested or granted,
+and the post-unlock retry result.
+
 ## Safety Rules
 
 - Fail closed. Wrong app/window, ambiguous element, stale refs, login/auth,
