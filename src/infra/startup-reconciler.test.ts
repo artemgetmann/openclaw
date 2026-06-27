@@ -116,6 +116,7 @@ describe("startup reconciler", () => {
     const localBin = path.join(root, "local-bin");
     await fs.mkdir(packageRoot, { recursive: true });
     await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.31.0\n");
+    const env = { ...process.env, PATH: localBin };
     await writeManifest({
       packageRoot,
       managedTools: [
@@ -134,7 +135,7 @@ describe("startup reconciler", () => {
     const result = await runStartupReconciler({
       packageRoot,
       stateDir,
-      env: { ...process.env, PATH: localBin },
+      env,
       log: { info: (message) => messages.push(message), warn: (message) => messages.push(message) },
     });
 
@@ -142,6 +143,11 @@ describe("startup reconciler", () => {
     const managedGog = path.join(stateDir, "bin", "gog");
     const version = spawnSync(managedGog, ["--version"], { encoding: "utf8" });
     expect(version.stdout.trim()).toBe("gog v0.31.0");
+    const resolvedVersion = spawnSync("gog", ["--version"], { encoding: "utf8", env });
+    expect(resolvedVersion.stdout.trim()).toBe("gog v0.31.0");
+    const resolvedPath = spawnSync("/bin/sh", ["-c", "command -v gog"], { encoding: "utf8", env });
+    expect(resolvedPath.stdout.trim()).toBe(managedGog);
+    expect(env.PATH?.split(path.delimiter).at(0)).toBe(path.join(stateDir, "bin"));
     if (result.status !== "reconciled") {
       throw new Error("expected reconciled result");
     }

@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { applyPathPrepend } from "./path-prepend.js";
 
 const STATUS_FORMAT = 1;
 const STATUS_RELATIVE_PATH = path.join("startup-reconciler", "status.json");
@@ -536,6 +537,13 @@ async function writeStatus(statusPath: string, report: StartupReconcilerStatus) 
   await fsp.writeFile(statusPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 }
 
+function exposeManagedBinDirOnPath(env: NodeJS.ProcessEnv, managedBinDir: string) {
+  // Startup reconciliation writes Jarvis-owned CLI copies into the managed bin
+  // directory. Prepending that directory makes later product command spawns use
+  // the repaired copy instead of an older Homebrew/user PATH entry.
+  applyPathPrepend(env as Record<string, string>, [path.resolve(managedBinDir)]);
+}
+
 function emitMaterialLogs(params: {
   previousSignature?: string;
   report: StartupReconcilerStatus;
@@ -588,6 +596,7 @@ export async function runStartupReconciler(
   const statusPath = path.join(stateDir, STATUS_RELATIVE_PATH);
   const previousSignature = readPreviousSignature(statusPath);
 
+  exposeManagedBinDirOnPath(env, managedBinDir);
   const skills = await syncManagedSkills({
     manifest,
     bundledSkillsDir,
