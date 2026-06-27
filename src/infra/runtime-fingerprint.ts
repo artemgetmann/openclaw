@@ -78,22 +78,66 @@ export function resolveRuntimeFingerprint(
 }
 
 function resolveRuntimeGuiCapabilities(worktree: string): RuntimeFingerprint["guiCapabilities"] {
+  const distJsFiles = listRuntimeDistJavaScriptFiles(worktree);
   return {
-    guiControl: runtimeFileExists(worktree, [
-      "src/agents/tools/gui-control-tool.ts",
-      "dist/agents/tools/gui-control-tool.js",
-    ]),
-    guiBenchmarkNativeApps: runtimeFileContains(
-      worktree,
-      ["src/gui-control/benchmark.ts"],
-      ["native-apps"],
-    ),
-    trustedLocalDefault: runtimeFileContains(
-      worktree,
-      ["src/gui-control/policy.ts"],
-      ["const DEFAULT_GUI_TASK_POLICY", 'taskId: "trusted_local_gui_control"'],
-    ),
+    guiControl:
+      runtimeFileExists(worktree, [
+        "src/agents/tools/gui-control-tool.ts",
+        "dist/agents/tools/gui-control-tool.js",
+      ]) || runtimeFilesContain(worktree, distJsFiles, ["src/agents/tools/gui-control-tool.ts"]),
+    guiBenchmarkNativeApps:
+      runtimeFileContains(worktree, ["src/gui-control/benchmark.ts"], ["native-apps"]) ||
+      runtimeFilesContain(worktree, distJsFiles, ["native-apps"]),
+    trustedLocalDefault:
+      runtimeFileContains(
+        worktree,
+        ["src/gui-control/policy.ts"],
+        ["const DEFAULT_GUI_TASK_POLICY", 'taskId: "trusted_local_gui_control"'],
+      ) ||
+      runtimeFilesContain(worktree, distJsFiles, [
+        "const DEFAULT_GUI_TASK_POLICY",
+        'taskId: "trusted_local_gui_control"',
+      ]),
   };
+}
+
+function listRuntimeDistJavaScriptFiles(worktree: string): string[] {
+  const distRoot = path.join(worktree, "dist");
+  const files: string[] = [];
+  const pending: Array<{ dir: string; depth: number }> = [{ dir: distRoot, depth: 0 }];
+
+  // Packaged Jarvis runtimes are bundled into hashed JS chunks, not stable
+  // source-shaped paths. Keep the scan bounded to executable JS files so status
+  // proof can read the shipped runtime without walking source maps or assets.
+  while (pending.length > 0 && files.length < 2000) {
+    const current = pending.pop();
+    if (!current || current.depth > 3) {
+      continue;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(current.dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "control-ui") {
+          continue;
+        }
+        pending.push({ dir: entryPath, depth: current.depth + 1 });
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".js")) {
+        files.push(path.relative(worktree, entryPath));
+      }
+    }
+  }
+
+  return files;
 }
 
 function runtimeFileExists(worktree: string, relativePaths: string[]): boolean {
@@ -101,6 +145,14 @@ function runtimeFileExists(worktree: string, relativePaths: string[]): boolean {
 }
 
 function runtimeFileContains(
+  worktree: string,
+  relativePaths: string[],
+  needles: string[],
+): boolean {
+  return runtimeFilesContain(worktree, relativePaths, needles);
+}
+
+function runtimeFilesContain(
   worktree: string,
   relativePaths: string[],
   needles: string[],
