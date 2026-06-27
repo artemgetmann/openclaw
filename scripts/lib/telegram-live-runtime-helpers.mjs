@@ -73,11 +73,10 @@ function resolveTelegramLivePreferredModel(params) {
     return preferredModel;
   }
 
-  // ACP validation and local Codex-auth tester lanes must stay on Codex unless
-  // the caller explicitly overrides them. Otherwise inherited Anthropic/OpenAI
-  // defaults can trigger missing-secret prechecks before the usable Codex auth
-  // profile is even considered.
-  if (isTelegramLiveAcpValidationEnabled(params) || params?.preferCodexAuth === true) {
+  // ACP validation is a special transport-continuity lane. Normal tester lanes
+  // must inherit the main runtime model unless the operator explicitly
+  // overrides it, or tester proof stops being staging proof.
+  if (isTelegramLiveAcpValidationEnabled(params)) {
     return DEFAULT_CODEX_TESTER_MODEL;
   }
 
@@ -149,13 +148,7 @@ function sanitizeTelegramTesterModelSelection(params) {
 
   const inheritedPrimary = resolveConfiguredModelPrimary(currentModelConfig);
   const inheritedFallbacks = normalizeModelFallbacks(currentModelConfig.fallbacks);
-  const safeFallbacks = inheritedFallbacks.filter(
-    (model) => model !== preferredModel && model !== inheritedPrimary && !isPlainOpenAiModel(model),
-  );
 
-  // Tester/live lanes must never silently keep the product's plain OpenAI
-  // default. If the caller did not force a model, try inherited safe fallbacks
-  // first, then fall back to the Codex twin of the inherited OpenAI default.
   if (preferredModel) {
     return {
       effectiveModel: preferredModel,
@@ -163,24 +156,26 @@ function sanitizeTelegramTesterModelSelection(params) {
     };
   }
 
-  if (inheritedPrimary && !isPlainOpenAiModel(inheritedPrimary)) {
+  // Parity lanes preserve the main runtime model/provider selection. Secret
+  // material is scrubbed elsewhere; changing provider here makes a tester pass
+  // irrelevant to the main Jarvis runtime.
+  if (inheritedPrimary) {
     return {
       effectiveModel: inheritedPrimary,
-      fallbackModels: safeFallbacks,
+      fallbackModels: inheritedFallbacks,
     };
   }
 
-  const safeInheritedFallback = safeFallbacks[0] ?? "";
+  const safeInheritedFallback = inheritedFallbacks[0] ?? "";
   if (safeInheritedFallback) {
     return {
       effectiveModel: safeInheritedFallback,
-      fallbackModels: safeFallbacks.filter((model) => model !== safeInheritedFallback),
+      fallbackModels: inheritedFallbacks.filter((model) => model !== safeInheritedFallback),
     };
   }
 
-  const codexTwin = codexTwinForPlainOpenAiModel(inheritedPrimary);
   return {
-    effectiveModel: codexTwin,
+    effectiveModel: "",
     fallbackModels: [],
   };
 }
@@ -1999,38 +1994,159 @@ export function buildTelegramLiveRuntimeConfig(params) {
   config.plugins = {
     ...basePlugins,
     enabled: true,
-    allow: acpValidation ? ["telegram", "acpx"] : ["telegram"],
-    // The isolated Telegram live harness runs bundled Telegram only. Inherited
-    // deny entries from the founder config can reference plugins unavailable in
-    // the current checkout, which makes doctor reject the runtime before it
-    // even boots. Keep the default denylist to the one thing we intentionally
-    // block, and remove that block only for explicit ACP validation lanes.
-    deny: acpValidation ? [] : ["acpx"],
+    // Keep the plugin/tool surface aligned with the base runtime. The tester
+    // lane isolates transport credentials and state, not product capability.
+    allow: Array.isArray(basePlugins.allow) ? structuredClone(basePlugins.allow) : undefined,
+    deny: Array.isArray(basePlugins.deny) ? structuredClone(basePlugins.deny) : undefined,
     entries: {
+      ...structuredClone(pluginEntries),
       telegram: {
         ...(pluginEntries.telegram && typeof pluginEntries.telegram === "object"
-          ? pluginEntries.telegram
+          ? structuredClone(pluginEntries.telegram)
           : {}),
         enabled: true,
       },
-      acpx: {
-        ...(pluginEntries.acpx && typeof pluginEntries.acpx === "object" ? pluginEntries.acpx : {}),
-        enabled: acpValidation,
-      },
+      ...(acpValidation
+        ? {
+            acpx: {
+              ...(pluginEntries.acpx && typeof pluginEntries.acpx === "object"
+                ? structuredClone(pluginEntries.acpx)
+                : {}),
+              enabled: true,
+            },
+          }
+        : {}),
     },
     slots: {
-      ...pluginSlots,
-      memory: "none",
+      ...structuredClone(pluginSlots),
     },
   };
 
-  // Founder-config tool allowlists often include local experimental tool names
-  // that do not exist in isolated Telegram lanes. Keep tool behavior, but drop
-  // allowlist noise that would otherwise pollute live runtime logs.
-  delete baseTools.alsoAllow;
   config.tools = baseTools;
 
   return config;
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stableJson(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, stableJson(value[key])]),
+  );
+}
+
+function jsonEqual(a, b) {
+  return JSON.stringify(stableJson(a ?? null)) === JSON.stringify(stableJson(b ?? null));
+}
+
+function resolveConfigValue(config, dottedPath) {
+  let current = config;
+  for (const segment of dottedPath.split(".")) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function collectExistingSessionProfiles(config) {
+  const profiles =
+    config?.browser?.profiles && typeof config.browser.profiles === "object"
+      ? config.browser.profiles
+      : {};
+  return Object.entries(profiles)
+    .filter(([, profile]) => {
+      return profile && typeof profile === "object" && profile.driver === "existing-session";
+    })
+    .map(([name]) => name)
+    .toSorted();
+}
+
+export function buildTelegramLiveRuntimeParityReport(params = {}) {
+  const baseConfigPath = String(params.baseConfigPath ?? "").trim();
+  const runtimeConfigPath = String(params.runtimeConfigPath ?? "").trim();
+  const baseConfig = baseConfigPath ? readJsonObject(baseConfigPath) : {};
+  const runtimeConfig = runtimeConfigPath ? readJsonObject(runtimeConfigPath) : {};
+  const parityPaths = [
+    "agents.defaults.model",
+    "agents.defaults.models",
+    "browser",
+    "plugins.allow",
+    "plugins.deny",
+    "plugins.slots",
+    "tools",
+  ];
+  const unexpectedDiffs = parityPaths.filter((pathKey) => {
+    return !jsonEqual(
+      resolveConfigValue(baseConfig, pathKey),
+      resolveConfigValue(runtimeConfig, pathKey),
+    );
+  });
+  const baseExistingProfiles = collectExistingSessionProfiles(baseConfig);
+  const runtimeExistingProfiles = collectExistingSessionProfiles(runtimeConfig);
+  const browserSidecarSkipped = String(params.browserSidecarSkipped ?? "").trim() === "1";
+  const browserSidecarEnabled =
+    resolveConfigValue(runtimeConfig, "browser.enabled") !== false && !browserSidecarSkipped;
+  const uploadDir = String(params.uploadDir ?? "/tmp/openclaw/uploads").trim();
+
+  return {
+    main_commit: String(params.mainCommit ?? "unknown"),
+    tester_commit: String(params.testerCommit ?? "unknown"),
+    config_diff_allowed_only: unexpectedDiffs.length === 0,
+    config_diff_unexpected_paths: unexpectedDiffs,
+    browser_sidecar_enabled: browserSidecarEnabled,
+    browser_profiles_match: jsonEqual(baseExistingProfiles, runtimeExistingProfiles),
+    browser_existing_session_profiles: runtimeExistingProfiles,
+    tools_match: jsonEqual(
+      resolveConfigValue(baseConfig, "tools"),
+      resolveConfigValue(runtimeConfig, "tools"),
+    ),
+    plugins_match:
+      jsonEqual(
+        resolveConfigValue(baseConfig, "plugins.allow"),
+        resolveConfigValue(runtimeConfig, "plugins.allow"),
+      ) &&
+      jsonEqual(
+        resolveConfigValue(baseConfig, "plugins.deny"),
+        resolveConfigValue(runtimeConfig, "plugins.deny"),
+      ) &&
+      jsonEqual(
+        resolveConfigValue(baseConfig, "plugins.slots"),
+        resolveConfigValue(runtimeConfig, "plugins.slots"),
+      ),
+    model_config_match:
+      jsonEqual(
+        resolveConfigValue(baseConfig, "agents.defaults.model"),
+        resolveConfigValue(runtimeConfig, "agents.defaults.model"),
+      ) &&
+      jsonEqual(
+        resolveConfigValue(baseConfig, "agents.defaults.models"),
+        resolveConfigValue(runtimeConfig, "agents.defaults.models"),
+      ),
+    runtime_worktree: String(params.runtimeWorktree ?? "unknown"),
+    runtime_port: String(params.runtimePort ?? "unknown"),
+    current_lane_bot: String(params.currentLaneBot ?? "unknown"),
+    upload_dir: uploadDir,
+    upload_dir_ready: Boolean(uploadDir && fs.existsSync(uploadDir)),
+    acceptable_config_diffs: [
+      "channels.telegram.botToken",
+      "channels.telegram.accounts",
+      "gateway.port",
+      "gateway.auth.token",
+      "gateway.controlUi",
+      "agents.defaults.workspace",
+      "agents.defaults.heartbeat",
+      "agents.defaults.memorySearch.store.path",
+      "bindings",
+    ],
+  };
 }
 
 export function pruneTesterRuntimeAuthStore(params) {
