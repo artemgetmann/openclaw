@@ -96,6 +96,10 @@ openclaw telegram-user send \
 ```
 
 Wait for the `TTS enabled` acknowledgement before sending the test prompt.
+When collecting visual proof, send `/tts on` and wait for that acknowledgement
+before starting the benchmark prompt recording. This keeps the proof focused on
+the prompt under test instead of mixing the settings acknowledgement into the
+progress/final/voice sequence.
 
 Pass criteria:
 
@@ -223,3 +227,8 @@ pnpm openclaw:local telegram runtime release
 
 Confirm the `/tts off` acknowledgement when the proof enabled TTS only for the
 scenario.
+
+For GUI proof artifacts, follow `docs/agent-guides/gui-verification.md`: create a
+compressed `*-review.mp4`, inspect a contact sheet or key frames, send only the
+compressed review copy to the user when requested, and keep raw `.mov` files or
+frame directories temporary unless they are needed for audit.
