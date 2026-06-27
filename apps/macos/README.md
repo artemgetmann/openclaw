@@ -90,6 +90,15 @@ Packaging also writes `OpenClawRuntime/openclaw/skills.manifest.json`, and
 `verify-consumer-mac-app.sh` compares consumer-default bundled skill content
 hashes against the source checkout. If a skill changes, rerun packaging without
 runtime reuse so Jarvis does not ship stale model-facing skill instructions.
+Packaging also writes
+`OpenClawRuntime/openclaw/capabilities.manifest.json`, which records packaged
+skill hashes plus managed CLI version expectations from skill metadata. During
+fresh runtime packaging, local installed CLIs such as `gog`, `wacli`, or
+`himalaya` are compared against the packaged `recommendedVersion`; if the local
+tool is newer, packaging fails so the release cannot accidentally ship stale
+consumer dependency expectations. Use
+`OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT=1` only when that drift is intentional
+for a local smoke build.
 
 To remove generated UI-smoke build output without deleting a currently running
 smoke app, run:

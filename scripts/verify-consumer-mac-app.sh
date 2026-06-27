@@ -264,6 +264,29 @@ assert_bundled_skill_content_current() {
   fi
 }
 
+assert_capabilities_manifest_present() {
+  local skills_dir="$1"
+  local context_label="$2"
+  local manifest_path
+
+  manifest_path="$(dirname "$skills_dir")/capabilities.manifest.json"
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "ERROR: ${context_label} capability manifest missing: $manifest_path" >&2
+    echo "Rerun packaging so Jarvis records packaged skill and managed CLI expectations." >&2
+    exit 1
+  fi
+
+  "$OPENCLAW_NODE_BIN" --input-type=module - "$manifest_path" <<'NODE'
+import fs from "node:fs";
+
+const manifestPath = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (manifest.format !== 1 || !manifest.skills || !Array.isArray(manifest.managedTools)) {
+  throw new Error(`invalid capabilities manifest: ${manifestPath}`);
+}
+NODE
+}
+
 load_consumer_default_bundled_skills
 
 actual_name="$(plist_print CFBundleDisplayName)"
@@ -345,6 +368,9 @@ assert_required_bundled_skills \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
 assert_bundled_skill_content_current \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
+  "bundled runtime skills"
+assert_capabilities_manifest_present \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
 

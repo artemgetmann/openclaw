@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "👀",
+        "displayName": "Mac Screen Control",
         "os": ["darwin"],
         "requires": { "bins": ["peekaboo"] },
         "install":

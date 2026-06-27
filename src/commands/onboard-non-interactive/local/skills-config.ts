@@ -10,6 +10,8 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "monitor-router",
   "apple-notes",
   "apple-reminders",
+  "media-editor",
+  "elevenlabs-creative",
   "gog",
   "goplaces",
   "himalaya",
