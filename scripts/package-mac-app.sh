@@ -63,6 +63,7 @@ OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
 OPENCLAW_CONSUMER_REUSE_RUNTIME="${OPENCLAW_CONSUMER_REUSE_RUNTIME:-0}"
 OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="${OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE:-0}"
 OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
+OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT="${OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
 REUSABLE_RUNTIME_STAGE_DIR=""
@@ -360,6 +361,18 @@ verify_required_telegram_user_tooling() {
     echo "ERROR: ${context_label} is missing required Telegram user tooling." >&2
     printf '  %s\n' "${missing[@]}" >&2
     echo "Expected directory: $tooling_dir" >&2
+    return 1
+  fi
+}
+
+verify_required_capabilities_manifest() {
+  local runtime_root="$1"
+  local context_label="$2"
+  local manifest_path="$runtime_root/openclaw/capabilities.manifest.json"
+
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "ERROR: ${context_label} is missing capabilities.manifest.json." >&2
+    echo "Expected file: $manifest_path" >&2
     return 1
   fi
 }
@@ -1058,6 +1071,7 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "openclaw.mjs"
       hash_consumer_runtime_path "package.json"
       hash_consumer_runtime_path "pnpm-lock.yaml"
+      hash_consumer_runtime_path "scripts/consumer-capabilities-manifest.mjs"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
       hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
       hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
@@ -1161,7 +1175,8 @@ prepare_bundled_consumer_runtime() {
 
   if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
     if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates" \
-      && verify_required_telegram_user_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/scripts/telegram-e2e" "reused bundled consumer runtime Telegram user tooling"; then
+      && verify_required_telegram_user_tooling "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/scripts/telegram-e2e" "reused bundled consumer runtime Telegram user tooling" \
+      && verify_required_capabilities_manifest "$REUSABLE_RUNTIME_STAGE_DIR" "reused bundled consumer runtime"; then
       echo "📦 Reusing previous bundled consumer runtime (smoke-only)"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
@@ -1176,7 +1191,8 @@ prepare_bundled_consumer_runtime() {
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && -d "$cache_root" && -f "$cache_root/manifest.json" ]]; then
     if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates" \
-      && verify_required_telegram_user_tooling "$cache_telegram_user_tooling_dir" "cached bundled consumer runtime Telegram user tooling"; then
+      && verify_required_telegram_user_tooling "$cache_telegram_user_tooling_dir" "cached bundled consumer runtime Telegram user tooling" \
+      && verify_required_capabilities_manifest "$cache_root" "cached bundled consumer runtime"; then
       echo "📦 Reusing cached bundled consumer runtime"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
@@ -1263,6 +1279,10 @@ prepare_bundled_consumer_runtime() {
     "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/skill-content-manifest.mjs" \
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills" \
       > "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills.manifest.json"
+    "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/consumer-capabilities-manifest.mjs" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills" \
+      --out "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
+      --fail-on-local-drift
   fi
 
   local bundled_template_src="$ROOT_DIR/docs/reference/templates"
