@@ -67,7 +67,7 @@ They should come away knowing:
   - browser automation and form-filling
   - booking, ordering, travel planning, and admin tasks done through the web
   - research and web tasks
-  - document creation or conversion
+  - document, presentation, spreadsheet, and PDF creation/conversion
   - data visualization / HTML outputs / PDF export
   - image understanding or image generation/editing
   - email / WhatsApp / Google / maps / reminders / notes
@@ -88,6 +88,9 @@ They should come away knowing:
   details, translate it first: `gog` is Google Workspace, `himalaya` is Email,
   `wacli` is WhatsApp as Me, `goplaces` is Google Maps Search, and `peekaboo` is
   Mac Screen Control.
+- If Documents, Presentations, or Spreadsheets are visible, describe them as
+  practical file skills for Word documents, PowerPoint decks, and Excel-style
+  spreadsheets. Mention local tool setup only when it is missing or relevant.
 - If ElevenLabs Creative is visible and configured, mention voice, music, sound
   effects, dubbing, audio cleanup, and speech-to-text. Treat image/video
   generation as exploratory unless a tested ElevenCreative route is connected.

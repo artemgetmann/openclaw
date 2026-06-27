@@ -1,6 +1,6 @@
 ---
 name: consumer-setup
-description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp as Me, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, Google Maps Search, or creative audio. Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
+description: Use when the user asks to use a consumer integration or local capability that is not set up yet: WhatsApp as Me, Email, Google Workspace, Apple Notes, Apple Reminders, Telegram as Me, Google Maps Search, Documents, Presentations, Spreadsheets, PDF, or creative audio. Route here only when the right capability exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -18,6 +18,9 @@ Trigger it for requests like:
 - "send a Telegram message as me" when Telegram-as-me still needs login
 - "send a WhatsApp message" when WhatsApp-as-me QR pairing or live sync is not ready
 - "create a reminder" when macOS access has not been granted yet
+- "make this a Word document" when document conversion tools are missing
+- "turn this into a PowerPoint" when presentation tools are missing
+- "convert this CSV to Excel" when spreadsheet tools are missing
 
 Do not use it when the underlying skill is already connected and ready, or when
 the problem is normal task execution rather than setup.
@@ -26,9 +29,11 @@ the problem is normal task execution rather than setup.
 
 - Explain the missing setup in plain product language, not raw CLI noise.
 - Use consumer-facing capability names first, such as Google Workspace, Email,
-  WhatsApp as Me, Telegram as Me, Google Maps Search, and Mac Screen Control. Mention raw
-  tool ids like `gog`, `himalaya`, `wacli`, or `peekaboo` only when the user is
-  debugging setup, reviewing a PR, or explicitly asks for the technical path.
+  WhatsApp as Me, Telegram as Me, Google Maps Search, Documents,
+  Presentations, Spreadsheets, PDF, Audio & Video Editing, and Mac Screen
+  Control. Mention raw tool ids like `gog`, `himalaya`, `wacli`, or `peekaboo`
+  only when the user is debugging setup, reviewing a PR, or explicitly asks for
+  the technical path.
 - Offer to help complete setup now.
 - Ask only for the information, approval, or login step the user must provide.
 - Prefer GUI, browser-assisted, or QR-based setup when that will be clearer than
@@ -196,6 +201,25 @@ explicitly ask for the CLI path.
   or a calendar/list call before creating drafts or events.
 - After verification succeeds, continue the user’s original Google task
   automatically instead of stopping at “auth is done”.
+
+### Documents, Presentations, and Spreadsheets
+
+- Missing states usually look like missing local conversion tools such as
+  Pandoc, LibreOffice, or Python.
+- Tell the user which plain capability is not ready yet: Documents,
+  Presentations, or Spreadsheets.
+- Say what Jarvis needs in outcome language: "I need the document conversion
+  tools connected on this Mac before I can create Word/PowerPoint/Excel files."
+- Do not tell a consumer user to run `brew install libreoffice pandoc` unless
+  they explicitly ask for the terminal path. Jarvis should prefer product-
+  managed tools once that lifecycle is available.
+- If tools are present, verify with the cheapest read-only command before the
+  real task:
+  - `pandoc --version` for Markdown/HTML to document or deck generation
+  - `soffice --version` or `libreoffice --version` for Office conversion/export
+  - `python3 --version` for CSV/spreadsheet inspection and cleanup
+- After setup or verification succeeds, continue the original file task instead
+  of stopping at "setup is done".
 
 ### Apple Notes
 
