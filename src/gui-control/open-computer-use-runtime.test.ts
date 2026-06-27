@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   OpenComputerUseRuntime,
+  formatOpenComputerUseTccRecoveryGuidance,
   parseOpenComputerUseActionResult,
   parseOpenComputerUseApps,
   parseOpenComputerUseSnapshot,
@@ -353,7 +354,68 @@ describe("parseOpenComputerUseVirtualPointerEvidence", () => {
   });
 });
 
+describe("formatOpenComputerUseTccRecoveryGuidance", () => {
+  it("explains stale dev-app TCC grants without auto-resetting them", () => {
+    const guidance = formatOpenComputerUseTccRecoveryGuidance({
+      command:
+        "/Users/user/Applications/Open Computer Use (Dev).app/Contents/MacOS/OpenComputerUse",
+      stderr: "Accessibility missing; ScreenCapture permission missing.",
+    });
+
+    expect(guidance).toContain("Exact app: /Users/user/Applications/Open Computer Use (Dev).app");
+    expect(guidance).toContain("Bundle id: com.ifuryst.opencomputeruse.dev");
+    expect(guidance).toContain("tccutil reset Accessibility com.ifuryst.opencomputeruse.dev");
+    expect(guidance).toContain("tccutil reset ScreenCapture com.ifuryst.opencomputeruse.dev");
+    expect(guidance).toContain("ad-hoc signed");
+    expect(guidance).toContain("CDHash");
+    expect(guidance).toContain("open '/Users/user/Applications/Open Computer Use (Dev).app'");
+  });
+
+  it("stays quiet for unrelated command failures", () => {
+    expect(
+      formatOpenComputerUseTccRecoveryGuidance({
+        command: "open-computer-use",
+        stderr: "network request failed",
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("OpenComputerUseRuntime", () => {
+  it("preserves stderr from failed OCU snapshot commands", async () => {
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "console.error('Accessibility permission is required. Run `open-computer-use doctor`.');",
+          "process.exit(3);",
+        ].join(""),
+      ],
+    });
+
+    await expect(runtime.observe({ appName: "TextEdit" })).rejects.toThrow(
+      "Accessibility permission is required",
+    );
+  });
+
+  it("adds exact stale-TCC recovery guidance to OCU permission failures", async () => {
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "console.error('Accessibility missing; ScreenCapture permission missing.');",
+          "process.exit(3);",
+        ].join(""),
+      ],
+    });
+
+    await expect(runtime.observe({ appName: "TextEdit" })).rejects.toThrow(
+      "tccutil reset Accessibility com.ifuryst.opencomputeruse.dev",
+    );
+  });
+
   it("clicks element-index targets through direct OCU actions without raw coordinates", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
     const argsPath = path.join(tempDir, "argv.json");

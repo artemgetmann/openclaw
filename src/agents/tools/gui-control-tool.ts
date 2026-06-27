@@ -60,7 +60,7 @@ const GuiControlToolSchema = Type.Object({
   approvedPolicyRisk: Type.Optional(
     Type.Boolean({
       description:
-        "Set true only when the user explicitly approved this specific mutating GUI action.",
+        "Set true when the user requested or approved this specific mutating GUI action.",
     }),
   ),
   verifyText: Type.Optional(

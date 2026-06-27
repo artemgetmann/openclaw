@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { RuntimeFingerprint } from "../infra/runtime-fingerprint.js";
 
 export type SessionStatus = {
   agentId?: string;
@@ -36,6 +37,7 @@ export type HeartbeatStatus = {
 
 export type StatusSummary = {
   runtimeVersion?: string | null;
+  runtimeFingerprint?: RuntimeFingerprint;
   linkChannel?: {
     id: ChannelId;
     label: string;

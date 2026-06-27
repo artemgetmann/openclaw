@@ -53,6 +53,7 @@ jarvis_fast_gateway_proof_gap() {
   local run_status="$4"
   local status_probe_ok="$5"
   local expected_label="$6"
+  local cli_capabilities_match="${7:-1}"
 
   if [[ "$launchagent_present" == "0" ]]; then
     printf 'gateway LaunchAgent is not present for %s\n' "$expected_label"
@@ -68,6 +69,10 @@ jarvis_fast_gateway_proof_gap() {
   fi
   if [[ "$run_status" == "1" && "$status_probe_ok" != "1" ]]; then
     printf 'gateway LaunchAgent matches packaged runtime, but RPC status did not pass\n'
+    return 0
+  fi
+  if [[ "$cli_capabilities_match" != "1" ]]; then
+    printf 'app-managed CLI does not expose expected GUI capabilities\n'
     return 0
   fi
 }

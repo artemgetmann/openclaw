@@ -643,7 +643,7 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
   if (cmp < 0) {
     logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+      `Config metadata lastTouchedVersion=${touched} is newer than this runtime package version=${VERSION}; this can be normal when a Jarvis app/product build carries an older runtime package, but runtime/status proof should show the active commit and capabilities separately.`,
     );
   }
 }
