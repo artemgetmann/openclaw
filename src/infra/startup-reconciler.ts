@@ -66,9 +66,9 @@ type StartupReconcilerOptions = {
 type SkillStatus = {
   name: string;
   displayName?: string;
-  packagedHash: string;
+  packagedHash?: string;
   managedHash?: string;
-  status: "current" | "updated" | "missing-packaged" | "failed";
+  status: "current" | "updated" | "removed" | "missing-packaged" | "failed";
   message?: string;
 };
 
@@ -287,16 +287,65 @@ async function copyManagedExecutable(sourcePath: string, targetPath: string) {
   await fsp.rename(tempPath, targetPath);
 }
 
+function listImmediateManagedSkillNames(rootDir: string): string[] {
+  try {
+    return fs
+      .readdirSync(rootDir, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules")
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .map((entry) => entry.name)
+      .toSorted((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+async function pruneRemovedManagedSkills(params: {
+  managedProductSkillsDir: string;
+  currentSkillNames: Set<string>;
+}): Promise<SkillStatus[]> {
+  const results: SkillStatus[] = [];
+  for (const name of listImmediateManagedSkillNames(params.managedProductSkillsDir)) {
+    if (params.currentSkillNames.has(name)) {
+      continue;
+    }
+    const targetDir = path.join(params.managedProductSkillsDir, name);
+    try {
+      // This root is product-owned. Prune stale mirrors so removed or renamed
+      // packaged skills cannot keep overriding user-managed or bundled skills.
+      await fsp.rm(targetDir, { recursive: true, force: true });
+      results.push({
+        name,
+        status: "removed",
+        message: `Removed stale product-managed ${name} skill.`,
+      });
+    } catch (err) {
+      results.push({
+        name,
+        status: "failed",
+        message: `Failed to remove stale product-managed ${name} skill: ${String(err)}`,
+      });
+    }
+  }
+  return results;
+}
+
 async function syncManagedSkills(params: {
   manifest: CapabilitiesManifest;
   bundledSkillsDir: string;
   managedProductSkillsDir: string;
 }): Promise<SkillStatus[]> {
   const skills = isRecord(params.manifest.skills) ? params.manifest.skills : {};
-  const results: SkillStatus[] = [];
+  const manifestSkillNames = new Set(Object.keys(skills));
+  for (const name of manifestSkillNames) {
+    assertSafeName(name, "skill name");
+  }
+  const results: SkillStatus[] = await pruneRemovedManagedSkills({
+    managedProductSkillsDir: params.managedProductSkillsDir,
+    currentSkillNames: manifestSkillNames,
+  });
 
   for (const [name, skill] of Object.entries(skills).toSorted(([a], [b]) => a.localeCompare(b))) {
-    assertSafeName(name, "skill name");
     const packagedHash = asString(skill?.sha256);
     if (!packagedHash) {
       continue;
@@ -489,7 +538,10 @@ async function reconcileManagedTools(params: {
 function materialNotifications(report: StartupReconcilerStatus): string[] {
   return [
     ...report.skills
-      .filter((item) => item.status === "updated" || item.status === "failed")
+      .filter(
+        (item) =>
+          item.status === "updated" || item.status === "removed" || item.status === "failed",
+      )
       .map((item) => item.message)
       .filter((item): item is string => Boolean(item)),
     ...report.tools

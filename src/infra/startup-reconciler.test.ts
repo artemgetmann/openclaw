@@ -109,6 +109,47 @@ describe("startup reconciler", () => {
     expect(messages).toContain("Updated Google Workspace skill from packaged Jarvis runtime.");
   });
 
+  it("prunes product-managed skills that are no longer packaged", async () => {
+    const root = await makeTempRoot("startup-reconciler-pruned-skills");
+    const packageRoot = path.join(root, "package");
+    const stateDir = path.join(root, "state");
+    const packagedSkill = path.join(packageRoot, "skills", "gog");
+    const managedProductSkillsDir = path.join(stateDir, "product-skills");
+    await fs.mkdir(packagedSkill, { recursive: true });
+    await fs.writeFile(path.join(packagedSkill, "SKILL.md"), "# Current\n", "utf8");
+    await fs.mkdir(path.join(managedProductSkillsDir, "old-office"), { recursive: true });
+    await fs.writeFile(
+      path.join(managedProductSkillsDir, "old-office", "SKILL.md"),
+      "# Stale\n",
+      "utf8",
+    );
+    const packagedHash = await hashSkillDirectory(packagedSkill);
+    await writeManifest({
+      packageRoot,
+      skills: { gog: { sha256: packagedHash, files: 1, displayName: "Google Workspace" } },
+    });
+
+    const result = await runStartupReconciler({
+      packageRoot,
+      stateDir,
+      log: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.status).toBe("reconciled");
+    if (result.status !== "reconciled") {
+      throw new Error("expected reconciled result");
+    }
+    await expect(fs.access(path.join(managedProductSkillsDir, "old-office"))).rejects.toThrow();
+    expect(result.report.skills).toContainEqual({
+      name: "old-office",
+      status: "removed",
+      message: "Removed stale product-managed old-office skill.",
+    });
+    expect(result.report.notifications).toContain(
+      "Removed stale product-managed old-office skill.",
+    );
+  });
+
   it("updates the Jarvis-managed Google Workspace CLI when a satisfying local copy exists", async () => {
     const root = await makeTempRoot("startup-reconciler-tool");
     const packageRoot = path.join(root, "package");
