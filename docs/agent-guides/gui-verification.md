@@ -92,8 +92,7 @@ answer stability, or TTS voice-caption snippets:
    ```
 
 4. If screenshots or recordings are black, do not keep retrying capture tools.
-   Check whether another automation owner is currently using the desktop, then
-   check the macOS lock state through the canonical Application Support unlock
+   Check the macOS lock state through the canonical Application Support unlock
    script. Only unlock when it reports `locked=true`, then start a short GUI
    lease long enough for the proof run:
 
