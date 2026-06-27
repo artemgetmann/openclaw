@@ -365,6 +365,7 @@ EXPECTED_CONFIG_PATH="$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")
 EXPECTED_LOGS_PATH="$(consumer_instance_logs_path "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_PROFILE="$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_INSTALLED_ENTRYPOINT="$EXPECTED_STATE_DIR/lib/openclaw-bundled/dist/index.js"
+EXPECTED_MANAGED_CLI="$EXPECTED_STATE_DIR/bin/openclaw"
 EXPECTED_NODE_PATH_ENTRY="$EXPECTED_STATE_DIR/tools/node/bin"
 EXPECTED_CANONICAL_CONFIG=""
 if [[ "$EXPECTED_LABEL" == "ai.openclaw.gateway" ]]; then
@@ -378,6 +379,7 @@ LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED=0
 PROTECTED_DRIFT=0
 STATUS_PROBE_OK=0
 WRITE_DISABLED_LAUNCH_OK=0
+CLI_CAPABILITIES_MATCH=0
 PROOF_GAP=""
 PROOF_WARNING=""
 
@@ -401,6 +403,19 @@ echo "  expected_gateway_port=$EXPECTED_PORT"
 echo "  expected_state_dir=$EXPECTED_STATE_DIR"
 echo "  expected_config_path=$EXPECTED_CONFIG_PATH"
 echo "  expected_installed_entrypoint=$EXPECTED_INSTALLED_ENTRYPOINT"
+echo "  expected_managed_cli=$EXPECTED_MANAGED_CLI"
+
+if [[ -x "$EXPECTED_MANAGED_CLI" ]]; then
+  MANAGED_CLI_HELP="$("$EXPECTED_MANAGED_CLI" gui-benchmark --help 2>&1 || true)"
+  if [[ "$MANAGED_CLI_HELP" == *"native-apps"* ]]; then
+    CLI_CAPABILITIES_MATCH=1
+  fi
+  echo "  app_managed_cli_present=true"
+  echo "  app_managed_cli_gui_benchmark_native_apps=$([[ "$CLI_CAPABILITIES_MATCH" == "1" ]] && printf true || printf false)"
+else
+  echo "  app_managed_cli_present=false"
+  echo "  app_managed_cli_gui_benchmark_native_apps=false"
+fi
 
 if [[ -f "$LAUNCHAGENT_PLIST" ]]; then
   LAUNCHAGENT_PRESENT=1
@@ -502,7 +517,8 @@ PROOF_GAP="$(jarvis_fast_gateway_proof_gap \
   "$LAUNCHAGENT_SERVICE_METADATA_MATCHES_EXPECTED" \
   "$RUN_STATUS" \
   "$STATUS_PROBE_OK" \
-  "$EXPECTED_LABEL")"
+  "$EXPECTED_LABEL" \
+  "$CLI_CAPABILITIES_MATCH")"
 
 if [[ -z "$PROOF_GAP" &&
   "$LAUNCHAGENT_RUNTIME_MATCHES_EXPECTED" == "1" &&

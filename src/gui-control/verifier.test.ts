@@ -12,6 +12,7 @@ import { performVerifiedAction } from "./verifier.js";
 
 const localFixturePolicy = getGuiTaskPolicyProfile("local_fixture_write");
 const assistantSendPolicy = getGuiTaskPolicyProfile("send_message_to_approved_assistant");
+const webDryRunPolicy = getGuiTaskPolicyProfile("non_committal_web_dry_run");
 
 class MockGuiRuntime implements GuiRuntime {
   readonly name = "agent-desktop" as const;
@@ -414,6 +415,61 @@ describe("performVerifiedAction", () => {
         action: "AXPress",
       },
     ]);
+  });
+
+  it("rechecks ambiguous browser activations before stale-ref retry", async () => {
+    const broadLinkText = [
+      "Flight search result link",
+      "Denpasar to Singapore",
+      "Tue morning departure",
+      "One stop itinerary",
+      "Fare card summary with airline, elapsed time, baggage information, and refundable label",
+      "Open this reversible result for more details",
+    ].join(" ");
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          appName: "Safari",
+          windowTitle: "Search results",
+          elements: [
+            {
+              ref: "@1",
+              role: "link",
+              label: broadLinkText,
+              bounds: { x: 10, y: 10, width: 300, height: 80 },
+            },
+          ],
+        }),
+        snapshot({
+          id: "refresh",
+          appName: "Safari",
+          windowTitle: "Search results",
+          elements: [
+            { ref: "@1", role: "link", label: broadLinkText },
+            { ref: "@2", role: "button", label: "Details" },
+            { ref: "@3", role: "button", label: "Emissions" },
+          ],
+        }),
+      ],
+      actions: [{ ok: false, staleRef: true }, { ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "Safari", windowTitle: "Search results" },
+      element: { ref: "@1", role: "link", label: broadLinkText },
+      actionType: "click",
+      reason: "Open a reversible search result for comparison.",
+      approvedPolicyRisk: true,
+      taskPolicy: webDryRunPolicy,
+      verify: () => ({ ok: true, summary: "should not run after stale retry block" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("Refusing blind click on broad browser link @1");
+    expect(result.stats.actionCount).toBe(1);
+    expect(result.stats.staleRefs).toBe(1);
   });
 
   it("blocks advertised secondary actions when the action name is sensitive", async () => {

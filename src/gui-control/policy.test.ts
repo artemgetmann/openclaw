@@ -14,6 +14,71 @@ function snapshot(params: Partial<GuiSnapshot> = {}): GuiSnapshot {
 }
 
 describe("evaluateGuiPolicy", () => {
+  it("defaults to trusted local GUI control for ordinary approved desktop mutations", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "TextEdit", windowTitle: "Scratch.txt" },
+      snapshot: snapshot({
+        appName: "TextEdit",
+        windowTitle: "Scratch.txt",
+        summary: "Scratch document body ready",
+      }),
+      element: { ref: "@body", role: "text area", label: "TextEdit document body" },
+      reason: "Write the requested scratch note into TextEdit.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.taskPolicy?.taskId).toBe("trusted_local_gui_control");
+    expect(decision.requiredCapability).toBe("write_text_to_target");
+  });
+
+  it.each([
+    ["Sign in", "sign in"],
+    ["Payment method", "payment"],
+    ["Confirm purchase", "confirm purchase"],
+    ["Delete account", "delete"],
+    ["Security settings", "security settings"],
+    ["Install and Relaunch", "install"],
+  ])("keeps trusted local default blocked on hard-stop surface %s", (label, blockedTerm) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Local task" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Local task",
+        summary: "Trusted local GUI task",
+      }),
+      element: { ref: "@blocked", role: "button", label },
+      reason: `Click ${label}.`,
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain(`Blocked sensitive GUI surface: ${blockedTerm}`);
+  });
+
+  it("still requires post-state verification under the trusted local default", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Photos", windowTitle: "Library" },
+      snapshot: snapshot({
+        appName: "Photos",
+        windowTitle: "Library",
+        summary: "Photo library grid",
+      }),
+      element: { ref: "@album", role: "button", label: "Favorites" },
+      reason: "Open the Favorites album.",
+      approvedPolicyRisk: true,
+      verificationMode: "observe_only",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("requires post-state verification");
+  });
+
   it("allows read-only observation with the read-only web profile", () => {
     const decision = evaluateGuiPolicy({
       actionType: "observe",
@@ -375,6 +440,18 @@ describe("evaluateGuiPolicy", () => {
       summary: "Checkout step",
       visibleText: ["PayPal"] as string[],
       blockedTerm: "paypal",
+    },
+    {
+      windowTitle: "Delete account",
+      summary: "Account deletion step",
+      visibleText: [] as string[],
+      blockedTerm: "delete account",
+    },
+    {
+      windowTitle: "Checkout",
+      summary: "Switch account before continuing",
+      visibleText: [] as string[],
+      blockedTerm: "switch account",
     },
   ])(
     "blocks generic commerce controls on hard-stop $blockedTerm context",

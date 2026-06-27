@@ -60,10 +60,24 @@ gap="$(
     "0" \
     "1" \
     "1" \
-    "ai.jarvis.gateway"
+    "ai.jarvis.gateway" \
+    "1"
 )"
 [[ "$gap" == *"service metadata still needs an app-owned refresh"* ]] ||
   fail "stale service metadata must remain a live-proof gap"
+
+gap="$(
+  jarvis_fast_gateway_proof_gap \
+    "1" \
+    "1" \
+    "1" \
+    "1" \
+    "1" \
+    "ai.jarvis.gateway" \
+    "0"
+)"
+[[ "$gap" == *"app-managed CLI does not expose expected GUI capabilities"* ]] ||
+  fail "stale app-managed CLI capabilities must be a live-proof gap"
 
 # A real runtime mismatch remains a proof gap. Port mismatch is enough to prove
 # that the LaunchAgent is not the expected installed Jarvis runtime.

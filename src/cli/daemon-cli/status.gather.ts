@@ -544,8 +544,9 @@ export async function gatherDaemonStatus(
 
   return {
     runtimeFingerprint: resolveRuntimeFingerprint({
+      cwd: command?.workingDirectory,
       env: serviceEnv,
-      serviceLabel: service.label,
+      serviceLabel: serviceEnv.OPENCLAW_LAUNCHD_LABEL ?? service.label,
     }),
     service: {
       label: service.label,

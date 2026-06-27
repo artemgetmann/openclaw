@@ -12,6 +12,7 @@ import {
 } from "../config/sessions.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { resolveRuntimeFingerprint } from "../infra/runtime-fingerprint.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -105,6 +106,15 @@ export function formatContextPressureSuffix(
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
   return {
     ...summary,
+    runtimeFingerprint: summary.runtimeFingerprint
+      ? {
+          ...summary.runtimeFingerprint,
+          branch: "[redacted]",
+          worktree: "[redacted]",
+          stateDir: "[redacted]",
+          configPath: "[redacted]",
+        }
+      : undefined,
     sessions: {
       ...summary.sessions,
       paths: [],
@@ -269,6 +279,7 @@ export async function getStatusSummary(
 
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    runtimeFingerprint: resolveRuntimeFingerprint({ moduleUrl: import.meta.url }),
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
