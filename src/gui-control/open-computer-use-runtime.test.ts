@@ -10,6 +10,7 @@ import {
   parseOpenComputerUseSnapshot,
   parseOpenComputerUseVirtualPointerEvidence,
   parseOpenComputerUseWindows,
+  resolveOpenComputerUseCommand,
 } from "./open-computer-use-runtime.js";
 
 describe("parseOpenComputerUseApps", () => {
@@ -382,6 +383,46 @@ describe("formatOpenComputerUseTccRecoveryGuidance", () => {
 });
 
 describe("OpenComputerUseRuntime", () => {
+  it("uses an explicit OCU command before discovery", () => {
+    expect(
+      resolveOpenComputerUseCommand("/tmp/custom-ocu", {
+        HOME: "/tmp/home",
+        OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
+      }),
+    ).toBe("/tmp/custom-ocu");
+  });
+
+  it("uses the OCU env override before default app discovery", () => {
+    expect(
+      resolveOpenComputerUseCommand(undefined, {
+        HOME: "/tmp/home",
+        OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
+      }),
+    ).toBe("/tmp/env-ocu");
+  });
+
+  it("discovers the installed dev app executable when no shim is configured", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-command-test-"));
+    const appCommand = path.join(
+      tempDir,
+      "Applications",
+      "Open Computer Use (Dev).app",
+      "Contents",
+      "MacOS",
+      "OpenComputerUse",
+    );
+    await fs.mkdir(path.dirname(appCommand), { recursive: true });
+    await fs.writeFile(appCommand, "");
+
+    expect(resolveOpenComputerUseCommand(undefined, { HOME: tempDir })).toBe(appCommand);
+  });
+
+  it("falls back to the PATH shim when OCU is not otherwise discoverable", () => {
+    expect(resolveOpenComputerUseCommand(undefined, { HOME: "/path/that/does/not/exist" })).toBe(
+      "open-computer-use",
+    );
+  });
+
   it("preserves stderr from failed OCU snapshot commands", async () => {
     const runtime = new OpenComputerUseRuntime({
       command: process.execPath,
