@@ -373,6 +373,8 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--thread-anchor",
       "--timeout-ms",
       "--title",
+      "--topic-anchor",
+      "--topic-id",
     ],
     guardedValueFlags: {
       "--media": "pathOrSafeLiteral",

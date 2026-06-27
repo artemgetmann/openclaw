@@ -51,8 +51,8 @@ export function registerTelegramUserCli(program: Command) {
             "Send as the Telegram user account.",
           ],
           [
-            "openclaw telegram-user send --chat @jarvis_tester_1_bot --media /tmp/proof.ogg --voice --json",
-            "Upload media as the Telegram user account, with --reply-to available for topic targeting.",
+            'openclaw telegram-user send --chat -1003783709877 --topic-anchor 15250 --message "hello topic" --json',
+            "Send into a forum topic by using the topic anchor returned by topic-create.",
           ],
           [
             'openclaw telegram-user topic-create --chat -1003783709877 --title "voice proof" --json',
@@ -159,6 +159,8 @@ export function registerTelegramUserCli(program: Command) {
     .option("--voice", "Send uploaded audio as a Telegram voice note", false)
     .option("--audio-as-voice", "Alias for --voice", false)
     .option("--reply-to <id>", "Reply to this message id")
+    .option("--topic-anchor <id>", "Forum topic anchor returned by topic-create")
+    .option("--topic-id <id>", "Alias for --topic-anchor")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserSendCommand } = await import("../commands/telegram-user.js");
