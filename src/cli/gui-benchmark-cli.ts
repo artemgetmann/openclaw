@@ -13,7 +13,12 @@ function parseRuntime(value: string): GuiRuntimeName {
 }
 
 function parseTask(value: string): GuiBenchmarkTask {
-  if (value === "x-to-claude" || value === "safari-notes-claude" || value === "workspace-restore") {
+  if (
+    value === "x-to-claude" ||
+    value === "safari-notes-claude" ||
+    value === "workspace-restore" ||
+    value === "native-apps"
+  ) {
     return value;
   }
   throw new Error(`Unsupported GUI benchmark task: ${value}`);
@@ -35,9 +40,13 @@ export function registerGuiBenchmarkCli(program: Command) {
     .command("gui-benchmark")
     .description("Experimental dev-only Jarvis GUI-control benchmark harness")
     .requiredOption("--runtime <runtime>", "Runtime adapter: agent-desktop, open-computer-use")
+    .option(
+      "--runtime-command <path>",
+      "Runtime command path, useful for a pinned OpenComputerUse build",
+    )
     .requiredOption(
       "--task <task>",
-      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore",
+      "Benchmark task: x-to-claude, safari-notes-claude, workspace-restore, native-apps",
     )
     .option("--dry-run", "Simulate the benchmark without touching real apps", false)
     .option("--write-report", "Write structured JSON report under artifacts/gui-benchmark", false)
@@ -51,6 +60,11 @@ export function registerGuiBenchmarkCli(program: Command) {
     .option(
       "--approve-notes-write",
       "Allow the labelled benchmark content to be written to Apple Notes",
+      false,
+    )
+    .option(
+      "--approve-native-app-write",
+      "Allow labelled benchmark content to be written to safe native-app scratch fixtures",
       false,
     )
     .option(
@@ -77,12 +91,14 @@ export function registerGuiBenchmarkCli(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const benchmarkOptions = {
           runtime: parseRuntime(String(opts.runtime)),
+          runtimeCommand: typeof opts.runtimeCommand === "string" ? opts.runtimeCommand : undefined,
           task: parseTask(String(opts.task)),
           dryRun: Boolean(opts.dryRun),
           writeReport: Boolean(opts.writeReport),
           reportDir: typeof opts.reportDir === "string" ? opts.reportDir : undefined,
           approveClaudeSend: Boolean(opts.approveClaudeSend),
           approveNotesWrite: Boolean(opts.approveNotesWrite),
+          approveNativeAppWrite: Boolean(opts.approveNativeAppWrite),
           openXHome: Boolean(opts.openXHome),
           openClaudeNew: Boolean(opts.openClaudeNew),
           allowClipboardFallback: opts.requireCodexParity

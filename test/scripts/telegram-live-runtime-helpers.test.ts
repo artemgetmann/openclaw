@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   bootstrapTelegramLiveCodexAuthStoreFromSources,
+  buildTelegramLiveRuntimeParityReport,
   buildTelegramLiveRuntimeConfig,
   clearEnvAssignmentText,
   readUsableOpenClawCodexAuthStore,
@@ -92,6 +93,100 @@ describe("summarizeTelegramTesterTokenPool", () => {
     expect(config.channels.telegram.accounts).toBeUndefined();
     expect(config.env.OPENAI_API_KEY).toBeUndefined();
     expect(config.models.providers.openai.apiKey).toBeUndefined();
+  });
+
+  it("preserves parity-sensitive model, browser, plugins, and tools config", () => {
+    const baseConfig = {
+      browser: {
+        enabled: true,
+        profiles: {
+          signedIn: {
+            driver: "existing-session",
+            profileDirectory: "Profile 4",
+          },
+        },
+      },
+      plugins: {
+        allow: ["telegram", "browser", "memory"],
+        deny: ["experimental"],
+        slots: {
+          memory: "default",
+        },
+      },
+      tools: {
+        allow: ["browser", "read"],
+        alsoAllow: ["local-experiment"],
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+          models: {
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    };
+
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.agents.defaults.model.primary).toBe("openai/gpt-5.4");
+    expect(config.browser).toEqual(baseConfig.browser);
+    expect(config.plugins.allow).toEqual(baseConfig.plugins.allow);
+    expect(config.plugins.deny).toEqual(baseConfig.plugins.deny);
+    expect(config.plugins.slots).toEqual(baseConfig.plugins.slots);
+    expect(config.tools).toEqual(baseConfig.tools);
+  });
+
+  it("reports tester runtime parity as machine-readable booleans", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-parity-report-"));
+    const baseConfigPath = path.join(root, "base.json");
+    const runtimeConfigPath = path.join(root, "runtime.json");
+    const uploadDir = path.join(root, "uploads");
+    const shared = {
+      browser: {
+        enabled: true,
+        profiles: {
+          signedIn: { driver: "existing-session", profileDirectory: "Profile 4" },
+        },
+      },
+      plugins: { allow: ["telegram", "browser"], deny: [], slots: { memory: "default" } },
+      tools: { allow: ["browser"] },
+      agents: { defaults: { model: { primary: "openai/gpt-5.4" }, models: {} } },
+    };
+    mkdirSync(uploadDir, { recursive: true });
+    writeFileSync(baseConfigPath, JSON.stringify(shared), "utf8");
+    writeFileSync(runtimeConfigPath, JSON.stringify(shared), "utf8");
+
+    const report = buildTelegramLiveRuntimeParityReport({
+      baseConfigPath,
+      runtimeConfigPath,
+      mainCommit: "main-sha",
+      testerCommit: "tester-sha",
+      runtimeWorktree: "/tmp/wt",
+      runtimePort: "23456",
+      currentLaneBot: "@tester",
+      uploadDir,
+    });
+
+    expect(report).toMatchObject({
+      main_commit: "main-sha",
+      tester_commit: "tester-sha",
+      config_diff_allowed_only: true,
+      browser_sidecar_enabled: true,
+      browser_profiles_match: true,
+      tools_match: true,
+      runtime_worktree: "/tmp/wt",
+      runtime_port: "23456",
+      current_lane_bot: "@tester",
+      upload_dir_ready: true,
+    });
   });
 });
 

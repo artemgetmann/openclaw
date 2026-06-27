@@ -231,6 +231,13 @@ bash scripts/verify-consumer-mac-app.sh --release "dist/Jarvis.app"
 If the user asks an agent to "build me a new application", "push an update",
 or "make a sendable Jarvis package", this is the canonical lane.
 
+Use one path:
+
+1. Enter the persistent release lane.
+2. Prove the app locally.
+3. Let the public release wrapper choose the next safe prepare/resume phase.
+4. Publish only with an explicit publish flag and latest GitHub release tag.
+
 Start with the persistent Jarvis release worktree launcher:
 
 ```bash
@@ -267,8 +274,10 @@ The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
 assets, verifies the public `releases/latest/download` URLs, parses the public
 appcast, and only declares the package sendable after Sparkle is live.
 
-For local Jarvis release proof, do not run the full distribution lane. Prove
-the signed app bundle first:
+#### Local Proof
+
+Do not run the full distribution lane when the question is "does this Jarvis app
+build verify locally?" Prove the signed app bundle first:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh --local-proof
@@ -284,13 +293,50 @@ launchd, or change the shared gateway runtime. Use this when the question is
 "does this Jarvis app build verify locally?" instead of
 "is this public distribution artifact sendable?"
 
+#### Prepare or Resume Artifacts
+
+For normal operator recovery, use the public release wrapper instead of choosing
+the phase by hand:
+
+```bash
+bash scripts/jarvis-public-release.sh --dry-run
+bash scripts/jarvis-public-release.sh
+```
+
+The wrapper inspects existing `dist/` artifacts, receipts, and the release
+manifest, chooses the next safe package phase, and delegates to
+`scripts/package-openclaw-mac-dist.sh`. With
+`--parallel-safe-local-assets`, the wrapper may create local `Jarvis.zip` and
+`jarvis-appcast.xml` after app notarization is accepted and a DMG notary
+submission exists, while DMG polling remains a separate resumable step. This is
+local-only P2 parallelism: the appcast upload still stays last because it is the
+public go-live switch. If the wrapper selects
+`create-local-release-assets-only`, let it resolve the latest release tag so
+the Sparkle appcast signs an immutable tagged `Jarvis.zip` URL:
+
+```bash
+bash scripts/jarvis-public-release.sh \
+  --parallel-safe-local-assets \
+  --latest-release-tag
+```
+
+#### Publish Gate
+
+Publishing is never implicit. Publish only after app and DMG notarization are
+accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
+`dist/jarvis-appcast.xml` are present:
+
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
-gh release view --repo artemgetmann/openclaw --json tagName,url
-bash scripts/package-openclaw-mac-dist.sh \
+bash scripts/jarvis-public-release.sh \
   --publish-release-assets \
-  --github-release-tag "<latest-tag-from-gh-release-view>"
+  --latest-release-tag
 ```
+
+Use `--github-release-tag <tag>` only when you intentionally want to pin the
+wrapper to a specific known tag. The wrapper rejects combining it with
+`--latest-release-tag` so publish and verification commands cannot hide
+ambiguous operator intent.
 
 Before the large GitHub release asset upload, the package script runs a
 GitHub-specific network preflight. It checks routes to `github.com`,
@@ -341,42 +387,6 @@ notary receipt exists. The script records release state in
 `dist/Jarvis.app.notary.env`, and DMG notarization in
 `dist/Jarvis.dmg.notary.env`. The manifest is operator metadata only; do not
 store credentials there.
-
-For normal operator recovery, use the public release wrapper instead of choosing
-the phase by hand:
-
-```bash
-bash scripts/jarvis-public-release.sh --dry-run
-bash scripts/jarvis-public-release.sh
-```
-
-The wrapper inspects existing `dist/` artifacts, receipts, and the release
-manifest, chooses the next safe package phase, and delegates to
-`scripts/package-openclaw-mac-dist.sh`. With
-`--parallel-safe-local-assets`, the wrapper may create local `Jarvis.zip` and
-`jarvis-appcast.xml` after app notarization is accepted and a DMG notary
-submission exists, while DMG polling remains a separate resumable step. This is
-local-only P2 parallelism: the appcast upload still stays last because it is the
-public go-live switch. If the wrapper selects
-`create-local-release-assets-only`, pass the latest release tag so the Sparkle
-appcast signs an immutable tagged `Jarvis.zip` URL:
-
-```bash
-bash scripts/jarvis-public-release.sh \
-  --parallel-safe-local-assets \
-  --github-release-tag "<latest-tag-from-gh-release-view>"
-```
-
-When local notarized assets are ready, publishing still requires the explicit
-publish flag and latest tag. Publish only after app and DMG notarization are
-accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
-`dist/jarvis-appcast.xml` are present:
-
-```bash
-bash scripts/jarvis-public-release.sh \
-  --publish-release-assets \
-  --github-release-tag "<latest-tag-from-gh-release-view>"
-```
 
 Wrapper runs write `dist/jarvis-public-release-summary.env`; timed package
 substeps append to `dist/jarvis-release-timing.tsv`. GitHub release view,

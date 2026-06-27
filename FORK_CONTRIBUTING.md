@@ -117,6 +117,23 @@ Default review flow:
 3. Skim only the risky files.
 4. Merge.
 
+## Codex Review Sidecar
+
+Use `codex review` as a parallel sidecar for risky fork PRs. Do not turn it
+into a blocker for every typo fix.
+
+Run it before or during merge flow when a PR touches:
+
+- release or launch tooling
+- runtime ownership, shared state, launchd, gateway ownership, or port selection
+- auth, token storage, or secret handling
+- bundled skills, tool execution, or agent bootstrap paths
+- operational tooling that can silently change how work gets shipped or verified
+
+If `codex review` finds a P1 or P2 before merge, fix it before merge. If it
+finishes after merge, open the follow-up PR immediately. Trivial docs, chore,
+and typo PRs may skip it by reviewer judgment so the founder loop stays fast.
+
 ## Files That Always Deserve a Real Look
 
 Even in fast review mode, slow down if the PR touches:

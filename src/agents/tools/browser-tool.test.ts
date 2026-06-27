@@ -744,6 +744,24 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("returns site contracts without opening or mutating a browser tab", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "contract",
+      targetUrl: "https://x.com/compose/post",
+      intent: "post",
+    });
+
+    expect(result?.details).toMatchObject({
+      ok: true,
+      contractId: "x",
+      contractAvailable: true,
+      intent: "post",
+    });
+    expect(browserActionsMocks.browserAct).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+  });
+
   it("untracks explicit tab close for tracked sessions", async () => {
     const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
     await tool.execute?.("call-1", {
@@ -785,6 +803,34 @@ describe("browser tool act compatibility", () => {
         kind: "type",
         ref: "f1e3",
         text: "Test Title",
+        targetId: "tab-1",
+        timeoutMs: 5000,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("passes paste act requests through for rich editor input", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "paste",
+      ref: "composer-1",
+      text: "caption plus media",
+      clear: true,
+      repairEdit: true,
+      targetId: "tab-1",
+      timeoutMs: 5000,
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "paste",
+        ref: "composer-1",
+        text: "caption plus media",
+        clear: true,
+        repairEdit: true,
         targetId: "tab-1",
         timeoutMs: 5000,
       }),

@@ -209,6 +209,71 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(result.config).toEqual(migratedConfig);
   });
 
+  it("repairs stale Jarvis workspace pointers before startup validation", async () => {
+    const home = makeTempDir();
+    const legacyWorkspace = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      ".openclaw",
+      "workspace",
+    );
+    const canonicalWorkspace = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "workspace",
+    );
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const staleConfig: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: legacyWorkspace },
+        list: [
+          { id: "main", workspace: legacyWorkspace },
+          { id: "codex", workspace: legacyWorkspace },
+        ],
+      },
+    };
+    const migratedConfig: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: canonicalWorkspace },
+        list: [
+          { id: "main", workspace: canonicalWorkspace },
+          { id: "codex", workspace: canonicalWorkspace },
+        ],
+      },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: migratedConfig }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+    const info = vi.fn<(message: string) => void>();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info, warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home } as NodeJS.ProcessEnv,
+    });
+
+    expect(writeConfig).toHaveBeenCalledWith(migratedConfig);
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("stale Jarvis workspace pointers"));
+    expect(result.config).toEqual(migratedConfig);
+  });
+
   it("writes auto-enabled plugins and re-reads snapshot on success", async () => {
     const phaseTwo = createSnapshot({
       config: { plugins: { entries: { msteams: { enabled: false } } } },

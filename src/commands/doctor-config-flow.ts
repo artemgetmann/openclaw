@@ -24,6 +24,7 @@ import {
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
+import { migrateJarvisWorkspacePointers } from "../infra/jarvis-workspace-migration.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import {
   fetchTelegramChatId,
@@ -1761,6 +1762,22 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       fixHints.push(
         `Run "${formatCliCommand("openclaw doctor --fix")}" to apply compatibility migrations.`,
       );
+    }
+  }
+
+  const jarvisWorkspaceMigration = migrateJarvisWorkspacePointers({
+    config: candidate,
+    configPath: snapshot.path ?? CONFIG_PATH,
+    env: process.env,
+  });
+  if (jarvisWorkspaceMigration.changes.length > 0) {
+    note(jarvisWorkspaceMigration.changes.join("\n"), "Doctor changes");
+    candidate = jarvisWorkspaceMigration.config;
+    pendingChanges = true;
+    if (shouldRepair) {
+      cfg = jarvisWorkspaceMigration.config;
+    } else {
+      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
     }
   }
 

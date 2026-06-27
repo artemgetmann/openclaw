@@ -439,7 +439,8 @@ This enforces:
 2. tester token claim/pool guard
 3. deterministic isolated runtime (`runtime_port`, `runtime_state_dir`)
 4. ownership and health proof lines
-5. plugin isolation for live runtime (`plugins.allow=["telegram"]`, `plugins.slots.memory=none`)
+5. main-runtime parity for model, browser, plugin slots, and tools, with a
+   machine-readable `tester-runtime-parity.json` report before startup
 6. Codex model auth probe before runtime startup when the tester lane selects
    an `openai-codex/*` model
 7. repo-local Telegram userbot sender access in the isolated pairing store, so
@@ -474,11 +475,15 @@ When a worktree is done with Telegram live testing, free its claim explicitly:
 scripts/telegram-live-runtime.sh release
 ```
 
-### Plugin isolation note (important)
+### Tester parity note (important)
 
-The canonical worktree live runtime intentionally allows only the bundled Telegram plugin to keep startup deterministic and prevent cross-worktree plugin side effects.
+The canonical worktree live runtime should behave like main except for explicit isolation fields: bot token, port, state dir, config path, logs, service/profile id, and staged upload path. `ensure` now fails closed when model, browser, plugin-slot, or tool parity drifts.
 
-If your test case depends on plugin behavior, do not use the isolated Telegram live runtime path for that assertion. Run that plugin-specific validation in the appropriate plugin-focused test lane instead.
+If a benchmark needs a local image/file upload, stage it first so browser upload tools accept the path:
+
+```bash
+scripts/telegram-live-runtime.sh stage-upload /path/to/benchmark-image.png
+```
 
 `scripts/telegram-live-preflight.sh` now also prints:
 

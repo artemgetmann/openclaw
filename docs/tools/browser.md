@@ -637,14 +637,61 @@ Notes:
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
   - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
-- `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
+- `click`/`type`/`paste`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 - Agent tool calls can pass `includeSnapshot: true` on mutating `act` requests
   to get a fresh structured snapshot immediately after the action. Use this
-  after `click`, `type`, `fill`, `press`, or `select` when the next step depends
+  after `click`, `type`, `paste`, `fill`, `press`, or `select` when the next step depends
   on the updated UI; use a separate `snapshot` call for read-only inspection.
+- For React/DraftJS-style rich editors, `type` and `paste` accept
+  `repairEdit: true`. For `type`, OpenClaw focuses the target and enters the
+  full value through keyboard text entry before the tiny repair edit [insert one
+  space, then delete it]. This avoids DOM-only drafts that look correct but
+  publish as image-only or empty-text artifacts.
 - For forms, prefer one `act` request with `kind: "fill"` and `fields[]` refs
   from the snapshot instead of many single-field calls.
+
+## External mutation contracts
+
+Browser transport proves that Chrome received clicks and keystrokes. It does
+not prove that a third-party app accepted the same semantic state [the app's
+own draft/publish state].
+
+For risky workflows that mutate an external account or public artifact, agents
+should call the browser tool with `action="contract"` before the final commit:
+
+```json
+{
+  "action": "contract",
+  "targetUrl": "https://x.com/compose/post",
+  "intent": "post"
+}
+```
+
+External mutations include posting, sending, publishing, checkout, account
+changes, deletes, and permission changes.
+
+The contract action returns only the matching site rules when a known contract
+exists, otherwise it returns the generic external-mutation contract. This keeps
+the model prompt small while still giving social composers, email senders, and
+other risky surfaces stricter proof requirements on demand.
+
+Contract rules are intentionally about final proof, not just input mechanics:
+
+- Capture the pre-commit state with a fresh snapshot or screenshot.
+- Prefer `act` `kind: "paste"` or real keyboard type over `fill` for rich editors when the next
+  click creates a public or external artifact.
+- On X/Twitter and similar rich editors, visible text is not enough. Verify the
+  app-owned state through an enabled Post/submit button, non-empty sane
+  counter/progress ring, clean non-overlapped screenshot text, intended
+  audience, and media. An empty X counter/progress ring means the caption may not
+  be in the publish payload even if text is visible. If a mutation fails or
+  corrupts the draft, discard it, rebuild fresh, and ask for fresh approval
+  before posting.
+- Ask for explicit approval before irreversible or public commits.
+- After committing, open or inspect the final artifact and verify the expected
+  text, media, target, and state before reporting success.
+- Do not treat an enabled button, closed composer, or successful click as proof.
 
 ## Snapshots and refs
 
@@ -652,7 +699,7 @@ OpenClaw supports two “snapshot” styles:
 
 - **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
   - Output: a text snapshot that includes numeric refs.
-  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
+  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`, `openclaw browser paste 23 "hello" --clear`.
   - Internally, the ref is resolved via Playwright’s `aria-ref`.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
@@ -771,14 +818,18 @@ For WSL2 Gateway + Windows Chrome split-host setups, see
 
 The agent gets **one tool** for browser automation:
 
-- `browser` — status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
+- `browser` — status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act/contract
 
 How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
-- `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+- `browser act` uses the snapshot `ref` IDs to click/type/drag/select or
+  `scrollIntoView` a specific element. There is no separate free-scroll tool;
+  use `scrollIntoView` for target-based scrolling.
 - `browser act` with `includeSnapshot: true` returns the action result plus a
   fresh structured snapshot; this is the default best path after UI mutations.
+- `browser contract` returns generic or site-specific proof rules before risky
+  third-party external mutations.
 - `browser screenshot` captures pixels (full page or element).
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).

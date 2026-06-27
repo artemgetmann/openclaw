@@ -1,4 +1,4 @@
-import { clickAriaRefViaCdp } from "../cdp.js";
+import { clickAriaRefViaCdp, insertTextViaCdp } from "../cdp.js";
 import {
   clickChromeMcpElement,
   closeChromeMcpTab,
@@ -9,6 +9,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  resolveChromeMcpPageWebSocketUrl,
   takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
@@ -200,6 +201,120 @@ function buildExistingSessionTypeSelectorScript(selector: string, value: string)
   }`;
 }
 
+function buildExistingSessionFocusEditableScript(params: { selector?: string }): string {
+  return `(targetOrNull) => {
+    const selector = ${jsLiteral(params.selector ?? "")};
+    const editableSelector = 'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
+    let target = selector ? document.querySelector(selector) : targetOrNull;
+    if (!(target instanceof HTMLElement)) {
+      throw new Error(selector ? \`No element matches selector: \${selector}\` : "editable target was not found");
+    }
+    if (!target.matches(editableSelector)) {
+      const nested = target.querySelector(editableSelector);
+      if (nested instanceof HTMLElement) {
+        target = nested;
+      }
+    }
+    target.scrollIntoView({ block: "center", inline: "center" });
+    target.focus();
+    return true;
+  }`;
+}
+
+function selectAllKeyForChromeMcp(): string {
+  // Chrome MCP forwards keys through a stricter key parser than Playwright.
+  // `ControlOrMeta+A` is a Playwright alias, so choose the real platform
+  // modifier before sending the repair path through existing-session Chrome.
+  return process.platform === "darwin" ? "Meta+A" : "Control+A";
+}
+
+function buildExistingSessionPasteScript(params: {
+  selector?: string;
+  value: string;
+  clear: boolean;
+}): string {
+  return `(targetOrNull) => {
+    const selector = ${jsLiteral(params.selector ?? "")};
+    const value = ${jsLiteral(params.value)};
+    const shouldClear = ${params.clear ? "true" : "false"};
+    const editableSelector = 'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
+    const resolveTarget = () => {
+      if (selector) {
+        return document.querySelector(selector);
+      }
+      if (targetOrNull instanceof Element) {
+        return targetOrNull;
+      }
+      return document.activeElement;
+    };
+    const dispatchInputEvents = (el, inputType) => {
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType, data: value }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const replaceInputValue = (el, nextValue) => {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+      descriptor && descriptor.set ? descriptor.set.call(el, nextValue) : (el.value = nextValue);
+    };
+
+    let target = resolveTarget();
+    if (!(target instanceof HTMLElement)) {
+      throw new Error(selector ? \`No element matches selector: \${selector}\` : "paste target was not found");
+    }
+    if (!target.matches(editableSelector)) {
+      const nested = target.querySelector(editableSelector);
+      if (nested instanceof HTMLElement) {
+        target = nested;
+      }
+    }
+    target.scrollIntoView({ block: "center", inline: "center" });
+    target.focus();
+
+    if (shouldClear) {
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        replaceInputValue(target, "");
+        dispatchInputEvents(target, "deleteContentBackward");
+      } else if (target.isContentEditable || target.getAttribute("role") === "textbox") {
+        target.textContent = "";
+        dispatchInputEvents(target, "deleteContentBackward");
+      }
+    }
+
+    const data = new DataTransfer();
+    data.setData("text/plain", value);
+    const pasteEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    const consumedPaste = !target.dispatchEvent(pasteEvent);
+    if (consumedPaste) {
+      return true;
+    }
+
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      const start = target.selectionStart ?? target.value.length;
+      const end = target.selectionEnd ?? start;
+      const nextValue = target.value.slice(0, start) + value + target.value.slice(end);
+      replaceInputValue(target, nextValue);
+      const caret = start + value.length;
+      target.setSelectionRange(caret, caret);
+      dispatchInputEvents(target, "insertFromPaste");
+      return true;
+    }
+
+    if (target.isContentEditable || target.getAttribute("role") === "textbox") {
+      if (!document.execCommand("insertText", false, value)) {
+        target.textContent = String(target.textContent || "") + value;
+      }
+      dispatchInputEvents(target, "insertFromPaste");
+      return true;
+    }
+
+    throw new Error("paste target is not editable");
+  }`;
+}
+
 function buildExistingSessionClickSelectorScript(selector: string): string {
   return `() => {
     const selector = ${jsLiteral(selector)};
@@ -211,6 +326,107 @@ function buildExistingSessionClickSelectorScript(selector: string): string {
     el.click();
     return true;
   }`;
+}
+
+async function performExistingSessionRichEditorRepairEdit(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  // Chrome MCP exposes key presses, not text insertion. Space then Backspace is
+  // the smallest focused keyboard mutation that leaves editor text unchanged.
+  await pressChromeMcpKey({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    key: "Space",
+    timeoutMs: params.timeoutMs,
+  });
+  await pressChromeMcpKey({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    key: "Backspace",
+    timeoutMs: params.timeoutMs,
+  });
+}
+
+async function performExistingSessionKeyboardTextEntry(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  wsUrl?: string;
+  ref?: string;
+  selector?: string;
+  text: string;
+  replace: boolean;
+  timeoutMs?: number;
+}): Promise<void> {
+  const wsUrl =
+    params.wsUrl ??
+    // Chrome MCP tab metadata intentionally exposes stable page ids rather than
+    // raw DevTools URLs. For trusted rich-editor text entry we still need CDP's
+    // real Input.insertText command, so derive the page websocket from the same
+    // attach endpoint used by the screenshot fallback.
+    (await resolveChromeMcpPageWebSocketUrl({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+    }));
+  if (!wsUrl) {
+    throw new Error(
+      "repairEdit requires a per-tab CDP websocket for trusted rich-editor text entry in existing-session profiles. Ensure the existing-session browser exposes a DevTools endpoint, then retry from a fresh composer.",
+    );
+  }
+  const fn = buildExistingSessionFocusEditableScript({ selector: params.selector });
+  if (params.selector) {
+    await evaluateChromeMcpScript({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      fn,
+      timeoutMs: params.timeoutMs,
+    });
+  } else {
+    const ref = params.ref!;
+    await runExistingSessionElementActionWithSnapshotRetry({
+      kind: "type",
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      run: async () => {
+        await evaluateChromeMcpScript({
+          profileName: params.profileName,
+          userDataDir: params.userDataDir,
+          targetId: params.targetId,
+          fn,
+          args: [ref],
+          timeoutMs: params.timeoutMs,
+        });
+      },
+    });
+  }
+  if (params.replace) {
+    await pressChromeMcpKey({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      key: selectAllKeyForChromeMcp(),
+      timeoutMs: params.timeoutMs,
+    });
+    await pressChromeMcpKey({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      key: "Backspace",
+      timeoutMs: params.timeoutMs,
+    });
+  }
+  await insertTextViaCdp({
+    wsUrl,
+    text: params.text,
+  });
 }
 
 function buildExistingSessionFillSelectorScript(selector: string, value: string): string {
@@ -707,29 +923,42 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
     }
-    case "type": {
+    case "type":
+    case "paste": {
       const ref = toStringOrEmpty(raw.ref) || undefined;
       const selector = toStringOrEmpty(raw.selector) || undefined;
       const text = raw.text;
       if (!ref && !selector) {
-        throw new Error("type requires ref or selector");
+        throw new Error(`${kind} requires ref or selector`);
       }
       if (typeof text !== "string") {
-        throw new Error("type requires text");
+        throw new Error(`${kind} requires text`);
       }
       const targetId = toStringOrEmpty(raw.targetId) || undefined;
       const submit = toBoolean(raw.submit);
       const slowly = toBoolean(raw.slowly);
+      const clear = toBoolean(raw.clear);
+      const repairEdit = toBoolean(raw.repairEdit);
       const timeoutMs = toNumber(raw.timeoutMs);
-      return {
+      const base = {
         kind,
         ...(ref ? { ref } : {}),
         ...(selector ? { selector } : {}),
         text,
         ...(targetId ? { targetId } : {}),
         ...(submit !== undefined ? { submit } : {}),
-        ...(slowly !== undefined ? { slowly } : {}),
+        ...(repairEdit !== undefined ? { repairEdit } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+      if (kind === "paste") {
+        return {
+          ...base,
+          ...(clear !== undefined ? { clear } : {}),
+        };
+      }
+      return {
+        ...base,
+        ...(slowly !== undefined ? { slowly } : {}),
       };
     }
     case "press": {
@@ -1124,7 +1353,8 @@ export function registerBrowserAgentActRoutes(
             }
             return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
           }
-          case "type": {
+          case "type":
+          case "paste": {
             const ref = readActRef(body);
             const selector = readActSelector(body);
             if (!ref && !selector) {
@@ -1136,8 +1366,107 @@ export function registerBrowserAgentActRoutes(
             const text = body.text;
             const submit = toBoolean(body.submit) ?? false;
             const slowly = toBoolean(body.slowly) ?? false;
+            const clear = toBoolean(body.clear) ?? false;
+            const repairEdit = toBoolean(body.repairEdit) ?? false;
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (kind === "paste") {
+                if (repairEdit) {
+                  await performExistingSessionKeyboardTextEntry({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    wsUrl: tab.wsUrl,
+                    ...(ref ? { ref } : {}),
+                    ...(selector ? { selector } : {}),
+                    text,
+                    replace: clear,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                  await performExistingSessionRichEditorRepairEdit({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                } else {
+                  const fn = buildExistingSessionPasteScript({
+                    selector,
+                    value: text,
+                    clear,
+                  });
+                  if (selector) {
+                    await evaluateChromeMcpScript({
+                      profileName,
+                      userDataDir: profileCtx.profile.userDataDir,
+                      targetId: tab.targetId,
+                      fn,
+                      timeoutMs: timeoutMs ?? undefined,
+                    });
+                  } else {
+                    const pasteRef = ref!;
+                    await runExistingSessionElementActionWithSnapshotRetry({
+                      kind,
+                      profileName,
+                      userDataDir: profileCtx.profile.userDataDir,
+                      targetId: tab.targetId,
+                      run: async () => {
+                        await evaluateChromeMcpScript({
+                          profileName,
+                          userDataDir: profileCtx.profile.userDataDir,
+                          targetId: tab.targetId,
+                          fn,
+                          args: [pasteRef],
+                          timeoutMs: timeoutMs ?? undefined,
+                        });
+                      },
+                    });
+                  }
+                }
+                if (submit) {
+                  await pressChromeMcpKey({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    key: "Enter",
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                }
+                return res.json({ ok: true, targetId: tab.targetId });
+              }
+              if (repairEdit) {
+                await performExistingSessionKeyboardTextEntry({
+                  profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
+                  targetId: tab.targetId,
+                  wsUrl: tab.wsUrl,
+                  ...(ref ? { ref } : {}),
+                  ...(selector ? { selector } : {}),
+                  text,
+                  replace: true,
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+                await performExistingSessionRichEditorRepairEdit({
+                  profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
+                  targetId: tab.targetId,
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+                if (submit) {
+                  await pressChromeMcpKey({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    key: "Enter",
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                }
+                return res.json({
+                  ok: true,
+                  targetId: tab.targetId,
+                  normalized: slowly ? { slowly: false } : undefined,
+                });
+              }
               if (selector) {
                 await evaluateChromeMcpScript({
                   profileName,
@@ -1202,6 +1531,7 @@ export function registerBrowserAgentActRoutes(
               text,
               submit,
               slowly,
+              repairEdit,
             };
             if (ref) {
               typeRequest.ref = ref;
@@ -1212,7 +1542,21 @@ export function registerBrowserAgentActRoutes(
             if (timeoutMs) {
               typeRequest.timeoutMs = timeoutMs;
             }
-            await pw.typeViaPlaywright(typeRequest);
+            if (kind === "paste") {
+              await pw.pasteViaPlaywright({
+                cdpUrl,
+                targetId: tab.targetId,
+                ...(ref ? { ref } : {}),
+                ...(selector ? { selector } : {}),
+                text,
+                clear,
+                submit,
+                repairEdit,
+                ...(timeoutMs ? { timeoutMs } : {}),
+              });
+            } else {
+              await pw.typeViaPlaywright(typeRequest);
+            }
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "press": {

@@ -28,6 +28,7 @@ type GuiControlCliOptions = {
   valueIncludes?: string;
   value?: string;
   keys?: string;
+  secondaryAction?: string;
   direction?: string;
   amount?: string | number;
   reason?: string;
@@ -193,6 +194,9 @@ function humanSummary(result: Awaited<ReturnType<typeof runGuiControl>>): string
     lines.push(`stale-refs: ${result.verifiedAction.stats.staleRefs}`);
     lines.push(`false-successes: ${result.verifiedAction.stats.falseSuccesses}`);
     lines.push(`false-failures: ${result.verifiedAction.stats.falseFailures}`);
+    if (result.verifiedAction.stats.activationPath) {
+      lines.push(`activation-path: ${result.verifiedAction.stats.activationPath}`);
+    }
     if (result.verifiedAction.stats.postStateResult) {
       lines.push(`post-state: ${result.verifiedAction.stats.postStateResult}`);
     }
@@ -214,6 +218,7 @@ async function runAction(action: GuiControlAction, opts: GuiControlCliOptions) {
       valueIncludes: opts.valueIncludes,
       value: opts.value,
       keys: readKeys(opts),
+      secondaryAction: opts.secondaryAction,
       scrollDirection: readScrollDirection(opts),
       scrollAmount: readScrollAmount(opts),
       reason: opts.reason,
@@ -291,6 +296,22 @@ export function registerGuiControlCli(program: Command) {
       false,
     )
     .action((opts) => runAction("click", opts));
+
+  addMutationOptions(
+    addElementOptions(
+      addSharedOptions(
+        gui.command("secondary-action").description("Perform an element secondary action"),
+      ),
+    ),
+  )
+    .requiredOption("--secondary-action <action>", "Secondary action name, e.g. AXPress")
+    .option("--verify-text <text>", "Text that must be visible after the secondary action")
+    .option(
+      "--allow-observed-click",
+      "Accept changed target state as verification when no text proof exists",
+      false,
+    )
+    .action((opts) => runAction("secondary-action", opts));
 
   addMutationOptions(
     addSharedOptions(gui.command("press").description("Press an app-scoped key combo")),

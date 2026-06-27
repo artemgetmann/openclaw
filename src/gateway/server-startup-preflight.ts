@@ -14,6 +14,7 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
+import { migrateJarvisWorkspacePointers } from "../infra/jarvis-workspace-migration.js";
 import {
   resolveRuntimeFingerprint,
   type RuntimeFingerprint,
@@ -216,6 +217,35 @@ export async function runGatewayStartupConfigPreflight(
   }
 
   configSnapshot = await deps.readSnapshot();
+  const jarvisWorkspaceMigration = migrateJarvisWorkspacePointers({
+    config: configSnapshot.config,
+    configPath: configSnapshot.path,
+    env,
+  });
+  if (jarvisWorkspaceMigration.changes.length > 0) {
+    if (deps.isNixMode) {
+      throw new GatewayStartupPreflightError(
+        "config_legacy_migration",
+        "Stale Jarvis workspace pointers detected while running in Nix mode. Update your managed config to point at the Jarvis workspace and restart.",
+      );
+    }
+    try {
+      await deps.writeConfig(jarvisWorkspaceMigration.config);
+      deps.log.info(
+        `gateway: repaired stale Jarvis workspace pointers:\n${jarvisWorkspaceMigration.changes
+          .map((entry) => `- ${entry}`)
+          .join("\n")}`,
+      );
+      configSnapshot = await deps.readSnapshot();
+    } catch (err) {
+      throw new GatewayStartupPreflightError(
+        "config_legacy_migration",
+        `Failed to repair stale Jarvis workspace pointers: ${String(err)}`,
+        { cause: err },
+      );
+    }
+  }
+
   if (configSnapshot.exists && !configSnapshot.valid) {
     throw new GatewayStartupPreflightError(
       "config_validation",

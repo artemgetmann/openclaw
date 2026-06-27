@@ -5,6 +5,7 @@ const BROWSER_ACT_KINDS = [
   "batch",
   "click",
   "type",
+  "paste",
   "press",
   "hover",
   "scrollIntoView",
@@ -31,6 +32,7 @@ const BROWSER_TOOL_ACTIONS = [
   "screenshot",
   "navigate",
   "console",
+  "contract",
   "pdf",
   "upload",
   "dialog",
@@ -89,10 +91,22 @@ const BrowserActSchema = Type.Object({
   ),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
-  // type
+  // type/paste
   text: Type.Optional(Type.String()),
   submit: Type.Optional(Type.Boolean()),
   slowly: Type.Optional(Type.Boolean()),
+  repairEdit: Type.Optional(
+    Type.Boolean({
+      description:
+        "For kind=type or kind=paste in rich editors, perform a tiny real keyboard edit after input to wake app-controlled editor state. Defaults to false.",
+    }),
+  ),
+  clear: Type.Optional(
+    Type.Boolean({
+      description:
+        "For kind=paste, clear the focused editable before pasting. Defaults to false so paste behaves like normal clipboard insertion.",
+    }),
+  ),
   // press
   key: Type.Optional(
     Type.String({
@@ -200,12 +214,18 @@ export const BrowserToolSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
+  intent: Type.Optional(
+    Type.String({
+      description:
+        'For action=contract, describe the browser workflow intent, for example "external_mutation", "post", "send", "checkout", or "account_change".',
+    }),
+  ),
   // Legacy flattened act params (preferred: request={...})
   kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
   includeSnapshot: Type.Optional(
     Type.Boolean({
       description:
-        "Legacy flattened act option. For mutating browser actions (click/type/fill/press/select/chooseOption), set true so the result includes a fresh structured aria-ref snapshot for the next step.",
+        "Legacy flattened act option. For mutating browser actions (click/type/paste/fill/press/select/chooseOption), set true so the result includes a fresh structured aria-ref snapshot for the next step.",
     }),
   ),
   doubleClick: Type.Optional(Type.Boolean()),
@@ -219,6 +239,18 @@ export const BrowserToolSchema = Type.Object({
   text: Type.Optional(Type.String()),
   submit: Type.Optional(Type.Boolean()),
   slowly: Type.Optional(Type.Boolean()),
+  repairEdit: Type.Optional(
+    Type.Boolean({
+      description:
+        "Legacy flattened act option for kind=type or kind=paste. Perform a tiny real keyboard edit after input for rich editors.",
+    }),
+  ),
+  clear: Type.Optional(
+    Type.Boolean({
+      description:
+        "Legacy flattened act option for kind=paste. Clear the focused editable before pasting.",
+    }),
+  ),
   key: Type.Optional(
     Type.String({
       description:

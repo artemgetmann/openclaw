@@ -298,8 +298,8 @@ Core actions:
 - `status`, `start`, `stop`, `tabs`, `open`, `focus`, `close`
 - `snapshot` (aria/ai)
 - `screenshot` (returns image block + `MEDIA:<path>`)
-- `act` (UI actions: click/type/press/hover/drag/select/fill/resize/wait/evaluate)
-- `navigate`, `console`, `pdf`, `upload`, `dialog`
+- `act` (UI actions: click/type/press/hover/drag/select/fill/resize/wait/evaluate/scrollIntoView)
+- `navigate`, `console`, `contract`, `pdf`, `upload`, `dialog`
 
 Profile management:
 
@@ -317,9 +317,10 @@ Common parameters:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - All actions accept optional `profile` parameter for multi-instance support.
 - Omit `profile` for the configured default (`openclaw` unless changed).
-- Use `profile="signed-in"` for serious signed-in web work; it controls a cloned signed-in Chrome profile through Chrome MCP.
-- Use `profile="openclaw"` for clean public browsing. For logged-in, hostile, social posting, or account-bound flows, treat it as a last-resort fallback when session state does not matter.
+- Use `profile="signed-in"` for most real browsing work, especially signed-in sites, anti-bot-sensitive flows, and tasks that benefit from cloned real Chrome cookies/session state.
 - Use `profile="user-live"` only when the task explicitly needs the user’s real live browser session, existing tabs, or installed extensions.
+- Use `profile="openclaw"` for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat it as a last-resort fallback when `signed-in` and any explicitly required `user-live` lane are unavailable or unsuitable, and only when session state does not matter.
+- Before third-party external mutations such as posting, sending, publishing, checkout, account changes, deletes, or permission changes, use `action="contract"` and verify the final artifact after commit. For rich editors and social composers, prefer `act` `kind: "paste"` over `kind: "fill"` for final text entry.
 - `profile="signed-in"` and `profile="user-live"` are host-only; do not combine them with sandbox/node targets.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).

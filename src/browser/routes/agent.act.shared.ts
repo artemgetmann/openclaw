@@ -7,6 +7,7 @@ export const ACT_KINDS = [
   "evaluate",
   "fill",
   "hover",
+  "paste",
   "scrollIntoView",
   "press",
   "resize",
