@@ -96,6 +96,40 @@ describe("runtime-fingerprint", () => {
     });
   });
 
+  it("detects GUI capabilities from packaged runtime chunks", async () => {
+    const root = await createRepoFixture();
+    cleanupPaths.push(root);
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "dist", "setup-surface-abc123.js"),
+      [
+        "//#region src/agents/tools/gui-control-tool.ts",
+        "const DEFAULT_GUI_TASK_POLICY = {",
+        '  taskId: "trusted_local_gui_control",',
+        "};",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "dist", "gui-benchmark-cli-abc123.js"),
+      'program.option("--task <task>", "native-apps");',
+      "utf8",
+    );
+
+    const fingerprint = resolveRuntimeFingerprint({
+      cwd: root,
+      env: {
+        OPENCLAW_STATE_DIR: path.join(root, ".state"),
+      },
+    });
+
+    expect(fingerprint.guiCapabilities).toEqual({
+      guiControl: true,
+      guiBenchmarkNativeApps: true,
+      trustedLocalDefault: true,
+    });
+  });
+
   it("falls back to HEAD for detached checkouts", async () => {
     const root = await createRepoFixture({ detached: true });
     cleanupPaths.push(root);
