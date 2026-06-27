@@ -41,7 +41,7 @@ describe("skills-cli (e2e)", () => {
           baseDir,
         } as SkillEntry["skill"],
         frontmatter: {},
-        metadata: { emoji: "📸" },
+        metadata: { displayName: "Mac Screen Control", emoji: "📸" },
       },
     ];
   }
@@ -80,6 +80,24 @@ describe("skills-cli (e2e)", () => {
 
     const output = formatSkillInfo(report, "peekaboo", {});
     expect(output).toContain("peekaboo");
+    expect(output).toContain("Mac Screen Control");
     expect(output).toContain("Details:");
+  });
+
+  it("renders consumer display names while preserving internal ids", () => {
+    const entries = createEntries();
+    const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
+      managedSkillsDir: "/nonexistent",
+      entries,
+    });
+
+    const listOutput = formatSkillsList(report, {});
+    expect(listOutput).toContain("Mac Screen Control");
+    expect(listOutput).toContain("(peekaboo)");
+
+    const jsonOutput = formatSkillsList(report, { json: true });
+    const parsed = JSON.parse(jsonOutput);
+    expect(parsed.skills[0].name).toBe("peekaboo");
+    expect(parsed.skills[0].displayName).toBe("Mac Screen Control");
   });
 });

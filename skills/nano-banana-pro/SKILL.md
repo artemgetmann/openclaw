@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🍌",
+        "displayName": "Image Generation",
         "requires": { "bins": ["node"] },
         "install":
           [
@@ -22,9 +23,12 @@ metadata:
   }
 ---
 
-# Nano Banana Pro (Gemini 3 Pro Image)
+# Image Generation (Nano Banana Pro)
 
-Use the bundled script to generate or edit images.
+Use the native or managed image-generation surface first when it is available in
+the runtime. Use this bundled Gemini/Nano Banana script as the Jarvis fallback or
+direct BYOK path for text-to-image, input-image edits, and multi-image
+composition.
 
 Generate
 

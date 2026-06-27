@@ -71,6 +71,10 @@ function sanitizeJsonValue(value: unknown): unknown {
 }
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = normalizeSkillEmoji(skill.emoji);
+  const displayName = skill.displayName?.trim();
+  if (displayName && displayName !== skill.name) {
+    return `${emoji} ${theme.command(displayName)} ${theme.muted(`(${skill.name})`)}`;
+  }
   return `${emoji} ${theme.command(skill.name)}`;
 }
 
@@ -103,6 +107,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
         name: s.name,
+        displayName: s.displayName,
         description: s.description,
         emoji: s.emoji,
         eligible: s.eligible,
@@ -195,7 +200,11 @@ export function formatSkillInfo(
         ? theme.warn("🚫 Blocked by allowlist")
         : theme.error("✗ Missing requirements");
 
-  lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
+  const heading =
+    skill.displayName && skill.displayName !== skill.name
+      ? `${skill.displayName} (${skill.name})`
+      : skill.name;
+  lines.push(`${emoji} ${theme.heading(heading)} ${status}`);
   lines.push("");
   lines.push(skill.description);
   lines.push("");

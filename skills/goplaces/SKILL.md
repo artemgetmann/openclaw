@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📍",
+        "displayName": "Google Maps Search",
         "requires": { "bins": ["node"] },
         "primaryEnv": "GOOGLE_PLACES_API_KEY",
         "install":
@@ -23,7 +24,7 @@ metadata:
   }
 ---
 
-# goplaces
+# Google Maps Search (goplaces)
 
 Modern Google Places search for Jarvis managed mode and BYOK Google Places API
 (New) users. Search routes through the Jarvis backend when managed services are
