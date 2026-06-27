@@ -210,6 +210,51 @@ describe("startup reconciler", () => {
     ).resolves.toContain('"status": "current"');
   });
 
+  it("does not prepend stale managed CLIs when no satisfying source is available", async () => {
+    const root = await makeTempRoot("startup-reconciler-stale-tool");
+    const packageRoot = path.join(root, "package");
+    const stateDir = path.join(root, "state");
+    const localBin = path.join(root, "local-bin");
+    const managedBin = path.join(stateDir, "bin");
+    await fs.mkdir(packageRoot, { recursive: true });
+    await writeExecutable(path.join(managedBin, "gog"), "#!/bin/sh\necho gog v0.29.0\n");
+    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.30.0\n");
+    const env = { ...process.env, PATH: localBin };
+    await writeManifest({
+      packageRoot,
+      managedTools: [
+        {
+          skillName: "gog",
+          installId: "brew",
+          bins: ["gog"],
+          versionCommand: ["gog", "--version"],
+          versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+          recommendedVersion: "0.31.0",
+        },
+      ],
+    });
+
+    const result = await runStartupReconciler({
+      packageRoot,
+      stateDir,
+      env,
+      log: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.status).toBe("reconciled");
+    if (result.status !== "reconciled") {
+      throw new Error("expected reconciled result");
+    }
+    expect(result.report.tools[0]).toMatchObject({
+      skillName: "gog",
+      status: "missing-source",
+      managedVersion: "0.29.0",
+    });
+    expect(env.PATH?.split(path.delimiter).at(0)).toBe(localBin);
+    const resolvedVersion = spawnSync("gog", ["--version"], { encoding: "utf8", env });
+    expect(resolvedVersion.stdout.trim()).toBe("gog v0.30.0");
+  });
+
   it("never invokes Homebrew or global install commands while updating managed CLI copies", async () => {
     const root = await makeTempRoot("startup-reconciler-no-brew");
     const packageRoot = path.join(root, "package");

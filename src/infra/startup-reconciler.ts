@@ -544,6 +544,10 @@ function exposeManagedBinDirOnPath(env: NodeJS.ProcessEnv, managedBinDir: string
   applyPathPrepend(env as Record<string, string>, [path.resolve(managedBinDir)]);
 }
 
+function hasUsableManagedTool(tools: ToolStatus[]): boolean {
+  return tools.some((tool) => tool.status === "current" || tool.status === "updated");
+}
+
 function emitMaterialLogs(params: {
   previousSignature?: string;
   report: StartupReconcilerStatus;
@@ -596,7 +600,6 @@ export async function runStartupReconciler(
   const statusPath = path.join(stateDir, STATUS_RELATIVE_PATH);
   const previousSignature = readPreviousSignature(statusPath);
 
-  exposeManagedBinDirOnPath(env, managedBinDir);
   const skills = await syncManagedSkills({
     manifest,
     bundledSkillsDir,
@@ -609,6 +612,9 @@ export async function runStartupReconciler(
     env,
     runVersionCommand,
   });
+  if (hasUsableManagedTool(tools)) {
+    exposeManagedBinDirOnPath(env, managedBinDir);
+  }
   const report: StartupReconcilerStatus = {
     format: STATUS_FORMAT,
     generatedAt: new Date().toISOString(),
