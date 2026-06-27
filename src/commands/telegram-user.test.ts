@@ -362,6 +362,73 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=125"));
   });
 
+  it("uses topic anchor as the reply target for forum-topic sends", async () => {
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: {
+        chat_id: -1003783709877,
+        chat_title: "Jarvis Warm Discovery Calls",
+        chat_username: null,
+        date: "2026-06-27T10:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: null,
+        message_id: 18328,
+        out: true,
+        reply_to_msg_id: 18327,
+        reply_to_top_id: 18327,
+        sender_id: 99,
+        text: "seed prompt",
+        thread_anchor: 18327,
+      },
+    });
+
+    await telegramUserSendCommand(
+      {
+        chat: "-1003783709877",
+        message: "seed prompt",
+        topicAnchor: "18327",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        message: "seed prompt",
+        replyTo: 18327,
+      }),
+    );
+  });
+
+  it("rejects conflicting reply and topic targets", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          chat: "-1003783709877",
+          message: "seed prompt",
+          replyTo: "111",
+          topicAnchor: "222",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/cannot combine --reply-to with a different topic anchor/i);
+  });
+
+  it("rejects malformed topic targets instead of sending unthreaded", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          chat: "-1003783709877",
+          message: "seed prompt",
+          topicAnchor: "not-a-number",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/requires --topic-anchor to be a numeric message\/topic id/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+  });
+
   it("uses message text as the media caption when caption is omitted", async () => {
     backendMocks.runTelegramUserSend.mockResolvedValueOnce({
       backend_meta: backendMeta,

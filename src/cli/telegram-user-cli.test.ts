@@ -50,6 +50,7 @@ describe("telegram-user cli", () => {
     expect(help).toContain("openclaw telegram-user status --json");
     expect(help).toContain("openclaw telegram-user doctor --json");
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
+    expect(help).toContain("openclaw telegram-user send --chat -1003783709877 --topic-anchor");
     expect(help).toContain(
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
     );
@@ -255,6 +256,8 @@ describe("telegram-user cli", () => {
         "--voice",
         "--reply-to",
         "15248",
+        "--topic-anchor",
+        "15248",
         "--json",
       ],
       { from: "user" },
@@ -267,7 +270,38 @@ describe("telegram-user cli", () => {
         json: true,
         media: "/tmp/proof.ogg",
         replyTo: "15248",
+        topicAnchor: "15248",
         voice: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("registers send topic aliases and forwards them to the command layer", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "send",
+        "--chat",
+        "-1003783709877",
+        "--topic-id",
+        "18327",
+        "--message",
+        "seed prompt",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserSendCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        json: true,
+        message: "seed prompt",
+        topicId: "18327",
       }),
       expect.any(Object),
     );

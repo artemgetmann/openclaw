@@ -59,6 +59,40 @@ function readStringOpt(opts: Record<string, unknown>, key: string): string | und
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function hasProvidedOpt(opts: Record<string, unknown>, key: string): boolean {
+  const value = opts[key];
+  return (
+    (typeof value === "number" && Number.isFinite(value)) ||
+    (typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+function readRequiredNumberOpt(
+  opts: Record<string, unknown>,
+  key: string,
+  flag: string,
+): number | undefined {
+  const value = readNumberOpt(opts, key);
+  if (value === undefined && hasProvidedOpt(opts, key)) {
+    throw new Error(`Telegram user send requires ${flag} to be a numeric message/topic id.`);
+  }
+  return value;
+}
+
+function resolveSendReplyTo(opts: Record<string, unknown>): number | undefined {
+  const replyTo = readRequiredNumberOpt(opts, "replyTo", "--reply-to");
+  const topicAnchor =
+    readRequiredNumberOpt(opts, "topicAnchor", "--topic-anchor") ??
+    readRequiredNumberOpt(opts, "topicId", "--topic-id");
+  if (replyTo !== undefined && topicAnchor !== undefined && replyTo !== topicAnchor) {
+    throw new Error("Telegram user send cannot combine --reply-to with a different topic anchor.");
+  }
+  // Telegram forum topics are addressed by replying to the topic anchor
+  // service message. Expose topic vocabulary at the CLI while keeping the
+  // transport path identical to the proven reply-to behavior.
+  return replyTo ?? topicAnchor;
+}
+
 function resolveBackendOptions(opts: Record<string, unknown>): TelegramUserBackendOptions {
   return {
     envFile: readStringOpt(opts, "envFile"),
@@ -661,7 +695,7 @@ export async function telegramUserSendCommand(opts: Record<string, unknown>, run
     chat,
     media,
     message: media ? undefined : message,
-    replyTo: readNumberOpt(opts, "replyTo"),
+    replyTo: resolveSendReplyTo(opts),
     voice: readBooleanOpt(opts, "voice") || readBooleanOpt(opts, "audioAsVoice"),
   });
   if (readBooleanOpt(opts, "json")) {

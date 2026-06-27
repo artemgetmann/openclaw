@@ -149,6 +149,10 @@ Default Commands
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
 - Reply to a specific message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --reply-to 12345 --message "on it" --json`
+- Create a forum topic:
+  `openclaw telegram-user topic-create --chat -1003783709877 --title "strategy follow-up" --json`
+- Send into a forum topic:
+  `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "seed prompt" --json`
 - Wait for a reply:
   `openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 12345 --sender-id 67890 --json`
 - Logout / clear local session:
@@ -165,6 +169,8 @@ Behavior Notes
   the payload and keep transcription generic through `openclaw media transcribe`.
 - `wait` is thread-aware through the existing backend semantics around
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
+- `topic-create` returns `topic_anchor`. Use that value as `--topic-anchor`
+  (or `--reply-to`) when sending into the newly created Telegram forum topic.
 - Do not promise broad media/history search features beyond the explicit
   read/download/transcribe path the CLI supports.
 
