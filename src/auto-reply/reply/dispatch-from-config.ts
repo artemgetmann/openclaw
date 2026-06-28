@@ -939,6 +939,7 @@ export async function dispatchReplyFromConfig(params: {
     let routedFinalCount = 0;
     if (replies.length === 0 && durableBlockFinalText.trim()) {
       const durableBlockFinalTextTrimmed = durableBlockFinalText.trim();
+      let visibleDurableBlockFinalText = durableBlockFinalTextTrimmed;
       if (shouldCaptionFinalTtsSupplement && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const resolvedTtsConfig = resolveTtsConfig(cfg);
         const fallbackDirectivePolicy: ResolvedTtsModelOverrides = {
@@ -964,6 +965,9 @@ export async function dispatchReplyFromConfig(params: {
             },
           },
         });
+        if (typeof durableFinalPayload.text === "string" && durableFinalPayload.text.trim()) {
+          visibleDurableBlockFinalText = durableFinalPayload.text;
+        }
         // Telegram block streams use mutable previews while the model is still
         // speaking. Once the resolver returns with no separate final payload,
         // promote the accumulated block text to a durable final immediately so
@@ -1012,8 +1016,11 @@ export async function dispatchReplyFromConfig(params: {
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsPayload = {
           ...ttsReply,
+          // The TTS payload may carry cleaned or synthesized text that differs
+          // from the final bubble. Telegram snippets must describe the visible
+          // final answer, not an earlier progress draft or speech-only variant.
           text: shouldCaptionFinalTtsSupplement
-            ? buildFinalTtsCaptionPreview(ttsReply.text ?? "")
+            ? buildFinalTtsCaptionPreview(visibleDurableBlockFinalText)
             : undefined,
         };
         const ttsSupplement = sanitizeTelegramVisiblePayload(
@@ -1164,9 +1171,15 @@ export async function dispatchReplyFromConfig(params: {
         const hasFinalTtsMedia =
           Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
         if (hasFinalTtsMedia) {
+          const finalTtsCaptionText =
+            typeof durableFinalPayload.text === "string" && durableFinalPayload.text.trim()
+              ? durableFinalPayload.text
+              : replyFinalText;
           const ttsPayload = {
             ...ttsReply,
-            text: buildFinalTtsCaptionPreview(ttsReply.text ?? replyFinalText),
+            // Match the voice-caption snippet to the already-sent final text.
+            // The synthesized payload text is not authoritative for Telegram UI.
+            text: buildFinalTtsCaptionPreview(finalTtsCaptionText),
           };
           const ttsSupplement = sanitizeTelegramVisiblePayload(
             shouldMarkFinalTtsSupplement ? markFinalTtsSupplement(ttsPayload) : ttsPayload,

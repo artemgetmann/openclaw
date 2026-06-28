@@ -1872,7 +1872,7 @@ describe("dispatchReplyFromConfig", () => {
   it("builds durable block final TTS captions from directive-cleaned visible text", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
-    ttsMocks.state.cleanedFinalText = "FINAL clean answer.";
+    ttsMocks.state.cleanedFinalText = "On it. I am still an earlier progress snippet.";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1915,6 +1915,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     ttsMocks.state.autoMode = "always";
     ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.state.cleanedFinalText = "On it. I am still an earlier progress snippet.";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
