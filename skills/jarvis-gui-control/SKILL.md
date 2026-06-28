@@ -23,14 +23,14 @@ The primary control surface is the installed OpenClaw CLI:
 
 ```bash
 openclaw gui-control --help
-openclaw gui-control observe --app TextEdit --json
-openclaw gui-control resolve-element --app TextEdit --intent text-input --json
-openclaw gui-control set-value --app TextEdit --intent text-input --value "$TEXT" --approve-policy-risk --json
+openclaw gui-control observe --runtime open-computer-use --app TextEdit --json
+openclaw gui-control resolve-element --runtime open-computer-use --app TextEdit --intent text-input --json
+openclaw gui-control set-value --runtime open-computer-use --app TextEdit --intent text-input --value "$TEXT" --approve-policy-risk --json
 ```
 
 ## Routing
 
-- Prefer `openclaw gui-control` for GUI operation.
+- Prefer `openclaw gui-control --runtime open-computer-use` for GUI operation.
 - Do not use Peekaboo as the first choice for normal GUI-operation requests.
   Peekaboo is for screenshots, video/capture artifacts, diagnostics, or an
   explicit fallback after `openclaw gui-control` is unavailable or insufficient.
@@ -44,7 +44,7 @@ openclaw gui-control set-value --app TextEdit --intent text-input --value "$TEXT
 1. Observe the target app before acting.
 2. Resolve a real UI element by app/window, role, label, description, value, or
    fresh element ref.
-3. Act through `openclaw gui-control` with structured JSON output.
+3. Act through `openclaw gui-control --runtime open-computer-use` with structured JSON output.
 4. Re-observe the app and verify the requested visible result.
 5. Reply with the app used, whether clipboard was used, and the visible proof
    value that was verified.
@@ -52,14 +52,15 @@ openclaw gui-control set-value --app TextEdit --intent text-input --value "$TEXT
 For simple text-entry proof in TextEdit:
 
 ```bash
-openclaw gui-control observe --app TextEdit --json
+openclaw gui-control observe --runtime open-computer-use --app TextEdit --json
 openclaw gui-control set-value \
+  --runtime open-computer-use \
   --app TextEdit \
   --intent text-input \
   --value "$TOKEN" \
   --approve-policy-risk \
   --json
-openclaw gui-control observe --app TextEdit --json
+openclaw gui-control observe --runtime open-computer-use --app TextEdit --json
 ```
 
 ## Safety
