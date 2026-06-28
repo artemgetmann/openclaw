@@ -64,6 +64,20 @@ Automation Rule
   `status --json` or `precheck --chat <chat> --json` before write actions.
 - Use `read --chat <chat>` only after inbox triage or the user has already named
   the target chat.
+- Before drafting a message to a specific person or chat, read the recent
+  conversation context for that exact target. Telegram is live chat, so never
+  draft from memory, stale user-provided snippets, or an earlier read when the
+  current thread can be checked.
+- When reporting the context or proposing a draft, include the exact full text
+  of the latest relevant inbound Telegram message(s) from the other person,
+  plus a concise context summary only if it helps. Do not replace the other
+  person's wording with only an AI summary when the actual message text is
+  available.
+- Immediately before sending any Telegram-as-me message, re-read the target
+  chat with `read --chat <chat> --limit 5 --json` (or the narrowest equivalent)
+  and compare it with the context used for the draft. If a newer inbound message
+  arrived, stop and update the draft or ask the user before sending. This is the
+  same basic safety step a human would take before replying in Telegram.
 - If `read` shows `media_kind` for a voice/audio message, download the payload
   with `telegram-user download`, then use the generic `media transcribe`
   command. Do not inspect Telethon internals or write a one-off downloader.
@@ -180,3 +194,8 @@ Safety
 - Confirm the intended recipient when the target is ambiguous.
 - Do not expose Telegram API hash, session files, OTPs, or 2FA secrets in logs
   or chat transcripts.
+- After sending, if follow-up handling would clearly help, offer a scoped wait
+  or monitor for that same chat. Do not create a new monitor or imply fully
+  autonomous conversation driving unless the user explicitly approves the scope,
+  cadence or wait condition, stop condition, and whether replies should only be
+  drafted or can be sent.

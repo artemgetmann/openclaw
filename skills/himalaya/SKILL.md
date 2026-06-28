@@ -55,6 +55,17 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
   account is the same mailbox the user intended.
 - For sends, never silently switch sender identities. If the same-mailbox
   account is unclear, stop and ask the user before sending.
+- Before sending an email reply from a draft that sat for a meaningful amount
+  of time, re-read the message/thread or search recent mail from that person
+  first. Email is usually less volatile than chat, but stale drafts can still
+  answer the wrong state.
+- When presenting email context for a reply decision, include the exact full
+  text of the latest relevant inbound email from the other person when it is
+  available, then add a concise summary only if useful. Do not force the user to
+  rely on a summary when the sender's actual wording matters.
+- If you draft and send in the same short flow, normal thread reading before the
+  draft is enough unless the user delayed approval, the thread is active, or the
+  last read is no longer trustworthy.
 - If Gmail auth fails and Himalaya is not safely configured for the same
   mailbox, report the blocker and ask whether the user wants to reconnect
   Google.
@@ -207,6 +218,9 @@ The local proof is command evidence, not recipient delivery confirmation. Raw
 Himalaya v1 does not expose SMTP RCPT acceptance details, so do not claim live
 recipient proof unless you verified inbox arrival, a reply, or a provider bounce
 with explicit approval. iCloud Sent is not reliable proof for this lane.
+After sending an important reply, you may offer to monitor that thread for a
+response. Ask before creating any monitor, and include the target, cadence, stop
+condition, expiry, and draft-vs-send policy.
 
 The wrapper behaves like normal Himalaya for no-attachment and small-attachment
 sends, so those still attempt to save a Sent copy. Only larger iCloud attachment

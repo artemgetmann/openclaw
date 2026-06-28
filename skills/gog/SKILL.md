@@ -98,6 +98,17 @@ Email fallback policy
   configured account is the same mailbox the user intended.
 - For sends, never silently fall back to a different sender identity. If the
   same-mailbox identity is unclear, stop and ask the user which account to use.
+- Before sending a Gmail reply from a draft that sat for a meaningful amount of
+  time, re-read or re-search the thread/person first and check for newer
+  messages. Email is usually less volatile than chat, but stale drafts can still
+  answer the wrong state.
+- When presenting a Gmail thread context for a reply decision, include the exact
+  full text of the latest relevant inbound email from the other person when it
+  is available, then add a concise summary only if useful. Do not force the user
+  to rely on a summary when the sender's actual wording matters.
+- If you draft and send in the same short flow, normal thread reading before the
+  draft is enough unless the user delayed approval, the thread is active, or the
+  last read is no longer trustworthy.
 - If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
   report the blocker clearly and ask whether the user wants to reconnect Google.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
@@ -245,4 +256,7 @@ Notes
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
 - Confirm before sending mail or creating events.
+- After sending an important Gmail reply, you may offer to monitor that thread
+  for a response. Ask before creating any monitor, and include the target,
+  cadence, stop condition, expiry, and draft-vs-send policy.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
