@@ -39,10 +39,14 @@ const OUTPUT_DONE = "done";
 const OUTPUT_NOPE = "nope";
 const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
+const OUTPUT_NEWEST_MARKER = "NEWEST_PAYLOAD";
+const OUTPUT_OLDEST_MARKER = "OLDEST_PAYLOAD";
+const POLL_OUTPUT_LIMIT_CHARS = 180;
 const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
+const COMMAND_LONG_SINGLE_LINE = `node -e "setTimeout(()=>process.stdout.write('${OUTPUT_NEWEST_MARKER}'+ 'x'.repeat(1000) +'${OUTPUT_OLDEST_MARKER}'), 20)"`;
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
 const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
@@ -453,6 +457,60 @@ describe("exec tool backgrounding", () => {
     const sessions = await listProcessSessions(processTool);
     expect(hasSession(sessions, sessionId)).toBe(true);
     expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
+  });
+
+  it("limits long poll output while preserving the beginning and end", async () => {
+    const sessionId = await startBackgroundCommand(execTool, COMMAND_LONG_SINGLE_LINE);
+
+    const poll = await executeProcessTool(processTool, {
+      action: "poll",
+      sessionId,
+      timeout: BACKGROUND_POLL_TIMEOUT_MS,
+      limit: POLL_OUTPUT_LIMIT_CHARS,
+    });
+    const text = readTextContent(poll.content) ?? "";
+
+    expect(text).toContain(OUTPUT_NEWEST_MARKER);
+    expect(text).toContain(OUTPUT_OLDEST_MARKER);
+    expect(text).toContain("output truncated");
+    expect(text).not.toContain("x".repeat(500));
+  });
+
+  it("clamps tiny positive poll output limits before truncating", async () => {
+    const sessionId = await startBackgroundCommand(execTool, COMMAND_LONG_SINGLE_LINE);
+
+    const poll = await executeProcessTool(processTool, {
+      action: "poll",
+      sessionId,
+      timeout: BACKGROUND_POLL_TIMEOUT_MS,
+      limit: 1,
+    });
+    const text = readTextContent(poll.content) ?? "";
+
+    expect(text).toContain("output truncated to 5 chars");
+    expect(text).toContain("requested limit 1 was clamped to 5");
+    expect(text).not.toContain("x".repeat(500));
+  });
+
+  it("limits finished-session poll output from the aggregated stream", async () => {
+    const { sessionId, status } = await runBackgroundCommandToCompletion(
+      execTool,
+      COMMAND_LONG_SINGLE_LINE,
+    );
+    expect(status).toBe(PROCESS_STATUS_COMPLETED);
+
+    const poll = await executeProcessTool(processTool, {
+      action: "poll",
+      sessionId,
+      limit: POLL_OUTPUT_LIMIT_CHARS,
+    });
+    const text = readTextContent(poll.content) ?? "";
+
+    expect(text).toContain(OUTPUT_NEWEST_MARKER);
+    expect(text).toContain(OUTPUT_OLDEST_MARKER);
+    expect(text).toContain("output truncated");
+    expect(text).not.toContain("x".repeat(500));
+    expect(text).toContain("Process exited with code 0.");
   });
 
   it("uses default timeout when timeout is omitted", async () => {

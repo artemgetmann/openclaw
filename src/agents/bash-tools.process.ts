@@ -30,6 +30,7 @@ type WritableStdin = {
   destroyed?: boolean;
 };
 const DEFAULT_LOG_TAIL_LINES = 200;
+const MIN_POLL_OUTPUT_TRUNCATE_CHARS = 5;
 
 function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
@@ -47,6 +48,36 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
     return "";
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
+}
+
+function resolvePollOutputCharLimit(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function formatPollOutput(output: string, limit: unknown): string {
+  const charLimit = resolvePollOutputCharLimit(limit);
+  if (charLimit === undefined || output.length <= charLimit) {
+    return output;
+  }
+  const effectiveCharLimit = Math.max(charLimit, MIN_POLL_OUTPUT_TRUNCATE_CHARS);
+
+  // Poll output is often a single JSON line, so line slicing does not protect
+  // the newest records at the front. Keep both ends visible and direct callers
+  // to the paged log action for the full stream.
+  const clampNote =
+    effectiveCharLimit === charLimit
+      ? ""
+      : `; requested limit ${charLimit} was clamped to ${effectiveCharLimit}`;
+  return `${truncateMiddle(output, effectiveCharLimit)}\n\n[output truncated to ${effectiveCharLimit} chars${clampNote}; use process(action=log, offset/limit) for full output]`;
 }
 
 const processSchema = Type.Object({
@@ -295,12 +326,17 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
+              const useWindowedOutput = params.limit !== undefined;
+              const rawFinishedOutput = (
+                useWindowedOutput ? scopedFinished.aggregated : scopedFinished.tail
+              ).trim();
+              const finishedOutput = formatPollOutput(rawFinishedOutput, params.limit);
               return {
                 content: [
                   {
                     type: "text",
                     text:
-                      (scopedFinished.tail ||
+                      (finishedOutput ||
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
@@ -353,8 +389,9 @@ export function createProcessTool(
               ? "completed"
               : "failed"
             : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
-          const hasNewOutput = output.length > 0;
+          const rawOutput = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const output = formatPollOutput(rawOutput, params.limit);
+          const hasNewOutput = rawOutput.length > 0;
           const retryInMs = exited
             ? undefined
             : recordPollRetrySuggestion(params.sessionId, hasNewOutput);
