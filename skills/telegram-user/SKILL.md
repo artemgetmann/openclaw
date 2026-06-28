@@ -102,6 +102,26 @@ When Not To Use
 - Broad history sync/search features that the current `telegram-user` backend
   does not promise yet.
 
+Triage Pattern
+
+- For broad Telegram triage, start with `inbox --json` or
+  `inbox --unread --json`; add `--dm-only`, `--limit`, or `--contains` to keep
+  the first pass small.
+- Shortlist from chat title, unread state, latest preview, sender, timestamp,
+  and known priority signals before reading full chat histories.
+- Filter obvious noise early: bot alerts, low-signal group chatter, stale
+  notifications, and routine FYI messages. Deep-read only likely actionable
+  chats, active conversations, media-bearing messages, or ambiguous previews.
+- Bucket results as `Urgent`, `Needs reply soon`, `Waiting on them`, `Schedule`,
+  `Delegate`, `Archive / no action`, or `FYI` when presenting a triage pass.
+- State the scope and confidence: for example, "checked unread DMs, limit 10;
+  confidence medium because group chats were excluded."
+- Treat "needs reply" as an inference. Telegram previews do not prove who owes
+  the next turn unless you read enough context.
+- Before drafting or sending, read the target chat with the narrowest useful
+  `read --chat ... --limit ... --json` command and use the latest relevant
+  inbound text, not only a preview.
+
 Setup Routing
 
 - If `doctor --json` returns `missing_credentials`, route through

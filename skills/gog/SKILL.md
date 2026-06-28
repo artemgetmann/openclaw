@@ -114,6 +114,32 @@ Email fallback policy
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
   Himalaya as a fallback. Himalaya is email-only.
 
+Gmail triage pattern
+
+- Default to Gmail inbox plus a clear timeframe unless the user asks for a
+  broader audit.
+- Shortlist before deep reads. Prefer `gog gmail search` or
+  `gog gmail messages search` with a small `--max` before reading full messages
+  or drafting replies.
+- Use Gmail query shape to control scope: unread/recent mail, sender, topic,
+  attachments, labels, or `newer_than:7d`. Tighten noisy searches before
+  reading bodies.
+- Filter obvious noise early: newsletters, calendar churn, receipts,
+  automated alerts, delivery notifications, and FYI-only threads.
+- Use `gog gmail search` for thread-level triage. Use
+  `gog gmail messages search` when individual message order matters or thread
+  grouping would hide who said what.
+- Deep-read only shortlisted items where snippets are not enough, active
+  conversations, attachment/media items, or reply candidates.
+- Bucket results as `Urgent`, `Needs reply soon`, `Waiting on them`,
+  `Schedule`, `Delegate`, `Archive / no action`, or `FYI`.
+- State scope and confidence: account, query, max/result count, timeframe, and
+  what was excluded or only sampled.
+- Treat "needs reply" as an inference unless the thread context clearly shows
+  the user is the next responder.
+- Before sending a Gmail reply, re-search or re-read the target thread/person if
+  approval was delayed, the thread is active, or the last read may be stale.
+
 Setup Routing
 
 - If `gog` is missing OAuth credentials, has no authorized account, or the

@@ -78,6 +78,29 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - Allow node execution when the runtime supports it. Missing
   `system.run.prepare` alone does not make Himalaya execution invalid.
 
+## Inbox Triage Pattern
+
+- Default to the inbox and a clear timeframe unless the user asks for a broader
+  mailbox audit.
+- Shortlist before reading bodies. Use `himalaya envelope list` with folder,
+  page-size, sender, subject, or date filters to inspect message metadata and
+  snippets first.
+- Keep the first pass small, usually about 20 envelopes, then refine or page
+  older only if the result set is incomplete.
+- Filter obvious noise early: newsletters, calendar churn, receipts,
+  automated alerts, delivery notifications, and resolved FYI threads.
+- Read full messages only for shortlisted items where sender, subject,
+  timestamp, and preview are not enough to classify urgency or reply-needed
+  state.
+- Escalate to thread/recent-mail context when a message appears to be part of an
+  active conversation and earlier or newer messages may change the answer.
+- Bucket results as `Urgent`, `Needs reply soon`, `Waiting on them`,
+  `Schedule`, `Delegate`, `Archive / no action`, or `FYI`.
+- State scope and confidence: account, folder, timeframe/search terms, page
+  size, and whether the result is a sampled slice or a complete enough scan.
+- Treat "needs reply" as an inference unless the thread context clearly shows
+  the user is the next responder.
+
 ## Configuration Setup
 
 Run the interactive wizard to set up an account:
