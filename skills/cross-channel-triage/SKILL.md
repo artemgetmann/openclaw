@@ -1,14 +1,7 @@
 ---
 name: cross-channel-triage
 description: Use when the user asks to triage messages, emails, chats, inboxes, unread messages, recent messages, open replies, or who they owe replies to across one or more channels such as WhatsApp, Telegram, Gmail/email, Slack, Signal, iMessage, browser portals, or files. First produce a scoped prioritized triage list, then handle items one by one with user approval before any external reply/send.
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "📬",
-        "displayName": "Cross-Channel Triage",
-      },
-  }
+metadata: { "openclaw": { "emoji": "📬", "displayName": "Cross-Channel Triage" } }
 ---
 
 # Cross-Channel Triage
@@ -104,15 +97,18 @@ For each selected item:
 ## Modes
 
 Default supervised mode:
+
 - Use for users, friends, investors, hiring, sales, conflict, negotiation,
   emotional threads, or anything reputational.
 - Draft one at a time and wait.
 
 Batch-draft mode:
+
 - Use only if the user asks to review several drafts before action.
 - Draft multiple replies, but send none until explicitly approved.
 
 Low-risk batch-send mode:
+
 - Use only if explicitly authorized and the messages are routine: confirmations,
   receipts, simple scheduling, or "thanks, received."
 - Ask before the first batch send unless the user already authorized the batch.
