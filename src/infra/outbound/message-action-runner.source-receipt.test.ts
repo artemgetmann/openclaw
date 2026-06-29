@@ -139,4 +139,115 @@ describe("runMessageAction heartbeat source receipt", () => {
     expect(sendExternal).toHaveBeenCalledTimes(1);
     expect(sendTelegram).not.toHaveBeenCalled();
   });
+
+  it("does not post a source receipt when best-effort delivery has no confirmed send", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    sendExternal.mockRejectedValueOnce(new Error("external down"));
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message: "Confirmed for Tuesday.",
+        bestEffort: true,
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sourceReceipt).toMatchObject({
+      status: "skipped",
+      reason: "unconfirmed-send",
+    });
+    expect(sendExternal).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not post a source receipt for hook-cancelled delivery sentinels", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "msteams",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({
+                channel: "msteams",
+                messageId: "cancelled-by-hook",
+                meta: { cancelled: true },
+              }),
+            },
+            messaging: {
+              targetResolver: {
+                looksLikeId: () => true,
+                resolveTarget: async ({ input }) => ({
+                  to: input,
+                  kind: "channel",
+                  source: "normalized",
+                }),
+              },
+            },
+          }),
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message: "Confirmed for Tuesday.",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sourceReceipt).toMatchObject({
+      status: "skipped",
+      reason: "unconfirmed-send",
+    });
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
 });

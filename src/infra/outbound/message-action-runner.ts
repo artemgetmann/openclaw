@@ -218,6 +218,23 @@ async function maybeApplyCrossContextMarker(params: {
   });
 }
 
+function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAction>>): boolean {
+  const result = send.sendResult?.result;
+  if (!result) {
+    return false;
+  }
+  const meta =
+    "meta" in result && result.meta && typeof result.meta === "object" ? result.meta : undefined;
+  if ((meta as { cancelled?: unknown } | undefined)?.cancelled === true) {
+    return false;
+  }
+  const messageId =
+    "messageId" in result && typeof result.messageId === "string" ? result.messageId.trim() : "";
+  // Some adapters use sentinel ids for hook-cancelled/skipped sends. Those are
+  // not external delivery proof, so do not produce source-topic receipts.
+  return Boolean(messageId && messageId !== "cancelled-by-hook" && messageId !== "skipped");
+}
+
 async function resolveChannel(
   cfg: OpenClawConfig,
   params: Record<string, unknown>,
@@ -588,15 +605,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
   const sourceReceipt =
     !dryRun && channel !== "telegram"
-      ? await deliverHeartbeatSourceReceipt({
-          cfg,
-          toolContext: input.toolContext,
-          sentChannel: channel,
-          sentTo: to,
-          message,
-          mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined,
-          deps: input.deps,
-        })
+      ? hasConfirmedSendDelivery(send)
+        ? await deliverHeartbeatSourceReceipt({
+            cfg,
+            toolContext: input.toolContext,
+            sentChannel: channel,
+            sentTo: to,
+            message,
+            mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined,
+            deps: input.deps,
+          })
+        : ({ status: "skipped", reason: "unconfirmed-send" } satisfies SourceReceiptDelivery)
       : undefined;
 
   return {
