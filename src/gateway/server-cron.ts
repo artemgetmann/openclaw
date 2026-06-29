@@ -7,6 +7,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
+import { getSessionGoal } from "../config/sessions/goals.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
@@ -38,7 +39,7 @@ import {
   saveMonitorStore,
   updateMonitorRecord,
 } from "../monitor/store.js";
-import { isTerminalMonitorStatus } from "../monitor/types.js";
+import { isTerminalMonitorStatus, type MonitorRecord } from "../monitor/types.js";
 import { buildMonitorWakeMessage, isMonitorExpired } from "../monitor/wake.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -57,6 +58,25 @@ function trimToOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function isBoundMonitorGoalComplete(
+  monitor: MonitorRecord,
+  cfg: ReturnType<typeof loadConfig>,
+): Promise<boolean> {
+  if (!monitor.goal) {
+    return false;
+  }
+  const snapshot = await getSessionGoal({
+    sessionKey: monitor.originSessionKey,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: monitor.agentId }),
+    persist: false,
+  });
+  return (
+    snapshot.status === "found" &&
+    snapshot.goal?.id === monitor.goal.id &&
+    snapshot.goal.status === "complete"
+  );
 }
 
 function redactWebhookUrl(url: string): string {
@@ -350,6 +370,26 @@ export function buildGatewayCronService(params: {
           stopJob: true,
         };
       }
+      const runtimeConfig = loadConfig();
+      if (await isBoundMonitorGoalComplete(monitor, runtimeConfig)) {
+        const stopped = updateMonitorRecord(
+          monitor,
+          { status: "stopped", lastWakeAtMs: nowMs, lastWakeStatus: "stopped" },
+          nowMs,
+        );
+        const stoppedIndex = monitorStore.monitors.findIndex(
+          (entry) => entry.monitorId === monitorId,
+        );
+        if (stoppedIndex >= 0) {
+          monitorStore.monitors[stoppedIndex] = stopped;
+          await saveMonitorStore(monitorStorePath, monitorStore);
+        }
+        return {
+          status: "skipped",
+          summary: stopped.name ?? stopped.monitorId,
+          stopJob: true,
+        };
+      }
       const wakeMessage = buildMonitorWakeMessage({
         monitor,
         nowIso: new Date(nowMs).toISOString(),
@@ -364,7 +404,6 @@ export function buildGatewayCronService(params: {
         originDelivery: monitor.originDelivery,
         watchDelivery: resolveMonitorRecordWatchDelivery(monitor),
       });
-      const runtimeConfig = loadConfig();
       const result = await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
@@ -397,15 +436,29 @@ export function buildGatewayCronService(params: {
         // "fresh mini-brain on every wake" bug this redesign is fixing.
         sessionDefaultResetMode: "manual",
       });
-      const updated = updateMonitorRecord(
-        monitor,
-        { lastWakeAtMs: nowMs, lastWakeStatus: monitor.status },
-        nowMs,
-      );
-      const index = monitorStore.monitors.findIndex((entry) => entry.monitorId === monitorId);
+      const latestMonitorStore = await loadMonitorStore(monitorStorePath);
+      const index = latestMonitorStore.monitors.findIndex((entry) => entry.monitorId === monitorId);
       if (index >= 0) {
-        monitorStore.monitors[index] = updated;
-        await saveMonitorStore(monitorStorePath, monitorStore);
+        const currentMonitor = latestMonitorStore.monitors[index];
+        const shouldStopForGoalCompletion = await isBoundMonitorGoalComplete(
+          currentMonitor,
+          runtimeConfig,
+        );
+        const nextStatus = shouldStopForGoalCompletion ? "stopped" : currentMonitor.status;
+        const updated = updateMonitorRecord(
+          currentMonitor,
+          {
+            ...(shouldStopForGoalCompletion ? { status: "stopped" as const } : {}),
+            lastWakeAtMs: nowMs,
+            lastWakeStatus: nextStatus,
+          },
+          Date.now(),
+        );
+        latestMonitorStore.monitors[index] = updated;
+        await saveMonitorStore(monitorStorePath, latestMonitorStore);
+        if (shouldStopForGoalCompletion || isTerminalMonitorStatus(updated.status)) {
+          return { ...result, stopJob: true };
+        }
       }
       return result;
     },

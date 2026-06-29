@@ -404,6 +404,262 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("preserves monitor changes made during a monitor wake", async () => {
+    const cfg = createCronConfig("server-cron-monitor-preserve-updates");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-preserve",
+            agentId: "main",
+            originSessionKey: "agent:main:main",
+            monitorSessionKey: "agent:main:monitor:monitor-preserve",
+            sourceType: "synthetic",
+            sourceTarget: { source: "proof" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            status: "active",
+            cronJobId: "cron-monitor-preserve",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      const store = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      store.monitors[0] = {
+        ...store.monitors[0],
+        sourceTarget: { source: "proof", latestInbound: "confirmed" },
+        lastCheckpoint: { evaluation: "done" },
+        updatedAtMs: 2,
+      };
+      await fs.writeFile(monitorStorePath, JSON.stringify(store), "utf-8");
+      return { status: "ok" as const, summary: "ok" };
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake preserve",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-preserve",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-preserve" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const store = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      expect(store.monitors[0]).toMatchObject({
+        sourceTarget: { source: "proof", latestInbound: "confirmed" },
+        lastCheckpoint: { evaluation: "done" },
+        lastWakeStatus: "active",
+      });
+      expect(typeof store.monitors[0].lastWakeAtMs).toBe("number");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("stops a monitor when its bound origin goal is completed during the wake", async () => {
+    const cfg = createCronConfig("server-cron-monitor-stops-on-goal-complete");
+    cfg.session = {
+      ...cfg.session,
+      store: path.join(path.dirname(cfg.cron!.store!), "sessions.json"),
+    };
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-goal-complete",
+            agentId: "main",
+            originSessionKey: "agent:main:origin-goal",
+            monitorSessionKey: "agent:main:monitor:monitor-goal-complete",
+            sourceType: "synthetic",
+            sourceTarget: { source: "proof" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            goal: {
+              id: "goal-1",
+              objective: "Coordinate dinner.",
+            },
+            status: "active",
+            cronJobId: "cron-monitor-goal-complete",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await fs.writeFile(
+        cfg.session!.store!,
+        JSON.stringify({
+          "agent:main:origin-goal": {
+            sessionId: "origin-session",
+            updatedAt: 3,
+            goal: {
+              schemaVersion: 1,
+              id: "goal-1",
+              objective: "Coordinate dinner.",
+              status: "complete",
+              createdAt: 1,
+              updatedAt: 3,
+              tokenStart: 0,
+              tokenStartFresh: true,
+              tokensUsed: 0,
+              continuationTurns: 0,
+              completedAt: 3,
+            },
+          },
+        }),
+        "utf-8",
+      );
+      return { status: "ok" as const, summary: "done" };
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake goal complete",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-goal-complete",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-goal-complete" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const monitorStore = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      expect(monitorStore.monitors[0]).toMatchObject({
+        status: "stopped",
+        lastWakeStatus: "stopped",
+      });
+      const jobs = await state.cron.list({ includeDisabled: true });
+      expect(jobs.find((entry) => entry.id === job.id)?.enabled).toBe(false);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("skips the model when a monitor wakes after its bound goal is already complete", async () => {
+    const cfg = createCronConfig("server-cron-monitor-skips-complete-goal");
+    cfg.session = {
+      ...cfg.session,
+      store: path.join(path.dirname(cfg.cron!.store!), "sessions.json"),
+    };
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-already-complete",
+            agentId: "main",
+            originSessionKey: "agent:main:origin-complete",
+            monitorSessionKey: "agent:main:monitor:monitor-already-complete",
+            sourceType: "synthetic",
+            sourceTarget: { source: "proof" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            goal: {
+              id: "goal-complete",
+              objective: "Coordinate dinner.",
+            },
+            status: "active",
+            cronJobId: "cron-monitor-already-complete",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      cfg.session.store!,
+      JSON.stringify({
+        "agent:main:origin-complete": {
+          sessionId: "origin-complete-session",
+          updatedAt: 3,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-complete",
+            objective: "Coordinate dinner.",
+            status: "complete",
+            createdAt: 1,
+            updatedAt: 3,
+            tokenStart: 0,
+            tokenStartFresh: true,
+            tokensUsed: 0,
+            continuationTurns: 0,
+            completedAt: 3,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake already complete",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-already-complete",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-already-complete" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      const monitorStore = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      expect(monitorStore.monitors[0]).toMatchObject({
+        status: "stopped",
+        lastWakeStatus: "stopped",
+      });
+      const jobs = await state.cron.list({ includeDisabled: true });
+      expect(jobs.find((entry) => entry.id === job.id)?.enabled).toBe(false);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("keeps waking monitors marked completed so fresh source changes can reactivate the task", async () => {
     const cfg = createCronConfig("server-cron-monitor-completed");
     loadConfigMock.mockReturnValue(cfg);
