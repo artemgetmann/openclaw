@@ -835,6 +835,13 @@ export async function dispatchReplyFromConfig(params: {
       if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         return null;
       }
+      if (isSourcePreviewToolPayload(payload)) {
+        // Same-source message-tool previews are already classified as transient
+        // progress by the agent runner. Preserve that structural marker so
+        // Telegram can route them through the mutable progress controller
+        // instead of dropping them with internal tool/status chatter.
+        return payload;
+      }
       if (shouldSendToolSummaries) {
         const text =
           typeof payload.text === "string"

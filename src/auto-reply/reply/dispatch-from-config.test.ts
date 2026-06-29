@@ -828,6 +828,56 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("keeps Telegram source-preview tool progress transient while preserving final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const sourcePreview = {
+      openclaw: {
+        sourcePreview: true,
+      },
+    };
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Progress: checking local files.",
+        channelData: sourcePreview,
+      });
+      return { text: "FINAL_ONLY_VOICE" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({
+      text: "Progress: checking local files.",
+      channelData: sourcePreview,
+    });
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "FINAL_ONLY_VOICE" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "FINAL_ONLY_VOICE",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("skips TTS for source-preview block progress while preserving one final TTS", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
