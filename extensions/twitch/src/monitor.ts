@@ -100,11 +100,12 @@ async function processTwitchMessage(params: {
     },
   });
 
-  const tableMode = core.channel.text.resolveMarkdownTableMode({
+  const resolvedTableMode = core.channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "twitch",
     accountId,
   });
+  const tableMode = resolvedTableMode === "block" ? "code" : resolvedTableMode;
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
     agentId: route.agentId,

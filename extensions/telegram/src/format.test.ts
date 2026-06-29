@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramHtml,
+  markdownToTelegramRichHtml,
+  splitTelegramHtmlChunks,
+  splitTelegramRichMessageTextChunks,
+} from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -133,5 +138,40 @@ describe("markdownToTelegramHtml", () => {
 
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  });
+
+  it("renders markdown tables as native rich-message table html in block mode", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      ["Here:", "", "| Name | Score |", "| --- | ---: |", "| Ada | **9** |", "| Bob | 7 |"].join(
+        "\n",
+      ),
+      { tableMode: "block" },
+    );
+
+    expect(richHtml).toContain("<table>");
+    expect(richHtml).toContain("<thead><tr><th>Name</th><th>Score</th></tr></thead>");
+    expect(richHtml).toContain("<tbody>");
+    expect(richHtml).toContain("<td>Ada</td><td><b>9</b></td>");
+  });
+
+  it("keeps a plain-text fallback for rich-message table chunks", () => {
+    const [chunk] = splitTelegramRichMessageTextChunks({
+      text: "| Name | Score |\n| --- | --- |\n| Ada | 9 |",
+      textLimit: 4000,
+      textMode: "markdown",
+      tableMode: "block",
+    });
+
+    expect(chunk?.text).toContain("<table>");
+    expect(chunk?.plainText).toBe("Name | Score\nAda | 9");
+  });
+
+  it("does not render fenced code pipes as native rich-message tables", () => {
+    const richHtml = markdownToTelegramRichHtml("```\n| not | a table |\n| --- | --- |\n```", {
+      tableMode: "block",
+    });
+
+    expect(richHtml).not.toContain("<table>");
+    expect(richHtml).toContain("<pre><code>");
   });
 });

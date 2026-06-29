@@ -29,6 +29,7 @@ import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   renderTelegramHtmlText,
+  splitTelegramRichMessageTextChunks,
   wrapFileReferencesInHtml,
 } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
@@ -94,6 +95,20 @@ function buildChunkTextResolver(params: {
         : [markdown];
     const chunks: ReturnType<typeof markdownToTelegramChunks> = [];
     for (const chunk of markdownChunks) {
+      if (params.tableMode === "block") {
+        chunks.push(
+          ...splitTelegramRichMessageTextChunks({
+            text: chunk,
+            textLimit: params.textLimit,
+            textMode: "markdown",
+            tableMode: params.tableMode,
+          }).map((richChunk) => ({
+            html: richChunk.text,
+            text: richChunk.plainText,
+          })),
+        );
+        continue;
+      }
       const nested = markdownToTelegramChunks(chunk, params.textLimit, {
         tableMode: params.tableMode,
       });
@@ -130,6 +145,7 @@ async function deliverTextReply(params: {
   replyQuotePosition?: number;
   replyQuoteEntities?: unknown[];
   linkPreview?: boolean;
+  tableMode?: MarkdownTableMode;
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
@@ -159,6 +175,7 @@ async function deliverTextReply(params: {
           textMode: "html",
           plainText: chunk.text,
           linkPreview: params.linkPreview,
+          tableMode: params.tableMode,
           replyMarkup,
         },
       );
@@ -179,6 +196,7 @@ async function sendPendingFollowUpText(params: {
   text: string;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   linkPreview?: boolean;
+  tableMode?: MarkdownTableMode;
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
@@ -197,6 +215,7 @@ async function sendPendingFollowUpText(params: {
         textMode: "html",
         plainText: chunk.text,
         linkPreview: params.linkPreview,
+        tableMode: params.tableMode,
         replyMarkup,
       });
     },
@@ -223,6 +242,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   runtime: RuntimeEnv;
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+  tableMode?: MarkdownTableMode;
   replyToId?: number;
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
@@ -250,6 +270,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
+      tableMode: opts.tableMode,
       replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
     });
     if (firstDeliveredMessageId == null) {
@@ -423,6 +444,7 @@ async function deliverMediaReply(params: {
               runtime: params.runtime,
               text: fallbackText,
               chunkText: params.chunkText,
+              tableMode: params.tableMode,
               replyToId: voiceFallbackReplyTo,
               replyQuoteMessageId: params.replyQuoteMessageId,
               replyQuotePosition: params.replyQuotePosition,
@@ -455,6 +477,7 @@ async function deliverMediaReply(params: {
                 runtime: params.runtime,
                 text: fallbackText,
                 chunkText: params.chunkText,
+                tableMode: params.tableMode,
                 replyToId: undefined,
                 thread: params.thread,
                 linkPreview: params.linkPreview,
@@ -505,6 +528,7 @@ async function deliverMediaReply(params: {
         text: pendingFollowUpText,
         replyMarkup: params.replyMarkup,
         linkPreview: params.linkPreview,
+        tableMode: params.tableMode,
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
@@ -702,6 +726,7 @@ export async function deliverReplies(params: {
           replyQuotePosition: params.replyQuotePosition,
           replyQuoteEntities: params.replyQuoteEntities,
           linkPreview: params.linkPreview,
+          tableMode: params.tableMode,
           replyToId,
           replyToMode: params.replyToMode,
           progress,
@@ -747,6 +772,7 @@ export async function deliverReplies(params: {
             replyQuotePosition: params.replyQuotePosition,
             replyQuoteEntities: params.replyQuoteEntities,
             linkPreview: params.linkPreview,
+            tableMode: params.tableMode,
             replyToId,
             replyToMode: params.replyToMode,
             progress,

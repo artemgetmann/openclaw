@@ -126,6 +126,11 @@ export type TelegramAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /**
+   * Prefer Telegram Bot API rich messages for text replies and sends.
+   * Default: true; delivery falls back to legacy HTML/plain sendMessage on any rich-send failure.
+   */
+  richMessages?: boolean;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
   /**

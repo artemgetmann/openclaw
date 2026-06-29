@@ -574,6 +574,7 @@ export const registerTelegramNativeCommands = ({
       cfg,
       channel: "telegram",
       accountId: route.accountId,
+      supportsBlockTables: true,
     });
     const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
     return {
