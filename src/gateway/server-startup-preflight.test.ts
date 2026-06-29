@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { CONSUMER_DEFAULT_BUNDLED_SKILLS } from "../agents/consumer-default-bundled-skills.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthConfig,
@@ -272,6 +273,88 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(writeConfig).toHaveBeenCalledWith(migratedConfig);
     expect(info).toHaveBeenCalledWith(expect.stringContaining("stale Jarvis workspace pointers"));
     expect(result.config).toEqual(migratedConfig);
+  });
+
+  it("repairs stale Jarvis consumer bundled skill allowlists before startup validation", async () => {
+    const home = makeTempDir();
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const staleAllowBundled: string[] = CONSUMER_DEFAULT_BUNDLED_SKILLS.filter(
+      (skillName) => skillName !== "jarvis-gui-control",
+    );
+    const repairedAllowBundled = [...staleAllowBundled];
+    repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-gui-control");
+    const staleConfig: OpenClawConfig = {
+      skills: { allowBundled: staleAllowBundled },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(
+        createSnapshot({
+          path: jarvisConfigPath,
+          config: {
+            skills: {
+              allowBundled: repairedAllowBundled,
+            },
+          },
+        }),
+      );
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+    const info = vi.fn<(message: string) => void>();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info, warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+    });
+
+    const writtenConfig = writeConfig.mock.calls[0]?.[0];
+    expect(writtenConfig?.skills?.allowBundled).toEqual(repairedAllowBundled);
+    expect(repairedAllowBundled.indexOf("jarvis-gui-control")).toBe(
+      repairedAllowBundled.indexOf("peekaboo") - 1,
+    );
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill allowlist"));
+    expect(result.config.skills?.allowBundled).toContain("jarvis-gui-control");
+  });
+
+  it("does not widen intentionally narrowed Jarvis consumer bundled skill allowlists", async () => {
+    const home = makeTempDir();
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const narrowedConfig: OpenClawConfig = {
+      skills: { allowBundled: ["peekaboo"] },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(createSnapshot({ path: jarvisConfigPath, config: narrowedConfig }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+    });
+
+    expect(writeConfig).not.toHaveBeenCalled();
+    expect(result.config.skills?.allowBundled).toEqual(["peekaboo"]);
   });
 
   it("writes auto-enabled plugins and re-reads snapshot on success", async () => {

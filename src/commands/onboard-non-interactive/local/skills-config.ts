@@ -1,57 +1,12 @@
+import { buildConsumerBundledSkillAllowlist } from "../../../agents/consumer-default-bundled-skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+export {
+  buildConsumerBundledSkillAllowlist,
+  CONSUMER_DEFAULT_BUNDLED_SKILLS,
+} from "../../../agents/consumer-default-bundled-skills.js";
 import { ensureSharedPersonalSkillsManagedRoot } from "../../onboard-shared-skills-root.js";
 import type { OnboardOptions } from "../../onboard-types.js";
-
-export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
-  "consumer-setup",
-  "timezone-preference-updater",
-  "checkpoint",
-  "monitor-router",
-  "apple-notes",
-  "apple-reminders",
-  "media-editor",
-  "elevenlabs-creative",
-  "gog",
-  "goplaces",
-  "himalaya",
-  "peekaboo",
-  "summarize",
-  "weather",
-  "wacli",
-  "mcporter",
-  "nano-banana-pro",
-  "telegram-user",
-  "notion",
-  "obsidian",
-  "things-mac",
-  "github",
-  "slack",
-  "discord",
-  "openai-image-gen",
-  "openai-whisper",
-  "nano-pdf",
-] as const;
-
-export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): string[] {
-  const existingAllowlist = config.skills?.allowBundled;
-  if (existingAllowlist?.includes("__none__")) {
-    return [...existingAllowlist];
-  }
-  const allowlist = existingAllowlist ? [...existingAllowlist] : [];
-  const allowed = new Set(allowlist);
-
-  for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
-    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
-    if (explicitlyDisabled || allowed.has(skillName)) {
-      continue;
-    }
-    allowlist.push(skillName);
-    allowed.add(skillName);
-  }
-
-  return allowlist;
-}
 
 export function applyNonInteractiveSkillsConfig(params: {
   nextConfig: OpenClawConfig;
