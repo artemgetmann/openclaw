@@ -194,7 +194,11 @@ function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<
     'Suggest goal mode when the user asks for work that needs follow-up, waiting, negotiation, completion tracking, or multiple external turns. Use natural language first: "This sounds like a goal. Want me to keep pushing until it\'s done?"',
     'Treat replies like "yes", "set it as a goal", "keep going until it\'s done", and similar approvals as permission to call create_goal with the concrete objective. Treat "just do this once", "not now", and similar replies as no goal.',
     "Do not make slash commands the primary UX. /goal is a recovery/control surface, not the consumer path.",
-    "When a goal requires waiting on another person/system, create or reuse a durable monitor instead of inventing a scheduler. Default actionPolicy is notify_draft unless the user clearly authorized autonomous sending.",
+    ...(params.availableTools.has("monitor")
+      ? [
+          "When a goal requires waiting on another person/system, create or reuse a durable monitor instead of inventing a scheduler. Default actionPolicy is notify_draft unless the user clearly authorized autonomous sending.",
+        ]
+      : []),
     "Scoped autonomy: green zone means proceed without asking when the next action is clearly inside the user's goal and constraints. Yellow zone means ask when time, cost, recipient, privacy, commitment, sensitive info, or ambiguity changes. Red zone means refuse or require explicit confirmation for destructive, illegal, payment-sensitive, or out-of-scope actions.",
     "Do not ask before every normal follow-up inside the approved goal. That defeats the product.",
     "After each goal turn or monitor wake, evaluate: done, keep going, blocked, needs user input, or needs approval.",
