@@ -62,6 +62,8 @@ export type MessageSendResult = {
   mediaUrls?: string[];
   /** Text that reached the outbound adapter after message_sending hooks rewrote it. */
   deliveredText?: string;
+  /** True when best-effort delivery continued after one or more payload failures. */
+  partialFailure?: boolean;
   result?: OutboundDeliveryResult | { messageId: string };
   dryRun?: boolean;
 };
@@ -239,6 +241,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       sessionKey: params.mirror?.sessionKey,
     });
     const deliveredPayloadTexts: string[] = [];
+    const deliveryErrors: string[] = [];
     const results = await deliverOutboundPayloads({
       cfg,
       channel: outboundChannel,
@@ -261,6 +264,11 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
           deliveredPayloadTexts.push(payload.text);
         }
       },
+      onError: (err) => {
+        // Best-effort sends may continue after failures. Keep a compact signal so
+        // callers that need exact-delivery proof can reject partial success.
+        deliveryErrors.push(err instanceof Error ? err.message : String(err));
+      },
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -278,6 +286,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       deliveredText: deliveredPayloadTexts.length ? deliveredPayloadTexts.join("\n") : undefined,
+      partialFailure: deliveryErrors.length > 0 ? true : undefined,
       result: results.at(-1),
     };
   }

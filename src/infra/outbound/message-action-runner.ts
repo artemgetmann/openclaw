@@ -225,6 +225,9 @@ function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAct
     }
     return !payloadReportsFailedOrCancelledDelivery(send.payload);
   }
+  if (send.sendResult?.partialFailure) {
+    return false;
+  }
   const result = send.sendResult?.result;
   if (!result) {
     return false;

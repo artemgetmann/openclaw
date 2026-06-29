@@ -58,4 +58,67 @@ describe("runHeartbeatOnce", () => {
       { prefix: "openclaw-hb-" },
     );
   });
+
+  it("preserves source topic origin in heartbeat context when approval receipts are enabled", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+          origin: {
+            provider: "telegram",
+            to: "telegram:group:-1003841603622",
+            accountId: "default",
+            threadId: 928,
+          },
+        });
+
+        replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
+          expect(ctx.To).toBe("telegram:123456");
+          expect(ctx.From).toBe("telegram:123456");
+          expect(ctx.OriginatingChannel).toBe("telegram");
+          expect(ctx.OriginatingTo).toBe("telegram:group:-1003841603622");
+          expect(ctx.MessageThreadId).toBe(928);
+          expect(ctx.SourceReceipt).toMatchObject({
+            sourceTo: "telegram:group:-1003841603622",
+            sourceThreadId: 928,
+          });
+          return { text: "ok" };
+        });
+
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "123456",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        });
+
+        expect(replySpy).toHaveBeenCalledTimes(1);
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
 });

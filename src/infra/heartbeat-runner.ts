@@ -736,22 +736,36 @@ export async function runHeartbeatOnce(opts: {
     workspaceDir,
     recentHeartbeats: entry?.recentHeartbeats,
   });
+  const sourceReceipt = resolveHeartbeatSourceReceiptContext({
+    entry,
+    sessionKey,
+    agentId,
+    heartbeatDelivery: delivery,
+  });
+  const originContext = sourceReceipt
+    ? {
+        channel: sourceReceipt.sourceChannel,
+        to: sourceReceipt.sourceTo,
+        accountId: sourceReceipt.sourceAccountId,
+        threadId: sourceReceipt.sourceThreadId,
+      }
+    : {
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        to: delivery.to,
+        accountId: delivery.accountId,
+        threadId: delivery.threadId,
+      };
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
-    OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
-    OriginatingTo: delivery.to,
-    AccountId: delivery.accountId,
-    MessageThreadId: delivery.threadId,
+    OriginatingChannel: originContext.channel,
+    OriginatingTo: originContext.to,
+    AccountId: originContext.accountId,
+    MessageThreadId: originContext.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    SourceReceipt: resolveHeartbeatSourceReceiptContext({
-      entry,
-      sessionKey,
-      agentId,
-      heartbeatDelivery: delivery,
-    }),
+    SourceReceipt: sourceReceipt,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({

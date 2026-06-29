@@ -232,6 +232,85 @@ describe("runMessageAction heartbeat source receipt", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not post a source receipt when best-effort delivery is partial", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    let mediaAttempt = 0;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "msteams",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ channel: "msteams", messageId: "text-unused" }),
+              sendMedia: async () => {
+                mediaAttempt += 1;
+                if (mediaAttempt === 2) {
+                  throw new Error("second media failed");
+                }
+                return { channel: "msteams", messageId: `media-${mediaAttempt}` };
+              },
+            },
+            messaging: {
+              targetResolver: {
+                looksLikeId: () => true,
+                resolveTarget: async ({ input }) => ({
+                  to: input,
+                  kind: "channel",
+                  source: "normalized",
+                }),
+              },
+            },
+          }),
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message:
+          "Confirmed for Tuesday.\nMEDIA:https://example.test/a.png https://example.test/b.png",
+        bestEffort: true,
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sendResult?.partialFailure).toBe(true);
+    expect(result.sourceReceipt).toMatchObject({
+      status: "skipped",
+      reason: "unconfirmed-send",
+    });
+    expect(mediaAttempt).toBe(2);
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
   it("does not post a source receipt for hook-cancelled delivery sentinels", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
     setActivePluginRegistry(
