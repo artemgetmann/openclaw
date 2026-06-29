@@ -42,6 +42,8 @@ Jarvis docs should create action, not emotional debt.
 
 - `docs/consumer/macos-consumer-app.md` - macOS app behavior, identity, and
   packaging reference.
+- `docs/consumer/heartbeat.md` - proactive check-in defaults, opt-out behavior,
+  personal-tool boundaries, and follow-up context rules.
 - `docs/consumer/fresh-user-mac-app-smoke.md` - isolated fresh-user app smoke.
 - `docs/consumer/jarvis-onboarding-copy-checklist.md` - current onboarding copy
   review checklist.

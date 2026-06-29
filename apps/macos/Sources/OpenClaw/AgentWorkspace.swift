@@ -139,10 +139,14 @@ enum AgentWorkspace {
         // Managed Telegram onboarding is a product path, not a blank-agent
         // workshop. Seed only untouched/template-only workspaces so existing
         // user identity files always win.
-        guard !self.hasIdentity(workspaceURL: workspaceURL) else { return }
-        guard self.isWorkspaceEmpty(workspaceURL: workspaceURL)
+        let hasExistingIdentity = self.hasIdentity(workspaceURL: workspaceURL)
+        let canSeedPresetWorkspace = self.isWorkspaceEmpty(workspaceURL: workspaceURL)
             || self.isTemplateOnlyWorkspace(workspaceURL: workspaceURL)
-        else { return }
+        if hasExistingIdentity || canSeedPresetWorkspace {
+            try self.writeConsumerHeartbeatTemplateIfMissing(workspaceURL: workspaceURL)
+        }
+        guard !hasExistingIdentity else { return }
+        guard canSeedPresetWorkspace else { return }
 
         try FileManager().createDirectory(at: workspaceURL, withIntermediateDirectories: true)
         try self.writeConsumerTemplateIfMissingOrTemplate(
@@ -169,6 +173,17 @@ enum AgentWorkspace {
             workspaceURL: workspaceURL,
             filename: self.bootstrapFilename,
             content: self.defaultBootstrapTemplate())
+    }
+
+    private static func writeConsumerHeartbeatTemplateIfMissing(workspaceURL: URL) throws {
+        try FileManager().createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        let url = workspaceURL.appendingPathComponent(self.heartbeatFilename)
+        // A blank or comment-only HEARTBEAT.md is an intentional runtime opt-out.
+        // Only seed missing files; never convert an existing opt-out into active
+        // heartbeat instructions during setup.
+        guard !FileManager().fileExists(atPath: url.path) else { return }
+        try self.defaultHeartbeatTemplate().write(to: url, atomically: true, encoding: .utf8)
+        self.logger.info("Created HEARTBEAT.md at \(url.path, privacy: .public)")
     }
 
     private static func writeConsumerTemplateIfMissingOrTemplate(
@@ -501,6 +516,31 @@ enum AgentWorkspace {
         - If a group task needs a durable note, write the note in workspace files, then share only the useful public summary.
         """
         return self.loadTemplate(named: self.groupsFilename, fallback: fallback)
+    }
+
+    static func defaultHeartbeatTemplate() -> String {
+        let fallback = """
+        # HEARTBEAT.md
+
+        # Heartbeat is a quiet periodic check-in. Keep it broad, low-burn, and DM-safe.
+        # If you want Jarvis to stop heartbeat API calls, leave this file empty or with
+        # only comments.
+
+        - Once each workday during active hours, do one broad sweep and only alert me if something needs attention.
+        - Check configured, connected personal tools only. If selected email, calendar, WhatsApp-as-me, Telegram-as-me, or another personal account tool is not set up, skip it silently.
+        - Prioritize items blocked on my approval, decision, quick reply, or a short "continue".
+        - For follow-ups from prior chats or tasks, include the source chat/thread link when available. If no link is available, say which source you used.
+        - Prefer net-new action-needed items. Do not repeat the same unresolved item unless something materially changed.
+        - If the same blocker still matters, send a short nudge instead of the same full message.
+        - If a dedicated recurring monitor would help, suggest one with cadence, stop condition, and expiry before creating it.
+        - Do not send external messages, make purchases, delete data, or take risky actions without approval.
+        - Keep heartbeat output short: at most 1-3 items.
+        - If nothing actually matters, reply HEARTBEAT_OK and nothing else.
+
+        # Do not use heartbeat as the home for exact reminders or "watch this thread
+        # until X happens" jobs. Use cron/monitors for those.
+        """
+        return self.loadTemplate(named: self.heartbeatFilename, fallback: fallback)
     }
 
     static func defaultBootstrapTemplate() -> String {
