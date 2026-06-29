@@ -219,6 +219,9 @@ async function maybeApplyCrossContextMarker(params: {
 }
 
 function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAction>>): boolean {
+  if (send.handledBy === "plugin" && send.toolResult) {
+    return !payloadReportsFailedOrCancelledDelivery(send.payload);
+  }
   const result = send.sendResult?.result;
   if (!result) {
     return false;
@@ -233,6 +236,35 @@ function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAct
   // Some adapters use sentinel ids for hook-cancelled/skipped sends. Those are
   // not external delivery proof, so do not produce source-topic receipts.
   return Boolean(messageId && messageId !== "cancelled-by-hook" && messageId !== "skipped");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function payloadReportsFailedOrCancelledDelivery(payload: unknown): boolean {
+  const record = asRecord(payload);
+  if (!record) {
+    return false;
+  }
+  const meta = asRecord(record.meta);
+  if (record.cancelled === true || record.canceled === true || meta?.cancelled === true) {
+    return true;
+  }
+  if (record.ok === false || record.success === false) {
+    return true;
+  }
+  const status = typeof record.status === "string" ? record.status.trim().toLowerCase() : "";
+  if (
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "skipped" ||
+    status === "failed"
+  ) {
+    return true;
+  }
+  const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
+  return messageId === "cancelled-by-hook" || messageId === "skipped";
 }
 
 async function resolveChannel(

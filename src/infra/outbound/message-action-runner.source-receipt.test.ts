@@ -250,4 +250,151 @@ describe("runMessageAction heartbeat source receipt", () => {
     });
     expect(sendTelegram).not.toHaveBeenCalled();
   });
+
+  it("posts a source receipt after a successful plugin-handled send", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "msteams",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: async () => ({ channel: "msteams", messageId: "unused" }),
+              },
+              messaging: {
+                targetResolver: {
+                  looksLikeId: () => true,
+                  resolveTarget: async ({ input }) => ({
+                    to: input,
+                    kind: "channel",
+                    source: "normalized",
+                  }),
+                },
+              },
+            }),
+            actions: {
+              supportsAction: ({ action }: { action: string }) => action === "send",
+              handleAction: async () => ({
+                content: [{ type: "text", text: JSON.stringify({ ok: true, messageId: "p-1" }) }],
+              }),
+            },
+          },
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message: "Confirmed for Tuesday.",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sourceReceipt).toMatchObject({ status: "sent" });
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not post a source receipt after a plugin-handled cancelled send", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "msteams",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: async () => ({ channel: "msteams", messageId: "unused" }),
+              },
+              messaging: {
+                targetResolver: {
+                  looksLikeId: () => true,
+                  resolveTarget: async ({ input }) => ({
+                    to: input,
+                    kind: "channel",
+                    source: "normalized",
+                  }),
+                },
+              },
+            }),
+            actions: {
+              supportsAction: ({ action }: { action: string }) => action === "send",
+              handleAction: async () => ({
+                details: { ok: false, cancelled: true, messageId: "cancelled-by-hook" },
+              }),
+            },
+          },
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message: "Confirmed for Tuesday.",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sourceReceipt).toMatchObject({
+      status: "skipped",
+      reason: "unconfirmed-send",
+    });
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
 });
