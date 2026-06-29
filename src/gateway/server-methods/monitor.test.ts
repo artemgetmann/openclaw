@@ -100,6 +100,7 @@ describe("monitor gateway handlers", () => {
         sourceType: "gmail",
         sourceTarget: { account: "me@example.com", threadId: "thread-1" },
         cadence: { kind: "every", everyMs: 300_000 },
+        goal: { id: "goal-1", objective: "Get the refund confirmed." },
       },
       respond: respond as never,
       context: {
@@ -125,6 +126,7 @@ describe("monitor gateway handlers", () => {
           sourceType: string;
           cronJobId: string;
           trigger?: { kind: string; cadence?: unknown };
+          goal?: { id: string; objective: string };
         }
       | undefined;
     expect(monitor).toMatchObject({
@@ -137,6 +139,7 @@ describe("monitor gateway handlers", () => {
         kind: "schedule",
         cadence: { kind: "every", everyMs: 300_000 },
       },
+      goal: { id: "goal-1", objective: "Get the refund confirmed." },
     });
     expect(cronAdd).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -157,6 +160,7 @@ describe("monitor gateway handlers", () => {
         sessionKey: monitor?.monitorSessionKey,
         originSessionKey: "agent:main:telegram:direct:user-1",
         instructions: "Monitor Empower replies and draft the next response.",
+        goal: { id: "goal-1", objective: "Get the refund confirmed." },
       }),
     );
     expect(cronUpdate).not.toHaveBeenCalled();

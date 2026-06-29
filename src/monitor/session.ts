@@ -13,6 +13,7 @@ function buildMonitorBootstrapPrompt(params: {
   stopCondition?: string;
   expiryAt?: string;
   actionPolicy: string;
+  goal?: { id: string; objective: string };
   watchDeliveryConfigured: boolean;
   originSessionKey: string;
 }) {
@@ -31,10 +32,19 @@ function buildMonitorBootstrapPrompt(params: {
     `- actionPolicy: ${params.actionPolicy}`,
     `- originSessionKey: ${params.originSessionKey}`,
     "- defaultRoute: origin chat",
+    ...(params.goal
+      ? [
+          `- goalId: ${params.goal.id}`,
+          `- goalObjective: ${params.goal.objective}`,
+          "The goal is the user-facing contract. This monitor is only the continuation mechanism.",
+        ]
+      : []),
     ...(params.stopCondition?.trim() ? [`- stopCondition: ${params.stopCondition.trim()}`] : []),
     ...(params.expiryAt?.trim() ? [`- expiryAt: ${params.expiryAt.trim()}`] : []),
     "",
     "Use normal OpenClaw tools and skills to fetch fresh source state on each wake.",
+    "Evaluate after each wake: done, keep going, blocked, needs user input, or needs approval.",
+    "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
     ...(params.actionPolicy === "auto_send"
       ? params.watchDeliveryConfigured
         ? [
@@ -72,6 +82,7 @@ export async function seedMonitorSession(params: {
   stopCondition?: string;
   expiryAt?: string;
   actionPolicy: string;
+  goal?: { id: string; objective: string };
   watchDeliveryConfigured: boolean;
   originSessionKey: string;
 }) {
@@ -123,6 +134,7 @@ export async function seedMonitorSession(params: {
       stopCondition: params.stopCondition,
       expiryAt: params.expiryAt,
       actionPolicy: params.actionPolicy,
+      goal: params.goal,
       watchDeliveryConfigured: params.watchDeliveryConfigured,
       originSessionKey: params.originSessionKey,
     }),

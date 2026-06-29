@@ -41,6 +41,11 @@ describe("tool mutation helpers", () => {
     expect(
       buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,
     ).toBe(true);
+    expect(
+      buildToolMutationState("create_goal", { objective: "Get a refund" }).mutatingAction,
+    ).toBe(true);
+    expect(buildToolMutationState("update_goal", { status: "complete" }).mutatingAction).toBe(true);
+    expect(buildToolMutationState("get_goal", {}).mutatingAction).toBe(false);
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
   });
 

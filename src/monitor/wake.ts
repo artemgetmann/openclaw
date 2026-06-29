@@ -25,6 +25,13 @@ export function buildMonitorWakeMessage(params: {
     `sourceTarget: ${JSON.stringify(monitor.sourceTarget)}`,
     `actionPolicy: ${monitor.actionPolicy}`,
     `status: ${monitor.status}`,
+    ...(monitor.goal
+      ? [
+          `goalId: ${monitor.goal.id}`,
+          `goalObjective: ${monitor.goal.objective}`,
+          "The goal is the user-facing contract. This monitor is only the continuation mechanism.",
+        ]
+      : []),
     ...(monitor.stopCondition?.trim() ? [`stopCondition: ${monitor.stopCondition.trim()}`] : []),
     ...(monitor.expiryAt?.trim() ? [`expiryAt: ${monitor.expiryAt.trim()}`] : []),
     ...(monitor.lastCheckpoint
@@ -36,6 +43,8 @@ export function buildMonitorWakeMessage(params: {
     "If fresh source inspection finds a new actionable change after an older resolved-looking checkpoint, keep the monitor active and continue the task.",
     "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     "Use normal tools/skills to inspect fresh source state.",
+    "Evaluate after this wake: done, keep going, blocked, needs user input, or needs approval.",
+    "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
     ...(monitor.actionPolicy === "auto_send"
       ? watchDeliveryConfigured
         ? [

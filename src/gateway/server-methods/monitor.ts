@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { loadConfig } from "../../config/config.js";
+import { getSessionGoal } from "../../config/sessions/goals.js";
+import { resolveStorePath as resolveSessionStorePath } from "../../config/sessions/paths.js";
 import type { CronJobCreate } from "../../cron/types.js";
 import {
   resolveMonitorOriginDelivery,
@@ -20,6 +22,7 @@ import {
   isTerminalMonitorStatus,
   type MonitorActionPolicy,
   type MonitorEventEnvelope,
+  type MonitorGoalSnapshot,
   type MonitorTrigger,
   type MonitorUpdatePatch,
 } from "../../monitor/types.js";
@@ -39,6 +42,29 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function resolveStorePath(cronStorePath: string) {
   return resolveMonitorStorePath({ cronStorePath });
+}
+
+async function resolveMonitorGoalSnapshot(params: {
+  explicitGoal?: MonitorGoalSnapshot;
+  originSessionKey: string;
+  agentId: string;
+  cfg: ReturnType<typeof loadConfig>;
+}): Promise<MonitorGoalSnapshot | undefined> {
+  if (params.explicitGoal) {
+    return params.explicitGoal;
+  }
+  const snapshot = await getSessionGoal({
+    sessionKey: params.originSessionKey,
+    storePath: resolveSessionStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+    persist: false,
+  });
+  if (snapshot.status !== "found" || snapshot.goal?.status !== "active") {
+    return undefined;
+  }
+  return {
+    id: snapshot.goal.id,
+    objective: snapshot.goal.objective,
+  };
 }
 
 export const monitorHandlers: GatewayRequestHandlers = {
@@ -108,6 +134,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       expiryAt?: string;
       stopCondition?: string;
       actionPolicy?: MonitorActionPolicy;
+      goal?: MonitorGoalSnapshot;
       lastCheckpoint?: Record<string, unknown>;
     };
     const storePath = resolveStorePath(context.cronStorePath);
@@ -125,6 +152,12 @@ export const monitorHandlers: GatewayRequestHandlers = {
     }
     const monitorId = crypto.randomBytes(12).toString("hex");
     const cfg = loadConfig();
+    const goal = await resolveMonitorGoalSnapshot({
+      explicitGoal: p.goal,
+      originSessionKey: p.originSessionKey,
+      agentId: p.agentId,
+      cfg,
+    });
     const watchDelivery = resolveMonitorWatchDelivery({
       sourceType: p.sourceType,
       sourceTarget: p.sourceTarget,
@@ -169,6 +202,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
         expiryAt: p.expiryAt,
         stopCondition: p.stopCondition,
         actionPolicy: p.actionPolicy,
+        goal,
         lastCheckpoint: p.lastCheckpoint,
         cronJobId: createdJob.id,
       },
@@ -189,6 +223,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       stopCondition: p.stopCondition,
       expiryAt: p.expiryAt,
       actionPolicy: monitor.actionPolicy,
+      goal: monitor.goal,
       watchDeliveryConfigured: Boolean(watchDelivery),
       originSessionKey: p.originSessionKey,
     });

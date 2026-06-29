@@ -56,6 +56,11 @@ export type MonitorEventEnvelope = {
   evidence?: MonitorSourceTarget;
 };
 
+export type MonitorGoalSnapshot = {
+  id: string;
+  objective: string;
+};
+
 export type MonitorRecord = {
   monitorId: string;
   agentId: string;
@@ -71,6 +76,7 @@ export type MonitorRecord = {
   expiryAt?: string;
   stopCondition?: string;
   actionPolicy: MonitorActionPolicy;
+  goal?: MonitorGoalSnapshot;
   status: MonitorStatus;
   lastCheckpoint?: MonitorCheckpoint;
   cronJobId: string;
@@ -100,6 +106,7 @@ export type MonitorCreateInput = {
   expiryAt?: string;
   stopCondition?: string;
   actionPolicy?: MonitorActionPolicy;
+  goal?: MonitorGoalSnapshot;
   lastCheckpoint?: MonitorCheckpoint;
   cronJobId: string;
 };
@@ -116,6 +123,7 @@ export type MonitorUpdatePatch = Partial<
     | "expiryAt"
     | "stopCondition"
     | "actionPolicy"
+    | "goal"
     | "status"
     | "lastCheckpoint"
     | "lastWakeAtMs"
