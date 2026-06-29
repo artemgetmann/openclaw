@@ -10,6 +10,7 @@ DRY_RUN=0
 SKIP_LIVE=0
 LIVE_TELEGRAM_RESTART=0
 CI_TIMEOUT_SECONDS="${OPENCLAW_SHIP_CI_TIMEOUT_SECONDS:-1800}"
+RUNTIME_SCOPE="openclaw-shared"
 
 log() {
   printf '[ship-main-gateway-fix] %s\n' "$*"
@@ -17,11 +18,15 @@ log() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/ship-main-gateway-fix.sh --pr <number> [--skip-live|--live-telegram-restart] [--dry-run]
+Usage: scripts/ship-main-gateway-fix.sh --pr <number> [--runtime-scope openclaw-shared|jarvis] [--skip-live|--live-telegram-restart] [--dry-run]
 
 Merge a main-targeted PR, fast-forward the sacred main clone, rebuild/recover
-the shared gateway runtime, print closeout proof, and optionally run the live
-Telegram restart smoke.
+the requested runtime scope, and print closeout proof.
+
+Scopes:
+  openclaw-shared  Rebuild/recover ai.openclaw.gateway from sacred main.
+  jarvis           Read-only proof of ai.jarvis.gateway. This never deploys,
+                   restarts, or treats ai.openclaw.gateway as Jarvis proof.
 EOF
 }
 
@@ -44,6 +49,10 @@ parse_args() {
         DRY_RUN=1
         shift
         ;;
+      --runtime-scope)
+        RUNTIME_SCOPE="${2:-}"
+        shift 2
+        ;;
       --help|-h)
         usage
         exit 0
@@ -63,6 +72,19 @@ parse_args() {
   fi
   if (( SKIP_LIVE == 1 && LIVE_TELEGRAM_RESTART == 1 )); then
     log "choose either --skip-live or --live-telegram-restart, not both" >&2
+    exit 1
+  fi
+  case "${RUNTIME_SCOPE}" in
+    openclaw-shared | jarvis)
+      ;;
+    *)
+      log "invalid --runtime-scope ${RUNTIME_SCOPE}; expected openclaw-shared or jarvis" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "${RUNTIME_SCOPE}" == "jarvis" && "${LIVE_TELEGRAM_RESTART}" == "1" ]]; then
+    log "--live-telegram-restart targets the OpenClaw shared gateway restart smoke, not ai.jarvis.gateway" >&2
+    log "use --runtime-scope jarvis without live restart, then run Jarvis Telegram UX proof after explicit runtime refresh approval" >&2
     exit 1
   fi
 }
@@ -178,7 +200,7 @@ merge_if_needed() {
   title="$(printf '%s\n' "${json}" | jq -r '.title')"
 
   if [[ "${state}" == "MERGED" ]]; then
-    log "PR #${PR_NUMBER} already merged; continuing to sacred-main deploy"
+    log "PR #${PR_NUMBER} already merged; continuing to ${RUNTIME_SCOPE} runtime proof"
     return 0
   fi
 
@@ -238,17 +260,21 @@ print_closeout() {
   local ci_line="$4"
   local deploy_line="$5"
   local live_line="$6"
+  local validation_line="$7"
+  local known_gaps_line="$8"
+  local rollback_line="$9"
 
   cat <<EOF
 PR: ${pr_url}
 Commit: ${commit_sha}
 Changed files: ${changed_files}
-Local validation: scripts/build-shared-runtime.sh; scripts/gateway-recover-main.sh
+Runtime scope: ${RUNTIME_SCOPE}
+Local validation: ${validation_line}
 CI: ${ci_line}
 Deploy: ${deploy_line}
 Live proof: ${live_line}
-Known gaps: Telegram restart smoke runs only with --live-telegram-restart and configured chat/session.
-Rollback: revert PR #${PR_NUMBER}, fast-forward ${MAIN_REPO}, then rerun scripts/build-shared-runtime.sh and scripts/gateway-recover-main.sh.
+Known gaps: ${known_gaps_line}
+Rollback: ${rollback_line}
 EOF
 }
 
@@ -268,14 +294,34 @@ main() {
   mark_ready_if_needed "${json}"
   merge_if_needed "${json}"
   fast_forward_sacred_main
-  run_in_main_or_print bash scripts/build-shared-runtime.sh
-  run_in_main_or_print bash scripts/gateway-recover-main.sh
 
   local status_proof=""
-  if (( DRY_RUN == 1 )); then
-    status_proof="dry-run"
+  local deploy_line=""
+  local validation_line=""
+  local known_gaps_line=""
+  local rollback_line=""
+  local expected_commit=""
+  expected_commit="$(git -C "${MAIN_REPO}" rev-parse --short=12 HEAD 2>/dev/null || printf dry-run)"
+  if [[ "${RUNTIME_SCOPE}" == "openclaw-shared" ]]; then
+    run_in_main_or_print bash scripts/build-shared-runtime.sh
+    run_in_main_or_print bash scripts/gateway-recover-main.sh
+
+    if (( DRY_RUN == 1 )); then
+      status_proof="dry-run"
+    else
+      status_proof="$(gateway_status_summary "$(extract_json_line "$(run_in_main_or_print pnpm openclaw:local gateway status --deep --require-rpc --json)")")"
+    fi
+    deploy_line="sacred-main fast-forward + build + gateway recovery; status=${status_proof}"
+    validation_line="scripts/build-shared-runtime.sh; scripts/gateway-recover-main.sh"
+    known_gaps_line="Telegram restart smoke runs only with --live-telegram-restart and configured chat/session. This scope is not Jarvis-managed ai.jarvis.gateway proof."
+    rollback_line="revert PR #${PR_NUMBER}, fast-forward ${MAIN_REPO}, then rerun scripts/build-shared-runtime.sh and scripts/gateway-recover-main.sh."
   else
-    status_proof="$(gateway_status_summary "$(extract_json_line "$(run_in_main_or_print pnpm openclaw:local gateway status --deep --require-rpc --json)")")"
+    run_in_main_or_print bash scripts/prove-jarvis-runtime.sh --expected-commit "${expected_commit}"
+    status_proof="jarvis runtime proof expected_commit=${expected_commit}"
+    deploy_line="no deploy/restart by this wrapper; read-only Jarvis proof only; status=${status_proof}"
+    validation_line="scripts/prove-jarvis-runtime.sh --expected-commit ${expected_commit}"
+    known_gaps_line="Jarvis app-support bundle refresh and Telegram live UX proof are separate approval-gated steps."
+    rollback_line="revert PR #${PR_NUMBER}. This wrapper did not mutate ai.jarvis.gateway, ai.openclaw.gateway, or /Applications/Jarvis.app in jarvis scope."
   fi
 
   local live_line="skipped"
@@ -297,8 +343,11 @@ main() {
     "${commit_sha}" \
     "$(changed_files_for_closeout)" \
     "pr-required passed before merge" \
-    "sacred-main fast-forward + build + gateway recovery; status=${status_proof}" \
-    "${live_line}"
+    "${deploy_line}" \
+    "${live_line}" \
+    "${validation_line}" \
+    "${known_gaps_line}" \
+    "${rollback_line}"
 }
 
 main "$@"
