@@ -88,6 +88,14 @@ type CreateLaneTextDelivererParams = {
     context: "final" | "update";
     previewButtons?: TelegramInlineButtons;
   }) => Promise<void>;
+  replaceFinalPreviewWithPayload?: (params: {
+    laneName: LaneName;
+    messageId: number;
+    text: string;
+    payload: ReplyPayload;
+    infoKind: string;
+    previewButtons?: TelegramInlineButtons;
+  }) => Promise<"sent" | "skipped" | "fallback">;
   deletePreviewMessage: (messageId: number) => Promise<void>;
   log: (message: string) => void;
   markDelivered: () => void;
@@ -113,9 +121,11 @@ type TryUpdatePreviewParams = {
   context: "final" | "update";
   previewMessageId?: number;
   previewTextSnapshot?: string;
+  payload?: ReplyPayload;
+  infoKind?: string;
 };
 
-type PreviewEditResult = "edited" | "retained" | "fallback";
+type PreviewEditResult = "edited" | "retained" | "fallback" | "sent" | "skipped";
 
 type ConsumeArchivedAnswerPreviewParams = {
   lane: DraftLaneState;
@@ -379,6 +389,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     context,
     previewMessageId: previewMessageIdOverride,
     previewTextSnapshot,
+    payload,
+    infoKind,
   }: TryUpdatePreviewParams): Promise<PreviewEditResult> => {
     const editPreview = (
       messageId: number,
@@ -466,6 +478,22 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       return "fallback";
     }
+    if (context === "final" && payload && infoKind && params.replaceFinalPreviewWithPayload) {
+      // Telegram rich messages are sent as new messages, not edited into an
+      // existing message. Let the runtime replace a transient preview before
+      // falling back to the legacy edit path.
+      const replacement = await params.replaceFinalPreviewWithPayload({
+        laneName,
+        messageId: previewTargetAfterStop.previewMessageId,
+        text,
+        payload,
+        infoKind,
+        previewButtons,
+      });
+      if (replacement !== "fallback") {
+        return replacement;
+      }
+    }
     const activePreviewMessageId = lane.stream?.messageId();
     return finalizePreview(
       previewTargetAfterStop.previewMessageId,
@@ -498,6 +526,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         context: "final",
         previewMessageId: archivedPreview.messageId,
         previewTextSnapshot: archivedPreview.textSnapshot,
+        payload,
+        infoKind: "final",
       });
       if (finalized === "edited") {
         return "preview-finalized";
@@ -505,6 +535,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
         return "preview-retained";
+      }
+      if (finalized === "sent") {
+        return "sent";
+      }
+      if (finalized === "skipped") {
+        return "skipped";
       }
     }
     // Send the replacement message first, then clean up the old preview.
@@ -584,7 +620,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             return archivedResultAfterFlush;
           }
         }
-        if (canMaterializeDraftFinal(lane, previewButtons)) {
+        if (
+          canMaterializeDraftFinal(lane, previewButtons) &&
+          !params.replaceFinalPreviewWithPayload
+        ) {
           const materialized = await tryMaterializeDraftPreviewForFinal({
             lane,
             laneName,
@@ -603,6 +642,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           stopBeforeEdit: true,
           skipRegressive: "existingOnly",
           context: "final",
+          payload,
+          infoKind,
         });
         if (finalized === "edited") {
           markActivePreviewComplete(laneName);
@@ -611,6 +652,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (finalized === "retained") {
           markActivePreviewComplete(laneName);
           return "preview-retained";
+        }
+        if (finalized === "sent") {
+          markActivePreviewComplete(laneName);
+          return "sent";
+        }
+        if (finalized === "skipped") {
+          markActivePreviewComplete(laneName);
+          return "skipped";
         }
       } else if (!hasMedia && !payload.isError && deliveryText.length > params.draftMaxChars) {
         params.log(
