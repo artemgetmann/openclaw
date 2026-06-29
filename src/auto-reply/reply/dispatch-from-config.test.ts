@@ -2162,6 +2162,67 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("strips live proof progress before proof-marker block-stream TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const finalText =
+      "Proof marker D8E9273: verified locally at repo commit d8e92733a7.\n\n" +
+      "• Inspected docs, code, and tests.\n" +
+      "• Wrote report: /tmp/jarvis-progress-tts-proof-d8e9273.txt.\n" +
+      "• Created and deleted Desktop temp file.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text:
+          "I’ll keep this strictly local: repo files + /tmp report + Desktop temp create/delete. No browser, no GUI.\n\n" +
+          "The first pass hit the Jarvis workspace, which is not the product repo. Switching to the local OpenClaw/Jarvis code repo and keeping the scan bounded.\n\n" +
+          "Found repo at commit d8e92733a7. Now I’m narrowing to the delivery path: Telegram streaming/progress preview and TTS handling.\n\n" +
+          finalText,
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: expect.stringMatching(/^Proof marker D8E9273:/),
+      }),
+    );
+    const ttsCaption = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[1]?.[0]
+      ?.text;
+    expect(ttsCaption).not.toContain("I’ll keep this strictly local");
+    expect(ttsCaption).not.toContain("The first pass hit the Jarvis workspace");
+  });
+
   it("sends returned Telegram final text before synthesizing final TTS", async () => {
     setNoAbort();
     ttsMocks.state.autoMode = "always";
