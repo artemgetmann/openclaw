@@ -291,7 +291,8 @@ function deriveVisibleBlockFinalText(text: string): string {
     .replace(/([.!?])(\s*)(FINAL\b)/g, "$1\n\n$3")
     .replace(/([.!?])(\s*)(Final\b)/g, "$1\n\n$3")
     .replace(/([.!?])(\s*)(Done\b)/g, "$1\n\n$3")
-    .replace(/([.!?])(\s*)(Verified\b)/g, "$1\n\n$3");
+    .replace(/([.!?])(\s*)(Verified\b)/g, "$1\n\n$3")
+    .replace(/([.!?])(\s*)(Proof marker\b)/g, "$1\n\n$3");
   const paragraphs = separated
     .split(/\n{2,}/)
     .map((paragraph) => paragraph.trim())
@@ -300,7 +301,12 @@ function deriveVisibleBlockFinalText(text: string): string {
     if (index === 0) {
       return false;
     }
-    return /^(?:FINAL\b|Final\b|Done\b|Verified\b|Result(?:s)?:|Short version:)/.test(paragraph);
+    // Proof runs often require a stable marker instead of a human "Done"
+    // prefix. Treat that marker as the same final-answer boundary so the
+    // additive TTS voice note cannot caption or speak the preceding progress.
+    return /^(?:FINAL\b|Final\b|Done\b|Verified\b|Proof marker\b|Result(?:s)?:|Short version:)/.test(
+      paragraph,
+    );
   });
   if (boundaryIndex < 0) {
     return trimmed;
