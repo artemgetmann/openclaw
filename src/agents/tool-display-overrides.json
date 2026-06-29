@@ -21,6 +21,21 @@
       "title": "Session Status",
       "detailKeys": ["sessionKey", "model"]
     },
+    "get_goal": {
+      "emoji": "🎯",
+      "title": "Goal",
+      "detailKeys": []
+    },
+    "create_goal": {
+      "emoji": "🎯",
+      "title": "Create Goal",
+      "detailKeys": ["objective", "tokenBudget"]
+    },
+    "update_goal": {
+      "emoji": "🎯",
+      "title": "Update Goal",
+      "detailKeys": ["status", "note"]
+    },
     "sessions_list": {
       "emoji": "🗂️",
       "title": "Sessions",

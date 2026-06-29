@@ -28,6 +28,12 @@ const MonitorToolSchema = Type.Object(
     actionPolicy: Type.Optional(stringEnum(MONITOR_ACTION_POLICIES)),
     watchDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
     patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    goal: Type.Optional(
+      Type.Object({
+        id: Type.String(),
+        objective: Type.String(),
+      }),
+    ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
     checkpoint: Type.Optional(Type.Object({}, { additionalProperties: true })),
     originSessionKey: Type.Optional(Type.String()),
@@ -51,6 +57,7 @@ Key behavior:
 
 For monitor creation:
 - instructions should capture the actual monitoring task in plain language.
+- if there is an active goal, monitor.create will bind it automatically; pass goal only when carrying an explicit snapshot.
 - sourceType/sourceTarget identify what is being checked.
 - cadence is the cron schedule object for repeated wakes.
 - default actionPolicy is notify_draft.
@@ -122,6 +129,10 @@ For monitor-related user replies/status:
               actionPolicy:
                 readStringParam(params, "actionPolicy") ??
                 ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
+              goal:
+                params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
+                  ? params.goal
+                  : undefined,
               watchDelivery:
                 params.watchDelivery &&
                 typeof params.watchDelivery === "object" &&

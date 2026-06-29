@@ -108,6 +108,34 @@ export type SessionPendingRestartConfirmation = {
   expiresAt: number;
 };
 
+export type SessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
+export type SessionGoal = {
+  schemaVersion: 1;
+  id: string;
+  objective: string;
+  status: SessionGoalStatus;
+  createdAt: number;
+  updatedAt: number;
+  tokenStart: number;
+  tokenStartFresh?: boolean;
+  tokensUsed: number;
+  tokenBudget?: number;
+  continuationTurns: number;
+  lastStatusNote?: string;
+  pausedAt?: number;
+  blockedAt?: number;
+  completedAt?: number;
+  budgetLimitedAt?: number;
+  usageLimitedAt?: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -123,6 +151,8 @@ export type SessionEntry = {
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Core-owned durable goal state for this session. */
+  goal?: SessionGoal;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
   spawnedWorkspaceDir?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */

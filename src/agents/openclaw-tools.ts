@@ -13,6 +13,11 @@ import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import {
+  createCreateGoalTool,
+  createGetGoalTool,
+  createUpdateGoalTool,
+} from "./tools/goal-tools.js";
 import { createGuiControlTool } from "./tools/gui-control-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -191,6 +196,18 @@ export function createOpenClawTools(
     }),
     createMonitorTool({
       agentSessionKey: options?.agentSessionKey,
+    }),
+    createGetGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
+    createCreateGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
+    createUpdateGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
     }),
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
