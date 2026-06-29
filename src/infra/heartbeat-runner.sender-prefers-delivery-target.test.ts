@@ -95,9 +95,11 @@ describe("runHeartbeatOnce", () => {
           expect(ctx.OriginatingChannel).toBe("telegram");
           expect(ctx.OriginatingTo).toBe("telegram:group:-1003841603622");
           expect(ctx.MessageThreadId).toBe(928);
+          expect(ctx.AccountId).toBeUndefined();
           expect(ctx.SourceReceipt).toMatchObject({
             sourceTo: "telegram:group:-1003841603622",
             sourceThreadId: 928,
+            sourceAccountId: "default",
           });
           return { text: "ok" };
         });
