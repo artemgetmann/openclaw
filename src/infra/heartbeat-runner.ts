@@ -746,7 +746,7 @@ export async function runHeartbeatOnce(opts: {
     ? {
         channel: sourceReceipt.sourceChannel,
         to: sourceReceipt.sourceTo,
-        accountId: undefined,
+        accountId: sourceReceipt.sourceAccountId,
         threadId: sourceReceipt.sourceThreadId,
       }
     : {

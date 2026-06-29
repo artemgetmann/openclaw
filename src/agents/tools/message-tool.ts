@@ -890,6 +890,24 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+function resolveContextualAgentAccountId(params: {
+  params: Record<string, unknown>;
+  agentAccountId?: string;
+  currentChannelProvider?: string;
+}): string | undefined {
+  if (!params.agentAccountId) {
+    return undefined;
+  }
+  const requestedChannel = normalizeMessageChannel(readStringParam(params.params, "channel"));
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  // A context account belongs to the context channel. Reuse it for implicit
+  // current-channel sends, but do not leak it into explicit cross-channel sends.
+  if (requestedChannel && currentChannel && requestedChannel !== currentChannel) {
+    return undefined;
+  }
+  return params.agentAccountId;
+}
+
 function filterActionsForContext(params: {
   actions: ChannelMessageActionName[];
   channel?: string;
@@ -1044,7 +1062,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const accountId = readStringParam(params, "accountId") ?? agentAccountId;
+      const accountId =
+        readStringParam(params, "accountId") ??
+        resolveContextualAgentAccountId({
+          params,
+          agentAccountId,
+          currentChannelProvider: options?.currentChannelProvider,
+        });
       if (accountId) {
         params.accountId = accountId;
       }

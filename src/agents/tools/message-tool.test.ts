@@ -121,6 +121,41 @@ describe("message tool agent routing", () => {
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
 
+  it("inherits agent account id for implicit current-channel sends", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: "hi",
+      },
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        agentAccountId: "work",
+      },
+    });
+
+    expect(call?.params?.accountId).toBe("work");
+  });
+
+  it("does not inherit current-channel account id for explicit cross-channel sends", async () => {
+    mockSendResult({ channel: "whatsapp", to: "+15555550123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "whatsapp",
+        target: "+15555550123",
+        message: "hi",
+      },
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        agentAccountId: "telegram-work",
+      },
+    });
+
+    expect(call?.params?.accountId).toBeUndefined();
+  });
+
   it("intercepts same-source Telegram text sends for progress preview delivery", async () => {
     mockSendResult();
     const tool = createMessageTool({
