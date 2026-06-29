@@ -1762,6 +1762,57 @@ export const dispatchTelegramMessage = async ({
       infoKind: "tool",
     });
   };
+  const deleteLanePreviewMessage = async (
+    messageId: number,
+    {
+      laneName = "answer",
+      callsite = "lane-delivery-delete-preview",
+      reason = "lane_delivery_preview_cleanup",
+    }: {
+      laneName?: LaneName;
+      callsite?: string;
+      reason?: string;
+    } = {},
+  ) => {
+    logPreviewLedger({
+      lane: laneName,
+      phase: "preview_delete_attempt",
+      source: "cleanup",
+      messageId,
+      operation: "delete",
+      callsite,
+    });
+    const result = await guardedTelegramDeleteMessage({
+      api: bot.api,
+      chatId,
+      messageId,
+      audit: {
+        callsite: "telegram-lane-preview-delete",
+        reason,
+        safetyMode: "deterministic_cleanup",
+        accountId: route.accountId,
+        lane: laneName,
+        classification: "preview",
+        sessionId:
+          typeof context.ctxPayload?.SessionKey === "string"
+            ? context.ctxPayload.SessionKey
+            : undefined,
+        topicId: threadSpec?.id,
+        thread: threadSpec,
+      },
+    });
+    if (result.deleted) {
+      logPreviewLedger({
+        lane: laneName,
+        phase: "preview_delete_completed",
+        source: "cleanup",
+        messageId,
+        operation: "delete",
+        callsite,
+      });
+    }
+    return result;
+  };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
     archivedAnswerPreviews,
@@ -1802,42 +1853,57 @@ export const dispatchTelegramMessage = async ({
         callsite: "lane-delivery-edit-preview",
       });
     },
+    replaceFinalPreviewWithPayload: async ({
+      laneName,
+      messageId,
+      text,
+      payload,
+      infoKind,
+      previewButtons,
+    }) => {
+      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+      if (
+        laneName !== "answer" ||
+        hasMedia ||
+        payload.isError ||
+        (previewButtons?.length ?? 0) > 0
+      ) {
+        return "fallback";
+      }
+      try {
+        // Rich messages are send-only in Telegram Bot API 10.1. Delete the
+        // transient preview first; if that fails, fall back to editing it so we
+        // do not create duplicate final answers.
+        const deleteResult = await deleteLanePreviewMessage(messageId, {
+          laneName,
+          callsite: "lane-final-rich-replacement-delete-preview",
+          reason: "lane_final_rich_replacement_preview_cleanup",
+        });
+        if (!deleteResult.deleted) {
+          logVerbose(
+            `telegram: ${laneName} preview rich replacement delete was suppressed; falling back to edit`,
+          );
+          return "fallback";
+        }
+      } catch (err) {
+        logVerbose(
+          `telegram: ${laneName} preview rich replacement delete failed; falling back to edit (${String(err)})`,
+        );
+        return "fallback";
+      }
+      const delivered = await sendPayload(applyTextToPayload(payload, text), {
+        reason: classifyPayloadDurableSendReason(payload, "final"),
+        callsite: "lane-final-rich-replacement-send",
+        laneName,
+        infoKind,
+      });
+      if (!delivered) {
+        logVerbose(`telegram: ${laneName} rich replacement final send failed after preview delete`);
+      }
+      return delivered ? "sent" : "skipped";
+    },
     deletePreviewMessage: async (messageId) => {
-      logPreviewLedger({
-        lane: "answer",
-        phase: "preview_delete_attempt",
-        source: "cleanup",
-        messageId,
-        operation: "delete",
-        callsite: "lane-delivery-delete-preview",
-      });
-      await guardedTelegramDeleteMessage({
-        api: bot.api,
-        chatId,
-        messageId,
-        audit: {
-          callsite: "telegram-lane-preview-delete",
-          reason: "lane_delivery_preview_cleanup",
-          safetyMode: "deterministic_cleanup",
-          accountId: route.accountId,
-          lane: "answer",
-          classification: "preview",
-          sessionId:
-            typeof context.ctxPayload?.SessionKey === "string"
-              ? context.ctxPayload.SessionKey
-              : undefined,
-          topicId: threadSpec?.id,
-          thread: threadSpec,
-        },
-      });
-      logPreviewLedger({
-        lane: "answer",
-        phase: "preview_delete_completed",
-        source: "cleanup",
-        messageId,
-        operation: "delete",
-        callsite: "lane-delivery-delete-preview",
-      });
+      await deleteLanePreviewMessage(messageId);
     },
     log: logVerbose,
     markDelivered: () => {

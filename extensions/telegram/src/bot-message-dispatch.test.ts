@@ -168,6 +168,28 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   }
 
+  function expectFinalPreviewReplacedWithDurableSend(messageId: number, text: string) {
+    expect(guardedTelegramDeleteMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: 123,
+        messageId,
+        audit: expect.objectContaining({
+          reason: "lane_final_rich_replacement_preview_cleanup",
+        }),
+      }),
+    );
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text })],
+      }),
+    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  }
+
+  function allowDeterministicPreviewDeletes() {
+    guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: true });
+  }
+
   it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(progressStream);
@@ -316,6 +338,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9011" });
+    allowDeterministicPreviewDeletes();
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
@@ -337,13 +360,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
       answerStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
+    expectFinalPreviewReplacedWithDurableSend(
       9011,
       "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
-      expect.any(Object),
     );
-    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("routes sourcePreview tool text through transient progress", async () => {
@@ -401,6 +421,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9101" });
+    allowDeterministicPreviewDeletes();
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
@@ -409,13 +430,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "Once upon a time, the answer began streaming.",
     );
     expect(answerStream.clear).not.toHaveBeenCalled();
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
+    expectFinalPreviewReplacedWithDurableSend(
       9101,
       "Once upon a time, the answer began streaming and stayed in the same bubble.",
-      expect.any(Object),
     );
-    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("does not promote phase-less answer blocks to progress after assistant partials started", async () => {
@@ -455,19 +473,17 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9201" });
+    allowDeterministicPreviewDeletes();
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(answerStream.update).toHaveBeenCalledWith("The durable story starts here.");
     expect(answerStream.clear).not.toHaveBeenCalled();
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
+    expectFinalPreviewReplacedWithDurableSend(
       9201,
       "The durable story starts here. It continues as a block snapshot.",
-      expect.any(Object),
     );
-    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("adopts a speculative answer preview when structure reclassifies it as progress", async () => {
@@ -563,6 +579,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9403" });
+    allowDeterministicPreviewDeletes();
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
@@ -574,14 +591,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(finalAnswerStream.update).toHaveBeenCalledWith(
       "The branch is clean enough to patch safely.",
     );
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      9403,
-      "The branch is clean enough to patch safely.",
-      expect.any(Object),
-    );
+    expectFinalPreviewReplacedWithDurableSend(9403, "The branch is clean enough to patch safely.");
     expect(speculativeAnswerStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("treats a terminal ambiguous block as the final answer", async () => {
