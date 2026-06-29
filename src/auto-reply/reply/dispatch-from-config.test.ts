@@ -881,6 +881,50 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("does not synthesize TTS for unmarked block progress before a returned final answer", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: "Progress 1/2: inspecting local files before the final answer.",
+      });
+      return { text: "FINAL_ONLY_VOICE" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "FINAL_ONLY_VOICE" },
+      }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "Progress 1/2: inspecting local files before the final answer.",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "FINAL_ONLY_VOICE",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("does not synthesize TTS for native control command final replies", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
@@ -1911,6 +1955,163 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("strips model-authored progress paragraphs before block-stream final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const finalText =
+      "FINAL CHECK UX_TTS_FINALFIX_FIXED_20260629-090226: Verified locally that progress proof docs, tests, and code are present.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text:
+          "Progress 1/2: Scanning local docs, tests, and code.\n\n" +
+          "Progress 2/2: Found the relevant files.\n\n" +
+          finalText,
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: finalText,
+      }),
+    );
+  });
+
+  it("strips progress when the final marker is adjacent to prior punctuation", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const finalText =
+      "FINAL CHECK UX_TTS_FINALFIX_PASSED_20260629-091443: Verified locally that final TTS uses final text.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text:
+          "Quick pass: I’m checking local Telegram/TTS docs now.I found the local trail and I’m writing the report." +
+          finalText,
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: finalText,
+      }),
+    );
+  });
+
+  it("strips old on-it progress prose before verified-locally block-stream TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const finalText =
+      "Verified locally: this repo’s Telegram/channel health path uses a layered watchdog design.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text:
+          "On it — I’ll keep this local-only, inspect the repo for channel health/watchdog docs/tests/code, write a short report to /tmp, do the harmless Desktop temp-file proof, and then summarize. " +
+          finalText,
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: finalText,
+      }),
+    );
+  });
+
   it("sends returned Telegram final text before synthesizing final TTS", async () => {
     setNoAbort();
     ttsMocks.state.autoMode = "always";
@@ -1952,6 +2153,70 @@ describe("dispatchReplyFromConfig", () => {
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
         text: "FINAL returned answer.",
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
+      }),
+    );
+  });
+
+  it("uses the visible final answer for Telegram TTS captions even when synthesis returns progress text", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.state.cleanedFinalText =
+      "Got it — I’ll stay strictly local to this repo, inspect channel-health/watchdog docs/tests/code, drop a short report in /tmp, do the harmless Desktop temp-file proof, and then summarize.";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const finalText =
+      "Done.\n\nVerified locally, without opening any GUI apps:\n\n" +
+      "• this repo/workspace contains only workspace docs + metadata, not an app/source tree\n" +
+      "• I wrote the report here: /tmp/UX_PREVIEW_TTS_CLEAN_20260627-205725_channel_health_watchdog_report.txt";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: "Got it — I’ll stay strictly local to this repo and inspect channel-health docs first.",
+        channelData: {
+          openclaw: {
+            sourcePreview: true,
+          },
+        },
+      });
+      return { text: finalText } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: "Done. Verified locally, without opening any GUI apps: • this repo/workspace contains only workspace docs + metadata, not an app/source tree • I wrote the rep...",
         channelData: {
           openclaw: {
             finalTtsSupplement: true,

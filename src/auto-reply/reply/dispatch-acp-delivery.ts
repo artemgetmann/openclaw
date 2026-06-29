@@ -324,16 +324,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
-    const ttsPayload = isSourcePreviewToolPayload(payload)
-      ? payload
-      : await maybeApplyTtsToPayload({
-          payload,
-          cfg: params.cfg,
-          channel: params.ttsChannel,
-          kind,
-          inboundAudio: params.inboundAudio,
-          ttsAuto: params.sessionTtsAuto,
-        });
+    const ttsPayload =
+      kind !== "final" || isSourcePreviewToolPayload(payload)
+        ? payload
+        : await maybeApplyTtsToPayload({
+            payload,
+            cfg: params.cfg,
+            channel: params.ttsChannel,
+            kind,
+            inboundAudio: params.inboundAudio,
+            ttsAuto: params.sessionTtsAuto,
+          });
 
     return deliverPreparedPayload(kind, ttsPayload, meta);
   };
