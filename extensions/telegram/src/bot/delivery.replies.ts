@@ -61,6 +61,15 @@ type TelegramReplyChannelData = {
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
 
+export type TelegramReplyDeliveredEvent = {
+  messageId?: number;
+  textLength: number;
+  hasMedia: boolean;
+  audioAsVoice: boolean;
+  finalTtsSupplement: boolean;
+  delivered: boolean;
+};
+
 function isFinalTtsSupplementPayload(reply: ReplyPayload): boolean {
   const channelData = reply.channelData;
   if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
@@ -610,6 +619,8 @@ export async function deliverReplies(params: {
   replyQuotePosition?: number;
   /** Telegram entities that belong to the selected quote text. */
   replyQuoteEntities?: unknown[];
+  /** Lightweight, body-free hook for live preview/final/TTS delivery proof. */
+  onReplyDelivered?: (event: TelegramReplyDeliveredEvent) => void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -697,6 +708,21 @@ export async function deliverReplies(params: {
         });
       } else {
         const finalTtsSupplement = isFinalTtsSupplementPayload(reply);
+        if (
+          finalTtsSupplement &&
+          reply.audioAsVoice === true &&
+          typeof reply.text === "string" &&
+          reply.text.trim().length > 0
+        ) {
+          // Final TTS is already an audio supplement to durable text. Keep only
+          // a bounded caption preview so Telegram topic/chat-list snippets have
+          // context without rendering a second full answer.
+          const voiceCaptionPreview = buildFinalTtsCaptionPreview(reply.text);
+          logVerbose(
+            `telegram: final TTS supplement caption previewed captionLength=${voiceCaptionPreview?.length ?? 0}`,
+          );
+          reply = { ...reply, text: voiceCaptionPreview };
+        }
         const shouldSplitVoiceSupplement =
           !finalTtsSupplement &&
           reply.audioAsVoice === true &&
@@ -804,6 +830,14 @@ export async function deliverReplies(params: {
           direction: "outbound",
         });
       }
+      params.onReplyDelivered?.({
+        messageId: firstDeliveredMessageId,
+        textLength: reply.text?.length ?? 0,
+        hasMedia,
+        audioAsVoice: reply.audioAsVoice === true,
+        finalTtsSupplement: isFinalTtsSupplementPayload(reply),
+        delivered: replyDelivered,
+      });
 
       emitMessageSentHooks({
         hookRunner,

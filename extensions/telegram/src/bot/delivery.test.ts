@@ -512,7 +512,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("uses final TTS supplement text as a voice caption without resending text", async () => {
+  it("sends marked final TTS supplements with a short caption preview", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn(async () => ({ message_id: 10, chat: { id: "123" } }));
     const sendVoice = vi.fn(async () => ({ message_id: 11, chat: { id: "123" } }));

@@ -96,6 +96,10 @@ openclaw telegram-user send \
 ```
 
 Wait for the `TTS enabled` acknowledgement before sending the test prompt.
+When collecting visual proof, send `/tts on` and wait for that acknowledgement
+before starting the benchmark prompt recording. This keeps the proof focused on
+the prompt under test instead of mixing the settings acknowledgement into the
+progress/final/voice sequence.
 
 Pass criteria:
 
@@ -117,11 +121,20 @@ Failure examples:
 - screenshots suppressed to make the transcript cleaner
 - final text replaced by audio-only output
 
-## Natural stress prompt
+## Natural stress prompts
 
-Synthetic scenarios can miss model-authored progress. For a stronger natural
-proof, use a prompt that exercises browser work, media delivery, file IO,
-progress narration, finalization, and TTS:
+Synthetic scenarios can miss model-authored progress. Start with a prompt that
+exercises real agent work without opening browser or GUI apps. That keeps the
+visual proof focused on Telegram progress delivery instead of unrelated app
+windows stealing the recording:
+
+```text
+Inspect only this repository's local files for Telegram progress-preview delivery. Do not open or control browser, Chrome, Safari, Notes, or any GUI app. Find the relevant docs, tests, and code; write a short local report under /tmp; create a harmless Desktop temp file and delete it; then summarize what you verified.
+```
+
+Use the browser/media stress prompt only when the change under test needs those
+surfaces too. It exercises browser work, media delivery, file IO, progress
+narration, finalization, and TTS:
 
 ```text
 open example.com, then open iana.org/domains/example, then open developer.mozilla.org/en-US/docs/Web/HTML, take one screenshot after the IANA page and one after the MDN page, write the key info from all three pages into a temporary file, read it back, remove the file after you are done, keep me updated with brief progress updates along the way, then tell me in one short final answer what each page is for and confirm the temporary file was removed
@@ -197,7 +210,11 @@ and report that GUI proof is blocked. Do not improvise from broken GUI state.
 
 ## Cleanup
 
-Always clean up test state:
+Always clean up test state, but restore state instead of blindly changing the
+tester bot. If a scenario or manual proof enabled `/tts on` and the prior state
+was off or unknown, send `/tts off` and confirm the acknowledgement. If the user
+explicitly wanted TTS to remain on before the proof, leave it on and record that
+choice in the evidence.
 
 ```bash
 openclaw telegram-user send \
@@ -208,4 +225,10 @@ openclaw telegram-user send \
 pnpm openclaw:local telegram runtime release
 ```
 
-Confirm the `/tts off` acknowledgement when TTS was enabled.
+Confirm the `/tts off` acknowledgement when the proof enabled TTS only for the
+scenario.
+
+For GUI proof artifacts, follow `docs/agent-guides/gui-verification.md`: create a
+compressed `*-review.mp4`, inspect a contact sheet or key frames, send only the
+compressed review copy to the user when requested, and keep raw `.mov` files or
+frame directories temporary unless they are needed for audit.

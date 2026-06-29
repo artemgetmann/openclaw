@@ -262,6 +262,20 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
   });
 
+  it("does not run TTS for ACP block previews even when the preview lacks sourcePreview metadata", async () => {
+    ttsMocks.state.autoMode = "always";
+    const { coordinator, dispatcher } = createCoordinator();
+
+    await coordinator.deliver("block", {
+      text: "Progress 1/2: inspecting local files before the final answer.",
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "Progress 1/2: inspecting local files before the final answer.",
+    });
+  });
+
   it("builds a short deterministic caption preview for final TTS supplements", () => {
     const preview = buildFinalTtsCaptionPreview(
       `  ${"First sentence with   irregular whitespace. ".repeat(8)}  `,
