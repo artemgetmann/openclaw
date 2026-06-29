@@ -1,7 +1,15 @@
 ---
 name: telegram-user
 description: Use for Telegram-as-me requests on this Mac: reading, sending, replying, or waiting as the user's real Telegram account. Do not use it for the normal Telegram bot channel, BotFather setup, or generic bot onboarding.
-metadata: { "openclaw": { "emoji": "✈️", "requires": { "bins": ["openclaw"] } } }
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "✈️",
+        "displayName": "Telegram as Me",
+        "requires": { "bins": ["openclaw"] },
+      },
+  }
 ---
 
 # Telegram User
@@ -56,6 +64,21 @@ Automation Rule
   `status --json` or `precheck --chat <chat> --json` before write actions.
 - Use `read --chat <chat>` only after inbox triage or the user has already named
   the target chat.
+- Before drafting a message to a specific person or chat, read the recent
+  conversation context for that exact target. Telegram is live chat, so never
+  draft from memory, stale user-provided snippets, or an earlier read when the
+  current thread can be checked.
+- When reporting the context or proposing a draft, include the exact full text
+  of the latest relevant inbound Telegram message(s) from the other person,
+  plus a concise context summary only if it helps. Do not replace the other
+  person's wording with only an AI summary when the actual message text is
+  available.
+- Immediately before sending any Telegram-as-me message, re-read the target
+  chat with `read --chat <chat> --limit 5 --format compact` (or the narrowest
+  equivalent) and compare it with the context used for the draft. If a newer
+  inbound message arrived, stop and update the draft or ask the user before
+  sending. This is the same basic safety step a human would take before replying
+  in Telegram.
 - If `read` shows `media_kind` for a voice/audio message, download the payload
   with `telegram-user download`, then use the generic `media transcribe`
   command. Do not inspect Telethon internals or write a one-off downloader.
@@ -79,6 +102,26 @@ When Not To Use
 - macOS UI clicking/typing in Telegram Desktop.
 - Broad history sync/search features that the current `telegram-user` backend
   does not promise yet.
+
+Triage Pattern
+
+- For broad Telegram triage, start with `inbox --json` or
+  `inbox --unread --json`; add `--dm-only`, `--limit`, or `--contains` to keep
+  the first pass small.
+- Shortlist from chat title, unread state, latest preview, sender, timestamp,
+  and known priority signals before reading full chat histories.
+- Filter obvious noise early: bot alerts, low-signal group chatter, stale
+  notifications, and routine FYI messages. Deep-read only likely actionable
+  chats, active conversations, media-bearing messages, or ambiguous previews.
+- Bucket results as `Urgent`, `Needs reply soon`, `Waiting on them`, `Schedule`,
+  `Delegate`, `Archive / no action`, or `FYI` when presenting a triage pass.
+- State the scope and confidence: for example, "checked unread DMs, limit 10;
+  confidence medium because group chats were excluded."
+- Treat "needs reply" as an inference. Telegram previews do not prove who owes
+  the next turn unless you read enough context.
+- Before drafting or sending, read the target chat with the narrowest useful
+  `read --chat ... --limit ... --json` command and use the latest relevant
+  inbound text, not only a preview.
 
 Setup Routing
 
@@ -130,9 +173,9 @@ Default Commands
 - Precheck one chat:
   `openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json`
 - Read recent messages from one chosen chat:
-  `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json`
+  `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --format compact`
 - Read recent messages matching known text:
-  `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json`
+  `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --format compact`
 - Download media from a known message:
   `openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json`
 - Transcribe the downloaded audio file:
@@ -141,6 +184,10 @@ Default Commands
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
 - Reply to a specific message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --reply-to 12345 --message "on it" --json`
+- Create a forum topic:
+  `openclaw telegram-user topic-create --chat -1003783709877 --title "strategy follow-up" --json`
+- Send into a forum topic:
+  `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "seed prompt" --json`
 - Wait for a reply:
   `openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 12345 --sender-id 67890 --json`
 - Logout / clear local session:
@@ -153,10 +200,16 @@ Behavior Notes
   manage `phone_code_hash` by hand.
 - Use `inbox` for discovery and unread triage across chats.
 - Use `read --chat` only once the target chat is known.
+- Prefer `read --format compact` for agent-facing context. It returns
+  newest-first message rows with ids, direction, sender, reply/topic metadata,
+  media kind, text, and paging hints. Use raw `read --json` only when debugging
+  backend metadata.
 - `read` exposes `media_kind` for media-bearing messages; use `download` for
   the payload and keep transcription generic through `openclaw media transcribe`.
 - `wait` is thread-aware through the existing backend semantics around
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
+- `topic-create` returns `topic_anchor`. Use that value as `--topic-anchor`
+  (or `--reply-to`) when sending into the newly created Telegram forum topic.
 - Do not promise broad media/history search features beyond the explicit
   read/download/transcribe path the CLI supports.
 
@@ -166,3 +219,8 @@ Safety
 - Confirm the intended recipient when the target is ambiguous.
 - Do not expose Telegram API hash, session files, OTPs, or 2FA secrets in logs
   or chat transcripts.
+- After sending, if follow-up handling would clearly help, offer a scoped wait
+  or monitor for that same chat. Do not create a new monitor or imply fully
+  autonomous conversation driving unless the user explicitly approves the scope,
+  cadence or wait condition, stop condition, and whether replies should only be
+  drafted or can be sent.

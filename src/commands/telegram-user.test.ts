@@ -362,6 +362,73 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=125"));
   });
 
+  it("uses topic anchor as the reply target for forum-topic sends", async () => {
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: {
+        chat_id: -1003783709877,
+        chat_title: "Jarvis Warm Discovery Calls",
+        chat_username: null,
+        date: "2026-06-27T10:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: null,
+        message_id: 18328,
+        out: true,
+        reply_to_msg_id: 18327,
+        reply_to_top_id: 18327,
+        sender_id: 99,
+        text: "seed prompt",
+        thread_anchor: 18327,
+      },
+    });
+
+    await telegramUserSendCommand(
+      {
+        chat: "-1003783709877",
+        message: "seed prompt",
+        topicAnchor: "18327",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        message: "seed prompt",
+        replyTo: 18327,
+      }),
+    );
+  });
+
+  it("rejects conflicting reply and topic targets", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          chat: "-1003783709877",
+          message: "seed prompt",
+          replyTo: "111",
+          topicAnchor: "222",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/cannot combine --reply-to with a different topic anchor/i);
+  });
+
+  it("rejects malformed topic targets instead of sending unthreaded", async () => {
+    await expect(
+      telegramUserSendCommand(
+        {
+          chat: "-1003783709877",
+          message: "seed prompt",
+          topicAnchor: "not-a-number",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/requires --topic-anchor to be a numeric message\/topic id/i);
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+  });
+
   it("uses message text as the media caption when caption is omitted", async () => {
     backendMocks.runTelegramUserSend.mockResolvedValueOnce({
       backend_meta: backendMeta,
@@ -469,6 +536,107 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
+  });
+
+  it("renders recent messages in compact agent-friendly text", async () => {
+    backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      messages: [
+        {
+          chat_id: 10,
+          chat_title: null,
+          chat_username: "jarvis_tester_1_bot",
+          date: "2026-03-24T00:00:00.000Z",
+          direct_messages_topic: { topic_id: 7001 },
+          direct_messages_topic_id: 7001,
+          media_kind: "voice",
+          message_id: 200,
+          out: false,
+          reply_to_msg_id: 123,
+          reply_to_top_id: 120,
+          sender_id: 555,
+          text: "reply\ntext",
+          thread_anchor: 7001,
+        },
+      ],
+    });
+
+    await telegramUserReadCommand(
+      { chat: "@jarvis_tester_1_bot", format: "compact", limit: "5" },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Telegram user read compact. chat=@jarvis_tester_1_bot messages=1 order=newest-first",
+      ),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'id=200 date=2026-03-24T00:00:00.000Z dir=in sender=555 reply_to=123 top=120 topic=7001 media=voice text="reply text"',
+      ),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Paging: newer --after-id 200 | older --before-id 200"),
+    );
+  });
+
+  it("renders recent messages as compact JSON without raw backend metadata", async () => {
+    backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      messages: [
+        {
+          chat_id: 10,
+          chat_title: null,
+          chat_username: "jarvis_tester_1_bot",
+          date: "2026-03-24T00:00:00.000Z",
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 201,
+          out: true,
+          reply_to_msg_id: null,
+          reply_to_top_id: null,
+          sender_id: 99,
+          text: "sent text",
+          thread_anchor: null,
+        },
+      ],
+    });
+
+    await telegramUserReadCommand(
+      { chat: "@jarvis_tester_1_bot", format: "compact", json: true },
+      runtime,
+    );
+
+    const payload = JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string);
+    expect(payload).toEqual({
+      chat: "@jarvis_tester_1_bot",
+      messages: [
+        {
+          date: "2026-03-24T00:00:00.000Z",
+          dir: "out",
+          id: 201,
+          media: null,
+          reply_to: null,
+          sender: 99,
+          text: "sent text",
+          top: null,
+          topic: null,
+        },
+      ],
+      order: "newest_first",
+      paging: {
+        newer_after_id: 201,
+        older_before_id: 201,
+      },
+    });
+  });
+
+  it("rejects unknown Telegram read formats", async () => {
+    await expect(
+      telegramUserReadCommand({ chat: "@jarvis_tester_1_bot", format: "full-table" }, runtime),
+    ).rejects.toThrow(/--format must be either table or compact/i);
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
   });
 
   it("downloads message media by chat and message id", async () => {

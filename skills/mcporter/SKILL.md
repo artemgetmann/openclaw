@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📦",
+        "displayName": "MCP Connector Manager",
         "requires": { "bins": ["mcporter"] },
         "install":
           [

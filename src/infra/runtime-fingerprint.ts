@@ -7,6 +7,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCommitHash } from "./git-commit.js";
 import { resolveGitHeadPath } from "./git-root.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
@@ -16,6 +17,21 @@ export type RuntimeFingerprint = {
   stateDir: string;
   configPath: string;
   serviceLabel: string;
+  runtimePackageVersion?: string;
+  appProductVersion?: string;
+  launchServiceVersion?: string;
+  runtimeCommit?: string;
+  runtimeSource?:
+    | "sacred-main-checkout"
+    | "jarvis-managed-bundle"
+    | "isolated-test-worktree"
+    | "source-checkout"
+    | "unknown";
+  guiCapabilities?: {
+    guiControl: boolean;
+    guiBenchmarkNativeApps: boolean;
+    trustedLocalDefault: boolean;
+  };
   openClawVersion?: string;
 };
 
@@ -39,6 +55,10 @@ export function resolveRuntimeFingerprint(
     }) ?? cwd;
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
+  const runtimePackageVersion = resolveRuntimeServiceVersion(
+    { ...env, OPENCLAW_VERSION: undefined, OPENCLAW_SERVICE_VERSION: undefined },
+    "unknown",
+  );
 
   return {
     branch: resolveBranchName(worktree),
@@ -46,8 +66,107 @@ export function resolveRuntimeFingerprint(
     stateDir,
     configPath,
     serviceLabel: params.serviceLabel ?? resolveGatewayServiceLabel(env, params.platform),
+    runtimePackageVersion,
+    appProductVersion: resolveAppProductVersion(env),
+    launchServiceVersion: firstNonEmpty(env.OPENCLAW_SERVICE_VERSION),
+    runtimeCommit:
+      resolveCommitHash({ cwd: worktree, env, moduleUrl: params.moduleUrl }) ?? undefined,
+    runtimeSource: classifyRuntimeSource({ worktree, env }),
+    guiCapabilities: resolveRuntimeGuiCapabilities(worktree),
     openClawVersion: resolveRuntimeServiceVersion(env),
   };
+}
+
+function resolveRuntimeGuiCapabilities(worktree: string): RuntimeFingerprint["guiCapabilities"] {
+  const distJsFiles = listRuntimeDistJavaScriptFiles(worktree);
+  return {
+    guiControl:
+      runtimeFileExists(worktree, [
+        "src/agents/tools/gui-control-tool.ts",
+        "dist/agents/tools/gui-control-tool.js",
+      ]) || runtimeFilesContain(worktree, distJsFiles, ["src/agents/tools/gui-control-tool.ts"]),
+    guiBenchmarkNativeApps:
+      runtimeFileContains(worktree, ["src/gui-control/benchmark.ts"], ["native-apps"]) ||
+      runtimeFilesContain(worktree, distJsFiles, ["native-apps"]),
+    trustedLocalDefault:
+      runtimeFileContains(
+        worktree,
+        ["src/gui-control/policy.ts"],
+        ["const DEFAULT_GUI_TASK_POLICY", 'taskId: "trusted_local_gui_control"'],
+      ) ||
+      runtimeFilesContain(worktree, distJsFiles, [
+        "const DEFAULT_GUI_TASK_POLICY",
+        'taskId: "trusted_local_gui_control"',
+      ]),
+  };
+}
+
+function listRuntimeDistJavaScriptFiles(worktree: string): string[] {
+  const distRoot = path.join(worktree, "dist");
+  const files: string[] = [];
+  const pending: Array<{ dir: string; depth: number }> = [{ dir: distRoot, depth: 0 }];
+
+  // Packaged Jarvis runtimes are bundled into hashed JS chunks, not stable
+  // source-shaped paths. Keep the scan bounded to executable JS files so status
+  // proof can read the shipped runtime without walking source maps or assets.
+  while (pending.length > 0 && files.length < 2000) {
+    const current = pending.pop();
+    if (!current || current.depth > 3) {
+      continue;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(current.dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "control-ui") {
+          continue;
+        }
+        pending.push({ dir: entryPath, depth: current.depth + 1 });
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".js")) {
+        files.push(path.relative(worktree, entryPath));
+      }
+    }
+  }
+
+  return files;
+}
+
+function runtimeFileExists(worktree: string, relativePaths: string[]): boolean {
+  return relativePaths.some((relativePath) => fs.existsSync(path.join(worktree, relativePath)));
+}
+
+function runtimeFileContains(
+  worktree: string,
+  relativePaths: string[],
+  needles: string[],
+): boolean {
+  return runtimeFilesContain(worktree, relativePaths, needles);
+}
+
+function runtimeFilesContain(
+  worktree: string,
+  relativePaths: string[],
+  needles: string[],
+): boolean {
+  return relativePaths.some((relativePath) => {
+    try {
+      const text = fs.readFileSync(path.join(worktree, relativePath), "utf8");
+      // Runtime capability flags should be proof from the fingerprinted runtime
+      // root, not claims about whichever CLI checkout happened to ask status.
+      return needles.every((needle) => text.includes(needle));
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function formatRuntimeFingerprint(
@@ -60,10 +179,66 @@ export function formatRuntimeFingerprint(
     `stateDir=${formatPath(fingerprint.stateDir)}`,
     `configPath=${formatPath(fingerprint.configPath)}`,
     `serviceLabel=${fingerprint.serviceLabel}`,
+    fingerprint.appProductVersion ? `appProductVersion=${fingerprint.appProductVersion}` : "",
+    fingerprint.launchServiceVersion
+      ? `launchServiceVersion=${fingerprint.launchServiceVersion}`
+      : "",
+    fingerprint.runtimePackageVersion
+      ? `runtimePackageVersion=${fingerprint.runtimePackageVersion}`
+      : "",
+    fingerprint.runtimeCommit ? `runtimeCommit=${fingerprint.runtimeCommit}` : "",
+    fingerprint.runtimeSource ? `runtimeSource=${fingerprint.runtimeSource}` : "",
+    fingerprint.guiCapabilities
+      ? `guiControl=${fingerprint.guiCapabilities.guiControl ? "yes" : "no"}`
+      : "",
+    fingerprint.guiCapabilities
+      ? `guiBenchmark.nativeApps=${fingerprint.guiCapabilities.guiBenchmarkNativeApps ? "yes" : "no"}`
+      : "",
+    fingerprint.guiCapabilities
+      ? `trustedLocalDefault=${fingerprint.guiCapabilities.trustedLocalDefault ? "yes" : "no"}`
+      : "",
     fingerprint.openClawVersion ? `openClawVersion=${fingerprint.openClawVersion}` : "",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function resolveAppProductVersion(env: NodeJS.ProcessEnv): string | undefined {
+  return firstNonEmpty(env.OPENCLAW_APP_VERSION, env.OPENCLAW_PRODUCT_VERSION);
+}
+
+function classifyRuntimeSource(params: {
+  worktree: string;
+  env: NodeJS.ProcessEnv;
+}): RuntimeFingerprint["runtimeSource"] {
+  const normalizedWorktree = path.resolve(params.worktree);
+  const home = params.env.HOME || process.env.HOME || "";
+  const sacredMain = home ? path.join(home, "Programming_Projects", "openclaw") : "";
+  if (sacredMain && normalizedWorktree === path.resolve(sacredMain)) {
+    return "sacred-main-checkout";
+  }
+  if (
+    normalizedWorktree.includes(
+      `${path.sep}Library${path.sep}Application Support${path.sep}Jarvis${path.sep}`,
+    ) ||
+    normalizedWorktree.includes(`${path.sep}.jarvis${path.sep}lib${path.sep}openclaw-bundled`)
+  ) {
+    return "jarvis-managed-bundle";
+  }
+  if (normalizedWorktree.includes(`${path.sep}.worktrees${path.sep}`)) {
+    return "isolated-test-worktree";
+  }
+  return normalizedWorktree ? "source-checkout" : "unknown";
 }
 
 function resolveBranchName(searchDir: string): string {
@@ -95,6 +270,10 @@ function resolveGatewayServiceLabel(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  const explicitLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (explicitLabel) {
+    return explicitLabel;
+  }
   const profile = env.OPENCLAW_PROFILE;
   if (platform === "darwin") {
     return resolveGatewayLaunchAgentLabel(profile);

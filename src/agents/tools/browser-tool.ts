@@ -161,6 +161,7 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "text",
   "submit",
   "slowly",
+  "repairEdit",
   "clear",
   "key",
   "delayMs",

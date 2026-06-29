@@ -2412,7 +2412,6 @@ export const dispatchTelegramMessage = async ({
             }
           : undefined,
         onModelSelected: tracedOnModelSelected,
-        onLatencyTrace: (event) => latencyTrace?.mark(event.span, event.fields),
       },
     }));
   } catch (err) {

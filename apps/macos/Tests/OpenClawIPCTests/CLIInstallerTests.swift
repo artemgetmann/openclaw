@@ -120,6 +120,85 @@ struct CLIInstallerTests {
         }
     }
 
+    @Test @MainActor func `consumer ensureInstalledIfNeeded refreshes stale bundled runtime`() async throws {
+        let instanceID = "cli-installer-bundled-refresh"
+        let fm = FileManager.default
+        let homeURL = fm.temporaryDirectory.appendingPathComponent(
+            "openclaw-cli-installer-refresh-home-\(UUID().uuidString)",
+            isDirectory: true)
+        let oldBundleRoot = fm.temporaryDirectory.appendingPathComponent(
+            "openclaw-cli-installer-refresh-old-\(UUID().uuidString)",
+            isDirectory: true)
+        let newBundleRoot = fm.temporaryDirectory.appendingPathComponent(
+            "openclaw-cli-installer-refresh-new-\(UUID().uuidString)",
+            isDirectory: true)
+        defer {
+            try? fm.removeItem(at: homeURL)
+            try? fm.removeItem(at: oldBundleRoot)
+            try? fm.removeItem(at: newBundleRoot)
+        }
+
+        let oldBundle = try self.makeConsumerBundle(resourceRoot: oldBundleRoot)
+        try self.writeBundledRuntime(
+            into: oldBundle,
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "old-build",
+                gitCommit: "old123",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+
+        let newBundle = try self.makeConsumerBundle(resourceRoot: newBundleRoot)
+        let newManifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "new-build",
+            gitCommit: "new456",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try self.writeBundledRuntime(into: newBundle, manifest: newManifest, fileManager: fm)
+
+        let result = try await TestIsolation.withIsolatedState(
+            env: [
+                ConsumerInstance.envKey: instanceID,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": homeURL.path,
+                "OPENCLAW_APP_VARIANT": "consumer",
+                "OPENCLAW_HOME": nil,
+                "OPENCLAW_STATE_DIR": nil,
+                "OPENCLAW_CONFIG_PATH": nil,
+                "OPENCLAW_GATEWAY_PORT": nil,
+                "OPENCLAW_GATEWAY_BIND": nil,
+                "OPENCLAW_LOG_DIR": nil,
+                "OPENCLAW_LAUNCHD_LABEL": nil,
+            ])
+        {
+            _ = try ConsumerBundledRuntime.seedIfNeeded(
+                from: oldBundle.resourceURL!.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName),
+                into: ConsumerRuntime.installPrefixURL,
+                fileManager: fm)
+
+            let result = await CLIInstaller.ensureInstalledIfNeeded(bundle: newBundle, fileManager: fm)
+            let manifestURL = ConsumerRuntime.installPrefixURL
+                .appendingPathComponent(".consumer-bundled-runtime.json")
+            let installed = try JSONDecoder().decode(
+                ConsumerBundledRuntime.Manifest.self,
+                from: Data(contentsOf: manifestURL))
+
+            #expect(installed == newManifest)
+            #expect(fm.isExecutableFile(atPath: ConsumerRuntime.installPrefixURL
+                .appendingPathComponent("bin/openclaw").path))
+            return result
+        }
+
+        switch result {
+        case .installed:
+            break
+        default:
+            Issue.record("Expected stale bundled runtime refresh, got \(result)")
+        }
+    }
+
     @Test @MainActor func `consumer ensureInstalledIfNeeded fails bluntly when bundle runtime is missing`() async throws {
         let instanceID = "cli-installer-missing-runtime"
         let fm = FileManager.default
@@ -187,7 +266,16 @@ struct CLIInstallerTests {
         return bundle
     }
 
-    private func writeBundledRuntime(into bundle: Bundle, fileManager: FileManager) throws {
+    private func writeBundledRuntime(
+        into bundle: Bundle,
+        manifest: ConsumerBundledRuntime.Manifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "123",
+            gitCommit: "abc123",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21"),
+        fileManager: FileManager) throws
+    {
         guard let resourceURL = bundle.resourceURL else {
             throw NSError(
                 domain: "CLIInstallerTests",
@@ -196,12 +284,6 @@ struct CLIInstallerTests {
         }
 
         let bundledRoot = resourceURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
-        let manifest = ConsumerBundledRuntime.Manifest(
-            format: 1,
-            bundleVersion: "123",
-            gitCommit: "abc123",
-            nodeVersion: "22.22.1",
-            uvVersion: "0.9.21")
         try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
             into: bundledRoot,
             manifest: manifest,

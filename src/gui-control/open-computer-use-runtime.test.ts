@@ -4,11 +4,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   OpenComputerUseRuntime,
+  formatOpenComputerUseTccRecoveryGuidance,
   parseOpenComputerUseActionResult,
   parseOpenComputerUseApps,
   parseOpenComputerUseSnapshot,
   parseOpenComputerUseVirtualPointerEvidence,
   parseOpenComputerUseWindows,
+  resolveOpenComputerUseCommand,
 } from "./open-computer-use-runtime.js";
 
 describe("parseOpenComputerUseApps", () => {
@@ -284,6 +286,35 @@ describe("parseOpenComputerUseActionResult", () => {
       }),
     );
   });
+
+  it("uses the last batched tool result as the action result", () => {
+    const result = parseOpenComputerUseActionResult(
+      [
+        {
+          tool: "get_app_state",
+          result: { isError: false, content: [{ type: "text", text: "state" }] },
+        },
+        {
+          tool: "click",
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "invalidArguments(\"unknown element_index '71'\")" }],
+          },
+        },
+      ],
+      true,
+      "ocuBatchedStateAction",
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        actionCount: 1,
+        activationPath: "ocuBatchedStateAction",
+        message: "invalidArguments(\"unknown element_index '71'\")",
+      }),
+    );
+  });
 });
 
 describe("parseOpenComputerUseVirtualPointerEvidence", () => {
@@ -324,8 +355,109 @@ describe("parseOpenComputerUseVirtualPointerEvidence", () => {
   });
 });
 
+describe("formatOpenComputerUseTccRecoveryGuidance", () => {
+  it("explains stale dev-app TCC grants without auto-resetting them", () => {
+    const guidance = formatOpenComputerUseTccRecoveryGuidance({
+      command:
+        "/Users/user/Applications/Open Computer Use (Dev).app/Contents/MacOS/OpenComputerUse",
+      stderr: "Accessibility missing; ScreenCapture permission missing.",
+    });
+
+    expect(guidance).toContain("Exact app: /Users/user/Applications/Open Computer Use (Dev).app");
+    expect(guidance).toContain("Bundle id: com.ifuryst.opencomputeruse.dev");
+    expect(guidance).toContain("tccutil reset Accessibility com.ifuryst.opencomputeruse.dev");
+    expect(guidance).toContain("tccutil reset ScreenCapture com.ifuryst.opencomputeruse.dev");
+    expect(guidance).toContain("ad-hoc signed");
+    expect(guidance).toContain("CDHash");
+    expect(guidance).toContain("open '/Users/user/Applications/Open Computer Use (Dev).app'");
+  });
+
+  it("stays quiet for unrelated command failures", () => {
+    expect(
+      formatOpenComputerUseTccRecoveryGuidance({
+        command: "open-computer-use",
+        stderr: "network request failed",
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("OpenComputerUseRuntime", () => {
-  it("clicks element-index targets through OCU click without raw coordinates", async () => {
+  it("uses an explicit OCU command before discovery", () => {
+    expect(
+      resolveOpenComputerUseCommand("/tmp/custom-ocu", {
+        HOME: "/tmp/home",
+        OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
+      }),
+    ).toBe("/tmp/custom-ocu");
+  });
+
+  it("uses the OCU env override before default app discovery", () => {
+    expect(
+      resolveOpenComputerUseCommand(undefined, {
+        HOME: "/tmp/home",
+        OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
+      }),
+    ).toBe("/tmp/env-ocu");
+  });
+
+  it("discovers the installed dev app executable when no shim is configured", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-command-test-"));
+    const appCommand = path.join(
+      tempDir,
+      "Applications",
+      "Open Computer Use (Dev).app",
+      "Contents",
+      "MacOS",
+      "OpenComputerUse",
+    );
+    await fs.mkdir(path.dirname(appCommand), { recursive: true });
+    await fs.writeFile(appCommand, "");
+
+    expect(resolveOpenComputerUseCommand(undefined, { HOME: tempDir })).toBe(appCommand);
+  });
+
+  it("falls back to the PATH shim when OCU is not otherwise discoverable", () => {
+    expect(resolveOpenComputerUseCommand(undefined, { HOME: "/path/that/does/not/exist" })).toBe(
+      "open-computer-use",
+    );
+  });
+
+  it("preserves stderr from failed OCU snapshot commands", async () => {
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "console.error('Accessibility permission is required. Run `open-computer-use doctor`.');",
+          "process.exit(3);",
+        ].join(""),
+      ],
+    });
+
+    await expect(runtime.observe({ appName: "TextEdit" })).rejects.toThrow(
+      "Accessibility permission is required",
+    );
+  });
+
+  it("adds exact stale-TCC recovery guidance to OCU permission failures", async () => {
+    const runtime = new OpenComputerUseRuntime({
+      command: process.execPath,
+      baseArgs: [
+        "-e",
+        [
+          "console.error('Accessibility missing; ScreenCapture permission missing.');",
+          "process.exit(3);",
+        ].join(""),
+      ],
+    });
+
+    await expect(runtime.observe({ appName: "TextEdit" })).rejects.toThrow(
+      "tccutil reset Accessibility com.ifuryst.opencomputeruse.dev",
+    );
+  });
+
+  it("clicks element-index targets through direct OCU actions without raw coordinates", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
     const argsPath = path.join(tempDir, "argv.json");
     const runtime = new OpenComputerUseRuntime({
@@ -352,6 +484,7 @@ describe("OpenComputerUseRuntime", () => {
         ok: true,
         usedClipboard: false,
         rawCoordinatesUsed: false,
+        activationPath: "ocuDirectAction",
       }),
     );
     expect(argv).toEqual([
@@ -362,7 +495,7 @@ describe("OpenComputerUseRuntime", () => {
     ]);
   });
 
-  it("maps secondary actions to OCU perform_secondary_action", async () => {
+  it("maps secondary actions to direct OCU actions", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-runtime-test-"));
     const argsPath = path.join(tempDir, "argv.json");
     const runtime = new OpenComputerUseRuntime({

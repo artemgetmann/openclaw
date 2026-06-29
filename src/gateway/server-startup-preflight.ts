@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { repairConsumerDefaultBundledSkillAllowlist } from "../agents/consumer-default-bundled-skills.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   migrateLegacyConfig,
@@ -180,6 +181,25 @@ function buildProtectedTelegramTokenConflictMessage(params: {
   ].join("\n");
 }
 
+function isConsumerJarvisRuntime(params: {
+  config: OpenClawConfig;
+  configPath?: string;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (params.env.OPENCLAW_PROFILE === "consumer") {
+    return true;
+  }
+  if (params.env.OPENCLAW_LAUNCHD_LABEL === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL) {
+    return true;
+  }
+  if (params.config.jarvis?.managedServices?.mode === "managed") {
+    return true;
+  }
+  return Boolean(
+    params.configPath?.includes(`${path.sep}Application Support${path.sep}Jarvis${path.sep}`),
+  );
+}
+
 /**
  * Startup phase: normalize and validate config before runtime boot.
  * This keeps startup-side writes explicit and phase-scoped.
@@ -243,6 +263,36 @@ export async function runGatewayStartupConfigPreflight(
         `Failed to repair stale Jarvis workspace pointers: ${String(err)}`,
         { cause: err },
       );
+    }
+  }
+
+  if (
+    Array.isArray(configSnapshot.config.skills?.allowBundled) &&
+    isConsumerJarvisRuntime({
+      config: configSnapshot.config,
+      configPath: configSnapshot.path,
+      env,
+    })
+  ) {
+    const consumerSkillRepair = repairConsumerDefaultBundledSkillAllowlist(configSnapshot.config);
+    if (consumerSkillRepair.changes.length > 0) {
+      if (deps.isNixMode) {
+        throw new GatewayStartupPreflightError(
+          "config_legacy_migration",
+          "Stale consumer bundled skill allowlist detected while running in Nix mode. Update skills.allowBundled and restart.",
+        );
+      }
+      try {
+        await deps.writeConfig(consumerSkillRepair.config);
+        deps.log.info(
+          `gateway: repaired consumer bundled skill allowlist:\n${consumerSkillRepair.changes
+            .map((entry) => `- ${entry}`)
+            .join("\n")}`,
+        );
+        configSnapshot = await deps.readSnapshot();
+      } catch (err) {
+        deps.log.warn(`gateway: failed to repair consumer bundled skill allowlist: ${String(err)}`);
+      }
     }
   }
 

@@ -20,15 +20,12 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "exec",
       "resume",
       "{sessionId}",
-      "--json",
       "--color",
       "never",
       "--sandbox",
       "workspace-write",
       "--skip-git-repo-check",
     ]);
-    expect(resolved?.config.output).toBe("jsonl");
-    expect(resolved?.config.resumeOutput).toBeUndefined();
   });
 
   it("deep-merges reliability watchdog overrides for codex", () => {

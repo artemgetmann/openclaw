@@ -42,6 +42,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "timezone-preference-updater",
         "checkpoint",
         "monitor-router",
+        "jarvis-gui-control",
         "mcporter",
         "nano-banana-pro",
         "telegram-user",
@@ -126,6 +127,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       description: "Route monitor status questions and natural-language follow-ups.",
       body: "# Monitor Router\n",
     });
+    await writeSkill({
+      dir: path.join(bundledDir, "jarvis-gui-control"),
+      name: "jarvis-gui-control",
+      description: "Use for Jarvis macOS GUI-control tasks and GUI proof requests.",
+      body: "# Jarvis GUI Control\n",
+    });
 
     const next = apply({});
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
@@ -136,5 +143,6 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
     expect(prompt).toContain("Route monitor status questions");
+    expect(prompt).toContain("Jarvis macOS GUI-control tasks");
   });
 });

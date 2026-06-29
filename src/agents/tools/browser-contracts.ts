@@ -64,18 +64,23 @@ const SITE_CONTRACTS: BrowserContract[] = [
     match: (url) => /(^|\.)(?:x|twitter)\.com$/i.test(url.hostname),
     hazards: [
       "X uses rich app-controlled composers; visible text and attached media can diverge from the payload that publishes",
+      "after a failed text/media mutation, the visible draft may no longer match X's React/DraftJS state",
       "community posts add another state dimension: the selected audience must survive until commit",
       "direct community post URLs may be unavailable or transient even when the profile artifact exists",
     ],
     requiredFlow: [
       "use the signed-in or explicitly requested live profile for account-bound posting",
-      "prefer keyboard paste/type over kind=fill for the final composer text when media is attached",
-      "verify the composer has the exact text, intended media, selected audience/community, and enabled Post control immediately before clicking",
+      "prefer keyboard paste/type over kind=fill for the final composer text when media is attached; use repairEdit for X-style rich editors",
+      "if a composer mutation fails or corrupts the draft, discard that draft and rebuild in a fresh composer instead of retrying in place",
+      "after rebuilding a failed draft, get fresh user approval before clicking Post",
+      "verify the composer has the exact text, intended media, selected audience/community, enabled Post control, non-empty sane counter/progress state, and clean non-overlapped screenshot proof immediately before clicking",
       "after posting, open the profile or final post artifact and verify the published artifact itself",
       "report success only after the live artifact shows the expected caption, media, and audience/community when visible",
     ],
     avoid: [
       "do not rely on composer snapshots alone",
+      "do not rely on visible composer text alone",
+      "do not rely on an enabled Post button if the counter/progress ring is empty or text appears visually overlapped",
       "do not rely on the composer closing as success",
       "do not claim success if the live artifact is image-only, text-only, wrong-audience, or inaccessible",
       "do not perform repeated public retries after one media/text mismatch without explicit user approval",
@@ -85,6 +90,7 @@ const SITE_CONTRACTS: BrowserContract[] = [
       "exact expected caption visible in final artifact or a clear statement that it is missing",
       "media visible in final artifact",
       "community/audience label when X exposes it",
+      "pre-commit screenshot showing clean text and a non-empty sane X counter/progress ring",
     ],
   },
   {

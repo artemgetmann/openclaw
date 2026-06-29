@@ -44,6 +44,15 @@ describe("resolveOpenClawMetadata install validation", () => {
     ]);
   });
 
+  it("parses consumer display names without replacing the skill id", () => {
+    const metadata = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"displayName":"Google Workspace","skillKey":"gog"}}',
+    });
+
+    expect(metadata?.displayName).toBe("Google Workspace");
+    expect(metadata?.skillKey).toBe("gog");
+  });
+
   it("drops unsafe brew formula values", () => {
     const install = resolveInstall({
       metadata: '{"openclaw":{"install":[{"kind":"brew","formula":"wget --HEAD"}]}}',

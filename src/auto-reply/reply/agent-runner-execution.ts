@@ -297,14 +297,6 @@ export async function runAgentTurnWithFallback(params: {
             model,
             thinkLevel: params.followupRun.run.thinkLevel,
           });
-          params.opts?.onLatencyTrace?.({
-            span: "model_selected",
-            fields: {
-              provider,
-              model,
-              thinkLevel: params.followupRun.run.thinkLevel,
-            },
-          });
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
@@ -434,7 +426,6 @@ export async function runAgentTurnWithFallback(params: {
                             await streamBlockReply(payload);
                           }
                         : undefined,
-                      onLatencyTrace: params.opts?.onLatencyTrace,
                     });
                   } finally {
                     params.opts?.abortSignal?.removeEventListener("abort", abortFromOuterSignal);
@@ -655,7 +646,6 @@ export async function runAgentTurnWithFallback(params: {
                     : undefined,
                 shouldEmitToolResult: params.shouldEmitToolResult,
                 shouldEmitToolOutput: params.shouldEmitToolOutput,
-                onLatencyTrace: params.opts?.onLatencyTrace,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:
                   bootstrapPromptWarningSignaturesSeen[

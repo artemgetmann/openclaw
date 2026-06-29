@@ -10,7 +10,6 @@ import {
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
-import { createTelegramReplyLatencyTrace } from "./latency-trace.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -56,16 +55,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
     replyMedia?: TelegramMediaRef[],
   ) => {
-    const latencyTrace = createTelegramReplyLatencyTrace({ runtime });
-    latencyTrace.mark("inbound_telegram_update_received", {
-      accountId: account.accountId,
-      messageId:
-        typeof primaryCtx.message?.message_id === "number"
-          ? primaryCtx.message.message_id
-          : undefined,
-      chatId:
-        typeof primaryCtx.message?.chat?.id === "number" ? primaryCtx.message.chat.id : undefined,
-    });
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
@@ -109,7 +98,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         textLimit,
         telegramCfg,
         opts,
-        latencyTrace,
       });
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));

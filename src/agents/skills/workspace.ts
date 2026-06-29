@@ -118,14 +118,16 @@ function resolvePromptSourcePriority(source?: string): number {
       return 0;
     case "agents-skills-project":
       return 1;
-    case "openclaw-managed":
+    case "openclaw-product-managed":
       return 2;
-    case "openclaw-bundled":
+    case "openclaw-managed":
       return 3;
-    case "openclaw-extra":
+    case "openclaw-bundled":
       return 4;
-    default:
+    case "openclaw-extra":
       return 5;
+    default:
+      return 6;
   }
 }
 
@@ -368,6 +370,7 @@ function loadSkillEntries(
   opts?: {
     config?: OpenClawConfig;
     managedSkillsDir?: string;
+    productManagedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
 ): SkillEntry[] {
@@ -523,6 +526,8 @@ function loadSkillEntries(
   };
 
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const productManagedSkillsDir =
+    opts?.productManagedSkillsDir ?? path.join(CONFIG_DIR, "product-skills");
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
@@ -552,6 +557,10 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
+  const productManagedSkills = loadSkills({
+    dir: productManagedSkillsDir,
+    source: "openclaw-product-managed",
+  });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
@@ -563,7 +572,7 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < agents-skills-project < workspace.
+  // Precedence: extra < bundled < user-managed < product-managed < project < workspace.
   // Personal cross-agent skills intentionally flow through the managed skills
   // root, typically via ~/.openclaw/skills -> ~/.agents/skills. That keeps one
   // user-owned source of truth instead of silently loading the same personal
@@ -575,6 +584,9 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
   for (const skill of managedSkills) {
+    merged.set(skill.name, skill);
+  }
+  for (const skill of productManagedSkills) {
     merged.set(skill.name, skill);
   }
   for (const skill of projectAgentsSkills) {
@@ -669,6 +681,7 @@ export function buildWorkspaceSkillsPrompt(
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
+  productManagedSkillsDir?: string;
   bundledSkillsDir?: string;
   entries?: SkillEntry[];
   /** If provided, only include skills with these names */
@@ -739,6 +752,7 @@ export function loadWorkspaceSkillEntries(
   opts?: {
     config?: OpenClawConfig;
     managedSkillsDir?: string;
+    productManagedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
 ): SkillEntry[] {

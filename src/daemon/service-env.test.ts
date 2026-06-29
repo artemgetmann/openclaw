@@ -281,6 +281,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SERVICE_BUILD).toBe("2026061103");
+    expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
     if (process.platform === "darwin") {

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { ReplyLatencyTraceEvent } from "../../../src/auto-reply/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+
+type TelegramReplyLatencyTraceFields = Record<string, string | number | boolean | null | undefined>;
 
 export type TelegramReplyLatencyTrace = {
   id: string;
   startedAtMs: number;
-  mark: (span: string, fields?: ReplyLatencyTraceEvent["fields"]) => void;
+  mark: (span: string, fields?: TelegramReplyLatencyTraceFields) => void;
 };
 
 function normalizeTraceValue(value: string | number | boolean | null | undefined): string {

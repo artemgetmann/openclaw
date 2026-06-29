@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { AgentDesktopRuntime } from "./agent-desktop-runtime.js";
 import { resolveElementRef } from "./element-resolution.js";
 import { OpenComputerUseRuntime } from "./open-computer-use-runtime.js";
-import { getGuiTaskPolicyProfile } from "./policy.js";
+import { evaluateGuiPolicy, getGuiTaskPolicyProfile } from "./policy.js";
 import { describeGuiTargetMismatch, guiTargetMatchesSnapshot } from "./targeting.js";
 import type {
   AppState,
@@ -21,16 +23,22 @@ import type {
 } from "./types.js";
 import { performVerifiedAction } from "./verifier.js";
 
-export type GuiBenchmarkTask = "x-to-claude" | "safari-notes-claude" | "workspace-restore";
+export type GuiBenchmarkTask =
+  | "x-to-claude"
+  | "safari-notes-claude"
+  | "workspace-restore"
+  | "native-apps";
 
 export type GuiBenchmarkOptions = {
   runtime: GuiRuntimeName;
+  runtimeCommand?: string;
   task: GuiBenchmarkTask;
   dryRun?: boolean;
   writeReport?: boolean;
   reportDir?: string;
   approveClaudeSend?: boolean;
   approveNotesWrite?: boolean;
+  approveNativeAppWrite?: boolean;
   openXHome?: boolean;
   openClaudeNew?: boolean;
   claudeInputRef?: string;
@@ -39,6 +47,22 @@ export type GuiBenchmarkOptions = {
   allowClipboardFallback?: boolean;
   progress?: (message: string) => void;
   runtimeImpl?: GuiRuntime;
+};
+
+export type GuiNativeAppBenchmarkSlice = {
+  id: string;
+  appName: string;
+  appClass: string;
+  status: "passed" | "failed" | "blocked" | "skipped" | "gap";
+  required: boolean;
+  safe: boolean;
+  mutationAttempted: boolean;
+  actionCount: number;
+  auditIds?: string[];
+  artifactPath?: string;
+  verifiedText?: string;
+  failureReason?: string;
+  notes: string;
 };
 
 export type GuiBenchmarkResult = {
@@ -54,6 +78,8 @@ export type GuiBenchmarkResult = {
   movedFocus: boolean;
   falseSuccesses: number;
   falseFailures: number;
+  activationPath?: string;
+  activationPaths?: string[];
   directRuntimeEscape: boolean;
   replyTextExtracted: boolean;
   replyExtractionMethod: "none" | "ax-visible-text" | "clipboard-copy";
@@ -116,6 +142,7 @@ export type GuiBenchmarkResult = {
   markdownSummary: string;
   replyText?: string;
   restoreDiagnostics?: GuiWorkspaceRestoreDiagnostic[];
+  nativeAppSlices?: GuiNativeAppBenchmarkSlice[];
   reportPath?: string;
   failureReason?: string;
 };
@@ -175,10 +202,19 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
   let claudeValue = "";
   let claudeReply = "";
   let notesValue = "";
+  let textEditValue = "";
+  let finderFixtureName = "jarvis-gui-native-finder-proof.txt";
   return {
     name,
     async listApps() {
-      return [{ appName: "Safari" }, { appName: "Notes" }, { appName: "Claude" }];
+      return [
+        { appName: "Safari" },
+        { appName: "Notes" },
+        { appName: "Claude" },
+        { appName: "TextEdit" },
+        { appName: "Finder" },
+        { appName: "System Settings" },
+      ];
     },
     async observe(target: AppTarget) {
       if (target.appName === "Safari") {
@@ -211,6 +247,57 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
           ],
         };
       }
+      if (target.appName === "TextEdit") {
+        const textEditWindowTitle = target.windowTitle ?? "jarvis-gui-native-fixture.txt";
+        return {
+          id: "dry-textedit",
+          appName: "TextEdit",
+          windowTitle: textEditWindowTitle,
+          summary: textEditValue
+            ? `Dry-run TextEdit document contains ${textEditValue}`
+            : "Dry-run TextEdit scratch document ready.",
+          visibleText: textEditValue ? [textEditValue] : ["TextEdit"],
+          elements: [
+            {
+              ref: "@textedit-body",
+              role: "text area",
+              label: "TextEdit document body",
+              value: textEditValue,
+              appName: "TextEdit",
+              windowTitle: textEditWindowTitle,
+            },
+          ],
+        };
+      }
+      if (target.appName === "Finder") {
+        const finderWindowTitle = target.windowTitle ?? "openclaw-gui-native-fixture";
+        return {
+          id: "dry-finder",
+          appName: "Finder",
+          windowTitle: finderWindowTitle,
+          summary: `Dry-run Finder window shows ${finderFixtureName}`,
+          visibleText: [finderWindowTitle, finderFixtureName],
+          elements: [
+            {
+              ref: "@finder-file",
+              role: "text",
+              label: finderFixtureName,
+              appName: "Finder",
+              windowTitle: finderWindowTitle,
+            },
+          ],
+        };
+      }
+      if (target.appName === "System Settings") {
+        return {
+          id: "dry-system-settings",
+          appName: "System Settings",
+          windowTitle: "System Settings",
+          summary: "Dry-run System Settings navigation surface observed without mutation.",
+          visibleText: ["System Settings", "General", "Accessibility", "Privacy & Security"],
+          elements: [],
+        };
+      }
       return {
         id: "dry-claude",
         appName: "Claude",
@@ -237,6 +324,8 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
     async setValue(target, value) {
       if (target.appName === "Notes") {
         notesValue = value;
+      } else if (target.appName === "TextEdit") {
+        textEditValue = value;
       } else {
         claudeValue = value;
       }
@@ -255,7 +344,13 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
       }
       return { ok: true, actionCount: 1 };
     },
-    async openUrl() {
+    async openUrl(target, url) {
+      if (target.appName === "Finder") {
+        const fixtureNames = await fs.readdir(new URL(url)).catch(() => []);
+        finderFixtureName =
+          fixtureNames.find((name) => name.startsWith("jarvis-gui-native-finder-proof-")) ??
+          finderFixtureName;
+      }
       return { ok: true, actionCount: 1, movedFocus: true };
     },
     async press() {
@@ -270,7 +365,7 @@ function createDryRunRuntime(name: GuiRuntimeName): GuiRuntime {
 }
 
 function createBenchmarkRuntime(
-  options: Pick<GuiBenchmarkOptions, "runtime" | "dryRun" | "reportDir">,
+  options: Pick<GuiBenchmarkOptions, "runtime" | "dryRun" | "reportDir" | "runtimeCommand">,
 ): GuiRuntime {
   const dryRun = Boolean(options.dryRun);
   if (dryRun) {
@@ -282,7 +377,7 @@ function createBenchmarkRuntime(
   if (options.runtime === "open-computer-use") {
     const reportDir = options.reportDir ?? path.join(process.cwd(), "artifacts", "gui-benchmark");
     return new OpenComputerUseRuntime({
-      command: process.env.OPENCLAW_OPEN_COMPUTER_USE_BIN,
+      command: options.runtimeCommand ?? process.env.OPENCLAW_OPEN_COMPUTER_USE_BIN,
       visualCursorObservationFile: path.join(
         reportDir,
         "open-computer-use-visual-cursor-observation.json",
@@ -294,15 +389,22 @@ function createBenchmarkRuntime(
 
 function mergeStats(stats: GuiVerifierStats[]): GuiVerifierStats {
   return stats.reduce(
-    (acc, stat) => ({
-      actionCount: acc.actionCount + stat.actionCount,
-      retries: acc.retries + stat.retries,
-      staleRefs: acc.staleRefs + stat.staleRefs,
-      usedClipboard: acc.usedClipboard || stat.usedClipboard,
-      movedFocus: acc.movedFocus || stat.movedFocus,
-      falseSuccesses: acc.falseSuccesses + stat.falseSuccesses,
-      falseFailures: acc.falseFailures + stat.falseFailures,
-    }),
+    (acc, stat) => {
+      const activationPaths = appendActivationPaths(acc.activationPaths, stat);
+      return {
+        actionCount: acc.actionCount + stat.actionCount,
+        retries: acc.retries + stat.retries,
+        staleRefs: acc.staleRefs + stat.staleRefs,
+        usedClipboard: acc.usedClipboard || stat.usedClipboard,
+        movedFocus: acc.movedFocus || stat.movedFocus,
+        falseSuccesses: acc.falseSuccesses + stat.falseSuccesses,
+        falseFailures: acc.falseFailures + stat.falseFailures,
+        // Keep the latest path for compact summaries, and the ordered unique
+        // list for benchmark JSON where multiple verified actions can run.
+        activationPath: activationPaths?.at(-1),
+        activationPaths,
+      };
+    },
     {
       actionCount: 0,
       retries: 0,
@@ -313,6 +415,18 @@ function mergeStats(stats: GuiVerifierStats[]): GuiVerifierStats {
       falseFailures: 0,
     },
   );
+}
+
+function appendActivationPaths(
+  existing: string[] | undefined,
+  stat: Pick<GuiVerifierStats, "activationPath" | "activationPaths">,
+): string[] | undefined {
+  const paths = [...(existing ?? []), ...(stat.activationPaths ?? [])];
+  if (stat.activationPath) {
+    paths.push(stat.activationPath);
+  }
+  const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+  return uniquePaths.length ? uniquePaths : undefined;
 }
 
 function emptyGuiVerifierStats(): GuiVerifierStats {
@@ -332,13 +446,17 @@ function statsFromActionResult(result: {
   staleRef?: boolean;
   usedClipboard?: boolean;
   movedFocus?: boolean;
+  activationPath?: string;
 }): GuiVerifierStats {
+  const activationPaths = result.activationPath ? [result.activationPath] : undefined;
   return {
     ...emptyGuiVerifierStats(),
     actionCount: result.actionCount ?? 0,
     staleRefs: result.staleRef ? 1 : 0,
     usedClipboard: Boolean(result.usedClipboard),
     movedFocus: Boolean(result.movedFocus),
+    activationPath: result.activationPath,
+    activationPaths,
   };
 }
 
@@ -350,6 +468,9 @@ function addStats(target: GuiVerifierStats, extra: GuiVerifierStats) {
   target.movedFocus ||= extra.movedFocus;
   target.falseSuccesses += extra.falseSuccesses;
   target.falseFailures += extra.falseFailures;
+  const activationPaths = appendActivationPaths(target.activationPaths, extra);
+  target.activationPath = activationPaths?.at(-1);
+  target.activationPaths = activationPaths;
 }
 
 function visibleSnapshotText(snapshot: { summary?: string; visibleText?: string[] }): string[] {
@@ -1496,6 +1617,32 @@ function evaluateQualityGate(
     };
   }
 
+  if (result.task === "native-apps") {
+    const slices = result.nativeAppSlices ?? [];
+    const blockers = slices
+      .filter((slice) => slice.required && slice.status !== "passed")
+      .map((slice) => `${slice.id}: ${slice.failureReason ?? slice.notes}`);
+    const debt = slices
+      .filter((slice) => !slice.required && (slice.status === "skipped" || slice.status === "gap"))
+      .map((slice) => `${slice.id}: ${slice.notes}`);
+    if (!result.ok || blockers.length) {
+      return {
+        codexComputerUseParity: "fail",
+        onParWithCodexComputerUse: false,
+        baselineElapsedSeconds,
+        baselineActionCount,
+        blockers: blockers.length ? blockers : [result.failureReason ?? "Native-app slice failed."],
+      };
+    }
+    return {
+      codexComputerUseParity: debt.length ? "functional-pass-with-debt" : "pass",
+      onParWithCodexComputerUse: !debt.length,
+      baselineElapsedSeconds,
+      baselineActionCount,
+      blockers: debt,
+    };
+  }
+
   // A functional pass is not automatically product parity. Codex Computer Use
   // is the reference because it completed the task quickly, visibly, without
   // clipboard recovery, and with less user-workspace disruption.
@@ -1561,6 +1708,9 @@ function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): str
     `- focus moved: ${result.movedFocus ? "yes" : "no"}`,
     `- false successes: ${result.falseSuccesses}`,
     `- false failures: ${result.falseFailures}`,
+    result.activationPaths?.length
+      ? `- activation paths: ${result.activationPaths.join(", ")}`
+      : "",
     `- direct runtime escape: ${result.directRuntimeEscape ? "yes" : "no"}`,
     `- opened X Home: ${result.xWindow.openAttempted ? result.xWindow.openSucceeded : "no"}`,
     `- X window id: ${result.xWindow.selectedWindowId ?? "unknown"}`,
@@ -1590,6 +1740,11 @@ function buildMarkdown(result: Omit<GuiBenchmarkResult, "markdownSummary">): str
           .map(
             (diagnostic) => `${diagnostic.name}=${diagnostic.restoredFrontmost ? "pass" : "fail"}`,
           )
+          .join(", ")}`
+      : "",
+    result.nativeAppSlices?.length
+      ? `- native app slices: ${result.nativeAppSlices
+          .map((slice) => `${slice.id}=${slice.status}`)
           .join(", ")}`
       : "",
     result.failureReason ? `- failure: ${result.failureReason}` : "",
@@ -1719,6 +1874,504 @@ function visibleTextContaining(
   return visibleSnapshotText(snapshot)
     .find((text) => textIncludesVisible(text, token))
     ?.slice(0, 2000);
+}
+
+function resolveTextEditBody(snapshot: GuiSnapshot) {
+  const textInput = (element: ElementRef) => {
+    const role = normalizeVisibleText(element.role ?? "");
+    return role.includes("text") || role.includes("edit") || role.includes("input");
+  };
+  const auxiliaryField = (element: ElementRef) => {
+    const text = normalizeVisibleText(elementSemanticText(element));
+    return text.includes("search") || text.includes("find") || text.includes("replace");
+  };
+  const candidates = snapshot.elements
+    .map((element) => {
+      const text = normalizeVisibleText(elementSemanticText(element));
+      const role = normalizeVisibleText(element.role ?? "");
+      const looksLikeDocumentBody =
+        text.includes("document body") ||
+        text.includes("textedit document body") ||
+        text.includes("body text view") ||
+        role.includes("text entry area");
+      if (!looksLikeDocumentBody || !textInput(element) || role.includes("button")) {
+        return { element, score: 0 };
+      }
+      let score = 40;
+      if (role.includes("text area") || role.includes("text entry area")) {
+        score += 50;
+      }
+      if (text.includes("document body") || text.includes("body text view")) {
+        score += 25;
+      }
+      return { element, score };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .toSorted((left, right) => right.score - left.score);
+
+  const [best, secondBest] = candidates;
+  if (best && (!secondBest || best.score > secondBest.score)) {
+    return {
+      ok: true,
+      element: best.element,
+      candidates: candidates.map((candidate) => candidate.element),
+      summary: `Resolved TextEdit body element ${best.element.ref} role=${best.element.role ?? ""}.`,
+    };
+  }
+
+  if (!best) {
+    const fallback = resolveElementRef(snapshot, { intent: "text-input" });
+    if (fallback.ok && !auxiliaryField(fallback.element)) {
+      return {
+        ok: true,
+        element: fallback.element,
+        candidates: fallback.candidates,
+        summary: `Resolved sole TextEdit text-input element ${fallback.element.ref} after scratch-window target proof.`,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    candidates: candidates.map((candidate) => candidate.element),
+    summary: best
+      ? `Found ${candidates.length} possible TextEdit body elements; refusing to guess.`
+      : "No editable TextEdit body element matched the latest TextEdit snapshot.",
+  };
+}
+
+async function createNativeFixture(): Promise<{
+  dir: string;
+  dirName: string;
+  textFilePath: string;
+  textFileName: string;
+  finderFilePath: string;
+  finderFileName: string;
+}> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gui-native-"));
+  const dirName = path.basename(dir);
+  const textFileName = `jarvis-gui-native-textedit-${uniqueBenchmarkToken()}.txt`;
+  const textFilePath = path.join(dir, textFileName);
+  const finderFileName = `jarvis-gui-native-finder-proof-${uniqueBenchmarkToken()}.txt`;
+  const finderFilePath = path.join(dir, finderFileName);
+  await fs.writeFile(textFilePath, "", "utf8");
+  await fs.writeFile(
+    finderFilePath,
+    "OpenClaw/Jarvis native GUI benchmark Finder fixture.\n",
+    "utf8",
+  );
+  return { dir, dirName, textFilePath, textFileName, finderFilePath, finderFileName };
+}
+
+function buildPolicyBoundarySlice(): GuiNativeAppBenchmarkSlice {
+  const policy = getGuiTaskPolicyProfile("local_fixture_write");
+  const blockedLabels = ["Delete Document", "Sign In", "Payment Method", "Account Settings"];
+  const decisions = blockedLabels.map((label) =>
+    evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "TextEdit", windowTitle: "Scratch" },
+      element: {
+        ref: `@blocked-${label.toLowerCase().replaceAll(/\s+/g, "-")}`,
+        role: "button",
+        label,
+      },
+      reason: `Click ${label} during native GUI benchmark policy-boundary check.`,
+      approvedPolicyRisk: true,
+      taskPolicy: policy,
+      verificationMode: "post_state",
+    }),
+  );
+  const escaped = decisions.find((decision) => decision.allowed);
+  return {
+    id: "policy-boundary",
+    appName: "TextEdit",
+    appClass: "safety-policy",
+    status: escaped ? "failed" : "passed",
+    required: true,
+    safe: !escaped,
+    mutationAttempted: false,
+    actionCount: 0,
+    notes: escaped
+      ? `Sensitive native-app surface was not blocked: ${escaped.reason ?? "allowed"}`
+      : "Login, payment, account, and destructive labels are blocked before runtime mutation.",
+    failureReason: escaped ? "Native-app policy boundary allowed a sensitive surface." : undefined,
+  };
+}
+
+async function runTextEditNativeSlice(input: {
+  runtime: GuiRuntime;
+  options: GuiBenchmarkOptions;
+  fixture: Awaited<ReturnType<typeof createNativeFixture>>;
+  token: string;
+  audit: GuiAuditRecord[];
+}): Promise<{ slice: GuiNativeAppBenchmarkSlice; stats: GuiVerifierStats }> {
+  const policy = getGuiTaskPolicyProfile("local_fixture_write");
+  const stats = emptyGuiVerifierStats();
+  const target: AppTarget = {
+    appName: "TextEdit",
+    windowTitle: input.fixture.textFileName,
+  };
+  const value = [
+    "Jarvis GUI benchmark native-apps",
+    `Visible token: ${input.token}`,
+    "Scratch TextEdit document only; no save/close/delete action is requested.",
+  ].join("\n");
+
+  if (!input.options.dryRun && !input.options.approveNativeAppWrite) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "blocked",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: 0,
+        artifactPath: input.fixture.textFilePath,
+        failureReason:
+          "Live native-app benchmark requires --approve-native-app-write before TextEdit mutation.",
+        notes: "Stopped before opening or writing the scratch TextEdit fixture.",
+      },
+    };
+  }
+
+  if (!input.runtime.openUrl) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "gap",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: 0,
+        artifactPath: input.fixture.textFilePath,
+        failureReason: "Selected GUI runtime cannot open the scratch TextEdit fixture.",
+        notes: "Runtime lacks openUrl; live TextEdit setup was not attempted.",
+      },
+    };
+  }
+
+  const opened = await input.runtime.openUrl(
+    target,
+    pathToFileURL(input.fixture.textFilePath).toString(),
+  );
+  addStats(stats, statsFromActionResult(opened));
+  if (!opened.ok) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.textFilePath,
+        failureReason: opened.message ?? "TextEdit scratch fixture did not open.",
+        notes: "Scratch file was created, but TextEdit could not be opened through the runtime.",
+      },
+    };
+  }
+  if (!input.options.dryRun) {
+    await sleep(1_000);
+  }
+
+  let snapshot: GuiSnapshot;
+  try {
+    snapshot = await input.runtime.observe(target);
+  } catch (error) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.textFilePath,
+        failureReason: error instanceof Error ? error.message : String(error),
+        notes: "TextEdit opened, but runtime observation failed before any benchmark write.",
+      },
+    };
+  }
+  if (!guiTargetMatchesSnapshot(target, snapshot)) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.textFilePath,
+        failureReason: describeGuiTargetMismatch(target, snapshot),
+        notes:
+          "TextEdit opened, but the observed window was not the scratch fixture; stopped before writing.",
+      },
+    };
+  }
+  const resolution = resolveTextEditBody(snapshot);
+  if (!resolution.ok) {
+    return {
+      stats,
+      slice: {
+        id: "textedit-scratch-write",
+        appName: "TextEdit",
+        appClass: "native-text-editor",
+        status: "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.textFilePath,
+        failureReason: resolution.summary,
+        notes: "TextEdit opened, but no single editable scratch-document body was resolved.",
+      },
+    };
+  }
+
+  const write = await performVerifiedAction({
+    runtime: input.runtime,
+    target,
+    element: resolution.element,
+    actionType: "setValue",
+    value,
+    reason: "Write labelled native GUI benchmark content into a scratch TextEdit document.",
+    approvedPolicyRisk: Boolean(input.options.dryRun || input.options.approveNativeAppWrite),
+    taskPolicy: policy,
+    verificationTimeoutMs: input.options.dryRun ? 0 : 15_000,
+    verificationIntervalMs: 750,
+    verify: (post) => ({
+      ok: snapshotContainsText(post, input.token),
+      summary: snapshotContainsText(post, input.token)
+        ? "TextEdit visible AX text contains labelled native benchmark token."
+        : "TextEdit token was not visible after write.",
+    }),
+  });
+  input.audit.push(write.audit);
+  addStats(stats, write.stats);
+
+  return {
+    stats,
+    slice: {
+      id: "textedit-scratch-write",
+      appName: "TextEdit",
+      appClass: "native-text-editor",
+      status: write.ok ? "passed" : "failed",
+      required: true,
+      safe: true,
+      mutationAttempted: true,
+      actionCount: stats.actionCount,
+      auditIds: [write.audit.id],
+      artifactPath: input.fixture.textFilePath,
+      verifiedText: write.ok ? input.token : undefined,
+      failureReason: write.failureReason,
+      notes: write.ok
+        ? "Opened a scratch TextEdit file, wrote a labelled nonce, and verified visible AX text."
+        : "TextEdit write ran through policy/verifier but did not prove the intended post-state.",
+    },
+  };
+}
+
+async function runFinderNativeSlice(input: {
+  runtime: GuiRuntime;
+  options: GuiBenchmarkOptions;
+  fixture: Awaited<ReturnType<typeof createNativeFixture>>;
+}): Promise<{ slice: GuiNativeAppBenchmarkSlice; stats: GuiVerifierStats }> {
+  const stats = emptyGuiVerifierStats();
+  const target: AppTarget = { appName: "Finder", windowTitle: input.fixture.dirName };
+  if (!input.runtime.openUrl) {
+    return {
+      stats,
+      slice: {
+        id: "finder-fixture-observe",
+        appName: "Finder",
+        appClass: "file-manager",
+        status: "gap",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: 0,
+        artifactPath: input.fixture.finderFilePath,
+        failureReason: "Selected GUI runtime cannot open the Finder fixture folder.",
+        notes: "Runtime lacks openUrl; Finder observe proof was not attempted.",
+      },
+    };
+  }
+
+  const opened = await input.runtime.openUrl(target, pathToFileURL(input.fixture.dir).toString());
+  addStats(stats, statsFromActionResult(opened));
+  if (!opened.ok) {
+    return {
+      stats,
+      slice: {
+        id: "finder-fixture-observe",
+        appName: "Finder",
+        appClass: "file-manager",
+        status: "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.finderFilePath,
+        failureReason: opened.message ?? "Finder fixture folder did not open.",
+        notes: "Scratch folder was created, but Finder could not be opened through the runtime.",
+      },
+    };
+  }
+  if (!input.options.dryRun) {
+    await sleep(1_000);
+  }
+
+  try {
+    const snapshot = await input.runtime.observe(target);
+    if (!guiTargetMatchesSnapshot(target, snapshot)) {
+      return {
+        stats,
+        slice: {
+          id: "finder-fixture-observe",
+          appName: "Finder",
+          appClass: "file-manager",
+          status: "failed",
+          required: true,
+          safe: true,
+          mutationAttempted: false,
+          actionCount: stats.actionCount,
+          artifactPath: input.fixture.finderFilePath,
+          failureReason: describeGuiTargetMismatch(target, snapshot),
+          notes: "Finder opened, but the observed window was not the scratch fixture folder.",
+        },
+      };
+    }
+    const verified = snapshotContainsText(snapshot, input.fixture.finderFileName);
+    return {
+      stats,
+      slice: {
+        id: "finder-fixture-observe",
+        appName: "Finder",
+        appClass: "file-manager",
+        status: verified ? "passed" : "failed",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.finderFilePath,
+        verifiedText: verified ? input.fixture.finderFileName : undefined,
+        failureReason: verified
+          ? undefined
+          : "Finder snapshot did not expose the scratch fixture filename.",
+        notes: verified
+          ? "Opened a scratch folder in Finder and verified the fixture filename via AX text."
+          : "Finder opened, but the runtime did not expose the fixture filename in visible text.",
+      },
+    };
+  } catch (error) {
+    return {
+      stats,
+      slice: {
+        id: "finder-fixture-observe",
+        appName: "Finder",
+        appClass: "file-manager",
+        status: "gap",
+        required: true,
+        safe: true,
+        mutationAttempted: false,
+        actionCount: stats.actionCount,
+        artifactPath: input.fixture.finderFilePath,
+        failureReason: error instanceof Error ? error.message : String(error),
+        notes: "Finder opening was attempted, but runtime observation failed.",
+      },
+    };
+  }
+}
+
+async function runSystemSettingsObservationSlice(
+  runtime: GuiRuntime,
+): Promise<GuiNativeAppBenchmarkSlice> {
+  try {
+    const snapshot = await runtime.observe({ appName: "System Settings" });
+    return {
+      id: "system-settings-observe-only",
+      appName: "System Settings",
+      appClass: "local-settings",
+      status: guiTargetMatchesSnapshot({ appName: "System Settings" }, snapshot) ? "passed" : "gap",
+      required: false,
+      safe: true,
+      mutationAttempted: false,
+      actionCount: 0,
+      verifiedText: visibleSnapshotText(snapshot).at(0),
+      notes:
+        "Observed System Settings without toggling or changing settings; mutation remains out of scope.",
+    };
+  } catch (error) {
+    return {
+      id: "system-settings-observe-only",
+      appName: "System Settings",
+      appClass: "local-settings",
+      status: "gap",
+      required: false,
+      safe: true,
+      mutationAttempted: false,
+      actionCount: 0,
+      failureReason: error instanceof Error ? error.message : String(error),
+      notes:
+        "System Settings is a safe-navigation target, but this run did not observe it; settings mutation stays blocked.",
+    };
+  }
+}
+
+function knownNativeGapSlices(): GuiNativeAppBenchmarkSlice[] {
+  return [
+    {
+      id: "notes-scratch-note",
+      appName: "Notes",
+      appClass: "native-notes",
+      status: "skipped",
+      required: false,
+      safe: true,
+      mutationAttempted: false,
+      actionCount: 0,
+      notes:
+        "Skipped in native-apps pack because Notes persists user data; use the explicit notes_write benchmark path with current approval.",
+    },
+    {
+      id: "document-suite-apps",
+      appName: "Numbers/Pages/Word/Excel",
+      appClass: "document-suite",
+      status: "gap",
+      required: false,
+      safe: true,
+      mutationAttempted: false,
+      actionCount: 0,
+      notes:
+        "Document-suite GUI control is reported as a future adapter gap; file APIs/native integrations are preferred until safe GUI proof exists.",
+    },
+    {
+      id: "safari-browser-adapter",
+      appName: "Safari",
+      appClass: "browser",
+      status: "gap",
+      required: false,
+      safe: true,
+      mutationAttempted: false,
+      actionCount: 0,
+      notes:
+        "Safari/browser activation is intentionally secondary; current native-app proof does not depend on Google Flights.",
+    },
+  ];
 }
 
 async function maybeWriteReport(
@@ -2242,10 +2895,80 @@ async function runWorkspaceRestoreBenchmark(
   return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
 }
 
+async function runNativeAppsBenchmark(options: GuiBenchmarkOptions): Promise<GuiBenchmarkResult> {
+  const started = Date.now();
+  const progress = options.progress ?? (() => undefined);
+  const runtime = options.runtimeImpl ?? createBenchmarkRuntime(options);
+  const workspaceBefore = await captureWorkspace(runtime);
+  const audit: GuiAuditRecord[] = [];
+  const stats = emptyGuiVerifierStats();
+  const slices: GuiNativeAppBenchmarkSlice[] = [];
+  const token = `JARVIS_GUI_NATIVE_${Date.now()}_${uniqueBenchmarkToken()}`;
+  const fixture = await createNativeFixture();
+
+  progress("Writing TextEdit");
+  const textEdit = await runTextEditNativeSlice({ runtime, options, fixture, token, audit });
+  addStats(stats, textEdit.stats);
+  slices.push(textEdit.slice);
+
+  progress("Reading Finder");
+  const finder = await runFinderNativeSlice({ runtime, options, fixture });
+  addStats(stats, finder.stats);
+  slices.push(finder.slice);
+
+  progress("Checking policy boundary");
+  slices.push(buildPolicyBoundarySlice());
+
+  progress("Observing System Settings");
+  slices.push(await runSystemSettingsObservationSlice(runtime));
+  slices.push(...knownNativeGapSlices());
+
+  const requiredFailures = slices.filter((slice) => slice.required && slice.status !== "passed");
+  const elapsedSeconds = (Date.now() - started) / 1000;
+  const base = {
+    ok: requiredFailures.length === 0,
+    runtime: options.runtime,
+    task: options.task,
+    dryRun: Boolean(options.dryRun),
+    elapsedSeconds,
+    ...stats,
+    directRuntimeEscape: false,
+    replyTextExtracted: false,
+    replyExtractionMethod: "none" as const,
+    xWindow: {
+      openAttempted: false,
+      openSucceeded: null,
+    },
+    stageManager: {
+      sameStageOrBackgroundSafe: options.dryRun ? true : null,
+      notes: options.dryRun
+        ? "Dry-run simulates native-app workspace preservation."
+        : "Native-app workspace preservation is scored from frontmost telemetry.",
+    },
+    virtualPointer: {
+      present: options.dryRun ? false : null,
+      notes: "OpenComputerUse pointer evidence is scored if the runtime reports it.",
+    },
+    audit,
+    nativeAppSlices: slices,
+    failureReason: requiredFailures.length
+      ? requiredFailures
+          .map((slice) => `${slice.id}: ${slice.failureReason ?? slice.notes}`)
+          .join(" | ")
+      : undefined,
+  };
+
+  return finalizeBenchmarkResult(base, { runtime, workspaceBefore, options });
+}
+
 export async function runGuiBenchmark(options: GuiBenchmarkOptions): Promise<GuiBenchmarkResult> {
   const started = Date.now();
   const progress = options.progress ?? (() => undefined);
   const audit: GuiAuditRecord[] = [];
+
+  if (options.task === "native-apps") {
+    return runNativeAppsBenchmark(options);
+  }
 
   if (options.task === "workspace-restore") {
     return runWorkspaceRestoreBenchmark(options);

@@ -204,6 +204,36 @@ describe("exec safe bin policy product-owned cli defaults", () => {
           "@jarvis_tester_1_bot",
           "--message",
           "hello",
+          "--topic-anchor",
+          "123",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message",
+          "hello",
+          "--topic-id",
+          "123",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message",
+          "hello",
           "--reply-to",
           "123",
         ],

@@ -23,6 +23,24 @@ describe("redactSensitiveStatusSummary", () => {
   it("removes sensitive session and path details while preserving summary structure", () => {
     const input: StatusSummary = {
       runtimeVersion: "2026.3.8",
+      runtimeFingerprint: {
+        branch: "feature/private-runtime",
+        worktree: "/Users/user/Programming_Projects/openclaw/.worktrees/private",
+        stateDir: "/Users/user/Library/Application Support/Jarvis/.jarvis",
+        configPath: "/Users/user/Library/Application Support/Jarvis/.jarvis/openclaw.json",
+        serviceLabel: "ai.jarvis.gateway",
+        runtimePackageVersion: "2026.3.16",
+        appProductVersion: "2026.6.24",
+        launchServiceVersion: "2026.6.24",
+        runtimeCommit: "eabe9d8",
+        runtimeSource: "sacred-main-checkout",
+        guiCapabilities: {
+          guiControl: true,
+          guiBenchmarkNativeApps: true,
+          trustedLocalDefault: true,
+        },
+        openClawVersion: "2026.6.24",
+      },
       heartbeat: {
         defaultAgentId: "main",
         agents: [{ agentId: "main", enabled: true, every: "5m", everyMs: 300_000 }],
@@ -52,6 +70,24 @@ describe("redactSensitiveStatusSummary", () => {
     expect(redacted.sessions.byAgent[0]?.path).toBe("[redacted]");
     expect(redacted.sessions.byAgent[0]?.recent).toEqual([]);
     expect(redacted.runtimeVersion).toBe("2026.3.8");
+    expect(redacted.runtimeFingerprint).toMatchObject({
+      branch: "[redacted]",
+      worktree: "[redacted]",
+      stateDir: "[redacted]",
+      configPath: "[redacted]",
+      serviceLabel: "ai.jarvis.gateway",
+      runtimePackageVersion: "2026.3.16",
+      appProductVersion: "2026.6.24",
+      launchServiceVersion: "2026.6.24",
+      runtimeCommit: "eabe9d8",
+      runtimeSource: "sacred-main-checkout",
+      guiCapabilities: {
+        guiControl: true,
+        guiBenchmarkNativeApps: true,
+        trustedLocalDefault: true,
+      },
+      openClawVersion: "2026.6.24",
+    });
     expect(redacted.heartbeat).toEqual(input.heartbeat);
     expect(redacted.channelSummary).toEqual(input.channelSummary);
   });

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runGuiBenchmark } from "./benchmark.js";
 import type { AppTarget, ElementRef, GuiRuntime, GuiSnapshot } from "./types.js";
@@ -167,6 +169,493 @@ describe("runGuiBenchmark", () => {
       "Verifying the reply",
     ]);
     expect(result.markdownSummary).toContain("GUI Benchmark: safari-notes-claude");
+  });
+
+  it("runs native-apps in dry-run mode with explicit slice status", async () => {
+    const progress: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: true,
+      progress: (message) => progress.push(message),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task).toBe("native-apps");
+    expect(result.actionCount).toBe(3);
+    expect(result.audit.map((record) => record.appName)).toEqual(["TextEdit"]);
+    expect(result.nativeAppSlices?.map((slice) => [slice.id, slice.status])).toEqual([
+      ["textedit-scratch-write", "passed"],
+      ["finder-fixture-observe", "passed"],
+      ["policy-boundary", "passed"],
+      ["system-settings-observe-only", "passed"],
+      ["notes-scratch-note", "skipped"],
+      ["document-suite-apps", "gap"],
+      ["safari-browser-adapter", "gap"],
+    ]);
+    expect(result.qualityGate.codexComputerUseParity).toBe("not-measured");
+    expect(result.qualityGate.blockers).toContain(
+      "Dry-run does not measure real desktop latency, focus, pointer, or reply UI.",
+    );
+    expect(progress).toEqual([
+      "Writing TextEdit",
+      "Reading Finder",
+      "Checking policy boundary",
+      "Observing System Settings",
+    ]);
+    expect(result.markdownSummary).toContain("GUI Benchmark: native-apps");
+    expect(result.markdownSummary).toContain("native app slices:");
+  });
+
+  it("fails native-apps before live TextEdit mutation unless explicitly approved", async () => {
+    let textEditWrites = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: false,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "Terminal", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "Finder") {
+            return benchmarkSnapshot({
+              id: "finder",
+              appName: "Finder",
+              visibleText: ["jarvis-gui-native-finder-proof.txt"],
+            });
+          }
+          if (target.appName === "System Settings") {
+            return benchmarkSnapshot({
+              id: "settings",
+              appName: "System Settings",
+              visibleText: ["System Settings"],
+            });
+          }
+          return benchmarkSnapshot({ appName: target.appName });
+        },
+        async openUrl() {
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async setValue() {
+          textEditWrites += 1;
+          return { ok: true, actionCount: 1 };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(textEditWrites).toBe(0);
+    expect(
+      result.nativeAppSlices?.find((slice) => slice.id === "textedit-scratch-write"),
+    ).toMatchObject({
+      status: "blocked",
+      mutationAttempted: false,
+    });
+    expect(result.failureReason).toContain("--approve-native-app-write");
+  });
+
+  it("proves native-apps TextEdit and Finder slices through verified runtime actions", async () => {
+    let textEditValue = "";
+    const openedApps: string[] = [];
+    let finderWindowTitle = "";
+    let finderVisibleText: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: false,
+      approveNativeAppWrite: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "Terminal", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "TextEdit") {
+            return benchmarkSnapshot({
+              id: "textedit",
+              appName: "TextEdit",
+              windowTitle: target.windowTitle,
+              visibleText: textEditValue ? [textEditValue] : ["TextEdit"],
+              elements: [
+                {
+                  ref: "@body",
+                  role: "text area",
+                  value: textEditValue,
+                  appName: "TextEdit",
+                  windowTitle: target.windowTitle,
+                },
+              ],
+            });
+          }
+          if (target.appName === "Finder") {
+            return benchmarkSnapshot({
+              id: "finder",
+              appName: "Finder",
+              windowTitle: finderWindowTitle,
+              visibleText: finderVisibleText,
+            });
+          }
+          if (target.appName === "System Settings") {
+            return benchmarkSnapshot({
+              id: "settings",
+              appName: "System Settings",
+              visibleText: ["System Settings"],
+            });
+          }
+          return benchmarkSnapshot({ appName: target.appName });
+        },
+        async openUrl(target: AppTarget, url: string) {
+          openedApps.push(target.appName);
+          if (target.appName === "Finder") {
+            finderWindowTitle = target.windowTitle ?? "";
+            finderVisibleText = await fs.readdir(fileURLToPath(url));
+          }
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async setValue(_target: ElementRef, value: string) {
+          textEditValue = value;
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(openedApps).toEqual(["TextEdit", "Finder"]);
+    expect(textEditValue).toContain("Jarvis GUI benchmark native-apps");
+    expect(result.audit).toHaveLength(1);
+    expect(result.audit[0]?.appName).toBe("TextEdit");
+    expect(
+      result.nativeAppSlices?.find((slice) => slice.id === "textedit-scratch-write"),
+    ).toMatchObject({
+      status: "passed",
+      mutationAttempted: true,
+      actionCount: 2,
+    });
+    expect(
+      result.nativeAppSlices?.find((slice) => slice.id === "finder-fixture-observe"),
+    ).toMatchObject({
+      status: "passed",
+      mutationAttempted: false,
+      actionCount: 1,
+    });
+    expect(result.nativeAppSlices?.find((slice) => slice.id === "policy-boundary")).toMatchObject({
+      status: "passed",
+      mutationAttempted: false,
+    });
+  });
+
+  it("accepts OCU TextEdit text entry area as the scratch document body", async () => {
+    let textEditValue = "";
+    let finderWindowTitle = "";
+    let finderVisibleText: string[] = [];
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: false,
+      approveNativeAppWrite: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "Terminal", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "TextEdit") {
+            return benchmarkSnapshot({
+              id: "textedit",
+              appName: "TextEdit",
+              windowTitle: target.windowTitle,
+              visibleText: textEditValue ? [textEditValue] : ["TextEdit"],
+              elements: [
+                {
+                  ref: "@2",
+                  role: "text entry area (settable, string)",
+                  label: "text entry area (settable, string)",
+                  value: textEditValue,
+                  appName: "TextEdit",
+                  windowTitle: target.windowTitle,
+                },
+                {
+                  ref: "@30",
+                  role: "text",
+                  label: target.windowTitle,
+                  appName: "TextEdit",
+                  windowTitle: target.windowTitle,
+                },
+                {
+                  ref: "@32",
+                  role: "TextEdit",
+                  label: "TextEdit",
+                  appName: "TextEdit",
+                  windowTitle: target.windowTitle,
+                },
+              ],
+            });
+          }
+          if (target.appName === "Finder") {
+            return benchmarkSnapshot({
+              id: "finder",
+              appName: "Finder",
+              windowTitle: finderWindowTitle,
+              visibleText: finderVisibleText,
+            });
+          }
+          if (target.appName === "System Settings") {
+            return benchmarkSnapshot({
+              id: "settings",
+              appName: "System Settings",
+              visibleText: ["System Settings"],
+            });
+          }
+          return benchmarkSnapshot({ appName: target.appName });
+        },
+        async openUrl(target: AppTarget, url: string) {
+          if (target.appName === "Finder") {
+            finderWindowTitle = target.windowTitle ?? "";
+            finderVisibleText = await fs.readdir(fileURLToPath(url));
+          }
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async setValue(_target: ElementRef, value: string) {
+          textEditValue = value;
+          return { ok: true, actionCount: 1, movedFocus: false };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(textEditValue).toContain("Jarvis GUI benchmark native-apps");
+  });
+
+  it("refuses approved native-apps TextEdit writes without document-body evidence", async () => {
+    let textEditWrites = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: false,
+      approveNativeAppWrite: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "TextEdit", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "TextEdit") {
+            return benchmarkSnapshot({
+              id: "textedit-find",
+              appName: "TextEdit",
+              windowTitle: target.windowTitle,
+              visibleText: ["Find"],
+              elements: [
+                {
+                  ref: "@find",
+                  role: "text field",
+                  label: "Find",
+                  value: "",
+                  appName: "TextEdit",
+                  windowTitle: target.windowTitle,
+                },
+              ],
+            });
+          }
+          if (target.appName === "Finder") {
+            return benchmarkSnapshot({
+              id: "finder",
+              appName: "Finder",
+              windowTitle: target.windowTitle,
+              visibleText: [],
+            });
+          }
+          if (target.appName === "System Settings") {
+            return benchmarkSnapshot({
+              id: "settings",
+              appName: "System Settings",
+              visibleText: ["System Settings"],
+            });
+          }
+          return benchmarkSnapshot({ appName: target.appName });
+        },
+        async openUrl() {
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async setValue() {
+          textEditWrites += 1;
+          return { ok: true, actionCount: 1 };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    const textEdit = result.nativeAppSlices?.find((slice) => slice.id === "textedit-scratch-write");
+
+    expect(result.ok).toBe(false);
+    expect(textEditWrites).toBe(0);
+    expect(textEdit).toMatchObject({
+      status: "failed",
+      mutationAttempted: false,
+    });
+    expect(textEdit?.failureReason).toContain("No editable TextEdit body element matched");
+  });
+
+  it("refuses approved native-apps TextEdit writes when the scratch window is not observed", async () => {
+    let textEditWrites = 0;
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: false,
+      approveNativeAppWrite: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "TextEdit", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "TextEdit") {
+            return benchmarkSnapshot({
+              id: "existing-textedit",
+              appName: "TextEdit",
+              windowTitle: "User notes.txt",
+              visibleText: ["Personal draft"],
+              elements: [
+                {
+                  ref: "@body",
+                  role: "text area",
+                  label: "TextEdit document body",
+                  value: "Personal draft",
+                  appName: "TextEdit",
+                  windowTitle: "User notes.txt",
+                },
+              ],
+            });
+          }
+          if (target.appName === "Finder") {
+            return benchmarkSnapshot({
+              id: "finder",
+              appName: "Finder",
+              visibleText: ["jarvis-gui-native-finder-proof.txt"],
+            });
+          }
+          if (target.appName === "System Settings") {
+            return benchmarkSnapshot({
+              id: "settings",
+              appName: "System Settings",
+              visibleText: ["System Settings"],
+            });
+          }
+          return benchmarkSnapshot({ appName: target.appName });
+        },
+        async openUrl() {
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async setValue() {
+          textEditWrites += 1;
+          return { ok: true, actionCount: 1 };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    const textEdit = result.nativeAppSlices?.find((slice) => slice.id === "textedit-scratch-write");
+
+    expect(result.ok).toBe(false);
+    expect(textEditWrites).toBe(0);
+    expect(textEdit).toMatchObject({
+      status: "failed",
+      mutationAttempted: false,
+    });
+    expect(textEdit?.failureReason).toContain("Wrong target");
+  });
+
+  it("refuses native-apps Finder proof from a stale non-fixture window", async () => {
+    let textEditValue = "";
+
+    const result = await runGuiBenchmark({
+      runtime: "open-computer-use",
+      task: "native-apps",
+      dryRun: false,
+      approveNativeAppWrite: true,
+      runtimeImpl: {
+        name: "open-computer-use",
+        async listApps() {
+          return [{ appName: "Finder", frontmost: true }];
+        },
+        async observe(target: AppTarget) {
+          if (target.appName === "TextEdit") {
+            return benchmarkSnapshot({
+              id: "textedit",
+              appName: "TextEdit",
+              windowTitle: target.windowTitle,
+              visibleText: textEditValue ? [textEditValue] : ["TextEdit"],
+              elements: [
+                {
+                  ref: "@body",
+                  role: "text area",
+                  label: "TextEdit document body",
+                  value: textEditValue,
+                  appName: "TextEdit",
+                  windowTitle: target.windowTitle,
+                },
+              ],
+            });
+          }
+          if (target.appName === "Finder") {
+            return benchmarkSnapshot({
+              id: "finder-old-window",
+              appName: "Finder",
+              windowTitle: "Downloads",
+              visibleText: ["jarvis-gui-native-finder-proof.txt"],
+            });
+          }
+          if (target.appName === "System Settings") {
+            return benchmarkSnapshot({
+              id: "settings",
+              appName: "System Settings",
+              visibleText: ["System Settings"],
+            });
+          }
+          return benchmarkSnapshot({ appName: target.appName });
+        },
+        async openUrl() {
+          return { ok: true, actionCount: 1, movedFocus: true };
+        },
+        async setValue(_target: ElementRef, value: string) {
+          textEditValue = value;
+          return { ok: true, actionCount: 1 };
+        },
+        async click() {
+          return { ok: true };
+        },
+      },
+    });
+
+    const finder = result.nativeAppSlices?.find((slice) => slice.id === "finder-fixture-observe");
+
+    expect(result.ok).toBe(false);
+    expect(finder).toMatchObject({
+      status: "failed",
+      mutationAttempted: false,
+    });
+    expect(finder?.failureReason).toContain("Wrong target");
   });
 
   it("prepares a fresh Claude chat for safari-notes-claude when requested", async () => {

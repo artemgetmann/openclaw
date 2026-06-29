@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🎮",
+        "displayName": "Google Workspace",
         "requires": { "bins": ["gog"] },
         "install":
           [
@@ -15,16 +16,20 @@ metadata:
               "kind": "brew",
               "formula": "steipete/tap/gogcli",
               "bins": ["gog"],
-              "label": "Install gog (brew)",
+              "label": "Install Google Workspace connector (gog)",
+              "versionCommand": ["gog", "--version"],
+              "versionRegex": "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+              "recommendedVersion": "0.31.0",
             },
           ],
       },
   }
 ---
 
-# gog
+# Google Workspace (gog)
 
-Use `gog` for Gmail, Google Calendar, Drive, Docs, Sheets, and Contacts work.
+Use `gog` for Google Workspace work: Gmail, Google Calendar, Drive, Docs,
+Sheets, and Contacts.
 This is the Google-account skill, not the generic mailbox skill.
 
 Use it when the user means things like:
@@ -36,10 +41,16 @@ Use it when the user means things like:
 - "look up a contact from my Google account"
 
 If the task is generic email read/reply/search without a Google-specific ask,
-prefer `himalaya` instead. Requires OAuth setup.
+prefer `himalaya` instead. For Gmail fallback, only use `himalaya` after you
+have proven it is the same mailbox the user meant. Never use it for Calendar,
+Drive, Docs, Sheets, or Contacts.
 
 Setup routing
 
+- Check `gog --version` before assuming newer auth helpers exist. Treat
+  v0.31.0+ as the cutoff for `auth setup`, `GOG_HELP=agent`, classified
+  corrupt-token reauth recovery, and global `--readonly` / `GOG_READONLY=1`.
+  If the local binary is older, use the older setup flow and say so plainly.
 - If OAuth client credentials, account auth, or `gog auth list` are missing,
   use the shared `consumer-setup` skill instead of pushing raw setup commands at
   the user.
@@ -74,6 +85,9 @@ Setup routing
   blocked.
 - If setup is missing, do not dump raw CLI setup commands back to a consumer.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
+- On v0.31.0+, `gog auth setup` is the preferred guided setup entrypoint and
+  `GOG_HELP=agent` surfaces the agent-oriented help text. Do not assume either
+  exists on older binaries.
 
 Email fallback policy
 
@@ -84,10 +98,47 @@ Email fallback policy
   configured account is the same mailbox the user intended.
 - For sends, never silently fall back to a different sender identity. If the
   same-mailbox identity is unclear, stop and ask the user which account to use.
+- Before sending a Gmail reply from a draft that sat for a meaningful amount of
+  time, re-read or re-search the thread/person first and check for newer
+  messages. Email is usually less volatile than chat, but stale drafts can still
+  answer the wrong state.
+- When presenting a Gmail thread context for a reply decision, include the exact
+  full text of the latest relevant inbound email from the other person when it
+  is available, then add a concise summary only if useful. Do not force the user
+  to rely on a summary when the sender's actual wording matters.
+- If you draft and send in the same short flow, normal thread reading before the
+  draft is enough unless the user delayed approval, the thread is active, or the
+  last read is no longer trustworthy.
 - If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
   report the blocker clearly and ask whether the user wants to reconnect Google.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
   Himalaya as a fallback. Himalaya is email-only.
+
+Gmail triage pattern
+
+- Default to Gmail inbox plus a clear timeframe unless the user asks for a
+  broader audit.
+- Shortlist before deep reads. Prefer `gog gmail search` or
+  `gog gmail messages search` with a small `--max` before reading full messages
+  or drafting replies.
+- Use Gmail query shape to control scope: unread/recent mail, sender, topic,
+  attachments, labels, or `newer_than:7d`. Tighten noisy searches before
+  reading bodies.
+- Filter obvious noise early: newsletters, calendar churn, receipts,
+  automated alerts, delivery notifications, and FYI-only threads.
+- Use `gog gmail search` for thread-level triage. Use
+  `gog gmail messages search` when individual message order matters or thread
+  grouping would hide who said what.
+- Deep-read only shortlisted items where snippets are not enough, active
+  conversations, attachment/media items, or reply candidates.
+- Bucket results as `Urgent`, `Needs reply soon`, `Waiting on them`,
+  `Schedule`, `Delegate`, `Archive / no action`, or `FYI`.
+- State scope and confidence: account, query, max/result count, timeframe, and
+  what was excluded or only sampled.
+- Treat "needs reply" as an inference unless the thread context clearly shows
+  the user is the next responder.
+- Before sending a Gmail reply, re-search or re-read the target thread/person if
+  approval was delayed, the thread is active, or the last read may be stale.
 
 Setup Routing
 
@@ -104,6 +155,8 @@ Setup Routing
   `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`.
   `gog` can open the browser itself on this Mac, and that path avoids repo-local
   helper allowlist problems.
+- If `gog --version` reports v0.31.0 or newer, `gog auth setup` is the better
+  first guided path than reconstructing the older flow by hand.
 - If repo-local helper execution is denied, fall back to direct `gog auth add`
   instead of telling the user to use Terminal or detouring to a node.
 - For local consumer OAuth setup, prefer
@@ -131,7 +184,8 @@ Setup Routing
   generic auth noise:
   missing OAuth client credentials, OAuth app still in Testing without this
   account added as a test user, required API not enabled, missed localhost
-  callback handoff, or local Keychain approval still pending.
+  callback handoff, local Keychain approval still pending, or a corrupt token
+  that v0.31.0+ can recover from automatically.
 - Once auth completes, verify with `gog auth list` before moving into Gmail,
   Calendar, Drive, Docs, Sheets, or Contacts actions.
 - Treat successful auth as a resume point. After `gog auth list` or another
@@ -140,6 +194,8 @@ Setup Routing
 
 Setup (once)
 
+- Current preferred path on `gog` v0.31.0 or newer:
+  `gog auth setup`
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
@@ -222,7 +278,11 @@ Notes
 
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
 - For scripting, prefer `--json` plus `--no-input`.
+- On v0.31.0+, use `--readonly` or `GOG_READONLY=1` for safe read-only probes.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
 - Confirm before sending mail or creating events.
+- After sending an important Gmail reply, you may offer to monitor that thread
+  for a response. Ask before creating any monitor, and include the target,
+  cadence, stop condition, expiry, and draft-vs-send policy.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.

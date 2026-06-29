@@ -346,6 +346,11 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: serviceVersion,
     OPENCLAW_SERVICE_BUILD: serviceBuild,
+    // launchd/systemd/schtasks already supervise the gateway process. Letting
+    // the CLI entrypoint respawn itself inside that service leaves launchd
+    // tracking a short-lived parent while the real listener survives as an
+    // orphan, which makes status/recovery report a stale gateway PID.
+    OPENCLAW_NO_RESPAWN: "1",
   };
 }
 

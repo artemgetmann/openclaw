@@ -31,9 +31,13 @@ export type GuiTaskPolicy = {
 };
 
 export const GUI_TASK_POLICY_PROFILE_NAMES = [
+  "trusted_local_gui_control",
   "read_only_web_context",
   "safe_local_settings_navigation",
   "non_committal_web_dry_run",
+  "commerce_flow_until_final_confirmation",
+  "software_update_flow",
+  "software_update_install_approved",
   "send_message_to_approved_assistant",
   "local_fixture_write",
   "notes_write",
@@ -56,6 +60,69 @@ export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "destructive",
 ];
 
+const TRUSTED_LOCAL_GUI_HARD_STOP_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "sign-in",
+  "oauth",
+  "token",
+  "secret",
+  "otp",
+  "one-time password",
+  "two-factor",
+  "2fa",
+  "payment method",
+  "change payment",
+  "add payment",
+  "credit card",
+  "debit card",
+  "payment card",
+  "card details",
+  "card number",
+  "security code",
+  "cvv",
+  "cvc",
+  "checkout",
+  "pay now",
+  "place order",
+  "final booking",
+  "final confirmation",
+  "confirm booking",
+  "confirm order",
+  "confirm purchase",
+  "confirm payment",
+  "buy now",
+  "purchase",
+  "subscribe",
+  "subscription",
+  "upgrade",
+  "start trial",
+  "delete account",
+  "remove account",
+  "close account",
+  "deactivate account",
+  "cancel account",
+  "change account",
+  "switch account",
+  "account change",
+  "delete profile",
+  "remove profile",
+  "delete user",
+  "remove user",
+  "security settings",
+  "install",
+  "install update",
+  "install updates",
+  "install now",
+  "install and relaunch",
+  "download and install",
+  "update now",
+  "upgrade now",
+  "relaunch to update",
+  "restart to update",
+  "replace app",
+  "move to applications",
+];
+
 const LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS = [
   ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
   "account",
@@ -66,8 +133,14 @@ const LOCAL_SETTINGS_NAVIGATION_DENIED_TERMS = [
   "quit",
   "install update",
   "install updates",
+  "install now",
+  "install and relaunch",
+  "update now",
   "update installation",
   "download update",
+  "relaunch to update",
+  "restart to update",
+  "replace app",
   "change plan",
   "change account",
 ];
@@ -88,7 +161,213 @@ const NON_COMMITTAL_WEB_DRY_RUN_DENIED_TERMS = [
   "2fa",
 ];
 
+const COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "payment method",
+  "change payment",
+  "add payment",
+  "credit card",
+  "debit card",
+  "payment card",
+  "card details",
+  "card number",
+  "security code",
+  "cvv",
+  "cvc",
+  "expiration date",
+  "expiry date",
+  "pay",
+  "pay now",
+  "book",
+  "final booking",
+  "confirm",
+  "order",
+  "order now",
+  "reserve",
+  "place order",
+  "confirm booking",
+  "confirm order",
+  "confirm purchase",
+  "confirm payment",
+  "confirm charge",
+  "buy now",
+  "purchase",
+  "subscribe",
+  "subscription",
+  "upgrade",
+  "start trial",
+  "start free trial",
+  "book now",
+  "complete booking",
+  "complete order",
+  "otp",
+  "one-time password",
+  "two-factor",
+  "2fa",
+  "login",
+  "log in",
+  "sign in",
+  "passkey",
+  "password",
+  "account settings",
+  "security settings",
+  "delete account",
+  "remove account",
+  "close account",
+  "deactivate account",
+  "cancel account",
+  "change account",
+  "switch account",
+  "account change",
+  "delete profile",
+  "remove profile",
+  "delete user",
+  "remove user",
+  "destructive",
+  "cancel booking",
+  "cancel order",
+  "delete order",
+  "refund",
+  "void",
+];
+
+// Commerce flows need two different safety lenses:
+// - the selected control/reason should block final booking, purchase, payment,
+//   auth, and destructive controls;
+// - the broader page context should block hard-stop auth/payment/security pages
+//   even when the selected button is generically labeled "Continue".
+//
+// Keep final-booking words like "book" out of the context-only list because
+// normal search/result pages can legitimately have titles like "Book your
+// ticket" while still being reversible pre-payment navigation.
+const COMMERCE_HARD_STOP_CONTEXT_TERMS = [
+  "login",
+  "log in",
+  "sign in",
+  "auth",
+  "password",
+  "passkey",
+  "payment",
+  "billing",
+  "account settings",
+  "payment method",
+  "change payment",
+  "add payment",
+  "credit card",
+  "debit card",
+  "payment card",
+  "card details",
+  "card number",
+  "security code",
+  "cvv",
+  "cvc",
+  "expiration date",
+  "expiry date",
+  "pay with",
+  "apple pay",
+  "paypal",
+  "pay now",
+  "pay",
+  "final confirmation",
+  "review and confirm",
+  "place order",
+  "confirm order",
+  "confirm purchase",
+  "confirm payment",
+  "confirm charge",
+  "buy now",
+  "purchase",
+  "subscribe",
+  "subscription",
+  "upgrade",
+  "start trial",
+  "start free trial",
+  "book now",
+  "complete booking",
+  "complete order",
+  "otp",
+  "one-time password",
+  "two-factor",
+  "2fa",
+  "account settings",
+  "security settings",
+  "delete account",
+  "remove account",
+  "close account",
+  "deactivate account",
+  "cancel account",
+  "change account",
+  "switch account",
+  "account change",
+  "delete profile",
+  "remove profile",
+  "delete user",
+  "remove user",
+  "destructive",
+  "cancel booking",
+  "cancel order",
+  "delete order",
+  "refund",
+  "void",
+];
+
+const SOFTWARE_UPDATE_FLOW_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "install update",
+  "install updates",
+  "install now",
+  "install on quit",
+  "install and relaunch",
+  "download and install",
+  "download & install",
+  "download/install",
+  "download update",
+  "update now",
+  "upgrade now",
+  "relaunch",
+  "restart to update",
+  "relaunch to update",
+  "quit and install",
+  "replace app",
+  "replace existing",
+  "move to applications",
+];
+
+// This profile is intentionally narrower than "anything updater-like." It
+// permits the Sparkle-style install controls we can prove after explicit user
+// approval, while keeping download/replace/move flows blocked until they have
+// their own proof and approval semantics.
+const SOFTWARE_UPDATE_INSTALL_APPROVED_DENIED_TERMS = [
+  ...DEFAULT_DENIED_GUI_SURFACE_TERMS,
+  "download and install",
+  "download & install",
+  "download/install",
+  "download update",
+  "update now",
+  "upgrade now",
+  "restart to update",
+  "relaunch to update",
+  "quit and install",
+  "replace app",
+  "replace existing",
+  "move to applications",
+];
+
 export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolicy> = {
+  trusted_local_gui_control: {
+    taskId: "trusted_local_gui_control",
+    taskName: "Trusted local GUI control",
+    allowedApps: ["*"],
+    grantedCapabilities: [
+      "read_screen",
+      "navigate_url",
+      "write_text_to_target",
+      "submit_message_to_target",
+      "click_verified_button",
+    ],
+    deniedSurfaceTerms: TRUSTED_LOCAL_GUI_HARD_STOP_TERMS,
+    requiredVerificationMode: "post_state",
+  },
   read_only_web_context: {
     taskId: "read_only_web_context",
     taskName: "Read-only web context gathering",
@@ -116,6 +395,35 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
       "click_verified_button",
     ],
     deniedSurfaceTerms: NON_COMMITTAL_WEB_DRY_RUN_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  commerce_flow_until_final_confirmation: {
+    taskId: "commerce_flow_until_final_confirmation",
+    taskName: "Commerce flow until payment or final confirmation",
+    allowedApps: ["Safari", "Google Chrome", "Chrome", "Arc", "Firefox"],
+    grantedCapabilities: [
+      "read_screen",
+      "navigate_url",
+      "write_text_to_target",
+      "click_verified_button",
+    ],
+    deniedSurfaceTerms: COMMERCE_UNTIL_FINAL_CONFIRMATION_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  software_update_flow: {
+    taskId: "software_update_flow",
+    taskName: "Software update discovery before install/relaunch",
+    allowedApps: ["*"],
+    grantedCapabilities: ["read_screen", "click_verified_button"],
+    deniedSurfaceTerms: SOFTWARE_UPDATE_FLOW_DENIED_TERMS,
+    requiredVerificationMode: "post_state",
+  },
+  software_update_install_approved: {
+    taskId: "software_update_install_approved",
+    taskName: "Approved software update install/relaunch",
+    allowedApps: ["*"],
+    grantedCapabilities: ["read_screen", "click_verified_button"],
+    deniedSurfaceTerms: SOFTWARE_UPDATE_INSTALL_APPROVED_DENIED_TERMS,
     requiredVerificationMode: "post_state",
   },
   send_message_to_approved_assistant: {
@@ -151,12 +459,18 @@ export const GUI_TASK_POLICY_PROFILES: Record<GuiTaskPolicyProfile, GuiTaskPolic
 };
 
 const DEFAULT_GUI_TASK_POLICY: GuiTaskPolicy = {
-  taskId: "default_read_only",
-  taskName: "Default read-only GUI policy",
+  taskId: "trusted_local_gui_control",
+  taskName: "Trusted local GUI control",
   allowedApps: ["*"],
-  grantedCapabilities: ["read_screen"],
-  deniedSurfaceTerms: DEFAULT_DENIED_GUI_SURFACE_TERMS,
-  requiredVerificationMode: "observe_only",
+  grantedCapabilities: [
+    "read_screen",
+    "navigate_url",
+    "write_text_to_target",
+    "submit_message_to_target",
+    "click_verified_button",
+  ],
+  deniedSurfaceTerms: TRUSTED_LOCAL_GUI_HARD_STOP_TERMS,
+  requiredVerificationMode: "post_state",
 };
 
 export type GuiPolicyDecision = {
@@ -172,6 +486,7 @@ export type GuiPolicyInput = {
   target: AppTarget;
   snapshot?: GuiSnapshot;
   element?: ElementRef;
+  secondaryAction?: string;
   reason: string;
   approvedPolicyRisk?: boolean;
   taskPolicy?: GuiTaskPolicy;
@@ -196,6 +511,7 @@ function searchableText(input: GuiPolicyInput): string {
     input.element?.label,
     input.element?.description,
     input.element?.value,
+    input.secondaryAction,
     input.reason,
   ]
     .map(normalizeText)
@@ -203,10 +519,64 @@ function searchableText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function visibleContextText(input: GuiPolicyInput): string {
+  return [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.summary,
+    ...(input.snapshot?.visibleText ?? []),
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function commerceHardStopContextText(input: GuiPolicyInput): string {
+  return [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.summary,
+    ...(input.snapshot?.visibleText ?? []),
+  ]
+    .map(commerceHardStopContextPart)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function commerceHardStopContextPart(value: string | undefined): string {
+  const text = normalizeText(value);
+  if (!text || !hasAnyTerm(text, COMMERCE_HARD_STOP_CONTEXT_TERMS)) {
+    return "";
+  }
+  return text;
+}
+
 function reasonAsDeniedSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): string {
   const reason = normalizeText(input.reason);
   if (!reason || !hasAnyTerm(reason, deniedTerms)) {
     return "";
+  }
+  const hasStopBeforeBoundary = /\bstop before\b/.test(reason);
+
+  // A boundary phrase only helps when the action itself remains reversible. If
+  // the request says to proceed into payment/card/final-confirmation territory,
+  // the negative clause after it cannot launder the transition into a safe
+  // pre-payment click.
+  if (
+    /\b(continue|proceed|go|advance|navigate|move|open)\s+(?:to|into|through|toward|towards)\s+(?:the\s+)?(pay|payment|billing|card details|final confirmation|final booking|purchase confirmation|booking confirmation)\b/.test(
+      reason,
+    ) ||
+    /\b(enter|add|provide|submit|save|use)\s+(?:a\s+|the\s+|this\s+)?(payment|payment method|card|credit card|debit card|card details|card number)\b/.test(
+      reason,
+    ) ||
+    (!hasStopBeforeBoundary &&
+      /\b(book|reserve|confirm|purchase|buy|order|subscribe|upgrade)\b/.test(reason))
+  ) {
+    return reason;
   }
 
   // Operators often state a boundary in the reason, for example "open this
@@ -224,6 +594,13 @@ function sensitiveSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): str
     return searchableText(input);
   }
 
+  if (input.taskPolicy?.taskId === "commerce_flow_until_final_confirmation") {
+    return [selectedMutationSurfaceText(input), reasonAsDeniedSurfaceText(input, deniedTerms)]
+      .map(normalizeText)
+      .filter(Boolean)
+      .join(" ");
+  }
+
   // Mutations should be judged against the target and selected element, not
   // every unrelated AX string in the app snapshot. Browser/toolbars often
   // expose generic items like "Remove from toolbar"; treating that as the
@@ -239,6 +616,7 @@ function sensitiveSurfaceText(input: GuiPolicyInput, deniedTerms: string[]): str
     input.element?.label,
     input.element?.description,
     input.element?.value,
+    input.secondaryAction,
     reasonAsDeniedSurfaceText(input, deniedTerms),
   ]
     .map(normalizeText)
@@ -254,6 +632,7 @@ function selectedMutationSurfaceText(input: GuiPolicyInput): string {
     input.element?.label,
     input.element?.description,
     input.element?.value,
+    input.secondaryAction,
   ]
     .map(normalizeText)
     .filter(Boolean)
@@ -269,6 +648,7 @@ function intendedActionText(input: GuiPolicyInput): string {
     input.element?.title,
     input.element?.label,
     input.element?.description,
+    input.secondaryAction,
     input.reason,
   ]
     .map(normalizeText)
@@ -302,6 +682,102 @@ function isAllowedNonCommittalBookChrome(input: GuiPolicyInput): boolean {
     pageChrome.includes("book your ticket") &&
     !hasAnyTerm(selectedMutationSurfaceText(input), ["book"])
   );
+}
+
+function isExplicitUserSuppliedDetailReason(reason: string): boolean {
+  return /\b(explicitly supplied|user supplied|supplied by (the )?user|provided by (the )?user|user provided|given by (the )?user|from (the )?user)\b/.test(
+    reason,
+  );
+}
+
+function commerceDetailEntryRequiresExplicitSource(input: GuiPolicyInput): boolean {
+  if (
+    input.taskPolicy?.taskId !== "commerce_flow_until_final_confirmation" ||
+    input.actionType !== "setValue"
+  ) {
+    return false;
+  }
+
+  const selectedSurface = selectedMutationSurfaceText(input);
+  if (
+    /\b(passenger|traveler|traveller)\b/.test(selectedSurface) &&
+    /\b(count|number|quantity|adult|adults|child|children|infant|infants)\b/.test(selectedSurface)
+  ) {
+    return false;
+  }
+
+  const detailSurface = [selectedSurface, visibleContextText(input)]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+
+  return Boolean(
+    hasAnyTerm(detailSurface, [
+      "passenger",
+      "traveler",
+      "traveller",
+      "contact",
+      "email",
+      "email address",
+      "phone",
+      "phone number",
+      "mobile",
+      "mobile number",
+      "address",
+      "name",
+      "given name",
+      "first name",
+      "last name",
+      "full name",
+      "surname",
+      "date of birth",
+      "birth date",
+      "dob",
+      "nationality",
+      "passport",
+    ]) && !isExplicitUserSuppliedDetailReason(normalizeText(input.reason)),
+  );
+}
+
+function hasVisibleSoftwareUpdateInstallContext(input: GuiPolicyInput): boolean {
+  if (
+    input.taskPolicy?.taskId !== "software_update_install_approved" ||
+    input.actionType === "observe"
+  ) {
+    return true;
+  }
+
+  // Explicit approval is not enough for the broad install-approved profile. The
+  // visible target also has to look like an updater surface, otherwise a generic
+  // "Install" button in another installer could inherit update privileges.
+  return /\b(software update|update available|new version|install update|install updates|install and relaunch|install on quit|relaunch to update)\b/.test(
+    visibleContextText(input),
+  );
+}
+
+function allowedSoftwareUpdateControlReason(input: GuiPolicyInput): string | undefined {
+  if (
+    input.actionType === "observe" ||
+    (input.taskPolicy?.taskId !== "software_update_flow" &&
+      input.taskPolicy?.taskId !== "software_update_install_approved")
+  ) {
+    return undefined;
+  }
+
+  const selectedSurface = selectedMutationSurfaceText(input);
+  if (input.taskPolicy.taskId === "software_update_flow") {
+    return /\b(check for updates?|check updates?|release notes?|view release notes?|more info|details)\b/.test(
+      selectedSurface,
+    )
+      ? undefined
+      : "Software update discovery only allows check/update-info controls.";
+  }
+
+  return /\b(install|install update|install updates|install now|install on quit|install and relaunch|relaunch)\b/.test(
+    selectedSurface,
+  )
+    ? undefined
+    : "Approved software update install only allows install or relaunch controls.";
 }
 
 function targetMatchesAllowedTerm(
@@ -400,6 +876,54 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
       requiredCapability,
       taskPolicy,
     };
+  }
+
+  if (commerceDetailEntryRequiresExplicitSource(input)) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason:
+        "Commerce detail entry requires the reason to state that the passenger, traveler, contact, or address detail was explicitly supplied by the user.",
+      requiredCapability,
+      taskPolicy,
+    };
+  }
+
+  if (!hasVisibleSoftwareUpdateInstallContext(input)) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason: "Approved software update install requires a visible software-update context.",
+      requiredCapability,
+      taskPolicy,
+    };
+  }
+
+  const softwareUpdateControlBlock = allowedSoftwareUpdateControlReason(input);
+  if (softwareUpdateControlBlock) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason: softwareUpdateControlBlock,
+      requiredCapability,
+      taskPolicy,
+    };
+  }
+
+  if (taskPolicy.taskId === "commerce_flow_until_final_confirmation") {
+    const hardStopContext = hasAnyTerm(
+      commerceHardStopContextText(input),
+      COMMERCE_HARD_STOP_CONTEXT_TERMS,
+    );
+    if (hardStopContext) {
+      return {
+        allowed: false,
+        risk: "blocked",
+        reason: `Blocked sensitive GUI context: ${hardStopContext}`,
+        requiredCapability,
+        taskPolicy,
+      };
+    }
   }
 
   if (!taskPolicy.grantedCapabilities.includes(requiredCapability)) {

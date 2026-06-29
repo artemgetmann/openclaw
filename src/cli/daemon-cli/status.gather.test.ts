@@ -47,6 +47,7 @@ const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSn
 const serviceReadCommand = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<{
     programArguments: string[];
+    workingDirectory?: string;
     environment?: Record<string, string>;
   }>
 >(async (_env?: NodeJS.ProcessEnv) => ({
@@ -430,6 +431,32 @@ describe("gatherDaemonStatus", () => {
         serviceLabel: "LaunchAgent",
       }),
     );
+  });
+
+  it("fingerprints the daemon service working directory, not the caller checkout", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      workingDirectory: "/tmp/openclaw-service-runtime",
+      environment: {
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.runtimeFingerprint).toEqual(
+      expect.objectContaining({
+        worktree: "/tmp/openclaw-service-runtime",
+        stateDir: "/tmp/openclaw-daemon",
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
+    expect(status.runtimeFingerprint?.worktree).not.toBe(process.cwd());
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {

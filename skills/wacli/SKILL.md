@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📱",
+        "displayName": "WhatsApp as Me",
         "requires":
           {
             "bins":
@@ -71,6 +72,20 @@ Automation Rule
   Raw sync/list is debug or fallback material, not the default authored monitor path.
 - For consumer checks, start with the cheapest read-only probes:
   `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
+- Before drafting a WhatsApp message to a specific person or group, pull the
+  latest conversation context for that exact target. Use `wacli-recent-reply.sh`
+  or the narrowest chat read/search path that proves what the other person last
+  said. WhatsApp is live chat, so do not draft from memory, stale snippets, or a
+  prior read when current thread context can be checked.
+- When reporting the context or proposing a draft, include the exact full text
+  of the latest relevant inbound WhatsApp message(s) from the other person,
+  plus a concise context summary only if it helps. Do not replace the other
+  person's wording with only an AI summary when the actual message text is
+  available.
+- Immediately before sending any WhatsApp-as-me message, refresh the same target
+  again and compare it with the context used for the draft. If a newer inbound
+  message arrived, stop and update the reply or ask the user before sending.
+  This is mandatory even if the user already approved an older draft.
 - Treat raw `wacli doctor` as fallback/debug-only.
   Under a live OpenClaw-owned lock it can report `CONNECTED false` even when
   `wacli sync --follow` is healthy, so do not use it as the primary readiness
@@ -130,6 +145,9 @@ Safety
 
 - Require explicit recipient + message text.
 - Confirm recipient + message before sending.
+- Confirmation does not replace the final thread refresh. Re-check the target
+  conversation immediately before `wacli-send-safe.sh` so approval cannot send a
+  stale reply over a newer inbound message.
 - If anything is ambiguous, ask a clarifying question.
 
 Auth + sync
@@ -141,6 +159,26 @@ Auth + sync
 - Raw debug only: `wacli doctor`
 
 Find chats + messages
+
+- For broad WhatsApp triage, shortlist before deep reads. Start with cheap
+  chat/message discovery such as `wacli chats list --limit 20 --json`, targeted
+  `wacli messages search ... --limit 20`, or the existing recent-reply helpers
+  when the target is known.
+- Use previews, sender/contact, timestamp, unread/recent state, and helper
+  fields such as `recentConversation`, `latestInboundReply`, and `continuity`
+  to decide what deserves deeper reading.
+- Filter obvious noise early: muted group chatter, routine reactions, receipts,
+  automated notifications, and media-only items that do not affect the user's
+  next action.
+- Bucket triage results as `Urgent`, `Needs reply soon`, `Waiting on them`,
+  `Schedule`, `Delegate`, `Archive / no action`, or `FYI`.
+- State scope and confidence in every broad triage result: target set,
+  timeframe/search terms, result count or limit, and what was excluded.
+- Treat "needs reply" as an inference until recent conversation context shows
+  the user is likely the next responder.
+- Before drafting, sending, or monitor-driven reply decisions, use the narrowest
+  current read/check path for the exact target and inspect enough conversation
+  context to avoid answering a stale preview.
 
 - `wacli chats list --limit 20 --query "name or number"`
 - `wacli messages search "query" --limit 20 --chat <jid>`
@@ -189,6 +227,11 @@ Monitor-driven reply send pattern
   - send: `skills/wacli/scripts/wacli-send-safe.sh text --to <phone-or-jid> --message "<approved reply>"`
 - Do not turn the wake run into a store-lock debugging exercise.
   The correct authored behavior is: inspect helper output, decide, then call the safe send helper once with pinned args.
+- After a manual send, if continued handling would clearly help, offer a scoped
+  monitor for that same WhatsApp thread. Do not start monitoring or promise to
+  drive the whole conversation unless the user explicitly approves the target,
+  cadence, stop condition, expiry, and whether the monitor may only draft or may
+  auto-send.
 
 Notes
 

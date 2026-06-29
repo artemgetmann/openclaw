@@ -278,6 +278,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "keep those channel-specific procedures there instead of copying command playbooks into the prompt",
     );
+    expect(prompt).toContain(
+      "For macOS GUI-operation or GUI-proof requests, prefer the `jarvis-gui-control` skill",
+    );
+    expect(prompt).toContain("Use Peekaboo for screenshots, screen recording/capture artifacts");
     expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
     expect(prompt).toContain("media transcribe --file <path> --json");
     expect(prompt).toContain(

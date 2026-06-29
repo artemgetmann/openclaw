@@ -45,18 +45,18 @@ enum CLIInstaller {
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void = { _ in })
         async -> EnsureResult
     {
-        let installedLocation = AppFlavor.current.isConsumer
-            ? self.consumerInstalledLocation(fileManager: fileManager)
-            : self.installedLocation(fileManager: fileManager)
-        if let location = installedLocation {
-            return .alreadyInstalled(location)
-        }
-
         if AppFlavor.current.isConsumer {
             return await self.ensureBundledConsumerRuntime(
                 bundle: bundle,
                 fileManager: fileManager,
                 statusHandler: statusHandler)
+        }
+
+        let installedLocation = AppFlavor.current.isConsumer
+            ? self.consumerInstalledLocation(fileManager: fileManager)
+            : self.installedLocation(fileManager: fileManager)
+        if let location = installedLocation {
+            return .alreadyInstalled(location)
         }
 
         await self.install(statusHandler: statusHandler)

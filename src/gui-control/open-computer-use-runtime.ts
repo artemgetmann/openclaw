@@ -1,4 +1,6 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type {
   ActionResult,
@@ -17,6 +19,10 @@ type OpenComputerUseRuntimeOptions = {
   timeoutMs?: number;
   visualCursorObservationFile?: string;
 };
+
+const OPEN_COMPUTER_USE_DEV_BUNDLE_ID = "com.ifuryst.opencomputeruse.dev";
+const OPEN_COMPUTER_USE_DEV_APP_NAME = "Open Computer Use (Dev).app";
+const OPEN_COMPUTER_USE_EXECUTABLE = "Contents/MacOS/OpenComputerUse";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -110,6 +116,119 @@ function parseJsonOutput(stdout: string, stderr: string): unknown {
       .find((line) => line.startsWith("{") || line.startsWith("["));
     return firstJsonLine ? JSON.parse(firstJsonLine) : { text: raw };
   }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function inferOpenComputerUseDevAppPath(command: string): string {
+  const appMarker = `${OPEN_COMPUTER_USE_DEV_APP_NAME}/`;
+  const appMarkerIndex = command.indexOf(appMarker);
+  if (appMarkerIndex >= 0) {
+    return command.slice(0, appMarkerIndex + OPEN_COMPUTER_USE_DEV_APP_NAME.length);
+  }
+  const home = process.env.HOME;
+  return home
+    ? path.join(home, "Applications", OPEN_COMPUTER_USE_DEV_APP_NAME)
+    : `~/Applications/${OPEN_COMPUTER_USE_DEV_APP_NAME}`;
+}
+
+export function resolveOpenComputerUseCommand(
+  command?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (command?.trim()) {
+    return command;
+  }
+
+  const envCommand = env.OPENCLAW_OPEN_COMPUTER_USE_BIN?.trim();
+  if (envCommand) {
+    return envCommand;
+  }
+
+  const home = env.HOME?.trim();
+  if (home) {
+    const devAppCommand = path.join(
+      home,
+      "Applications",
+      OPEN_COMPUTER_USE_DEV_APP_NAME,
+      OPEN_COMPUTER_USE_EXECUTABLE,
+    );
+    if (fsSync.existsSync(devAppCommand)) {
+      return devAppCommand;
+    }
+  }
+
+  // Preserve the PATH shim fallback for developer installs, CI fakes, and
+  // hosts that intentionally provide OCU outside the default dev app path.
+  return "open-computer-use";
+}
+
+function isOpenComputerUseTccPermissionFailure(text: string): boolean {
+  const mentionsRequiredService =
+    /\bAccessibility\b/i.test(text) || /\bScreen\s*(?:Capture|Recording)\b/i.test(text);
+  const mentionsPermissionState =
+    /\b(?:missing|required|denied|disabled|not\s+(?:granted|authorized)|unauthori[sz]ed|enable|permission)\b/i.test(
+      text,
+    );
+  return mentionsRequiredService && mentionsPermissionState;
+}
+
+export function formatOpenComputerUseTccRecoveryGuidance(input: {
+  command: string;
+  stderr?: string;
+  stdout?: string;
+}): string | undefined {
+  const output = [input.stderr, input.stdout].filter(Boolean).join("\n");
+  if (!isOpenComputerUseTccPermissionFailure(output)) {
+    return undefined;
+  }
+
+  const appPath = inferOpenComputerUseDevAppPath(input.command);
+  const quotedAppPath = shellQuote(appPath);
+
+  // This is intentionally guidance, not repair. `tccutil reset` deletes the
+  // app's grant state, so an operator must choose to run it and re-grant the
+  // exact rebuilt app in System Settings.
+  return [
+    "OpenComputerUse macOS permission recovery:",
+    `- Exact app: ${appPath}`,
+    `- Bundle id: ${OPEN_COMPUTER_USE_DEV_BUNDLE_ID}`,
+    "- If System Settings already shows this app enabled but OCU still reports Accessibility or ScreenCapture missing, the TCC grant may be stale.",
+    "- Dev builds are often ad-hoc signed, have no TeamIdentifier, and can change CDHash after rebuilds.",
+    "- Operator-approved reset commands:",
+    `  tccutil reset Accessibility ${OPEN_COMPUTER_USE_DEV_BUNDLE_ID}`,
+    `  tccutil reset ScreenCapture ${OPEN_COMPUTER_USE_DEV_BUNDLE_ID}`,
+    `  open ${quotedAppPath}`,
+    "- Then re-grant Accessibility and Screen Recording for that exact app in System Settings > Privacy & Security.",
+  ].join("\n");
+}
+
+function formatOpenComputerUseCommandError(
+  error: unknown,
+  command: string,
+  args: string[],
+): string {
+  const failed = error instanceof Error ? error.message : String(error);
+  const processOutput = error as { stdout?: unknown; stderr?: unknown };
+  const stderr =
+    typeof processOutput.stderr === "string" && processOutput.stderr.trim()
+      ? processOutput.stderr.trim()
+      : undefined;
+  const stdout =
+    typeof processOutput.stdout === "string" && processOutput.stdout.trim()
+      ? processOutput.stdout.trim()
+      : undefined;
+  const details = [stderr, stdout].filter(Boolean).join("\n");
+  const commandLine = [command, ...args].join(" ");
+  const guidance = formatOpenComputerUseTccRecoveryGuidance({ command, stderr, stdout });
+  const suffix = guidance ? `\n\n${guidance}` : "";
+
+  // CLI permission failures are often only printed on stderr. Preserve that
+  // text so benchmark reports explain the real runtime blocker instead of just
+  // saying Node's generic "Command failed".
+  return details ? `${failed}\n${details}${suffix}` : `${failed}: ${commandLine}${suffix}`;
 }
 
 function tryParseJson(value: string): unknown {
@@ -524,12 +643,26 @@ export function parseOpenComputerUseSnapshot(raw: unknown, target: AppTarget): G
   };
 }
 
-export function parseOpenComputerUseActionResult(raw: unknown, commandOk = true): ActionResult {
-  const record = asRecord(raw);
-  const payload = asRecord(unwrapPayload(raw));
+function readLastSequenceResult(raw: unknown): unknown {
+  if (!Array.isArray(raw)) {
+    return raw;
+  }
+  const last = raw.at(-1);
+  const lastRecord = asRecord(last);
+  return lastRecord.result ?? last;
+}
+
+export function parseOpenComputerUseActionResult(
+  raw: unknown,
+  commandOk = true,
+  activationPath?: string,
+): ActionResult {
+  const actionRaw = readLastSequenceResult(raw);
+  const record = asRecord(actionRaw);
+  const payload = asRecord(unwrapPayload(actionRaw));
   const isError = record.isError === true || payload.isError === true;
   const message = firstString(
-    payload.message ?? payload.error ?? record.message ?? record.error ?? readMcpText(raw),
+    payload.message ?? payload.error ?? record.message ?? record.error ?? readMcpText(actionRaw),
     undefined,
   );
   return {
@@ -548,6 +681,7 @@ export function parseOpenComputerUseActionResult(raw: unknown, commandOk = true)
       payload.rawCoordinatesUsed ?? payload.raw_coordinates_used ?? record.rawCoordinatesUsed,
     ),
     movedFocus: Boolean(payload.movedFocus ?? payload.moved_focus ?? record.movedFocus),
+    activationPath,
     message,
     raw,
   };
@@ -575,18 +709,25 @@ export class OpenComputerUseRuntime implements GuiRuntime {
   private readonly visualCursorObservationFile?: string;
 
   constructor(options: OpenComputerUseRuntimeOptions = {}) {
-    this.command = options.command ?? "open-computer-use";
+    this.command = resolveOpenComputerUseCommand(options.command);
     this.baseArgs = options.baseArgs ?? [];
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.visualCursorObservationFile = options.visualCursorObservationFile;
   }
 
   private async runJson(args: string[]): Promise<unknown> {
-    const result = await runExec(this.command, [...this.baseArgs, ...args], {
-      timeoutMs: this.timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return parseJsonOutput(result.stdout, result.stderr);
+    const commandArgs = [...this.baseArgs, ...args];
+    try {
+      const result = await runExec(this.command, commandArgs, {
+        timeoutMs: this.timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      return parseJsonOutput(result.stdout, result.stderr);
+    } catch (error) {
+      throw new Error(formatOpenComputerUseCommandError(error, this.command, commandArgs), {
+        cause: error,
+      });
+    }
   }
 
   private async runActionJson(args: string[]): Promise<{ ok: boolean; raw: unknown }> {
@@ -617,8 +758,14 @@ export class OpenComputerUseRuntime implements GuiRuntime {
     tool: string,
     args: Record<string, unknown> = {},
   ): Promise<ActionResult> {
+    // Do not wrap element-index actions in OCU's `--calls` sequence here. The
+    // sequence preserves OCU's in-process snapshot table, but OpenClaw cannot
+    // dynamically rebind the second call's element_index after the first
+    // get_app_state result. Pairing a fresh OCU snapshot with stale args would
+    // make broad browser activations look safer without actually making them
+    // more precise.
     const result = await this.runActionJson(["call", tool, "--args", JSON.stringify(args)]);
-    return parseOpenComputerUseActionResult(result.raw, result.ok);
+    return parseOpenComputerUseActionResult(result.raw, result.ok, "ocuDirectAction");
   }
 
   async getVirtualPointerEvidence(): Promise<VirtualPointerEvidence> {

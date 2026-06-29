@@ -259,6 +259,7 @@ export function resolveOpenClawMetadata(
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    displayName: typeof metadataObj.displayName === "string" ? metadataObj.displayName : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
     homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
     skillKey: typeof metadataObj.skillKey === "string" ? metadataObj.skillKey : undefined,
