@@ -12,6 +12,8 @@ const MUTATING_TOOL_NAMES = new Set([
   "canvas",
   "nodes",
   "session_status",
+  "create_goal",
+  "update_goal",
 ]);
 
 const READ_ONLY_ACTIONS = new Set([
@@ -107,6 +109,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "exec":
     case "bash":
     case "sessions_send":
+    case "create_goal":
+    case "update_goal":
       return true;
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
@@ -164,6 +168,8 @@ export function buildToolActionFingerprint(
     "jobId",
     "id",
     "model",
+    "objective",
+    "status",
   ]) {
     const value = normalizeFingerprintValue(record?.[key]);
     if (value) {

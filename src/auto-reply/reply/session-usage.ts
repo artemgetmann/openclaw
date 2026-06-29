@@ -5,6 +5,7 @@ import {
   type NormalizedUsage,
 } from "../../agents/usage.js";
 import {
+  resolveSessionGoalDisplayState,
   type SessionSystemPromptReport,
   type SessionEntry,
   updateSessionStoreEntry,
@@ -108,6 +109,16 @@ export async function persistSessionUsageUpdate(params: {
           // context utilization is stale/unknown.
           patch.totalTokens = totalTokens;
           patch.totalTokensFresh = typeof totalTokens === "number";
+          // Goal budgets ride on the same fresh context snapshot as /status.
+          // If we do not account here, a goal can appear active forever even after
+          // its token budget is exhausted.
+          const accountedGoal = resolveSessionGoalDisplayState({
+            ...entry,
+            ...patch,
+          });
+          if (accountedGoal) {
+            patch.goal = accountedGoal;
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });

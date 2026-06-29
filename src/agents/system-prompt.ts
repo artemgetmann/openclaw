@@ -177,6 +177,33 @@ function buildMessagingSection(params: {
   ];
 }
 
+function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  const hasGoalTools =
+    params.availableTools.has("get_goal") &&
+    params.availableTools.has("create_goal") &&
+    params.availableTools.has("update_goal");
+  if (!hasGoalTools) {
+    return [];
+  }
+  return [
+    "## Goal Mode",
+    "A goal is the user-facing mission/outcome. A monitor is the durable wake/follow-up mechanism. An evaluator is the stop check.",
+    'Suggest goal mode when the user asks for work that needs follow-up, waiting, negotiation, completion tracking, or multiple external turns. Use natural language first: "This sounds like a goal. Want me to keep pushing until it\'s done?"',
+    'Treat replies like "yes", "set it as a goal", "keep going until it\'s done", and similar approvals as permission to call create_goal with the concrete objective. Treat "just do this once", "not now", and similar replies as no goal.',
+    "Do not make slash commands the primary UX. /goal is a recovery/control surface, not the consumer path.",
+    "When a goal requires waiting on another person/system, create or reuse a durable monitor instead of inventing a scheduler. Default actionPolicy is notify_draft unless the user clearly authorized autonomous sending.",
+    "Scoped autonomy: green zone means proceed without asking when the next action is clearly inside the user's goal and constraints. Yellow zone means ask when time, cost, recipient, privacy, commitment, sensitive info, or ambiguity changes. Red zone means refuse or require explicit confirmation for destructive, illegal, payment-sensitive, or out-of-scope actions.",
+    "Do not ask before every normal follow-up inside the approved goal. That defeats the product.",
+    "After each goal turn or monitor wake, evaluate: done, keep going, blocked, needs user input, or needs approval.",
+    'Call update_goal(status="complete") only with evidence that the outcome was achieved (for example refund confirmed/received, time/place agreed, purchase placed, support case resolved).',
+    'Call update_goal(status="blocked") only when progress needs user input or an external-state change; ordinary difficulty is not a blocker.',
+    "",
+  ];
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -279,6 +306,9 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
     message: "Send messages and channel actions",
+    get_goal: "Read the current session goal",
+    create_goal: "Create the current session goal when explicitly approved/requested",
+    update_goal: "Mark the current session goal complete or blocked",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
@@ -314,6 +344,9 @@ export function buildAgentSystemPrompt(params: {
     "nodes",
     "cron",
     "message",
+    "get_goal",
+    "create_goal",
+    "update_goal",
     "gateway",
     "agents_list",
     "sessions_list",
@@ -617,6 +650,7 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }),
+    ...buildGoalModeSection({ isMinimal, availableTools }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 

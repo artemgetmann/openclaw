@@ -16,6 +16,7 @@ describe("buildMonitorWakeMessage", () => {
         cadence: { kind: "every", everyMs: 300_000 },
         stopCondition: "Stop when the thread is resolved.",
         actionPolicy: "notify_draft",
+        goal: { id: "goal-1", objective: "Get the refund confirmed." },
         status: "completed",
         lastCheckpoint: {
           resolved: true,
@@ -36,6 +37,8 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("Write the update like an assistant talking to the user");
     expect(message).toContain("include the actual draft text");
     expect(message).toContain("only needs a status update");
+    expect(message).toContain("goalObjective: Get the refund confirmed.");
+    expect(message).toContain("Evaluate after this wake");
   });
 
   it("preserves the reopened-conversation regression contract for WhatsApp-like checkpoints", () => {
