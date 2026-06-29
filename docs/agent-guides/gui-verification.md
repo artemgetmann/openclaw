@@ -12,6 +12,12 @@ methodology.
 GUI evidence proves what the operator could see. It does not replace structured
 proof such as logs, API calls, transcripts, message IDs, or state files.
 
+Use video when the acceptance question is about sequence, motion, polish, or
+feel. Screenshots can prove a final state, but they usually cannot prove whether
+the UI felt stable while it changed. For UI/UX regressions, a short recording
+should show the user-visible flow from before the action, through the transition,
+to the final settled state.
+
 For transport UI bugs, collect both:
 
 - visual proof: screenshot or video during the behavior and after completion
