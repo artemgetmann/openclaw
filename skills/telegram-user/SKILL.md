@@ -74,10 +74,11 @@ Automation Rule
   person's wording with only an AI summary when the actual message text is
   available.
 - Immediately before sending any Telegram-as-me message, re-read the target
-  chat with `read --chat <chat> --limit 5 --json` (or the narrowest equivalent)
-  and compare it with the context used for the draft. If a newer inbound message
-  arrived, stop and update the draft or ask the user before sending. This is the
-  same basic safety step a human would take before replying in Telegram.
+  chat with `read --chat <chat> --limit 5 --format compact` (or the narrowest
+  equivalent) and compare it with the context used for the draft. If a newer
+  inbound message arrived, stop and update the draft or ask the user before
+  sending. This is the same basic safety step a human would take before replying
+  in Telegram.
 - If `read` shows `media_kind` for a voice/audio message, download the payload
   with `telegram-user download`, then use the generic `media transcribe`
   command. Do not inspect Telethon internals or write a one-off downloader.
@@ -152,9 +153,9 @@ Default Commands
 - Precheck one chat:
   `openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json`
 - Read recent messages from one chosen chat:
-  `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json`
+  `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --format compact`
 - Read recent messages matching known text:
-  `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json`
+  `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --format compact`
 - Download media from a known message:
   `openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json`
 - Transcribe the downloaded audio file:
@@ -179,6 +180,10 @@ Behavior Notes
   manage `phone_code_hash` by hand.
 - Use `inbox` for discovery and unread triage across chats.
 - Use `read --chat` only once the target chat is known.
+- Prefer `read --format compact` for agent-facing context. It returns
+  newest-first message rows with ids, direction, sender, reply/topic metadata,
+  media kind, text, and paging hints. Use raw `read --json` only when debugging
+  backend metadata.
 - `read` exposes `media_kind` for media-bearing messages; use `download` for
   the payload and keep transcription generic through `openclaw media transcribe`.
 - `wait` is thread-aware through the existing backend semantics around

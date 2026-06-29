@@ -82,8 +82,9 @@ and more reliable default.
   - Use `openclaw telegram-user inbox --unread --json` for unread-only sweeps
   - Use `openclaw telegram-user inbox --contains <text> --json` for known chat labels or preview text
   - Narrow with `--dm-only` and `--limit` when you only need a lighter scan
-  - Use `openclaw telegram-user read --chat <chat> --contains <text> --limit <n> --json` for known message text
-  - Use `openclaw telegram-user read --chat <chat> --limit <n> --json` only after picking the target chat
+  - Use `openclaw telegram-user read --chat <chat> --contains <text> --limit <n> --format compact` for known message text
+  - Use `openclaw telegram-user read --chat <chat> --limit <n> --format compact` only after picking the target chat
+  - If you need raw Telegram metadata for debugging, add `--json`; otherwise prefer compact reads to avoid clipped model/tool output
   - Do not pipe Telegram JSON to `grep` for chat/message discovery when these CLI filters fit
   - Then continue with `precheck`, `send`, or `wait` on that chosen chat
 - Full repo-local details:

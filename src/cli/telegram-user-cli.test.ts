@@ -54,10 +54,11 @@ describe("telegram-user cli", () => {
     expect(help).toContain(
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
     );
+    expect(help).toContain("--format compact");
     expect(help).toContain(
       "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830",
     );
-    expect(help).toContain("instead of piping JSON to grep");
+    expect(help).toContain("compact agent-friendly rows");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
   });
 

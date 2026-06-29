@@ -35,6 +35,20 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
+const telegramReadFormats = new Set(["table", "compact"]);
+
+type TelegramUserReadFormat = "table" | "compact";
+type TelegramUserCompactMessage = {
+  date: string | null;
+  dir: "in" | "out";
+  id: number;
+  media: TelegramUserMessage["media_kind"];
+  reply_to: number | null;
+  sender: number | null;
+  text: string;
+  top: number | null;
+  topic: number | null;
+};
 
 function readBooleanOpt(opts: Record<string, unknown>, key: string): boolean {
   return opts[key] === true;
@@ -57,6 +71,14 @@ function readNumberOpt(opts: Record<string, unknown>, key: string): number | und
 function readStringOpt(opts: Record<string, unknown>, key: string): string | undefined {
   const value = opts[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readTelegramReadFormat(opts: Record<string, unknown>): TelegramUserReadFormat {
+  const raw = readStringOpt(opts, "format") ?? "table";
+  if (!telegramReadFormats.has(raw)) {
+    throw new Error("Telegram user read --format must be either table or compact.");
+  }
+  return raw as TelegramUserReadFormat;
 }
 
 function hasProvidedOpt(opts: Record<string, unknown>, key: string): boolean {
@@ -136,6 +158,89 @@ function formatTelegramUserMessages(messages: TelegramUserMessage[]): string {
     ],
     rows: renderTelegramUserMessageRows(messages),
   }).trimEnd();
+}
+
+function formatTelegramCompactText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function getTelegramMessageTopicId(message: TelegramUserMessage): number | null {
+  return message.direct_messages_topic?.topic_id ?? message.direct_messages_topic_id ?? null;
+}
+
+function toTelegramCompactMessage(message: TelegramUserMessage): TelegramUserCompactMessage {
+  return {
+    date: message.date,
+    dir: message.out ? "out" : "in",
+    id: message.message_id,
+    media: message.media_kind ?? null,
+    reply_to: message.reply_to_msg_id,
+    sender: message.sender_id,
+    text: formatTelegramCompactText(message.text),
+    top: message.reply_to_top_id,
+    topic: getTelegramMessageTopicId(message),
+  };
+}
+
+function formatTelegramCompactField(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  return String(value);
+}
+
+function buildTelegramCompactPaging(messages: TelegramUserCompactMessage[]) {
+  if (messages.length === 0) {
+    return {
+      newer_after_id: null,
+      older_before_id: null,
+    };
+  }
+  const ids = messages.map((message) => message.id);
+  return {
+    newer_after_id: Math.max(...ids),
+    older_before_id: Math.min(...ids),
+  };
+}
+
+function buildTelegramCompactReadResult(result: TelegramUserReadResult, chat: string) {
+  const messages = result.messages.map(toTelegramCompactMessage);
+  return {
+    chat,
+    messages,
+    order: "newest_first" as const,
+    paging: buildTelegramCompactPaging(messages),
+  };
+}
+
+function formatTelegramCompactMessages(result: TelegramUserReadResult, chat: string): string {
+  const compact = buildTelegramCompactReadResult(result, chat);
+  const lines = [
+    `Telegram user read compact. chat=${chat} messages=${compact.messages.length} order=newest-first`,
+  ];
+  for (const message of compact.messages) {
+    lines.push(
+      [
+        `id=${message.id}`,
+        `date=${formatTelegramCompactField(message.date)}`,
+        `dir=${message.dir}`,
+        `sender=${formatTelegramCompactField(message.sender)}`,
+        `reply_to=${formatTelegramCompactField(message.reply_to)}`,
+        `top=${formatTelegramCompactField(message.top)}`,
+        `topic=${formatTelegramCompactField(message.topic)}`,
+        `media=${formatTelegramCompactField(message.media)}`,
+        `text=${JSON.stringify(message.text)}`,
+      ].join(" "),
+    );
+  }
+  if (compact.messages.length === 0) {
+    lines.push("No Telegram user messages matched the requested range.");
+    return lines.join("\n");
+  }
+  lines.push(
+    `Paging: newer --after-id ${compact.paging.newer_after_id} | older --before-id ${compact.paging.older_before_id}`,
+  );
+  return lines.join("\n");
 }
 
 function formatTelegramInboxLastMessage(dialog: TelegramUserInboxDialog): string {
@@ -731,6 +836,7 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
   if (!chat) {
     throw new Error("Telegram user read requires --chat.");
   }
+  const format = readTelegramReadFormat(opts);
   const result = await runTelegramUserRead({
     ...resolveBackendOptions(opts),
     chat,
@@ -740,7 +846,11 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     contains: readStringOpt(opts, "contains"),
   });
   if (readBooleanOpt(opts, "json")) {
-    logJson(runtime, result);
+    logJson(runtime, format === "compact" ? buildTelegramCompactReadResult(result, chat) : result);
+    return;
+  }
+  if (format === "compact") {
+    runtime.log(formatTelegramCompactMessages(result, chat));
     return;
   }
   logReadText(runtime, result);

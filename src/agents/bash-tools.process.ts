@@ -63,7 +63,7 @@ function resolvePollOutputCharLimit(value: unknown): number | undefined {
   return undefined;
 }
 
-function formatPollOutput(output: string, limit: unknown): string {
+function formatPollOutput(output: string, limit: unknown, command?: string): string {
   const charLimit = resolvePollOutputCharLimit(limit);
   if (charLimit === undefined || output.length <= charLimit) {
     return output;
@@ -77,7 +77,11 @@ function formatPollOutput(output: string, limit: unknown): string {
     effectiveCharLimit === charLimit
       ? ""
       : `; requested limit ${charLimit} was clamped to ${effectiveCharLimit}`;
-  return `${truncateMiddle(output, effectiveCharLimit)}\n\n[output truncated to ${effectiveCharLimit} chars${clampNote}; use process(action=log, offset/limit) for full output]`;
+  const telegramReadNote =
+    command && /\btelegram-user\s+read\b/u.test(command)
+      ? "; for telegram-user read, rerun with --format compact, a smaller --limit, or --after-id/--before-id"
+      : "";
+  return `${truncateMiddle(output, effectiveCharLimit)}\n\n[output truncated to ${effectiveCharLimit} chars${clampNote}${telegramReadNote}; use process(action=log, offset/limit) for full output]`;
 }
 
 const processSchema = Type.Object({
@@ -330,7 +334,11 @@ export function createProcessTool(
               const rawFinishedOutput = (
                 useWindowedOutput ? scopedFinished.aggregated : scopedFinished.tail
               ).trim();
-              const finishedOutput = formatPollOutput(rawFinishedOutput, params.limit);
+              const finishedOutput = formatPollOutput(
+                rawFinishedOutput,
+                params.limit,
+                scopedFinished.command,
+              );
               return {
                 content: [
                   {
@@ -390,7 +398,7 @@ export function createProcessTool(
               : "failed"
             : "running";
           const rawOutput = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
-          const output = formatPollOutput(rawOutput, params.limit);
+          const output = formatPollOutput(rawOutput, params.limit, scopedSession.command);
           const hasNewOutput = rawOutput.length > 0;
           const retryInMs = exited
             ? undefined

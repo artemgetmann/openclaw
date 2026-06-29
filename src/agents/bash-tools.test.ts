@@ -47,6 +47,7 @@ const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const COMMAND_LONG_SINGLE_LINE = `node -e "setTimeout(()=>process.stdout.write('${OUTPUT_NEWEST_MARKER}'+ 'x'.repeat(1000) +'${OUTPUT_OLDEST_MARKER}'), 20)"`;
+const COMMAND_LONG_TELEGRAM_READ_OUTPUT = `${COMMAND_LONG_SINGLE_LINE} # telegram-user read`;
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
 const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
@@ -490,6 +491,22 @@ describe("exec tool backgrounding", () => {
     expect(text).toContain("output truncated to 5 chars");
     expect(text).toContain("requested limit 1 was clamped to 5");
     expect(text).not.toContain("x".repeat(500));
+  });
+
+  it("adds Telegram read recovery guidance to truncated poll output", async () => {
+    const sessionId = await startBackgroundCommand(execTool, COMMAND_LONG_TELEGRAM_READ_OUTPUT);
+
+    const poll = await executeProcessTool(processTool, {
+      action: "poll",
+      sessionId,
+      timeout: BACKGROUND_POLL_TIMEOUT_MS,
+      limit: POLL_OUTPUT_LIMIT_CHARS,
+    });
+    const text = readTextContent(poll.content) ?? "";
+
+    expect(text).toContain("for telegram-user read, rerun with --format compact");
+    expect(text).toContain("--after-id/--before-id");
+    expect(text).toContain("process(action=log, offset/limit)");
   });
 
   it("limits finished-session poll output from the aggregated stream", async () => {
