@@ -23,7 +23,7 @@ function createProgressControllerHarness() {
 }
 
 describe("createTelegramProgressController", () => {
-  it("serializes pending first send, cancels pending cleanup edit, then deletes the same message", async () => {
+  it("serializes pending first send, flushes pending progress edit, then deletes the same message", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
     controller.update("Opening example.com");
@@ -38,8 +38,15 @@ describe("createTelegramProgressController", () => {
     await clearPromise;
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      77,
+      "Opening example.com\n\nReading IANA example domains",
+    );
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
+    expect(api.editMessageText.mock.invocationCallOrder[0]).toBeLessThan(
+      api.deleteMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("edits cumulative progress while work is still active", async () => {
