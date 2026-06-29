@@ -50,6 +50,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { deliverHeartbeatSourceReceipt, type SourceReceiptDelivery } from "./source-receipt.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -116,6 +117,7 @@ export type MessageActionRunResult =
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
+      sourceReceipt?: SourceReceiptDelivery;
       dryRun: boolean;
     }
   | {
@@ -584,6 +586,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     replyToId: replyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
+  const sourceReceipt =
+    !dryRun && channel !== "telegram"
+      ? await deliverHeartbeatSourceReceipt({
+          cfg,
+          toolContext: input.toolContext,
+          sentChannel: channel,
+          sentTo: to,
+          message,
+          mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined,
+          deps: input.deps,
+        })
+      : undefined;
 
   return {
     kind: "send",
@@ -594,6 +608,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     payload: send.payload,
     toolResult: send.toolResult,
     sendResult: send.sendResult,
+    sourceReceipt,
     dryRun,
   };
 }

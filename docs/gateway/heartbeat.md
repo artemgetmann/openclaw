@@ -103,6 +103,35 @@ custom body.
 Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripped
 and logged; a message that is only `HEARTBEAT_OK` is dropped.
 
+## Source-linked action receipts
+
+When a heartbeat run is attached to a Telegram source session but delivers the
+approval prompt somewhere else, such as the owner DM, message sends do not make
+the DM the new task home. After a successful non-Telegram `message action=send`,
+OpenClaw posts a receipt back to the original Telegram source topic/thread when
+stored runtime metadata proves that source.
+
+Example receipt:
+
+```text
+Artem approved/sent this exact message via WhatsApp to +15555550123:
+
+Confirmed for Tuesday.
+```
+
+Routing boundaries:
+
+- Receipts only post for heartbeat runs with stored Telegram source metadata
+  (`origin.provider`, `origin.to`, and optional `origin.threadId`).
+- If the heartbeat target is already the same Telegram source surface, the
+  receipt is skipped to avoid duplicate noise.
+- If an exact Telegram topic link can be derived, private supergroup topics use
+  `https://t.me/c/<chat>/<thread>`. Otherwise the receipt preserves the source
+  label plus chat/thread ids for recovery.
+- Receipts are best-effort after the external send. If the receipt fails,
+  OpenClaw does not retry the external send, because retrying could duplicate
+  the approved outbound message.
+
 ## Config
 
 ```json5

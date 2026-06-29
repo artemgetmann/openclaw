@@ -51,8 +51,11 @@ export function buildThreadingToolContext(params: {
       currentThreadTs:
         sessionCtx.MessageThreadId != null ? String(sessionCtx.MessageThreadId) : undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
+      currentThreadTs:
+        sessionCtx.MessageThreadId != null ? String(sessionCtx.MessageThreadId) : undefined,
       currentMessageId,
       hasRepliedRef,
+      sourceReceipt: sessionCtx.SourceReceipt,
     };
   }
   const context =
@@ -76,6 +79,7 @@ export function buildThreadingToolContext(params: {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
     currentMessageId: context.currentMessageId ?? currentMessageId,
+    sourceReceipt: sessionCtx.SourceReceipt,
   };
 }
 

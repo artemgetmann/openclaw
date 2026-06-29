@@ -826,6 +826,24 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     Related docs: [Exec approvals](/tools/exec-approvals)
 
   </Accordion>
+
+  <Accordion title="Heartbeat approval receipts back to source topics">
+    Heartbeat approvals can be delivered to an approver DM while the original
+    work belongs to a Telegram topic. When a heartbeat run carries stored
+    Telegram source metadata and then sends a non-Telegram message action, Jarvis
+    posts a concise sent receipt back to that original Telegram source
+    topic/thread.
+
+    Boundaries:
+
+    - The receipt is runtime-routed from stored source metadata, not from model-written chat ids.
+    - No source metadata means no group/topic receipt.
+    - Private supergroup topic links are included when `chatId` and `threadId` are available; otherwise the receipt keeps the source label and ids.
+    - The external send is not retried if the source receipt fails, to avoid duplicate outbound messages.
+
+    Related docs: [Heartbeat](/gateway/heartbeat#source-linked-action-receipts)
+
+  </Accordion>
 </AccordionGroup>
 
 ## Troubleshooting

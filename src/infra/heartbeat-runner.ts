@@ -73,6 +73,7 @@ import {
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
+import { resolveHeartbeatSourceReceiptContext } from "./outbound/source-receipt.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
@@ -745,6 +746,12 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
+    SourceReceipt: resolveHeartbeatSourceReceiptContext({
+      entry,
+      sessionKey,
+      agentId,
+      heartbeatDelivery: delivery,
+    }),
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
