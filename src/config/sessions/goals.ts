@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { formatTokenCount } from "../../utils/usage-format.js";
 import {
   loadSessionStore,
+  normalizeStoreSessionKey,
   resolveSessionStoreEntry,
   updateSessionStore,
   updateSessionStoreEntry,
@@ -31,6 +32,7 @@ type CreateSessionGoalOptions = SessionGoalStoreOptions & {
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
   status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
   note?: string;
+  expectedGoalId?: string;
 };
 
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
@@ -201,29 +203,37 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   const now = nowMs(options.now);
   let created: SessionGoal | undefined;
 
-  await updateSessionStore(options.storePath, (store) => {
-    const existing = store[options.sessionKey] ?? options.fallbackEntry;
-    if (existing?.goal) {
-      throw new Error("goal already exists");
-    }
-    const tokenBudget = normalizeTokenBudget(options.tokenBudget);
-    const entry = mergeSessionEntry(existing, options.fallbackEntry ?? {});
-    const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
-    created = {
-      schemaVersion: 1,
-      id: crypto.randomUUID(),
-      objective,
-      status: "active",
-      createdAt: now,
-      updatedAt: now,
-      tokenStart: resolveEntryGoalStartTokens(entry),
-      tokenStartFresh,
-      tokensUsed: 0,
-      ...(tokenBudget ? { tokenBudget } : {}),
-      continuationTurns: 0,
-    };
-    store[options.sessionKey] = mergeSessionEntry(entry, { goal: created });
-  });
+  await updateSessionStore(
+    options.storePath,
+    (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: options.sessionKey });
+      const existing = resolved.existing ?? options.fallbackEntry;
+      if (existing?.goal) {
+        throw new Error("goal already exists");
+      }
+      const tokenBudget = normalizeTokenBudget(options.tokenBudget);
+      const entry = mergeSessionEntry(existing, options.fallbackEntry ?? {});
+      const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
+      created = {
+        schemaVersion: 1,
+        id: crypto.randomUUID(),
+        objective,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+        tokenStart: resolveEntryGoalStartTokens(entry),
+        tokenStartFresh,
+        tokensUsed: 0,
+        ...(tokenBudget ? { tokenBudget } : {}),
+        continuationTurns: 0,
+      };
+      store[resolved.normalizedKey] = mergeSessionEntry(entry, { goal: created });
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
+    },
+    { activeSessionKey: normalizeStoreSessionKey(options.sessionKey) },
+  );
 
   if (!created) {
     throw new Error("session not found");
@@ -245,6 +255,9 @@ export async function updateSessionGoalStatus(
       const accounted = accountGoalUsage(entry, now);
       if (!accounted) {
         throw new Error("goal not found");
+      }
+      if (options.expectedGoalId && accounted.id !== options.expectedGoalId) {
+        throw new Error("goal mismatch");
       }
       if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
         throw new Error(`goal is already ${accounted.status}`);

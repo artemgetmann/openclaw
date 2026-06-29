@@ -134,6 +134,13 @@ export const monitorHandlers: GatewayRequestHandlers = {
     };
     const storePath = resolveStorePath(context.cronStorePath);
     const store = await loadMonitorStore(storePath);
+    const cfg = loadConfig();
+    const goal = await resolveMonitorGoalSnapshot({
+      explicitGoal: p.goal,
+      originSessionKey: p.originSessionKey,
+      agentId: p.agentId,
+      cfg,
+    });
     const existingMonitor = findActiveMonitorByIdentity(store, {
       agentId: p.agentId,
       sourceType: p.sourceType,
@@ -142,17 +149,25 @@ export const monitorHandlers: GatewayRequestHandlers = {
       purposeLabel: p.name,
     });
     if (existingMonitor) {
-      respond(true, existingMonitor, undefined);
+      const goalChanged = goal
+        ? existingMonitor.goal?.id !== goal.id || existingMonitor.goal?.objective !== goal.objective
+        : existingMonitor.goal !== undefined;
+      const reconciled = goalChanged
+        ? updateMonitorRecord(existingMonitor, { goal }, Date.now())
+        : existingMonitor;
+      if (reconciled !== existingMonitor) {
+        const index = store.monitors.findIndex(
+          (monitor) => monitor.monitorId === existingMonitor.monitorId,
+        );
+        if (index >= 0) {
+          store.monitors[index] = reconciled;
+          await saveMonitorStore(storePath, store);
+        }
+      }
+      respond(true, reconciled, undefined);
       return;
     }
     const monitorId = crypto.randomBytes(12).toString("hex");
-    const cfg = loadConfig();
-    const goal = await resolveMonitorGoalSnapshot({
-      explicitGoal: p.goal,
-      originSessionKey: p.originSessionKey,
-      agentId: p.agentId,
-      cfg,
-    });
     const watchDelivery = resolveMonitorWatchDelivery({
       sourceType: p.sourceType,
       sourceTarget: p.sourceTarget,
