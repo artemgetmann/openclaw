@@ -100,6 +100,21 @@ function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
   return isSingleLine && isShortHeading;
 }
 
+function isLikelyFinalAnswerPreviewAfterProgress(text: string): boolean {
+  const trimmed = normalizeAnswerPreviewText(text).trim();
+  if (!trimmed) {
+    return false;
+  }
+  const firstParagraph = trimmed.split(/\n{2,}/)[0]?.trim() ?? "";
+  if (/^(?:Done|Verified|Final|Result(?:s)?|Short version)[:.!]?(?:\s|$)/i.test(firstParagraph)) {
+    return true;
+  }
+  if (/^Ran it[.!]?(?:\s|$)/i.test(firstParagraph) && /\n{2,}/.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
 function shouldEmitCoalescedDraftPreview(params: {
   previousText: string;
   nextText: string;
@@ -1189,7 +1204,7 @@ export const dispatchTelegramMessage = async ({
     });
     return true;
   };
-  const updateDraftFromPartial = (laneName: LaneName, text: string | undefined) => {
+  const updateDraftFromPartial = async (laneName: LaneName, text: string | undefined) => {
     const lane = lanes[laneName];
     if (!text) {
       return;
@@ -1236,6 +1251,21 @@ export const dispatchTelegramMessage = async ({
     }
     if (previewText === lane.lastPartialText) {
       return;
+    }
+    if (
+      lane === answerLane &&
+      routeToolStatusPartialsToProgress &&
+      getActiveProgressController() &&
+      isLikelyFinalAnswerPreviewAfterProgress(previewText)
+    ) {
+      // Tool/status narration owns the transient progress bubble. Once a
+      // final-looking answer starts streaming, delete progress before opening
+      // the durable answer lane so Telegram never shows final text inside the
+      // soon-to-be-deleted progress message.
+      routeToolStatusPartialsToProgress = false;
+      await clearProgressController("before-answer-partial", {
+        timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+      });
     }
     if (
       lane === answerLane &&
@@ -1290,7 +1320,7 @@ export const dispatchTelegramMessage = async ({
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
       }
-      updateDraftFromPartial(segment.lane, segment.text);
+      await updateDraftFromPartial(segment.lane, segment.text);
     }
   };
   const flushDraftLane = async (lane: DraftLaneState) => {

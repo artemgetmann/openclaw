@@ -376,9 +376,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("keeps natural multi-tool status partials in one transient progress bubble", async () => {
+  it("starts final-looking partials in a separate answer bubble after transient progress", async () => {
     const progressStream = createDraftStream(9010);
-    createTelegramDraftStream.mockReturnValue(progressStream);
+    const answerStream = createDraftStream(9011);
+    createTelegramDraftStream.mockReturnValueOnce(progressStream).mockReturnValueOnce(answerStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({
@@ -417,10 +418,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       },
     );
     deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9011" });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
     expect(progressStream.update).toHaveBeenCalledWith(
       "I'll inspect browser support, write a report, and clean up the temp file.",
     );
@@ -428,23 +430,23 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "I'll inspect browser support, write a report, and clean up the temp file.\n\n" +
         "Browser is up. I'm checking docs and code now.",
     );
-    expect(progressStream.update).toHaveBeenCalledWith(
-      "I'll inspect browser support, write a report, and clean up the temp file.\n\n" +
-        "Browser is up. I'm checking docs and code now.\n\n" +
-        "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+    expect(progressStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("Ran it.\n\nWhat I tested:"),
     );
     expect(progressStream.clear).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
-          }),
-        ],
-      }),
+    expect(answerStream.update).toHaveBeenCalledWith(
+      "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
     );
+    expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      answerStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9011,
+      "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("routes sourcePreview tool text through transient progress", async () => {
