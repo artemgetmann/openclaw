@@ -220,7 +220,7 @@ export function buildHeartbeatSourceReceiptPayload(params: {
   const body = sentContent || "(no text content)";
   return {
     text: [
-      `Artem approved/sent this exact message via ${channel}${target ? ` to ${target}` : ""}:`,
+      `The user approved/sent this exact message via ${channel}${target ? ` to ${target}` : ""}:`,
       body,
       sourceLine.trimEnd(),
     ]

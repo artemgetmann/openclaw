@@ -36,7 +36,7 @@ describe("heartbeat source receipts", () => {
       message: "Confirmed for Tuesday.",
     });
 
-    expect(payload.text).toContain("Artem approved/sent this exact message via WhatsApp");
+    expect(payload.text).toContain("The user approved/sent this exact message via WhatsApp");
     expect(payload.text).toContain("Confirmed for Tuesday.");
     expect(payload.text).toContain("Warm Leads");
     expect(payload.text).toContain("telegram:-1003841603622");
