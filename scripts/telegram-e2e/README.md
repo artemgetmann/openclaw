@@ -161,7 +161,7 @@ openclaw telegram-user read \
   --chat @jarvis_tester_1_bot \
   --contains proof \
   --limit 5 \
-  --json
+  --format compact
 
 openclaw telegram-user download \
   --chat @jarvis_tester_1_bot \
@@ -187,11 +187,11 @@ For discovery, prefer structured filters over shell parsing:
 
 ```bash
 openclaw telegram-user inbox --contains "Artem" --unread --json
-openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --json
+openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --format compact
 ```
 
-Do not pipe Telegram JSON to `grep` when `inbox`, `read`, or `wait` already has
-the selector you need.
+Do not pipe Telegram output to `grep` when `inbox`, `read`, or `wait` already
+has the selector you need.
 
 For media-bearing Telegram messages, keep fetching and understanding separate:
 `read` discovers `media_kind`, `telegram-user download` saves the payload by

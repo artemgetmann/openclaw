@@ -59,8 +59,8 @@ export function registerTelegramUserCli(program: Command) {
             "Create a forum topic and return its topic anchor for follow-up replies.",
           ],
           [
-            "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof --limit 5 --json",
-            "Read matching recent DM messages with raw metadata; use CLI filters instead of piping JSON to grep.",
+            "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof --limit 5 --format compact",
+            "Read matching recent DM messages in compact agent-friendly rows; add --json only when raw metadata is needed.",
           ],
           [
             "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json",
@@ -191,6 +191,7 @@ export function registerTelegramUserCli(program: Command) {
     .option("--after-id <id>", "Only include messages newer than this id")
     .option("--before-id <id>", "Only include messages older than this id")
     .option("--contains <text>", "Only include messages containing this substring")
+    .option("--format <format>", "Output format: table or compact", "table")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
         const { telegramUserReadCommand } = await import("../commands/telegram-user.js");
