@@ -204,13 +204,16 @@ export function buildHeartbeatSourceReceiptPayload(params: {
     to: params.source.sourceTo,
     threadId: params.source.sourceThreadId,
   });
+  const sourceTarget = normalizeTelegramTarget(params.source.sourceTo);
+  const sourceThreadId = resolveTelegramThreadId(
+    params.source.sourceThreadId,
+    params.source.sourceTo,
+  );
   const sourceBits = [
     params.source.sourceLabel?.trim(),
     link,
     !link
-      ? `telegram:${params.source.sourceTo}${
-          params.source.sourceThreadId != null ? ` thread ${params.source.sourceThreadId}` : ""
-        }`
+      ? `telegram:${sourceTarget}${sourceThreadId != null ? ` thread ${sourceThreadId}` : ""}`
       : undefined,
   ].filter((value): value is string => Boolean(value));
   const sourceLine = sourceBits.length ? `\nSource: ${sourceBits.join(" | ")}` : "";
@@ -258,7 +261,7 @@ export async function deliverHeartbeatSourceReceipt(params: {
   });
   const deliver = params.deliver ?? deliverOutboundPayloads;
   try {
-    await deliver({
+    const results = await deliver({
       cfg: params.cfg,
       channel: "telegram",
       to: sourceTarget,
@@ -283,6 +286,10 @@ export async function deliverHeartbeatSourceReceipt(params: {
             }
           : undefined,
     });
+    const delivered = results.some((result) => result.messageId.trim());
+    if (!delivered) {
+      return { status: "skipped", reason: "unconfirmed-receipt" };
+    }
     return {
       status: "sent",
       link: buildTelegramSourceLink({

@@ -27,7 +27,7 @@ describe("heartbeat source receipts", () => {
       source: {
         kind: "heartbeat",
         sourceChannel: "telegram",
-        sourceTo: "-1003841603622",
+        sourceTo: "telegram:group:-1003841603622",
         sourceThreadId: undefined,
         sourceLabel: "Warm Leads",
       },
@@ -40,6 +40,7 @@ describe("heartbeat source receipts", () => {
     expect(payload.text).toContain("Confirmed for Tuesday.");
     expect(payload.text).toContain("Warm Leads");
     expect(payload.text).toContain("telegram:-1003841603622");
+    expect(payload.text).not.toContain("telegram:telegram:");
   });
 
   it("uses runtime session origin as the source and skips same-surface heartbeat deliveries", () => {
@@ -156,7 +157,7 @@ describe("heartbeat source receipts", () => {
   });
 
   it("strips embedded Telegram topic suffixes before receipt delivery", async () => {
-    const deliver = vi.fn(async () => []);
+    const deliver = vi.fn(async () => [{ channel: "telegram" as const, messageId: "tg-1" }]);
 
     await deliverHeartbeatSourceReceipt({
       cfg: {} as Parameters<typeof deliverHeartbeatSourceReceipt>[0]["cfg"],
@@ -184,5 +185,28 @@ describe("heartbeat source receipts", () => {
         }),
       }),
     );
+  });
+
+  it("reports skipped when receipt delivery produces no confirmed Telegram message", async () => {
+    const deliver = vi.fn(async () => []);
+
+    const result = await deliverHeartbeatSourceReceipt({
+      cfg: {} as Parameters<typeof deliverHeartbeatSourceReceipt>[0]["cfg"],
+      toolContext: {
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622:topic:928",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      sentChannel: "whatsapp",
+      sentTo: "+15555550123",
+      message: "Confirmed for Tuesday.",
+      deliver,
+    });
+
+    expect(result).toMatchObject({ status: "skipped", reason: "unconfirmed-receipt" });
   });
 });
