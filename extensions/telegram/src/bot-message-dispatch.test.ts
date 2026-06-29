@@ -196,10 +196,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Checking the page.");
-    expect(progressStream.flush).not.toHaveBeenCalled();
+    expect(progressStream.flush).toHaveBeenCalledTimes(1);
     expect(progressStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      progressStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({

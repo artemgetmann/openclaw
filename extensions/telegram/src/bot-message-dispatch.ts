@@ -95,6 +95,13 @@ function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
   if (!trimmed) {
     return false;
   }
+  // Codex often emits tiny raw delta prefixes such as "Step" or "Step 2"
+  // immediately before a structured commentary block. In DM/message-preview
+  // mode those prefixes can allocate a real Telegram message before we know
+  // they are progress. Hold them until a fuller sentence or known phase arrives.
+  if (/^Step(?:\s+\d+)?$/i.test(trimmed)) {
+    return true;
+  }
   const isSingleLine = !/\n/.test(trimmed);
   const isShortHeading = trimmed.length <= 120 && /^[^!?\n]{1,80}[:：]\s*[^.!?\n]*$/.test(trimmed);
   return isSingleLine && isShortHeading;
@@ -1607,6 +1614,7 @@ export const dispatchTelegramMessage = async ({
     }
     return withoutTraceText;
   };
+  const deliveredFinalTextKeys = new Set<string>();
   const sendPayload = async (
     payload: ReplyPayload,
     classification?: {
@@ -1642,6 +1650,20 @@ export const dispatchTelegramMessage = async ({
     const durableReason =
       classification?.reason ??
       classifyPayloadDurableSendReason(normalizedPayload, classification?.infoKind);
+    const finalTextKey =
+      durableReason === "final" && !hasMedia && typeof normalizedPayload.text === "string"
+        ? normalizedPayload.text.trim()
+        : undefined;
+    if (finalTextKey && deliveredFinalTextKeys.has(finalTextKey)) {
+      // High-route providers can emit an explicitly phased final-answer block
+      // and then return the same final payload through the generic dispatcher.
+      // One visible final is the product contract; a second identical send is
+      // just duplicate noise in Telegram and TTS ordering proof.
+      logVerbose(
+        `telegram: skipped duplicate final text send callsite=${classification?.callsite ?? "dispatch-send-payload"}`,
+      );
+      return true;
+    }
     const ledgerLane: TelegramPreviewLedgerLane = isTtsSupplement
       ? "tts"
       : classification?.laneName === "answer"
@@ -1707,6 +1729,9 @@ export const dispatchTelegramMessage = async ({
       },
     });
     if (result.delivered) {
+      if (finalTextKey) {
+        deliveredFinalTextKeys.add(finalTextKey);
+      }
       deliveryState.markDelivered();
     }
     return result.delivered;
@@ -1832,6 +1857,34 @@ export const dispatchTelegramMessage = async ({
     const preparedText = await prepareFinalAnswerText(text, {
       hasMedia,
       isError: payload.isError,
+    });
+    const normalizedPreparedText = normalizeAdjacentProgressBoundaries(preparedText).trim();
+    if (!normalizedPreparedText) {
+      return "skipped";
+    }
+    const activeProgressController = getActiveProgressController();
+    const activeProgressText = normalizeAdjacentProgressBoundaries(
+      activeProgressController?.lastText() ?? "",
+    ).trim();
+    if (
+      activeProgressController &&
+      (transientProgressPreviewTexts.includes(normalizedPreparedText) ||
+        normalizedPreparedText === activeProgressText) &&
+      !isLikelyFinalAnswerPreviewAfterProgress(normalizedPreparedText)
+    ) {
+      // The high-route dispatcher can replay the latest progress/commentary
+      // block as a synthetic final when an agent turn pauses for continuation.
+      // Treat that as a progress echo, not a final boundary, so the same
+      // progress bubble can continue across dispatches until a real final lands.
+      logVerbose("telegram: skipped final echo that matched transient progress");
+      return "skipped";
+    }
+    // If a progress controller owns the current visible bubble, remove it
+    // before durable final delivery. Sending final first creates the exact UX
+    // bug this path is meant to prevent: progress appears, final appears, then
+    // progress disappears out of order.
+    await clearProgressController("before-final-answer", {
+      timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
     });
     setDraftDurableSendClassification("answer", {
       reason: classifyPayloadDurableSendReason(payload, "final"),

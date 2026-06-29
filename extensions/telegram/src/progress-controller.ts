@@ -22,6 +22,7 @@ export type TelegramProgressController = {
   replace: (text: string) => void;
   clear: () => Promise<void>;
   messageId: () => number | undefined;
+  lastText: () => string;
 };
 
 export function createTelegramProgressController(params: {
@@ -82,6 +83,7 @@ export function createTelegramProgressController(params: {
     });
   let hasProgress = false;
   let cleared = false;
+  let lastRenderedProgressText = "";
   const progressEntries: string[] = [];
   const progressEntryKeys = new Set<string>();
 
@@ -150,6 +152,7 @@ export function createTelegramProgressController(params: {
         return;
       }
       hasProgress = true;
+      lastRenderedProgressText = cumulativeProgressText;
       stream.update(cumulativeProgressText);
     },
     preview: (text: string) => {
@@ -165,6 +168,7 @@ export function createTelegramProgressController(params: {
         return;
       }
       hasProgress = true;
+      lastRenderedProgressText = previewProgressText;
       stream.update(previewProgressText);
     },
     replace: (text: string) => {
@@ -176,6 +180,7 @@ export function createTelegramProgressController(params: {
         return;
       }
       hasProgress = true;
+      lastRenderedProgressText = progressText;
       stream.update(progressText);
     },
     clear: async () => {
@@ -183,11 +188,14 @@ export function createTelegramProgressController(params: {
         return;
       }
       cleared = true;
-      // Final-answer delivery owns the durable transcript. Progress cleanup
-      // should remove the current preview quickly, not force one last pending
-      // edit that can briefly duplicate the final answer before deletion.
+      // Final-answer delivery owns the durable transcript, but the progress
+      // controller owns progress ordering proof. Flush pending progress edits
+      // before deletion so "step 1 -> step 2 -> final" cannot collapse into
+      // "step 1 -> final -> delete" under Telegram preview throttling.
+      await stream.flush();
       await stream.clear();
     },
     messageId: () => stream.messageId(),
+    lastText: () => lastRenderedProgressText,
   };
 }
