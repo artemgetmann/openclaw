@@ -220,6 +220,9 @@ async function maybeApplyCrossContextMarker(params: {
 
 function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAction>>): boolean {
   if (send.handledBy === "plugin" && send.toolResult) {
+    if (toolResultReportsError(send.toolResult)) {
+      return false;
+    }
     return !payloadReportsFailedOrCancelledDelivery(send.payload);
   }
   const result = send.sendResult?.result;
@@ -250,6 +253,11 @@ function resolveReceiptMessage(
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function toolResultReportsError(toolResult: unknown): boolean {
+  const record = asRecord(toolResult);
+  return record?.isError === true || record?.is_error === true;
 }
 
 function payloadReportsFailedOrCancelledDelivery(payload: unknown): boolean {
