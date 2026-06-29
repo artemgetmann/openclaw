@@ -107,6 +107,21 @@ helper, merges only after required checks pass, fast-forwards the sacred
 `scripts/build-shared-runtime.sh`, recovers with
 `scripts/gateway-recover-main.sh`, and prints the standard closeout block.
 
+That default scope is `ai.openclaw.gateway` only. It is not Jarvis-managed
+runtime proof. For founder Jarvis/Telegram proof, use the explicit Jarvis scope:
+
+```bash
+bash scripts/ship-main-gateway-fix.sh --pr <number> --runtime-scope jarvis
+```
+
+Jarvis scope fast-forwards the sacred main clone after merge, then runs
+`scripts/prove-jarvis-runtime.sh --expected-commit <main sha>`. It is read-only:
+it must prove `ai.jarvis.gateway`, Jarvis app-support state, and
+`runtimeSource=jarvis-managed-bundle`; it does not rebuild, restart, bootout,
+install, mutate `ai.openclaw.gateway`, or touch `/Applications/Jarvis.app`.
+If the Jarvis bundle is stale, that is the result: request explicit approval for
+the bundle refresh/relaunch step before claiming Telegram UX proof.
+
 Use `--dry-run` before the first live rollout or whenever the PR/runtime state
 is not obvious. Use `--skip-live` only when the proof level is intentionally
 `L2`; shared runtime, LaunchAgent, bot restart, and Telegram transport changes
