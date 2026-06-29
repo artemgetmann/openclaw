@@ -226,6 +226,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain('Call update_goal(status="complete") only with evidence');
   });
 
+  it("omits monitor-specific goal guidance when monitor is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["get_goal", "create_goal", "update_goal"],
+    });
+
+    expect(prompt).toContain("## Goal Mode");
+    expect(prompt).not.toContain("create or reuse a durable monitor");
+  });
+
   it("adds reasoning tag hint when enabled", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -87,4 +87,26 @@ describe("session goals", () => {
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.goal?.status).toBe("budget_limited");
   });
+
+  it("creates goals on the normalized session key and removes legacy casing", async () => {
+    const mixedCaseSessionKey = "Agent:Main:Telegram:Direct:456";
+    const normalizedSessionKey = mixedCaseSessionKey.toLowerCase();
+    await updateSessionStore(storePath, (store) => {
+      store[mixedCaseSessionKey] = {
+        sessionId: "session-legacy",
+        updatedAt: 1,
+      };
+    });
+
+    await createSessionGoal({
+      sessionKey: normalizedSessionKey,
+      storePath,
+      objective: "Keep checking the support ticket.",
+      now: 1000,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mixedCaseSessionKey]).toBeUndefined();
+    expect(store[normalizedSessionKey]?.goal?.objective).toBe("Keep checking the support ticket.");
+  });
 });

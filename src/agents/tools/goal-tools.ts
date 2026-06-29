@@ -1,5 +1,6 @@
 // Model-facing goal tools scoped to the current chat/session.
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
 import {
   createSessionGoal,
   getSessionGoal,
@@ -7,6 +8,8 @@ import {
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronStorePath } from "../../cron/store.js";
+import { loadMonitorStore, resolveMonitorStorePath } from "../../monitor/store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -26,6 +29,7 @@ type GoalToolOptions = {
 type GoalSessionScope = {
   sessionKey: string;
   storePath: string;
+  expectedGoalId?: string;
 };
 
 const GOAL_TOOL_STATUSES = ["complete", "blocked"] as const;
@@ -48,17 +52,55 @@ const UpdateGoalToolSchema = Type.Object({
   note: Type.Optional(Type.String({ description: "Short status note." })),
 });
 
-function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
+function resolveConfig(options: GoalToolOptions): OpenClawConfig {
+  return options.config ?? loadConfig();
+}
+
+function resolveCurrentGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   const sessionKey = options.agentSessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("session key required");
   }
+  const cfg = resolveConfig(options);
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const agentId = normalizeAgentId(parsedAgentId ?? options.sessionAgentId);
   return {
     sessionKey,
-    storePath: resolveStorePath(options.config?.session?.store, { agentId }),
+    storePath: resolveStorePath(cfg.session?.store, { agentId }),
   };
+}
+
+async function resolveMonitorOriginGoalSessionScope(
+  options: GoalToolOptions,
+  current: GoalSessionScope,
+): Promise<GoalSessionScope | undefined> {
+  const cfg = resolveConfig(options);
+  const monitorStorePath = resolveMonitorStorePath({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
+  const store = await loadMonitorStore(monitorStorePath);
+  const monitor = store.monitors.find(
+    (entry) => entry.monitorSessionKey === current.sessionKey && entry.goal,
+  );
+  if (!monitor?.goal) {
+    return undefined;
+  }
+  return {
+    sessionKey: monitor.originSessionKey,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: monitor.agentId }),
+    expectedGoalId: monitor.goal.id,
+  };
+}
+
+async function resolveGoalSessionScope(
+  options: GoalToolOptions,
+  scopeOptions?: { allowMonitorOrigin?: boolean },
+): Promise<GoalSessionScope> {
+  const current = resolveCurrentGoalSessionScope(options);
+  if (!scopeOptions?.allowMonitorOrigin) {
+    return current;
+  }
+  return (await resolveMonitorOriginGoalSessionScope(options, current)) ?? current;
 }
 
 export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
@@ -68,8 +110,9 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     description: "Get the current goal for this session, including status and token usage.",
     parameters: Type.Object({}),
     execute: async () => {
+      const scope = await resolveGoalSessionScope(options, { allowMonitorOrigin: true });
       const snapshot = await getSessionGoal({
-        ...resolveGoalSessionScope(options),
+        ...scope,
         persist: false,
       });
       return jsonResult(snapshot);
@@ -92,7 +135,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         throw new ToolInputError("token_budget must be positive");
       }
       const goal = await createSessionGoal({
-        ...resolveGoalSessionScope(options),
+        ...resolveCurrentGoalSessionScope(options),
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
@@ -115,10 +158,12 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         throw new ToolInputError(`status must be one of ${GOAL_TOOL_STATUSES.join(", ")}`);
       }
       const note = readStringParam(params, "note");
+      const scope = await resolveGoalSessionScope(options, { allowMonitorOrigin: true });
       const goal = await updateSessionGoalStatus({
-        ...resolveGoalSessionScope(options),
+        ...scope,
         status: status as (typeof GOAL_TOOL_STATUSES)[number],
         ...(note ? { note } : {}),
+        ...(scope.expectedGoalId ? { expectedGoalId: scope.expectedGoalId } : {}),
       });
       return jsonResult({ status: "updated", goal });
     },

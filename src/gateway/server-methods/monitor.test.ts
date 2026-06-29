@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSessionGoal, updateSessionStore } from "../../config/sessions.js";
+import { loadMonitorStore, resolveMonitorStorePath } from "../../monitor/store.js";
 import { ErrorCodes } from "../protocol/index.js";
 
-const { seedMonitorSessionMock } = vi.hoisted(() => ({
+const { configState, seedMonitorSessionMock } = vi.hoisted(() => ({
+  configState: { sessionStorePath: "" },
   seedMonitorSessionMock: vi.fn(async () => undefined),
 }));
 
@@ -19,7 +22,9 @@ vi.mock("../../config/config.js", async () => {
     ...actual,
     loadConfig: vi.fn(() => ({
       session: {
-        store: path.join(os.tmpdir(), `monitor-handler-session-${Date.now()}.json`),
+        store:
+          configState.sessionStorePath ||
+          path.join(os.tmpdir(), `monitor-handler-session-${Date.now()}.json`),
         mainKey: "main",
       },
     })),
@@ -39,7 +44,11 @@ function createInvokeContext() {
     delivery: job.delivery,
   }));
   const cronUpdate = vi.fn(async () => undefined);
-  const cronStorePath = path.join(os.tmpdir(), `monitor-handler-cron-${Date.now()}`, "cron.json");
+  const cronStorePath = path.join(
+    os.tmpdir(),
+    `monitor-handler-cron-${Date.now()}-${Math.random()}`,
+    "cron.json",
+  );
   return {
     respond,
     cronAdd,
@@ -71,6 +80,10 @@ async function invokeMonitorCreate(
 
 describe("monitor gateway handlers", () => {
   beforeEach(() => {
+    configState.sessionStorePath = path.join(
+      os.tmpdir(),
+      `monitor-handler-session-${Date.now()}-${Math.random()}.json`,
+    );
     seedMonitorSessionMock.mockClear();
   });
 
@@ -186,6 +199,90 @@ describe("monitor gateway handlers", () => {
     expect(secondMonitor).toEqual(firstMonitor);
     expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
     expect(seedMonitorSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-binds the active origin goal when monitor.create omits goal", async () => {
+    const invokeContext = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:direct:user-goal";
+    await updateSessionStore(configState.sessionStorePath, (store) => {
+      store[originSessionKey] = { sessionId: "origin-session", updatedAt: 1 };
+    });
+    const goal = await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Get the refund confirmed.",
+    });
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Watch the refund thread.",
+        agentId: "main",
+        name: "Refund watch",
+        originSessionKey,
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "refund-thread" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      "req-goal-autobind",
+    );
+
+    const monitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { goal?: { id: string; objective: string } }
+      | undefined;
+    expect(monitor?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(seedMonitorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goal: { id: goal.id, objective: goal.objective },
+        originSessionKey,
+      }),
+    );
+  });
+
+  it("reconciles an existing active monitor with the current origin goal", async () => {
+    const invokeContext = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:direct:user-reuse";
+    const baseParams = {
+      instructions: "Watch the refund thread.",
+      agentId: "main",
+      name: "Refund watch",
+      originSessionKey,
+      sourceType: "gmail",
+      sourceTarget: { account: "me@example.com", threadId: "refund-thread" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    };
+    await updateSessionStore(configState.sessionStorePath, (store) => {
+      store[originSessionKey] = { sessionId: "origin-session", updatedAt: 1 };
+    });
+
+    await invokeMonitorCreate(invokeContext, baseParams, "req-reuse-before-goal");
+    const firstMonitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { monitorId: string; goal?: unknown }
+      | undefined;
+    expect(firstMonitor?.goal).toBeUndefined();
+
+    const goal = await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Get the refund confirmed.",
+    });
+    await invokeMonitorCreate(invokeContext, baseParams, "req-reuse-after-goal");
+
+    const secondMonitor = invokeContext.respond.mock.calls[1]?.[1] as
+      | { monitorId: string; goal?: { id: string; objective: string } }
+      | undefined;
+    expect(secondMonitor?.monitorId).toBe(firstMonitor?.monitorId);
+    expect(secondMonitor?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
+    expect(seedMonitorSessionMock).toHaveBeenCalledTimes(1);
+
+    const monitorStore = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(monitorStore.monitors[0]?.goal).toEqual({
+      id: goal.id,
+      objective: goal.objective,
+    });
   });
 
   it("creates a new monitor when the action policy differs", async () => {
