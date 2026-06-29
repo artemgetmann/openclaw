@@ -38,6 +38,23 @@ function normalizeTelegramUsername(raw: string): string | undefined {
   return /^[a-zA-Z][\w\d_]{4,31}$/.test(value) ? value : undefined;
 }
 
+function sameTelegramSurface(params: {
+  deliveryTo?: string;
+  sourceTo: string;
+  deliveryThreadId?: string | number;
+  sourceThreadId?: string | number;
+}): boolean {
+  if (!params.deliveryTo?.trim()) {
+    return false;
+  }
+  // Telegram targets appear in both raw and OpenClaw-prefixed forms depending
+  // on where they came from, so compare the transport ids instead of strings.
+  return (
+    normalizeTelegramTarget(params.deliveryTo) === normalizeTelegramTarget(params.sourceTo) &&
+    String(params.deliveryThreadId ?? "") === String(params.sourceThreadId ?? "")
+  );
+}
+
 export function buildTelegramSourceLink(params: {
   to: string;
   threadId?: string | number;
@@ -97,10 +114,15 @@ export function resolveHeartbeatSourceReceiptContext(params: {
   const deliveryChannel = normalizeMessageChannel(params.heartbeatDelivery?.channel);
   const deliveryTo = readString(params.heartbeatDelivery?.to);
   const deliveryThreadId = params.heartbeatDelivery?.threadId;
-  const sameSurface =
+  const sameSurface = Boolean(
     deliveryChannel === "telegram" &&
-    deliveryTo === originSource.sourceTo &&
-    String(deliveryThreadId ?? "") === String(originSource.sourceThreadId ?? "");
+    sameTelegramSurface({
+      deliveryTo,
+      sourceTo: originSource.sourceTo,
+      deliveryThreadId,
+      sourceThreadId: originSource.sourceThreadId,
+    }),
+  );
   if (sameSurface) {
     return undefined;
   }
@@ -225,6 +247,8 @@ export async function deliverHeartbeatSourceReceipt(params: {
               text: payload.text ?? "",
               idempotencyKey: [
                 "heartbeat-source-receipt",
+                normalizeTelegramTarget(source.sourceTo),
+                String(source.sourceThreadId ?? ""),
                 params.sentChannel,
                 params.sentTo,
                 params.message,

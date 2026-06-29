@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   buildHeartbeatSourceReceiptPayload,
   buildTelegramSourceLink,
+  deliverHeartbeatSourceReceipt,
   resolveHeartbeatSourceReceiptContext,
 } from "./source-receipt.js";
 
@@ -80,5 +81,48 @@ describe("heartbeat source receipts", () => {
         },
       }),
     ).toBeUndefined();
+
+    expect(
+      resolveHeartbeatSourceReceiptContext({
+        entry,
+        sessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+        agentId: "jarvis",
+        heartbeatDelivery: {
+          channel: "telegram",
+          to: "-1003841603622",
+          threadId: 928,
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("scopes receipt mirror idempotency to the source topic", async () => {
+    const deliver = vi.fn(async () => []);
+
+    await deliverHeartbeatSourceReceipt({
+      cfg: {} as Parameters<typeof deliverHeartbeatSourceReceipt>[0]["cfg"],
+      toolContext: {
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      sentChannel: "whatsapp",
+      sentTo: "+15555550123",
+      message: "Confirmed for Tuesday.",
+      deliver,
+    });
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          idempotencyKey: expect.stringContaining("heartbeat-source-receipt:-1003841603622:928:"),
+        }),
+      }),
+    );
   });
 });
