@@ -15,6 +15,11 @@ describe("heartbeat source receipts", () => {
         threadId: 928,
       }),
     ).toBe("https://t.me/c/3841603622/928");
+    expect(
+      buildTelegramSourceLink({
+        to: "telegram:group:-1003841603622:topic:928",
+      }),
+    ).toBe("https://t.me/c/3841603622/928");
   });
 
   it("preserves source labels and ids when no exact Telegram link can be built", () => {
@@ -94,6 +99,30 @@ describe("heartbeat source receipts", () => {
         },
       }),
     ).toBeUndefined();
+
+    const embeddedTopicEntry: SessionEntry = {
+      sessionId: "session-2",
+      updatedAt: 1,
+      displayName: "Warm Leads",
+      origin: {
+        provider: "telegram",
+        to: "telegram:group:-1003841603622:topic:928",
+        accountId: "default",
+      },
+    } as SessionEntry;
+
+    expect(
+      resolveHeartbeatSourceReceiptContext({
+        entry: embeddedTopicEntry,
+        sessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+        agentId: "jarvis",
+        heartbeatDelivery: {
+          channel: "telegram",
+          to: "-1003841603622",
+          threadId: 928,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("scopes receipt mirror idempotency to the source topic", async () => {
@@ -119,6 +148,37 @@ describe("heartbeat source receipts", () => {
 
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
+        mirror: expect.objectContaining({
+          idempotencyKey: expect.stringContaining("heartbeat-source-receipt:-1003841603622:928:"),
+        }),
+      }),
+    );
+  });
+
+  it("strips embedded Telegram topic suffixes before receipt delivery", async () => {
+    const deliver = vi.fn(async () => []);
+
+    await deliverHeartbeatSourceReceipt({
+      cfg: {} as Parameters<typeof deliverHeartbeatSourceReceipt>[0]["cfg"],
+      toolContext: {
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622:topic:928",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      sentChannel: "whatsapp",
+      sentTo: "+15555550123",
+      message: "Confirmed for Tuesday.",
+      deliver,
+    });
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "-1003841603622",
+        threadId: "928",
         mirror: expect.objectContaining({
           idempotencyKey: expect.stringContaining("heartbeat-source-receipt:-1003841603622:928:"),
         }),

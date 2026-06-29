@@ -22,13 +22,35 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function normalizeTelegramTarget(raw: string): string {
-  return raw
+function parseTelegramTarget(raw: string): { to: string; threadId?: string } {
+  const stripped = raw
     .trim()
     .replace(/^telegram:/i, "")
     .replace(/^group:/i, "")
     .replace(/^channel:/i, "")
     .trim();
+  const topicMatch = /^(.*):topic:([^:]+)$/i.exec(stripped);
+  if (!topicMatch) {
+    return { to: stripped };
+  }
+  return {
+    to: topicMatch[1]?.trim() ?? stripped,
+    threadId: topicMatch[2]?.trim() || undefined,
+  };
+}
+
+function normalizeTelegramTarget(raw: string): string {
+  return parseTelegramTarget(raw).to;
+}
+
+function resolveTelegramThreadId(
+  explicitThreadId: string | number | undefined,
+  rawTarget: string,
+): string | number | undefined {
+  if (explicitThreadId != null && String(explicitThreadId).trim()) {
+    return explicitThreadId;
+  }
+  return parseTelegramTarget(rawTarget).threadId;
 }
 
 function normalizeTelegramUsername(raw: string): string | undefined {
@@ -49,9 +71,14 @@ function sameTelegramSurface(params: {
   }
   // Telegram targets appear in both raw and OpenClaw-prefixed forms depending
   // on where they came from, so compare the transport ids instead of strings.
+  const deliveryThreadId = resolveTelegramThreadId(
+    params.deliveryThreadId,
+    params.deliveryTo ?? "",
+  );
+  const sourceThreadId = resolveTelegramThreadId(params.sourceThreadId, params.sourceTo);
   return (
     normalizeTelegramTarget(params.deliveryTo) === normalizeTelegramTarget(params.sourceTo) &&
-    String(params.deliveryThreadId ?? "") === String(params.sourceThreadId ?? "")
+    String(deliveryThreadId ?? "") === String(sourceThreadId ?? "")
   );
 }
 
@@ -59,11 +86,9 @@ export function buildTelegramSourceLink(params: {
   to: string;
   threadId?: string | number;
 }): string | undefined {
-  const target = normalizeTelegramTarget(params.to);
-  const threadId =
-    params.threadId != null && String(params.threadId).trim()
-      ? String(params.threadId).trim()
-      : undefined;
+  const parsed = parseTelegramTarget(params.to);
+  const target = parsed.to;
+  const threadId = resolveTelegramThreadId(params.threadId, params.to);
   const privateSupergroup = /^-100(\d+)$/.exec(target);
   if (privateSupergroup && threadId) {
     return `https://t.me/c/${privateSupergroup[1]}/${encodeURIComponent(threadId)}`;
@@ -90,7 +115,7 @@ function sourceFromOrigin(origin?: SessionOrigin): HeartbeatSourceReceiptContext
     sourceChannel: "telegram",
     sourceTo,
     sourceAccountId: readString(origin?.accountId),
-    sourceThreadId: origin?.threadId,
+    sourceThreadId: resolveTelegramThreadId(origin?.threadId, sourceTo),
     sourceLabel: readString(origin?.label),
   };
 }
@@ -221,6 +246,8 @@ export async function deliverHeartbeatSourceReceipt(params: {
   if (!source.sourceTo.trim()) {
     return { status: "skipped", reason: "missing-source-target" };
   }
+  const sourceTarget = normalizeTelegramTarget(source.sourceTo);
+  const sourceThreadId = resolveTelegramThreadId(source.sourceThreadId, source.sourceTo);
 
   const payload = buildHeartbeatSourceReceiptPayload({
     source,
@@ -234,9 +261,9 @@ export async function deliverHeartbeatSourceReceipt(params: {
     await deliver({
       cfg: params.cfg,
       channel: "telegram",
-      to: normalizeTelegramTarget(source.sourceTo),
+      to: sourceTarget,
       accountId: source.sourceAccountId,
-      threadId: source.sourceThreadId,
+      threadId: sourceThreadId,
       payloads: [payload],
       deps: params.deps,
       mirror:
@@ -247,8 +274,8 @@ export async function deliverHeartbeatSourceReceipt(params: {
               text: payload.text ?? "",
               idempotencyKey: [
                 "heartbeat-source-receipt",
-                normalizeTelegramTarget(source.sourceTo),
-                String(source.sourceThreadId ?? ""),
+                sourceTarget,
+                String(sourceThreadId ?? ""),
                 params.sentChannel,
                 params.sentTo,
                 params.message,
