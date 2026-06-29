@@ -238,6 +238,16 @@ function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAct
   return Boolean(messageId && messageId !== "cancelled-by-hook" && messageId !== "skipped");
 }
 
+function resolveReceiptMessage(
+  send: Awaited<ReturnType<typeof executeSendAction>>,
+  fallbackMessage: string,
+): string {
+  // Core direct sends expose post-hook text. Prefer it so source-topic receipts
+  // do not claim the user sent text that a message_sending hook rewrote.
+  const deliveredText = send.sendResult?.deliveredText?.trim();
+  return deliveredText || fallbackMessage;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
@@ -643,7 +653,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
             toolContext: input.toolContext,
             sentChannel: channel,
             sentTo: to,
-            message,
+            message: resolveReceiptMessage(send, message),
             mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined,
             deps: input.deps,
           })

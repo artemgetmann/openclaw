@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../../extensions/telegram/src/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -66,6 +71,7 @@ describe("runMessageAction heartbeat source receipt", () => {
   });
 
   afterEach(() => {
+    resetGlobalHookRunner();
     setActivePluginRegistry(createTestRegistry([]));
   });
 
@@ -113,6 +119,52 @@ describe("runMessageAction heartbeat source receipt", () => {
     );
     expect(sendTelegram.mock.calls[0]?.[1]).toContain("Warm Leads");
     expect(sendTelegram.mock.calls[0]?.[1]).toContain("https://t.me/c/3841603622/928");
+  });
+
+  it("receipts the post-hook message text when outbound hooks rewrite delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "message_sending",
+          handler: vi.fn(() => ({ content: "Hook-rewritten confirmation." })),
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message: "Original confirmation.",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sourceReceipt).toMatchObject({ status: "sent" });
+    expect(sendExternal).toHaveBeenCalledWith("room-1", "Hook-rewritten confirmation.");
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    const receiptText = String(sendTelegram.mock.calls[0]?.[1] ?? "");
+    expect(receiptText).toContain("Hook-rewritten confirmation.");
+    expect(receiptText).not.toContain("Original confirmation.");
   });
 
   it("does not post receipts without runtime source metadata", async () => {
