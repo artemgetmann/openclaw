@@ -657,6 +657,12 @@ describe("runCliAgent with process supervisor", () => {
         "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
       );
       expect(systemPrompt).toContain(
+        "Use the listed <location> path exactly. Do not construct a fallback path like workspace/skills/<name>/SKILL.md",
+      );
+      expect(systemPrompt).toContain(
+        "preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH",
+      );
+      expect(systemPrompt).toContain(
         "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
       );
       expect(systemPrompt).toContain("<available_skills>");
@@ -733,6 +739,12 @@ describe("runCliAgent with process supervisor", () => {
       );
       expect(promptArg).toContain(
         "These are OpenClaw workspace skills, not Claude Code native slash skills.",
+      );
+      expect(promptArg).toContain(
+        "Use the listed <location> path exactly. Do not invent workspace/skills/<name>/SKILL.md",
+      );
+      expect(promptArg).toContain(
+        "preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH",
       );
       expect(promptArg).toContain(
         "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",

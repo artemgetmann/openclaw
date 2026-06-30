@@ -35,10 +35,10 @@ const skillCommandDebugOnce = new Set<string>();
  * Replace the user's home directory prefix with `~` in skill file paths
  * to reduce system prompt token usage.
  *
- * Keep workspace skills absolute. They are frequently read immediately on live
- * turns, and we have seen model-side `~` expansion produce malformed paths for
- * `~/.openclaw/workspace/...` helper skills. Using the absolute path removes
- * that ambiguity without changing which skill is selected.
+ * Keep runtime-owned skills absolute. They are frequently read immediately on
+ * live turns, and we have seen model-side `~` expansion or path guessing
+ * produce malformed paths for app-owned/product skills. Using the exact path
+ * removes that ambiguity without changing which skill is selected.
  *
  * Example compacted path:
  * `/Users/alice/.bun/.../skills/github/SKILL.md`
@@ -51,10 +51,13 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   return skills.map((s) => ({
     ...s,
     filePath:
-      // Loader-emitted workspace skills use `openclaw-workspace`; older tests
-      // and callers may still pass `workspace`. Preserve both as exact paths so
-      // model-side file reads do not depend on shell-style `~` expansion.
-      s.source === "openclaw-workspace" || s.source === "workspace"
+      // Loader-emitted workspace/product skills are runtime-owned. Preserve
+      // exact paths so model-side file reads do not depend on shell-style `~`
+      // expansion or reconstructed `workspace/skills/<name>` guesses.
+      s.source === "openclaw-workspace" ||
+      s.source === "workspace" ||
+      s.source === "openclaw-product-managed" ||
+      s.source === "openclaw-bundled"
         ? s.filePath
         : s.filePath.startsWith(prefix)
           ? "~/" + s.filePath.slice(prefix.length)

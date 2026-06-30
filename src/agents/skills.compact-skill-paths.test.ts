@@ -63,6 +63,67 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("<location>~/");
   });
 
+  it("keeps product-managed and bundled skill locations absolute under the home directory", () => {
+    const home = os.homedir();
+    const productPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "product-skills",
+      "telegram-user",
+      "SKILL.md",
+    );
+    const bundledPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "lib",
+      "openclaw-bundled",
+      "skills",
+      "jarvis-gui-control",
+      "SKILL.md",
+    );
+    const entries: SkillEntry[] = [
+      {
+        skill: {
+          name: "telegram-user",
+          description: "Telegram as me",
+          filePath: productPath,
+          baseDir: path.dirname(productPath),
+          source: "openclaw-product-managed",
+          disableModelInvocation: false,
+        },
+        frontmatter: {},
+      },
+      {
+        skill: {
+          name: "jarvis-gui-control",
+          description: "Jarvis GUI control",
+          filePath: bundledPath,
+          baseDir: path.dirname(bundledPath),
+          source: "openclaw-bundled",
+          disableModelInvocation: false,
+        },
+        frontmatter: {},
+      },
+    ];
+
+    const prompt = buildWorkspaceSkillsPrompt(
+      path.join(home, "Library", "Application Support", "Jarvis", ".jarvis", "workspace"),
+      {
+        entries,
+      },
+    );
+
+    expect(prompt).toContain(productPath);
+    expect(prompt).toContain(bundledPath);
+    expect(prompt).not.toContain("<location>~/Library/Application Support/Jarvis");
+  });
+
   it("preserves paths outside home directory", async () => {
     // Skills outside ~ should keep their absolute paths
     await withTempWorkspace(async (workspaceDir) => {

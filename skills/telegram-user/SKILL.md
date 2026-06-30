@@ -40,6 +40,14 @@ Automation Rule
 
 - Prefer the installed OpenClaw CLI first:
   `openclaw telegram-user <subcommand> ...`
+- In packaged Jarvis, the active state is app-owned. Preserve the runtime
+  environment when running CLI checks: `OPENCLAW_HOME`,
+  `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_LOG_DIR`,
+  `OPENCLAW_PROFILE`, and `OPENCLAW_LAUNCHD_LABEL`. If `doctor --json`
+  reports paths under `~/.openclaw` while the Jarvis runtime metadata points to
+  `~/Library/Application Support/Jarvis/.jarvis`, treat that as a wrong-runtime
+  probe and rerun with the active Jarvis env before saying Telegram-as-me is
+  missing.
 - Use the bundled wrapper only as a human/operator fallback when you are
   already inside this repo and explicitly want the lane-local entrypoint:
   `skills/telegram-user/scripts/telegram-user-cli.sh <subcommand> ...`
@@ -141,6 +149,10 @@ Setup Routing
   `scripts/telegram-e2e/tmp/userbot.session` as the normal consumer setup
   answer. Those files are test/operator compatibility only; consumers need the
   packaged Telegram User setup path.
+- Do not use `~/.openclaw/telegram-user` as proof that packaged Jarvis is
+  missing Telegram-as-me. Packaged Jarvis uses the active
+  `$OPENCLAW_STATE_DIR/telegram-user/`, normally
+  `~/Library/Application Support/Jarvis/.jarvis/telegram-user/`.
 - If the user explicitly wants the terminal path, use the exact commands below.
   Otherwise keep the explanation in product language first.
 
