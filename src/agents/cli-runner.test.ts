@@ -348,10 +348,9 @@ describe("runCliAgent with process supervisor", () => {
       const systemPromptIndex = argv.indexOf("--append-system-prompt");
       expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
       const systemPrompt = argv[systemPromptIndex + 1] ?? "";
-      expect(systemPrompt).toContain(
-        "Your home is the runtime workspace at ~/.openclaw/workspace.",
-      );
-      expect(systemPrompt).toContain("~/.openclaw/workspace/AGENTS.md first");
+      expect(systemPrompt).toContain(`Your home is the runtime workspace at ${workspaceDir}.`);
+      expect(systemPrompt).toContain(`${workspaceDir}/AGENTS.md first`);
+      expect(systemPrompt).not.toContain("~/.openclaw/workspace/AGENTS.md first");
       expect(systemPrompt).toContain("# OpenClaw Workspace Bootstrap");
       expect(systemPrompt).toContain("Do not treat Claude Code user-level memory");
       expect(systemPrompt).toContain(`${workspaceDir}/AGENTS.md`);
@@ -1393,11 +1392,11 @@ describe("runCliAgent with process supervisor", () => {
       envValue: "bridge_pointer_condensed",
       splitValue: undefined,
       expectedIncludes: [
-        "Your home is the runtime workspace at ~/.openclaw/workspace.",
-        "Start with ~/.openclaw/workspace/AGENTS.md, then follow its workspace contract precisely.",
-        "~/.openclaw/workspace/SOUL.md next",
-        "~/.openclaw/workspace/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
-        "~/.openclaw/workspace/HEARTBEAT.md only for heartbeat runs",
+        "Your home is the runtime workspace at /tmp.",
+        "Start with /tmp/AGENTS.md, then follow its workspace contract precisely.",
+        "/tmp/SOUL.md next",
+        "/tmp/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
+        "/tmp/HEARTBEAT.md only for heartbeat runs",
       ],
       expectedExcludes: ["Jarvis", "# Project Context", "docs/agent-guides/workflow.md"],
       minLength: 300,
@@ -1493,10 +1492,7 @@ describe("runCliAgent with process supervisor", () => {
       label: "unknown_falls_back_to_neutral_full",
       envValue: "definitely-unknown",
       splitValue: "banana",
-      expectedIncludes: [
-        "Your home is the runtime workspace at ~/.openclaw/workspace.",
-        "~/.openclaw/workspace/AGENTS.md first",
-      ],
+      expectedIncludes: ["Your home is the runtime workspace at /tmp.", "/tmp/AGENTS.md first"],
       expectedExcludes: ["Jarvis", "# Project Context", "docs/agent-guides/workflow.md"],
       minLength: 300,
       maxLength: 2_500,
@@ -1774,12 +1770,11 @@ describe("runCliAgent with process supervisor", () => {
         };
       };
     };
+    expect(bridgeParams.systemPrompt).toContain("Your home is the runtime workspace at /tmp.");
+    expect(bridgeParams.systemPrompt).toContain("/tmp/AGENTS.md first");
+    expect(bridgeParams.systemPrompt).not.toContain("~/.openclaw/workspace/AGENTS.md first");
     expect(bridgeParams.systemPrompt).toContain(
-      "Your home is the runtime workspace at ~/.openclaw/workspace.",
-    );
-    expect(bridgeParams.systemPrompt).toContain("~/.openclaw/workspace/AGENTS.md first");
-    expect(bridgeParams.systemPrompt).toContain(
-      "~/.openclaw/workspace/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
+      "/tmp/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
     );
     expect(bridgeParams.systemPromptReport?.systemPrompt?.chars).toBeLessThanOrEqual(2_500);
     expect(bridgeParams.systemPromptReport?.systemPrompt?.projectContextChars).toBe(0);
