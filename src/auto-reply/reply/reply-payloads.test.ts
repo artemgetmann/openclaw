@@ -161,7 +161,26 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(true);
   });
 
-  it("does not suppress final replies after same-target media-only sends", () => {
+  it("suppresses empty final fallbacks after same-target media-only sends", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "telegram:1336356696",
+        includeMediaOnly: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "telegram:1336356696",
+            hasMedia: true,
+            hasText: false,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps normal final replies after same-target media-only sends", () => {
     expect(
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",

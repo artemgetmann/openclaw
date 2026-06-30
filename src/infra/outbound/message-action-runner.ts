@@ -242,6 +242,9 @@ async function resolveActionTarget(params: {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
   const toRaw = typeof params.args.to === "string" ? params.args.to.trim() : "";
   if (toRaw) {
+    const parsedExplicitTarget =
+      getChannelPlugin(params.channel)?.messaging?.parseExplicitTarget?.({ raw: toRaw }) ?? null;
+    const parsedThreadId = parsedExplicitTarget?.threadId;
     const resolved = await resolveChannelTarget({
       cfg: params.cfg,
       channel: params.channel,
@@ -251,6 +254,16 @@ async function resolveActionTarget(params: {
     if (resolved.ok) {
       params.args.to = resolved.target.to;
       resolvedTarget = resolved.target;
+      // Target normalization may strip a channel-native topic suffix from `to`
+      // (for example Telegram `chat:topic:id`). Preserve that explicit thread
+      // before auto-threading considers the current turn's topic.
+      if (
+        parsedThreadId != null &&
+        parsedThreadId !== "" &&
+        (params.args.threadId == null || params.args.threadId === "")
+      ) {
+        params.args.threadId = String(parsedThreadId);
+      }
     } else {
       throw resolved.error;
     }

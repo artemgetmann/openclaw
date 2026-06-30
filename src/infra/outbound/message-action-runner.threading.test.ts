@@ -144,6 +144,47 @@ describe("runMessageAction threading auto-injection", () => {
     }
   });
 
+  it("injects the current topic for same-group telegram media sends", async () => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: telegramConfig,
+      actionParams: {
+        channel: "telegram",
+        target: "telegram:group:-1003783709877",
+        message: "",
+        media: "file:///tmp/report.pdf",
+      },
+      toolContext: {
+        currentChannelId: "telegram:-1003783709877",
+        currentThreadTs: "18926",
+      },
+    });
+
+    expect(call?.threadId).toBe("18926");
+    expect(call?.ctx?.params?.threadId).toBe("18926");
+  });
+
+  it("uses the explicit target topic instead of the current topic", async () => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: telegramConfig,
+      actionParams: {
+        channel: "telegram",
+        target: "telegram:group:-1003783709877:topic:18926",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "telegram:-1003783709877",
+        currentThreadTs: "17730",
+      },
+    });
+
+    expect(call?.threadId).toBe("18926");
+    expect(call?.ctx?.params?.threadId).toBe("18926");
+  });
+
   it("uses explicit telegram threadId when provided", async () => {
     mockHandledSendAction();
 

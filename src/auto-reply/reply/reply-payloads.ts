@@ -240,6 +240,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
+  includeMediaOnly?: boolean;
 }): boolean {
   const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
@@ -255,7 +256,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
-    if (target?.hasMedia === true && target.hasText !== true) {
+    if (target?.hasMedia === true && target.hasText !== true && params.includeMediaOnly !== true) {
       return false;
     }
     const targetProvider = resolveTargetProviderForComparison({

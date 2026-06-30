@@ -71,16 +71,6 @@ vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
 
-vi.mock("../../utils/delivery-context.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
-    "../../utils/delivery-context.js",
-  );
-  return {
-    ...actual,
-    normalizeSessionDeliveryFields: () => ({}),
-  };
-});
-
 const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
@@ -316,6 +306,31 @@ describe("gateway agent handler", () => {
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+  });
+
+  it("preserves topic delivery context when refreshing a session entry", async () => {
+    const topicDelivery = {
+      channel: "telegram",
+      to: "-1003783709877",
+      accountId: "default",
+      threadId: 18926,
+    };
+    mockMainSessionEntry({
+      lastChannel: "telegram",
+      lastTo: "-1003783709877",
+      lastAccountId: "default",
+      lastThreadId: 18926,
+      deliveryContext: topicDelivery,
+    });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-topic-delivery");
+
+    expect(capturedEntry).toBeDefined();
+    expect(capturedEntry?.deliveryContext).toEqual(topicDelivery);
+    expect(capturedEntry?.lastChannel).toBe("telegram");
+    expect(capturedEntry?.lastTo).toBe("-1003783709877");
+    expect(capturedEntry?.lastAccountId).toBe("default");
+    expect(capturedEntry?.lastThreadId).toBe(18926);
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {
