@@ -3,6 +3,45 @@ import Testing
 
 @Suite(.serialized)
 struct ConsumerBootstrapTests {
+    @Test func `consumer defaults enable Telegram inbound debounce without overwriting explicit opt out`() {
+        var missingRoot: [String: Any] = [
+            "messages": [
+                "ackReactionScope": "group-mentions",
+            ],
+            "channels": [
+                "telegram": [
+                    "streaming": "partial",
+                ],
+            ],
+        ]
+
+        let filled = ConsumerBootstrap.applyMissingConfigDefaults(to: &missingRoot)
+
+        #expect(filled)
+        let messages = missingRoot["messages"] as? [String: Any]
+        let inbound = messages?["inbound"] as? [String: Any]
+        let byChannel = inbound?["byChannel"] as? [String: Any]
+        #expect(byChannel?["telegram"] as? Int == 2000)
+
+        var optedOutRoot: [String: Any] = [
+            "messages": [
+                "inbound": [
+                    "byChannel": [
+                        "telegram": 0,
+                    ],
+                ],
+            ],
+        ]
+
+        let preserved = ConsumerBootstrap.applyMissingConfigDefaults(to: &optedOutRoot)
+
+        #expect(preserved)
+        let optedOutMessages = optedOutRoot["messages"] as? [String: Any]
+        let optedOutInbound = optedOutMessages?["inbound"] as? [String: Any]
+        let optedOutByChannel = optedOutInbound?["byChannel"] as? [String: Any]
+        #expect(optedOutByChannel?["telegram"] as? Int == 0)
+    }
+
     @Test func `seeded defaults add backend activation config without overwriting user config`() {
         var root: [String: Any] = [
             "jarvis": [

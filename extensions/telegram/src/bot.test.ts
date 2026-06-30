@@ -1229,6 +1229,85 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("coalesces quick text messages from the same sender in the same chat into one turn", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "first fragment",
+          date: 1736380800,
+          message_id: 301,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "second fragment",
+          date: 1736380801,
+          message_id: 302,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+
+      await vi.waitFor(() => {
+        expect(replySpy).toHaveBeenCalledTimes(1);
+      });
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("first fragment\nsecond fragment");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("isolates inbound debounce by DM topic thread id", async () => {
     const DEBOUNCE_MS = 4321;
     onSpy.mockClear();
@@ -1306,6 +1385,159 @@ describe("createTelegramBot", () => {
         .toSorted((a, b) => (a ?? 0) - (b ?? 0));
       expect(threadIds).toEqual([100, 200]);
     } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("isolates inbound debounce by sender in the same Telegram topic", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: -1001234567890, type: "supergroup", title: "Ops", is_forum: true },
+          text: "from ada",
+          date: 1736380800,
+          message_id: 401,
+          message_thread_id: 99,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: -1001234567890, type: "supergroup", title: "Ops", is_forum: true },
+          text: "from grace",
+          date: 1736380801,
+          message_id: 402,
+          message_thread_id: 99,
+          from: { id: 43, first_name: "Grace" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const debounceTimerIndexes = setTimeoutSpy.mock.calls
+        .map((call, index) => ({ index, delay: call[1] }))
+        .filter((entry) => entry.delay === DEBOUNCE_MS)
+        .map((entry) => entry.index);
+      expect(debounceTimerIndexes.length).toBeGreaterThanOrEqual(2);
+
+      for (const index of debounceTimerIndexes) {
+        clearTimeout(setTimeoutSpy.mock.results[index]?.value as ReturnType<typeof setTimeout>);
+      }
+      for (const index of debounceTimerIndexes) {
+        const flushTimer = setTimeoutSpy.mock.calls[index]?.[0] as (() => unknown) | undefined;
+        await flushTimer?.();
+      }
+
+      await vi.waitFor(() => {
+        expect(replySpy).toHaveBeenCalledTimes(2);
+      });
+      const bodies = replySpy.mock.calls.map((call) => call[0].Body).join("\n---\n");
+      expect(bodies).toContain("from ada");
+      expect(bodies).toContain("from grace");
+      expect(bodies).not.toContain("from ada\nfrom grace");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("does not debounce Telegram slash commands behind pending text", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "normal text",
+          date: 1736380800,
+          message_id: 501,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "/status",
+          date: 1736380801,
+          message_id: 502,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await vi.waitFor(() => {
+        expect(replySpy).toHaveBeenCalledTimes(2);
+      });
+      expect(replySpy.mock.calls[0][0].Body).toContain("normal text");
+      expect(replySpy.mock.calls[1][0].Body).toContain("/status");
+    } finally {
+      const debounceTimerIndexes = setTimeoutSpy.mock.calls
+        .map((call, index) => ({ index, delay: call[1] }))
+        .filter((entry) => entry.delay === DEBOUNCE_MS)
+        .map((entry) => entry.index);
+      for (const index of debounceTimerIndexes) {
+        clearTimeout(setTimeoutSpy.mock.results[index]?.value as ReturnType<typeof setTimeout>);
+      }
       setTimeoutSpy.mockRestore();
     }
   });
