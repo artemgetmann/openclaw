@@ -36,14 +36,25 @@ Useful shorthand:
 > Jarvis is an Iron Man suit for one high-agency operator, not a company uniform
 > for a committee.
 
-Assistants, PA networks, and businesses are useful learning surfaces, but the
-first wedge is not broad employee deployment or enterprise workflow management.
-The product should make normal users feel oriented quickly while still leaving
-power users room to go deeper.
+Assistants, PA networks, and founder-led businesses are useful learning
+surfaces, but the first wedge is not broad employee deployment or enterprise
+workflow management. The product should make normal users feel oriented quickly
+while still leaving power users room to go deeper.
+
+Founder-led business workflow pilots are allowed when they teach repeatable
+Jarvis product behavior. The best pilots are show-don't-tell demos of one
+annoying real workflow, for example: given booking and passenger details, help
+with airline check-in or seat selection, then stop for the human on CAPTCHA,
+payment, purchase, passport-risk, or irreversible travel decisions. Treat these
+as product discovery for packaged workflows, connectors, approvals, and proof —
+not as bespoke client automation projects.
 
 ## Product Shape
 
 - Mac-first execution. The user's Mac is the default working environment.
+- Windows-aware business learning. Many business operators live on Windows, but
+  that signal should inform packaged workflow and connector priorities before it
+  pulls Jarvis away from the current Mac-first consumer wedge.
 - Telegram-first control. Telegram is the current primary command and feedback
   surface.
 - Local-first trust. Browser sessions, local files, installed tools, and machine
@@ -70,6 +81,9 @@ power users room to go deeper.
 
 - Do not make users choose local vs cloud per task.
 - Do not make Linux VPS setup the default consumer story.
+- Do not confuse Linux/server/API connector work with the Windows-native product
+  question. Use server/API/MCP connectors when they make workflows repeatable;
+  build Windows-native UX only after repeated demand proves the wedge.
 - Do not expose runtime placement, ports, bundle IDs, or internal service names
   in primary consumer copy.
 - Do not sell Artem as a custom automation agency. Jarvis is the product.

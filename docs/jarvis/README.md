@@ -68,6 +68,8 @@ current mission needs the history.
   closeout proof.
 - `docs/consumer/archive/browser-spike-results-20260322.md` - historical browser
   benchmark evidence.
+- `docs/consumer/archive/jarvis-public-release-acceleration-spec.md` - historical
+  public-release acceleration design; implemented P0-P2 and archived.
 - `docs/consumer/archive/telegram-managed-onboarding-tracker-20260525.md` -
   historical Telegram onboarding proof tracker.
 

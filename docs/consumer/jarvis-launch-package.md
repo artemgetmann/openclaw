@@ -136,11 +136,11 @@ the user's provider subscription/login where supported. Backend-held
 founder/provider keys are limited to managed utilities, onboarding fallback,
 controlled beta support, and non-model tool surfaces.
 
-| Plan                     | Price    | Buyer                      | Public at launch | Main boundary                                   |
-| ------------------------ | -------- | -------------------------- | ---------------- | ----------------------------------------------- |
-| Jarvis Personal          | $99/mo   | normal consumers           | yes              | subscription-login models plus capped utilities |
-| Jarvis Core              | $19/mo   | technical and power users  | yes              | BYOK raw API keys and advanced provider setup   |
-| Jarvis Founder Concierge | $299/mo+ | high-touch pilot customers | no               | onboarding, workflow setup, priority support    |
+| Plan                     | Price    | Buyer                       | Public at launch | Main boundary                                           |
+| ------------------------ | -------- | --------------------------- | ---------------- | ------------------------------------------------------- |
+| Jarvis Personal          | $99/mo   | normal consumers            | yes              | subscription-login models plus capped utilities         |
+| Jarvis Core              | $19/mo   | technical and power users   | yes              | BYOK raw API keys and advanced provider setup           |
+| Jarvis Founder Concierge | $299/mo+ | founder-led pilot customers | no               | onboarding, repeatable workflow setup, priority support |
 
 Trial/account rules: 14-day account-login trial; no card for the first
 GitHub/Reddit beta; later paid ads require a card before trial; 7-day offline
@@ -155,6 +155,20 @@ Provider boundaries:
 - BYOK raw API keys are an advanced escape hatch, not the default consumer path.
 - Unlimited backend-paid model usage at consumer pricing is a margin trap. Do
   not ship it.
+
+Founder-led business pilot boundaries:
+
+- Use business pilots to find repeatable workflows, not to become a custom
+  automation agency.
+- Demo with one concrete, high-friction workflow before pitching platform
+  breadth. A good travel-ops example is airline check-in or seat selection from
+  booking and passenger details, with human-in-loop stops for CAPTCHA, payment,
+  purchase, or passport-risk decisions.
+- Expect Windows-first business environments, but keep the current product
+  Mac-first until repeated demand justifies a native Windows lane.
+- Prefer API/MCP connector lanes for repeatable business systems when they beat
+  brittle GUI work. Keep the Linux/server/API-vs-Windows-native decision
+  explicit instead of smuggling it into every pilot.
 
 ## README Launch Outline
 
