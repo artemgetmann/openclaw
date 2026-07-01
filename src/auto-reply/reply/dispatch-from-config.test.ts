@@ -1173,6 +1173,11 @@ describe("dispatchReplyFromConfig", () => {
         text: "🔊 TTS enabled.",
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
+        channelData: {
+          openclaw: {
+            controlCommandReply: true,
+          },
+        },
       }),
     );
   });

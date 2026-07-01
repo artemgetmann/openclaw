@@ -58,7 +58,10 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
-import { isControlCommandReplyPayload } from "./control-command-reply.js";
+import {
+  isControlCommandReplyPayload,
+  markControlCommandReplyPayload,
+} from "./control-command-reply.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -790,14 +793,15 @@ export async function dispatchReplyFromConfig(params: {
       payload: ReplyPayload,
       kind: ReplyDispatchKind,
     ): Promise<ReplyPayload> => {
+      const shouldPreserveControlCommandMarker = isControlCommandReplyPayload(payload);
       // Command handlers mark their own control replies. That keeps `/status`
       // and `/model` text visible without voicing product UI, while command
       // surfaces that continue into a real assistant answer still get normal
       // final-answer TTS.
-      if (isControlCommandReplyPayload(payload) && !isTelegramTtsControlCommand) {
+      if (shouldPreserveControlCommandMarker && !isTelegramTtsControlCommand) {
         return payload;
       }
-      return maybeApplyTtsToPayload({
+      const ttsPayload = await maybeApplyTtsToPayload({
         payload,
         cfg,
         channel: ttsChannel,
@@ -805,6 +809,13 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: turnTtsAuto,
       });
+      // `/tts on` is a control reply and intentionally passes through TTS so
+      // the acknowledgement can be spoken. Some TTS implementations rebuild the
+      // payload while adding media, so reapply the structural marker after TTS
+      // instead of relying on object-spread behavior in every TTS provider.
+      return shouldPreserveControlCommandMarker
+        ? markControlCommandReplyPayload(ttsPayload)
+        : ttsPayload;
     };
     const acpDispatch = await tryDispatchAcpReply({
       ctx,

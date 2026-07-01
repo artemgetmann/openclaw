@@ -292,6 +292,65 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("sends marked native command replies without Telegram rich-message transport", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "control_ack",
+        description: "TTS command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: { key: "control_ack", requireAuth: false },
+      args: undefined,
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "🔊 TTS enabled.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+      channelData: { openclaw: { controlCommandReply: true } },
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+          commandHandlers.set(name, cb);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    const handler = commandHandlers.get("control_ack");
+    expect(handler).toBeTruthy();
+    await handler?.({
+      match: "",
+      message: {
+        message_id: 1,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "alice" },
+      },
+    });
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [
+          expect.objectContaining({
+            text: "🔊 TTS enabled.",
+            mediaUrl: "https://example.com/tts-synth.opus",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("registers /ping and replies with current branch name text", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const sendMessage = vi.fn().mockResolvedValue(undefined);
