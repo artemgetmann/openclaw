@@ -612,7 +612,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("keeps final answer text eligible for Telegram rich-message transport", async () => {
+  it("sends final answer text without Telegram rich-message transport", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "Final answer for normal clients." },
@@ -627,10 +627,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     const call = deliverReplies.mock.calls[0]?.[0];
     expect(call).toEqual(
       expect.objectContaining({
+        richMessages: false,
         replies: [expect.objectContaining({ text: "Final answer for normal clients." })],
       }),
     );
-    expect(call).not.toHaveProperty("richMessages");
   });
 
   it("sends control-command text without Telegram rich-message transport even with media", async () => {
@@ -1396,6 +1396,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
+        richMessages: false,
         thread: { id: 777, scope: "dm" },
         replies: [expect.objectContaining({ text: "Final answer." })],
       }),
