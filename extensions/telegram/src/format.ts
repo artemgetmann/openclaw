@@ -469,10 +469,12 @@ function renderTelegramRichTable(table: MarkdownTableBlock): string {
   if (columnCount > TELEGRAM_RICH_TABLE_COLUMN_LIMIT) {
     return renderTelegramRichTableFallback(table);
   }
-  const header = table.headers.length
-    ? `<thead><tr>${table.headers
-        .map((cell) => `<th>${renderTelegramRichCell(cell)}</th>`)
-        .join("")}</tr></thead>`
+
+  // Telegram Bot API rich HTML documents table rows directly under <table>.
+  // Avoid browser-only grouping tags here; unsupported rich tags can make
+  // clients fall back to a raw-looking markdown/code presentation.
+  const headerRow = table.headers.length
+    ? `<tr>${Array.from({ length: columnCount }, (_value, index) => `<th>${renderTelegramRichCell(table.headers[index] ?? "")}</th>`).join("")}</tr>`
     : "";
   const bodyRows = table.rows
     .map(
@@ -480,8 +482,7 @@ function renderTelegramRichTable(table: MarkdownTableBlock): string {
         `<tr>${Array.from({ length: columnCount }, (_value, index) => `<td>${renderTelegramRichCell(row[index] ?? "")}</td>`).join("")}</tr>`,
     )
     .join("");
-  const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
-  return `<table>${header}${body}</table>\n\n`;
+  return `<table bordered striped>${headerRow}${bodyRows}</table>\n\n`;
 }
 
 function renderTelegramRichMarkdownDocument(markdown: string): string {

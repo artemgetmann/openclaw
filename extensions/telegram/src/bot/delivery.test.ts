@@ -787,7 +787,7 @@ describe("deliverReplies", () => {
       expect.objectContaining({
         chat_id: "123",
         rich_message: expect.objectContaining({
-          html: expect.stringContaining("<table>"),
+          html: expect.stringContaining("<table bordered striped>"),
         }),
       }),
     );
@@ -817,7 +817,7 @@ describe("deliverReplies", () => {
     expect(sendRichMessage).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
-      expect.stringContaining("<table>"),
+      expect.stringContaining("<table bordered striped>"),
       expect.objectContaining({ parse_mode: "HTML" }),
     );
   });
@@ -843,7 +843,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(
       1,
       "123",
-      expect.stringContaining("<table>"),
+      expect.stringContaining("<table bordered striped>"),
       expect.objectContaining({ parse_mode: "HTML" }),
     );
     expect(sendMessage).toHaveBeenNthCalledWith(2, "123", "Name | Score\nAda | 9", {});

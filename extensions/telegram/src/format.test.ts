@@ -148,9 +148,10 @@ describe("markdownToTelegramHtml", () => {
       { tableMode: "block" },
     );
 
-    expect(richHtml).toContain("<table>");
-    expect(richHtml).toContain("<thead><tr><th>Name</th><th>Score</th></tr></thead>");
-    expect(richHtml).toContain("<tbody>");
+    expect(richHtml).toContain("<table bordered striped>");
+    expect(richHtml).not.toContain("<thead>");
+    expect(richHtml).not.toContain("<tbody>");
+    expect(richHtml).toContain("<tr><th>Name</th><th>Score</th></tr>");
     expect(richHtml).toContain("<td>Ada</td><td><b>9</b></td>");
   });
 
@@ -162,7 +163,7 @@ describe("markdownToTelegramHtml", () => {
       tableMode: "block",
     });
 
-    expect(chunk?.text).toContain("<table>");
+    expect(chunk?.text).toContain("<table bordered striped>");
     expect(chunk?.plainText).toBe("Name | Score\nAda | 9");
   });
 

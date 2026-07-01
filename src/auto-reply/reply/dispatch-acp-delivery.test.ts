@@ -287,6 +287,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(preview?.endsWith("...")).toBe(true);
   });
 
+  it("omits final TTS caption previews for markdown table answers", () => {
+    const preview = buildFinalTtsCaptionPreview(
+      ["| Item | Color | Score |", "| --- | --- | ---: |", "| Apple | red | 9 |"].join("\n"),
+    );
+
+    expect(preview).toBeUndefined();
+  });
+
   it("keeps synthesized final TTS media-only outside Telegram", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const { coordinator, dispatcher } = createCoordinator();
