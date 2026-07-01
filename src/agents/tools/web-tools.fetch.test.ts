@@ -522,34 +522,13 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.text).toContain("managed firecrawl fallback");
   });
 
-  it("falls back to direct Firecrawl when managed Firecrawl is unavailable and a direct key is configured", async () => {
-    const fetchSpy = installMockFetch((input: RequestInfo | URL, init?: RequestInit) => {
+  it("does not fall back to direct Firecrawl when managed Firecrawl is unavailable", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
       const url = resolveRequestUrl(input);
       if (url === "https://jarvis.example/v1/managed/utilities/firecrawl.scrape") {
         return Promise.resolve(new Response("Service Suspended", { status: 503 }));
       }
-      if (url === "https://api.firecrawl.dev/v2/scrape") {
-        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer direct-firecrawl-key");
-        expect(parseJsonRequestBody(init)).toMatchObject({
-          url: "https://example.com/managed-down",
-        });
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              success: true,
-              data: {
-                markdown: "direct firecrawl fallback",
-                metadata: {
-                  title: "Direct Firecrawl",
-                  sourceURL: "https://example.com/managed-down",
-                  statusCode: 200,
-                },
-              },
-            }),
-            { status: 200 },
-          ),
-        );
-      }
+      expect(url).not.toContain("api.firecrawl.dev");
       return Promise.resolve({
         ok: false,
         status: 403,
@@ -582,14 +561,13 @@ describe("web_fetch extraction fallbacks", () => {
       sandboxed: false,
     });
 
-    const result = await tool?.execute?.("call", {
-      url: "https://example.com/managed-down",
-    });
-    const details = result?.details as { extractor?: string; text?: string };
+    await expect(
+      tool?.execute?.("call", {
+        url: "https://example.com/managed-down",
+      }),
+    ).rejects.toThrow(/Jarvis managed utility failed with HTTP 503/);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
-    expect(details.extractor).toBe("firecrawl");
-    expect(details.text).toContain("direct firecrawl fallback");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it("wraps external content and clamps oversized maxChars", async () => {
