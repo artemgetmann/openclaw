@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findPublicPackageSecretFindings } from "../../scripts/verify-public-package-secrets.mjs";
 
 describe("scripts/verify-public-package-secrets.mjs", () => {
@@ -95,5 +95,47 @@ describe("scripts/verify-public-package-secrets.mjs", () => {
     );
 
     await expect(findPublicPackageSecretFindings(root)).resolves.toEqual([]);
+  });
+
+  it("skips files that disappear before stat during warm package rebuilds", async () => {
+    await fs.mkdir(path.join(root, "Contents", "Resources"), { recursive: true });
+    const transientPath = path.join(root, "Contents", "Resources", "transient.json");
+    await fs.writeFile(transientPath, JSON.stringify({ token: "vanishing-value" }));
+
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (filePath, ...args) => {
+      if (filePath === transientPath) {
+        const error = new Error("missing during scan") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return fs.stat.wrappedMethod(filePath, ...args);
+    });
+
+    try {
+      await expect(findPublicPackageSecretFindings(root)).resolves.toEqual([]);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
+  it("skips files that disappear before read during warm package rebuilds", async () => {
+    await fs.mkdir(path.join(root, "Contents", "Resources"), { recursive: true });
+    const transientPath = path.join(root, "Contents", "Resources", "transient.json");
+    await fs.writeFile(transientPath, JSON.stringify({ token: "vanishing-value" }));
+
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, ...args) => {
+      if (filePath === transientPath) {
+        const error = new Error("missing during read") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return fs.readFile.wrappedMethod(filePath, ...args);
+    });
+
+    try {
+      await expect(findPublicPackageSecretFindings(root)).resolves.toEqual([]);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 });
