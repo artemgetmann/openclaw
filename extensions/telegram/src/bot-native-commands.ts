@@ -14,9 +14,11 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../../../src/auto-reply/commands-registry.js";
+import { isControlCommandReplyPayload } from "../../../src/auto-reply/reply/control-command-reply.js";
 import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
 import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
+import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../src/channels/command-gating.js";
 import { resolveNativeCommandSessionTargets } from "../../../src/channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../../../src/channels/reply-prefix.js";
@@ -87,6 +89,14 @@ import { seedTelegramThreadSessionOnTopicCreate } from "./thread-session-seeding
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const execFileAsync = promisify(execFile);
+
+function shouldUseLegacyTextTransportForNativeReply(payload: ReplyPayload): boolean {
+  // Native Telegram slash commands deliver straight through this module, so
+  // they bypass bot-message-dispatch's control-command rich-message guard.
+  // Keep structurally marked product-control acknowledgements on ordinary
+  // sendMessage while leaving normal assistant finals rich-message eligible.
+  return isControlCommandReplyPayload(payload);
+}
 
 async function resolveCurrentBranchName(): Promise<string> {
   const candidateCwds = [
@@ -900,6 +910,9 @@ export const registerTelegramNativeCommands = ({
                 const result = await deliverReplies({
                   replies: [payload],
                   ...deliveryBaseOptions,
+                  ...(shouldUseLegacyTextTransportForNativeReply(payload)
+                    ? { richMessages: false }
+                    : {}),
                 });
                 if (result.delivered) {
                   deliveryState.delivered = true;
@@ -1030,6 +1043,9 @@ export const registerTelegramNativeCommands = ({
             await deliverReplies({
               replies: [result],
               ...deliveryBaseOptions,
+              ...(shouldUseLegacyTextTransportForNativeReply(result)
+                ? { richMessages: false }
+                : {}),
             });
           }
         });
