@@ -50,6 +50,29 @@ async function createWebFetchToolForTest(params?: {
   });
 }
 
+async function createManagedWebFetchToolForTest() {
+  const { createWebFetchTool } = await import("./web-tools.js");
+  return createWebFetchTool({
+    config: {
+      jarvis: {
+        backend: {
+          baseUrl: "https://jarvis.example",
+          accessToken: "backend-token",
+        },
+        managedServices: { mode: "managed" },
+      },
+      tools: {
+        web: {
+          fetch: {
+            cacheTtlMinutes: 0,
+            firecrawl: { enabled: true },
+          },
+        },
+      },
+    },
+  });
+}
+
 async function expectBlockedUrl(
   tool: Awaited<ReturnType<typeof createWebFetchToolForTest>>,
   url: string,
@@ -92,6 +115,15 @@ describe("web_fetch SSRF protection", () => {
     for (const url of cases) {
       await expectBlockedUrl(tool, url, /private|internal|blocked/i);
     }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks private managed URLs before calling Jarvis backend", async () => {
+    const fetchSpy = setMockFetch();
+    const tool = await createManagedWebFetchToolForTest();
+
+    await expectBlockedUrl(tool, "http://127.0.0.1/private", /private|internal|blocked/i);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
   });

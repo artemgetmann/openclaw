@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -43,6 +44,70 @@ def backend_token_headers(token: str = "server-token") -> dict[str, str]:
     """Build the backend bearer header used by managed-utility contract tests."""
 
     return {"Authorization": f"Bearer {token}"}
+
+
+def install_mock_dns(monkeypatch, addresses: list[str]) -> None:
+    """Keep managed scrape SSRF tests deterministic and off real DNS."""
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        return [
+            (
+                socket.AF_INET6 if ":" in address else socket.AF_INET,
+                socket.SOCK_STREAM,
+                0,
+                "",
+                (address, port or 443),
+            )
+            for address in addresses
+        ]
+
+    monkeypatch.setattr("app.main.socket.getaddrinfo", getaddrinfo)
+
+
+def install_mock_preflight(
+    monkeypatch,
+    status_code: int = 204,
+    location: str | None = None,
+    response_by_host: dict[str, tuple[int, str | None]] | None = None,
+):
+    """Fake the backend socket preflight while recording pinned connection targets."""
+
+    calls = []
+
+    class Reader:
+        def __init__(self, response_status_code: int, response_location: str | None):
+            self.response_status_code = response_status_code
+            self.response_location = response_location
+
+        async def readuntil(self, separator):
+            headers = [f"HTTP/1.1 {self.response_status_code} Test"]
+            if self.response_location:
+                headers.append(f"Location: {self.response_location}")
+            return ("\r\n".join(headers) + "\r\n\r\n").encode()
+
+    class Writer:
+        def write(self, data):
+            calls[-1]["request"] = data
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            return None
+
+        async def wait_closed(self):
+            return None
+
+    async def open_connection(**kwargs):
+        calls.append(kwargs)
+        response_status_code, response_location = (response_by_host or {}).get(
+            kwargs["host"],
+            (status_code, location),
+        )
+        return Reader(response_status_code, response_location), Writer()
+
+    monkeypatch.setattr("app.main.asyncio.open_connection", open_connection)
+    return calls
 
 
 def test_health_reports_provider_presence_without_secret_values(monkeypatch):
@@ -721,6 +786,8 @@ def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    install_mock_dns(monkeypatch, ["93.184.216.34"])
+    preflight_calls = install_mock_preflight(monkeypatch)
     reset_settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -746,6 +813,163 @@ def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
     assert response.status_code == 200
     assert response.json()["result"]["provider"] == "firecrawl"
     assert response.json()["result"]["payload"]["data"]["markdown"] == "# Example"
+    assert preflight_calls[0]["host"] == "93.184.216.34"
+    assert preflight_calls[0]["server_hostname"] == "example.com"
+    assert b"Host: example.com\r\n" in preflight_calls[0]["request"]
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_rejects_private_url_before_provider(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for blocked URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "http://127.0.0.1/private"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "private/internal" in response.text
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_rejects_private_dns_before_provider(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    install_mock_dns(monkeypatch, ["10.0.0.5"])
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for blocked URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://public-looking.example/private"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "resolves to a private/internal" in response.text
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_rejects_multicast_literal_before_provider(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    preflight_calls = install_mock_preflight(monkeypatch)
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for blocked URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "http://224.0.0.1/multicast"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "private/internal" in response.text
+    assert preflight_calls == []
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_rejects_invalid_port_before_provider(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    preflight_calls = install_mock_preflight(monkeypatch)
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for invalid URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "http://example.com:abc/"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "absolute http(s) URL" in response.text
+    assert preflight_calls == []
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_rejects_private_redirect_before_provider(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    install_mock_dns(monkeypatch, ["93.184.216.34"])
+    preflight_calls = install_mock_preflight(
+        monkeypatch,
+        status_code=302,
+        location="http://127.0.0.1/private",
+    )
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for blocked URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://redirect.example/start"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "private/internal" in response.text
+    assert preflight_calls[0]["host"] == "93.184.216.34"
+    assert preflight_calls[0]["server_hostname"] == "redirect.example"
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_checks_private_redirects_on_all_resolved_addresses(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    install_mock_dns(monkeypatch, ["93.184.216.34", "93.184.216.35"])
+    preflight_calls = install_mock_preflight(
+        monkeypatch,
+        response_by_host={
+            "93.184.216.34": (204, None),
+            "93.184.216.35": (302, "http://127.0.0.1/private"),
+        },
+    )
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for blocked URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://multi.example/start"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "private/internal" in response.text
+    assert [call["host"] for call in preflight_calls] == ["93.184.216.34", "93.184.216.35"]
     assert "test-firecrawl-provider-placeholder" not in response.text
 
 

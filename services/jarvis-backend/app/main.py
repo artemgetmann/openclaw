@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
+import ipaddress
 import os
 import secrets
+import socket
+import ssl
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Protocol
-from urllib.parse import quote
+from urllib.parse import ParseResult, quote, urljoin, urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 import httpx
@@ -29,6 +33,9 @@ OPENAI_AUDIO_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions
 OPENAI_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 TELEGRAM_BOT_API_BASE_URL = "https://api.telegram.org"
 MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
+MANAGED_SCRAPE_PREFLIGHT_TIMEOUT_SECONDS = 5.0
+MANAGED_SCRAPE_MAX_REDIRECTS = 5
+MANAGED_SCRAPE_PREFLIGHT_HEADER_LIMIT = 64_000
 TELEGRAM_MANAGED_BOT_TIMEOUT_SECONDS = 20.0
 TELEGRAM_MANAGED_SETUP_TTL_MINUTES = 15
 MAX_GEMINI_IMAGE_PROMPT_CHARS = 4000
@@ -45,6 +52,11 @@ SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
     "9:16",
     "16:9",
     "21:9",
+}
+BLOCKED_SCRAPE_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+    "metadata.google.internal",
 }
 
 
@@ -820,6 +832,7 @@ async def _firecrawl_scrape(
 
     api_key = _require_provider_key("firecrawl", settings.firecrawl_api_key)
     url = _required_input_string(input_payload, "url", "firecrawl.scrape")
+    await _validate_managed_scrape_url(url)
     provider_payload = await _post_provider_json(
         provider="firecrawl",
         url=f"{FIRECRAWL_API_BASE_URL}/scrape",
@@ -1045,6 +1058,281 @@ def _require_provider_key(provider: str, api_key: str | None) -> str:
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=f"{provider} provider is not configured",
     )
+
+
+def _normalize_scrape_hostname(hostname: str) -> str:
+    """Normalize hosts before comparing internal/special names."""
+
+    return hostname.strip().lower().rstrip(".")
+
+
+def _is_blocked_scrape_hostname(hostname: str) -> bool:
+    """Catch hostnames that are internal by name before DNS can run."""
+
+    normalized = _normalize_scrape_hostname(hostname)
+    return (
+        normalized in BLOCKED_SCRAPE_HOSTNAMES
+        or normalized.endswith(".localhost")
+        or normalized.endswith(".local")
+        or normalized.endswith(".internal")
+    )
+
+
+def _is_public_ip_address(address: str) -> bool:
+    """Allow only ordinary global unicast addresses."""
+
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return (
+        parsed.is_global
+        and not parsed.is_multicast
+        and not parsed.is_unspecified
+        and not parsed.is_loopback
+        and not parsed.is_link_local
+        and not parsed.is_reserved
+    )
+
+
+def _require_managed_scrape_http_url(raw_url: str) -> ParseResult:
+    """Accept only absolute HTTP(S) URLs for server-managed scraping."""
+
+    try:
+        parsed = urlparse(raw_url)
+        parsed.port
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url must be an absolute http(s) URL",
+        ) from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url must be an absolute http(s) URL",
+        )
+    hostname = _normalize_scrape_hostname(parsed.hostname)
+    if _is_blocked_scrape_hostname(hostname):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url targets a private/internal host",
+        )
+    if _looks_like_ip_address(hostname) and not _is_public_ip_address(hostname):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url targets a private/internal IP address",
+        )
+    return parsed
+
+
+def _looks_like_ip_address(value: str) -> bool:
+    """Avoid sending literal IPs through DNS before classifying them."""
+
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+async def _resolve_managed_scrape_addresses(hostname: str) -> list[str]:
+    """Resolve on the backend so managed scraping has a server-side SSRF gate."""
+
+    try:
+        infos = await asyncio.to_thread(
+            socket.getaddrinfo,
+            hostname,
+            None,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url hostname could not be resolved",
+        ) from exc
+
+    addresses = list(dict.fromkeys(info[4][0] for info in infos if info and info[4]))
+    if not addresses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url hostname could not be resolved",
+        )
+    return addresses
+
+
+async def _resolve_public_managed_scrape_addresses(hostname: str) -> list[str]:
+    """Block DNS rebinding-style targets before Firecrawl receives the URL."""
+
+    normalized = _normalize_scrape_hostname(hostname)
+    if _is_blocked_scrape_hostname(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url targets a private/internal host",
+        )
+
+    if _looks_like_ip_address(normalized):
+        if not _is_public_ip_address(normalized):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="firecrawl.scrape input.url targets a private/internal IP address",
+            )
+        return [normalized]
+
+    addresses = await _resolve_managed_scrape_addresses(normalized)
+    if any(not _is_public_ip_address(address) for address in addresses):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url resolves to a private/internal IP address",
+        )
+    return addresses
+
+
+def _managed_scrape_default_port(parsed: ParseResult) -> int:
+    """Return the network port a browser-style fetch would use."""
+
+    if parsed.port:
+        return parsed.port
+    return 443 if parsed.scheme == "https" else 80
+
+
+def _managed_scrape_host_header(parsed: ParseResult) -> str:
+    """Build a Host header without trusting userinfo from the original netloc."""
+
+    hostname = parsed.hostname or ""
+    host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
+    default_port = 443 if parsed.scheme == "https" else 80
+    return f"{host}:{parsed.port}" if parsed.port and parsed.port != default_port else host
+
+
+def _managed_scrape_request_target(parsed: ParseResult) -> str:
+    """Send only path/query on the pinned socket, never the absolute URL."""
+
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+    return target
+
+
+def _parse_preflight_response_headers(raw_headers: bytes) -> tuple[int, str | None]:
+    """Parse just the HTTP status and Location header from a preflight response."""
+
+    text = raw_headers.decode("iso-8859-1", errors="replace")
+    lines = text.split("\r\n")
+    status_line = lines[0] if lines else ""
+    parts = status_line.split(" ", 2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url returned an invalid preflight response",
+        )
+    location: str | None = None
+    for line in lines[1:]:
+        if not line:
+            break
+        name, separator, value = line.partition(":")
+        if separator and name.strip().lower() == "location":
+            location = value.strip()
+            break
+    return int(parts[1]), location
+
+
+async def _read_preflight_headers(reader: asyncio.StreamReader) -> bytes:
+    """Read bounded response headers and reject oversized/partial headers."""
+
+    try:
+        return await asyncio.wait_for(
+            reader.readuntil(b"\r\n\r\n"),
+            timeout=MANAGED_SCRAPE_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url preflight response headers could not be read",
+        ) from exc
+
+
+async def _managed_scrape_redirect_target(parsed: ParseResult, address: str) -> str | None:
+    """Probe one redirect hop through the already-vetted address."""
+
+    headers = {
+        "Accept": "*/*",
+        "Range": "bytes=0-0",
+        "User-Agent": "Jarvis-Managed-WebFetch/1.0",
+    }
+    host_header = _managed_scrape_host_header(parsed)
+    request = (
+        f"GET {_managed_scrape_request_target(parsed)} HTTP/1.1\r\n"
+        f"Host: {host_header}\r\n"
+        f"Accept: {headers['Accept']}\r\n"
+        f"Range: {headers['Range']}\r\n"
+        f"User-Agent: {headers['User-Agent']}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("ascii", errors="ignore")
+
+    ssl_context = ssl.create_default_context() if parsed.scheme == "https" else None
+    server_hostname = parsed.hostname if parsed.scheme == "https" else None
+    port = _managed_scrape_default_port(parsed)
+    writer: asyncio.StreamWriter | None = None
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(
+                host=address,
+                port=port,
+                ssl=ssl_context,
+                server_hostname=server_hostname,
+                limit=MANAGED_SCRAPE_PREFLIGHT_HEADER_LIMIT,
+            ),
+            timeout=MANAGED_SCRAPE_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+        writer.write(request)
+        await asyncio.wait_for(writer.drain(), timeout=MANAGED_SCRAPE_PREFLIGHT_TIMEOUT_SECONDS)
+        status_code, location = _parse_preflight_response_headers(
+            await _read_preflight_headers(reader),
+        )
+    except (OSError, ssl.SSLError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url could not be validated",
+        ) from exc
+    finally:
+        if writer:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (OSError, ssl.SSLError):
+                pass
+
+    if 300 <= status_code < 400:
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="firecrawl.scrape input.url returned a redirect without a location",
+            )
+        return urljoin(parsed.geturl(), location)
+    return None
+
+
+async def _validate_managed_scrape_url(url: str, depth: int = 0) -> None:
+    """Validate initial and redirected scrape targets before provider spend."""
+
+    if depth > MANAGED_SCRAPE_MAX_REDIRECTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firecrawl.scrape input.url redirects too many times",
+        )
+
+    parsed = _require_managed_scrape_http_url(url)
+    addresses = await _resolve_public_managed_scrape_addresses(parsed.hostname or "")
+    redirect_urls: list[str] = []
+    for address in addresses:
+        redirect_url = await _managed_scrape_redirect_target(parsed, address)
+        if redirect_url and redirect_url not in redirect_urls:
+            redirect_urls.append(redirect_url)
+
+    for redirect_url in redirect_urls:
+        await _validate_managed_scrape_url(redirect_url, depth + 1)
 
 
 def _required_input_string(input_payload: dict[str, Any], field_name: str, utility: str) -> str:

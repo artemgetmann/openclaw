@@ -6,7 +6,7 @@ import {
   createJarvisManagedUtilityClient,
   unwrapManagedProviderPayload,
 } from "../../consumer/managed-utilities.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { isBlockedHostnameOrIp, SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -508,6 +508,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  managedFetchOnly: boolean;
 };
 
 function toFirecrawlContentParams(
@@ -576,9 +577,18 @@ async function maybeFetchFirecrawlWebFetchPayload(
   return payload;
 }
 
+function assertManagedWebFetchUrlAllowed(parsedUrl: URL): void {
+  // Keep this check local-only: managed Jarvis must not depend on the user's
+  // network/DNS to decide whether Render can fetch a page. Redirect-aware and
+  // resolved-address SSRF enforcement belongs on the managed backend.
+  if (isBlockedHostnameOrIp(parsedUrl.hostname)) {
+    throw new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address");
+  }
+}
+
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.managedFetchOnly ? "managed" : "direct"}:${params.url}:${params.extractMode}:${params.maxChars}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -596,6 +606,24 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   const start = Date.now();
+  if (params.managedFetchOnly) {
+    // Packaged Jarvis must not make local page/provider requests when managed
+    // services own web_fetch. Render is the transport and failure boundary.
+    assertManagedWebFetchUrlAllowed(parsedUrl);
+    const payload = await maybeFetchFirecrawlWebFetchPayload({
+      ...params,
+      urlToFetch: params.url,
+      finalUrlFallback: params.url,
+      statusFallback: 200,
+      cacheKey,
+      tookMs: Date.now() - start,
+    });
+    if (payload) {
+      return payload;
+    }
+    throw new Error("Jarvis managed web_fetch requires managed Firecrawl to be enabled.");
+  }
+
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
@@ -819,11 +847,10 @@ export function createWebFetchTool(options?: {
   const managedFirecrawlEnabled = Boolean(
     firecrawlManagedUtilityClient && firecrawl?.enabled !== false,
   );
-  const firecrawlEnabled =
-    runtimeFirecrawlActive ??
-    Boolean(
-      managedFirecrawlEnabled || resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey }),
-    );
+  const firecrawlEnabled = managedFirecrawlEnabled
+    ? true
+    : (runtimeFirecrawlActive ??
+      Boolean(resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey })));
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
@@ -870,6 +897,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        managedFetchOnly: managedFirecrawlEnabled,
       });
       return jsonResult(result);
     },
