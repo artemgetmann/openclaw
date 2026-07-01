@@ -266,11 +266,6 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
         text: firstCommentary,
       }),
       expect.objectContaining({
-        op: "editMessageText",
-        messageId: progressSend!.messageId,
-        text: `${firstCommentary}\n\n${secondCommentary}`,
-      }),
-      expect.objectContaining({
         op: "deleteMessage",
         messageId: progressSend!.messageId,
       }),
@@ -324,11 +319,6 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
         op: "sendMessage",
         messageId: progressSend!.messageId,
         text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "editMessageText",
-        messageId: progressSend!.messageId,
-        text: `${firstCommentary}\n\n${secondCommentary}\n\n${thirdCommentary}`,
       }),
       expect.objectContaining({
         op: "deleteMessage",
@@ -400,11 +390,6 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
         op: "sendMessage",
         messageId: progressSend!.messageId,
         text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "editMessageText",
-        messageId: progressSend!.messageId,
-        text: `${firstCommentary}\n\n${secondCommentary}`,
       }),
       expect.objectContaining({
         op: "deleteMessage",

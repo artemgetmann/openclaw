@@ -6,7 +6,7 @@ export type FinalizableDraftStreamState = {
 };
 
 type StopAndClearMessageIdParams<T> = {
-  stopForClear: () => Promise<void>;
+  stopForClear: (options?: { waitForInFlight?: boolean }) => Promise<void>;
   readMessageId: () => T | undefined;
   clearMessageId: () => void;
 };
@@ -54,10 +54,12 @@ export function createFinalizableDraftStreamControls(params: {
     await loop.flush();
   };
 
-  const stopForClear = async (): Promise<void> => {
+  const stopForClear = async (options?: { waitForInFlight?: boolean }): Promise<void> => {
     params.markStopped();
     loop.stop();
-    await loop.waitForInFlight();
+    if (options?.waitForInFlight !== false) {
+      await loop.waitForInFlight();
+    }
   };
 
   return {
@@ -89,8 +91,9 @@ export function createFinalizableDraftStreamControlsForState(params: {
 
 export async function takeMessageIdAfterStop<T>(
   params: StopAndClearMessageIdParams<T>,
+  options?: { waitForInFlight?: boolean },
 ): Promise<T | undefined> {
-  await params.stopForClear();
+  await params.stopForClear(options);
   const messageId = params.readMessageId();
   params.clearMessageId();
   return messageId;
@@ -98,12 +101,16 @@ export async function takeMessageIdAfterStop<T>(
 
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
+  options?: { waitForInFlight?: boolean },
 ): Promise<void> {
-  const messageId = await takeMessageIdAfterStop({
-    stopForClear: params.stopForClear,
-    readMessageId: params.readMessageId,
-    clearMessageId: params.clearMessageId,
-  });
+  const messageId = await takeMessageIdAfterStop(
+    {
+      stopForClear: params.stopForClear,
+      readMessageId: params.readMessageId,
+      clearMessageId: params.clearMessageId,
+    },
+    options,
+  );
   if (!params.isValidMessageId(messageId)) {
     return;
   }
@@ -124,17 +131,20 @@ export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifec
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
   });
 
-  const clear = async () => {
-    await clearFinalizableDraftMessage({
-      stopForClear: controls.stopForClear,
-      readMessageId: params.readMessageId,
-      clearMessageId: params.clearMessageId,
-      isValidMessageId: params.isValidMessageId,
-      deleteMessage: params.deleteMessage,
-      onDeleteSuccess: params.onDeleteSuccess,
-      warn: params.warn,
-      warnPrefix: params.warnPrefix,
-    });
+  const clear = async (options?: { waitForInFlight?: boolean }) => {
+    await clearFinalizableDraftMessage(
+      {
+        stopForClear: controls.stopForClear,
+        readMessageId: params.readMessageId,
+        clearMessageId: params.clearMessageId,
+        isValidMessageId: params.isValidMessageId,
+        deleteMessage: params.deleteMessage,
+        onDeleteSuccess: params.onDeleteSuccess,
+        warn: params.warn,
+        warnPrefix: params.warnPrefix,
+      },
+      options,
+    );
   };
 
   return {
