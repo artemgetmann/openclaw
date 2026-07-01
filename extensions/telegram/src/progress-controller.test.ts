@@ -104,6 +104,42 @@ describe("createTelegramProgressController", () => {
     expect(controller.messageId()).toBe(88);
   });
 
+  it("can discard pending progress edits before deleting the visible final-bound bubble", async () => {
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockReturnValue(88),
+      previewMode: vi.fn().mockReturnValue("message"),
+      previewRevision: vi.fn().mockReturnValue(1),
+      lastDeliveredText: vi.fn().mockReturnValue("Already visible progress."),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(88),
+      forceNewMessage: vi.fn(),
+      sendMayHaveLanded: vi.fn().mockReturnValue(false),
+    };
+    const api = {
+      sendMessage: vi.fn(),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
+    };
+    const controller = createTelegramProgressController({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      minInitialChars: 1,
+      stream: adoptedStream,
+      renderText: (text) => ({ text }),
+    });
+
+    controller.update("Stale progress edit still queued.");
+    await controller.clear({ flushBeforeDelete: false, waitForInFlight: false });
+
+    expect(adoptedStream.update).toHaveBeenCalledWith("Stale progress edit still queued.");
+    expect(adoptedStream.flush).not.toHaveBeenCalled();
+    expect(adoptedStream.clear).toHaveBeenCalledWith({ waitForInFlight: false });
+  });
+
   it("dedupes repeated progress entries while preserving first-seen order", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 

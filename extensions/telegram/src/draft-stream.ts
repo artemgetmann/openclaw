@@ -72,7 +72,7 @@ export type TelegramDraftStream = {
   previewMode?: () => "message" | "draft";
   previewRevision?: () => number;
   lastDeliveredText?: () => string;
-  clear: () => Promise<void>;
+  clear: (options?: { waitForInFlight?: boolean }) => Promise<void>;
   stop: () => Promise<void>;
   /** Convert the current draft preview into a permanent message (sendMessage). */
   materialize?: () => Promise<number | undefined>;
@@ -577,8 +577,8 @@ export function createTelegramDraftStream(params: {
     previewMode: () => previewTransport,
     previewRevision: () => previewRevision,
     lastDeliveredText: () => lastDeliveredText,
-    clear: async () => {
-      await clear();
+    clear: async (options?: { waitForInFlight?: boolean }) => {
+      await clear(options);
       await clearNativeDraftPreview();
     },
     stop,
