@@ -2,6 +2,8 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
+import { deliveryContextKey, type DeliveryContext } from "../utils/delivery-context.js";
+
 export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
 
 const MAX_EVENTS = 20;
@@ -17,6 +19,10 @@ const queues = new Map<string, SessionQueue>();
 type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
+};
+
+type OriginScopedSystemEventOptions = SystemEventOptions & {
+  origin?: DeliveryContext;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -82,6 +88,22 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return true;
 }
 
+export function systemEventSessionKeyForOrigin(
+  sessionKey: string,
+  origin?: DeliveryContext,
+): string {
+  const key = requireSessionKey(sessionKey);
+  const originKey = deliveryContextKey(origin);
+  return originKey ? `${key}::origin:${originKey}` : key;
+}
+
+export function enqueueSystemEventForOrigin(text: string, options: OriginScopedSystemEventOptions) {
+  return enqueueSystemEvent(text, {
+    sessionKey: systemEventSessionKeyForOrigin(options.sessionKey, options.origin),
+    contextKey: options.contextKey,
+  });
+}
+
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
@@ -94,6 +116,18 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
+}
+
+export function drainSystemEventEntriesForOrigin(
+  sessionKey: string,
+  origin?: DeliveryContext,
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const scopedKey = systemEventSessionKeyForOrigin(key, origin);
+  if (scopedKey === key) {
+    return drainSystemEventEntries(key);
+  }
+  return [...drainSystemEventEntries(scopedKey), ...drainSystemEventEntries(key)];
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {
