@@ -20,7 +20,7 @@ export type TelegramProgressController = {
   update: (text: string) => void;
   preview: (text: string) => void;
   replace: (text: string) => void;
-  clear: () => Promise<void>;
+  clear: (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => Promise<void>;
   messageId: () => number | undefined;
   lastText: () => string;
 };
@@ -183,17 +183,21 @@ export function createTelegramProgressController(params: {
       lastRenderedProgressText = progressText;
       stream.update(progressText);
     },
-    clear: async () => {
+    clear: async (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => {
       if (cleared) {
         return;
       }
       cleared = true;
-      // Final-answer delivery owns the durable transcript, but the progress
-      // controller owns progress ordering proof. Flush pending progress edits
-      // before deletion so "step 1 -> step 2 -> final" cannot collapse into
-      // "step 1 -> final -> delete" under Telegram preview throttling.
-      await stream.flush();
-      await stream.clear();
+      if (options?.flushBeforeDelete !== false) {
+        // Normal progress cleanup flushes pending progress edits before
+        // deletion so "step 1 -> step 2 -> cleanup" cannot collapse into a
+        // stale visible bubble under Telegram preview throttling.
+        await stream.flush();
+      }
+      // Final-answer cleanup can explicitly skip in-flight preview edits. At
+      // that point the next durable message is the final answer, so deleting
+      // the visible progress bubble beats faithfully rendering stale progress.
+      await stream.clear({ waitForInFlight: options?.waitForInFlight });
     },
     messageId: () => stream.messageId(),
     lastText: () => lastRenderedProgressText,

@@ -277,11 +277,6 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         text: expect.stringContaining("Opening"),
       }),
       expect.objectContaining({
-        op: "editMessageText",
-        messageId: progressSend!.messageId,
-        text: expect.stringMatching(/Opening[\s\S]*Reading IANA example domains/),
-      }),
-      expect.objectContaining({
         op: "deleteMessage",
         messageId: progressSend!.messageId,
       }),
@@ -386,11 +381,6 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         op: "sendMessage",
         messageId: progressSend!.messageId,
         text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "editMessageText",
-        messageId: progressSend!.messageId,
-        text: `${firstCommentary}\n\n${secondCommentary}`,
       }),
       expect.objectContaining({
         op: "deleteMessage",
