@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../../infra/net/ssrf.js";
+import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withEnv } from "../../test-utils/env.js";
-import { __testing } from "./web-search.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { createWebSearchTool, __testing } from "./web-search.js";
 
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -33,6 +36,116 @@ const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+function installMockFetch(
+  impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  const mockFetch = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => await impl(input, init),
+  );
+  global.fetch = withFetchPreconnect(mockFetch);
+  return mockFetch;
+}
+
+function parseJsonRequestBody(init: RequestInit | undefined): unknown {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected JSON string request body");
+  }
+  return JSON.parse(init.body);
+}
+
+describe("web_search managed Brave fallback", () => {
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    const resolvePinned = async (hostname: string) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    };
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(resolvePinned);
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(resolvePinned);
+  });
+
+  afterEach(() => {
+    global.fetch = priorFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("falls back to direct Brave when managed Brave is unavailable and a direct key is configured", async () => {
+    const fetchSpy = installMockFetch(async (input, init) => {
+      const url = resolveRequestUrl(input);
+      if (url === "https://jarvis.example/v1/managed/utilities/brave.search") {
+        expect(parseJsonRequestBody(init)).toEqual({
+          input: {
+            query: "managed brave down",
+            count: 1,
+            mode: "web",
+          },
+        });
+        return new Response("Service Suspended", { status: 503 });
+      }
+      if (url.startsWith("https://api.search.brave.com/res/v1/web/search")) {
+        expect(new Headers(init?.headers).get("X-Subscription-Token")).toBe("direct-brave-key");
+        return new Response(
+          JSON.stringify({
+            web: {
+              results: [
+                {
+                  title: "Direct Brave",
+                  url: "https://example.com/direct-brave",
+                  description: "direct brave fallback",
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: "backend-token",
+          },
+          managedServices: { mode: "managed" },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              apiKey: "direct-brave-key",
+              cacheTtlMinutes: 0,
+            },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", {
+      query: "managed brave down",
+      count: 1,
+    });
+    const details = result?.details as {
+      provider?: string;
+      results?: Array<{ url?: string; description?: string }>;
+    };
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(details.provider).toBe("brave");
+    expect(details.results?.[0]?.url).toBe("https://example.com/direct-brave");
+    expect(details.results?.[0]?.description).toContain("direct brave fallback");
+  });
+});
 
 describe("web_search perplexity compatibility routing", () => {
   it("detects API key prefixes", () => {
