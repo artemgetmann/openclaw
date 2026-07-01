@@ -633,6 +633,37 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(call).not.toHaveProperty("richMessages");
   });
 
+  it("sends control-command text without Telegram rich-message transport even with media", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "TTS enabled.",
+          mediaUrl: "file:///tmp/tts-preview.mp3",
+          audioAsVoice: true,
+          channelData: { openclaw: { controlCommandReply: true } },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [
+          expect.objectContaining({
+            text: "TTS enabled.",
+            mediaUrl: "file:///tmp/tts-preview.mp3",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("disables answer preview streaming and preserves native quote replies", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
