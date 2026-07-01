@@ -7,6 +7,7 @@ import {
 } from "../../../src/agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
+import { isControlCommandReplyPayload } from "../../../src/auto-reply/reply/control-command-reply.js";
 import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
@@ -1718,12 +1719,13 @@ export const dispatchTelegramMessage = async ({
       hasMedia,
       isError: normalizedPayload.isError === true,
     });
+    const shouldUseLegacyTextTransport = isControlCommandReplyPayload(normalizedPayload);
     const result = await deliverReplies({
       ...deliveryBaseOptions,
-      // Final text is the durable proof point for Telegram progress/TTS UX.
-      // Bot API rich messages can arrive as unsupported media for MTProto
-      // readers, so keep finals on ordinary text transport.
-      richMessages: durableReason === "final" && !hasMedia && !isTtsSupplement ? false : undefined,
+      // Control command replies are product UI, not rich content. Some attach
+      // media, such as the /tts on voice preview, so keep their text bubble on
+      // ordinary Telegram transport while preserving media delivery.
+      ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
       replies: [applyQuoteReplyTarget(normalizedPayload)],
       onVoiceRecording: sendRecordVoice,
       onReplyDelivered: (event: TelegramReplyDeliveredEvent) => {

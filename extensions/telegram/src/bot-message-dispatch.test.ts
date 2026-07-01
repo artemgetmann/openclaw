@@ -612,7 +612,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("sends final answer text without Telegram rich-message transport", async () => {
+  it("keeps final answer text eligible for Telegram rich-message transport", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "Final answer for normal clients." },
@@ -624,10 +624,42 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
+    const call = deliverReplies.mock.calls[0]?.[0];
+    expect(call).toEqual(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Final answer for normal clients." })],
+      }),
+    );
+    expect(call).not.toHaveProperty("richMessages");
+  });
+
+  it("sends control-command text without Telegram rich-message transport even with media", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "TTS enabled.",
+          mediaUrl: "file:///tmp/tts-preview.mp3",
+          audioAsVoice: true,
+          channelData: { openclaw: { controlCommandReply: true } },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         richMessages: false,
-        replies: [expect.objectContaining({ text: "Final answer for normal clients." })],
+        replies: [
+          expect.objectContaining({
+            text: "TTS enabled.",
+            mediaUrl: "file:///tmp/tts-preview.mp3",
+            audioAsVoice: true,
+          }),
+        ],
       }),
     );
   });
