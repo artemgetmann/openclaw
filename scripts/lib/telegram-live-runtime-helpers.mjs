@@ -1818,6 +1818,10 @@ export function buildTelegramLiveRuntimeConfig(params) {
     port: runtimePort,
     bind: "loopback",
     mode: "local",
+    reload: {
+      ...(gateway.reload && typeof gateway.reload === "object" ? gateway.reload : {}),
+      mode: "off",
+    },
     ...(effectiveGatewayAuthToken
       ? {
           auth: {
@@ -2184,6 +2188,7 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
       "gateway.port",
       "gateway.auth.token",
       "gateway.controlUi",
+      "gateway.reload",
       "agents.defaults.workspace",
       "agents.defaults.heartbeat",
       "agents.defaults.memorySearch.store.path",

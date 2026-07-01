@@ -138,6 +138,7 @@ describe("summarizeTelegramTesterTokenPool", () => {
 
     expect(config.agents.defaults.model.primary).toBe("openai/gpt-5.4");
     expect(config.browser).toEqual(baseConfig.browser);
+    expect(config.gateway.reload.mode).toBe("off");
     expect(config.plugins.allow).toEqual(baseConfig.plugins.allow);
     expect(config.plugins.deny).toEqual(baseConfig.plugins.deny);
     expect(config.plugins.slots).toEqual(baseConfig.plugins.slots);

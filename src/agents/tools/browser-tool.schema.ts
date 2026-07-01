@@ -180,6 +180,12 @@ export const BrowserToolSchema = Type.Object({
   target: optionalStringEnum(BROWSER_TARGETS),
   node: Type.Optional(Type.String()),
   profile: Type.Optional(Type.String()),
+  fallbackApproved: Type.Optional(
+    Type.Boolean({
+      description:
+        'Set true only after the user explicitly approved switching from a signed-in/user-live browser lane to profile="openclaw" in this conversation.',
+    }),
+  ),
   targetUrl: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),

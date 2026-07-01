@@ -463,6 +463,7 @@ export async function executeActAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onBrowserBackendAttempt?: () => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   const requestTimeoutMs = readActTimeoutMs(request) ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS;
@@ -473,9 +474,11 @@ export async function executeActAction(params: {
       profile,
       proxyRequest,
       timeoutMs: requestTimeoutMs,
+      onBrowserBackendAttempt: params.onBrowserBackendAttempt,
     });
   }
   try {
+    params.onBrowserBackendAttempt?.();
     const result = proxyRequest
       ? await proxyRequest({
           method: "POST",
@@ -497,6 +500,7 @@ export async function executeActAction(params: {
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const retryRequest = stripTargetIdFromActRequest(request);
+      params.onBrowserBackendAttempt?.();
       const tabs = proxyRequest
         ? ((
             (await proxyRequest({
@@ -511,6 +515,7 @@ export async function executeActAction(params: {
       // Only retry safe read-only actions, and only when exactly one tab remains attached.
       if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {
+          params.onBrowserBackendAttempt?.();
           const retryResult = proxyRequest
             ? await proxyRequest({
                 method: "POST",
@@ -554,7 +559,9 @@ async function executeSingleAct(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   timeoutMs: number;
+  onBrowserBackendAttempt?: () => void;
 }): Promise<unknown> {
+  params.onBrowserBackendAttempt?.();
   return params.proxyRequest
     ? await params.proxyRequest({
         method: "POST",
@@ -610,6 +617,7 @@ async function executeExistingSessionBatchAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   timeoutMs: number;
+  onBrowserBackendAttempt?: () => void;
 }): Promise<AgentToolResult<unknown>> {
   const rawActions = (params.request as { actions?: unknown }).actions;
   const actions = Array.isArray(rawActions) ? rawActions : [];
@@ -634,6 +642,7 @@ async function executeExistingSessionBatchAction(params: {
         profile: params.profile,
         proxyRequest: params.proxyRequest,
         timeoutMs: readActTimeoutMs(stepRequest) ?? params.timeoutMs,
+        onBrowserBackendAttempt: params.onBrowserBackendAttempt,
       });
       results.push({ ok: true });
     } catch (err) {
