@@ -137,8 +137,7 @@ async function postFirecrawlJson(params: {
   );
 }
 
-function resolveDirectFirecrawlApiKey(label: string, cfg?: OpenClawConfig): string {
-  const apiKey = resolveFirecrawlApiKey(cfg);
+function requireDirectFirecrawlApiKey(label: string, apiKey: string | undefined): string {
   if (apiKey) {
     return apiKey;
   }
@@ -255,9 +254,10 @@ export async function runFirecrawlSearch(
   const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
   const managedClient = createJarvisManagedUtilityClient(params.cfg);
-  const directApiKey = managedClient
-    ? ""
-    : resolveDirectFirecrawlApiKey("web_search (firecrawl)", params.cfg);
+  const directApiKey = resolveFirecrawlApiKey(params.cfg);
+  if (!managedClient) {
+    requireDirectFirecrawlApiKey("web_search (firecrawl)", directApiKey);
+  }
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-search",
@@ -291,8 +291,10 @@ export async function runFirecrawlSearch(
   }
 
   const start = Date.now();
-  const payload = managedClient
-    ? unwrapManagedProviderPayload(
+  let payload: Record<string, unknown>;
+  if (managedClient) {
+    try {
+      payload = unwrapManagedProviderPayload(
         await managedClient.callManagedUtility({
           utility: "firecrawl.search",
           input: {
@@ -301,8 +303,14 @@ export async function runFirecrawlSearch(
           },
         }),
         "firecrawl",
-      )
-    : await postFirecrawlJson({
+      );
+    } catch (error) {
+      // Managed Jarvis Firecrawl is preferred, but an explicit direct key should
+      // keep web search working when the managed utility backend is unavailable.
+      if (!directApiKey) {
+        throw error;
+      }
+      payload = await postFirecrawlJson({
         baseUrl,
         pathname: "/v2/search",
         apiKey: directApiKey,
@@ -310,6 +318,17 @@ export async function runFirecrawlSearch(
         timeoutSeconds,
         errorLabel: "Firecrawl Search",
       });
+    }
+  } else {
+    payload = await postFirecrawlJson({
+      baseUrl,
+      pathname: "/v2/search",
+      apiKey: requireDirectFirecrawlApiKey("web_search (firecrawl)", directApiKey),
+      body,
+      timeoutSeconds,
+      errorLabel: "Firecrawl Search",
+    });
+  }
   const result = buildSearchPayload({
     query: params.query,
     provider: "firecrawl",
@@ -400,9 +419,10 @@ export async function runFirecrawlScrape(
 ): Promise<Record<string, unknown>> {
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
   const managedClient = createJarvisManagedUtilityClient(params.cfg);
-  const directApiKey = managedClient
-    ? ""
-    : resolveDirectFirecrawlApiKey("firecrawl_scrape", params.cfg);
+  const directApiKey = resolveFirecrawlApiKey(params.cfg);
+  if (!managedClient) {
+    requireDirectFirecrawlApiKey("firecrawl_scrape", directApiKey);
+  }
   const timeoutSeconds = resolveFirecrawlScrapeTimeoutSeconds(params.cfg, params.timeoutSeconds);
   const onlyMainContent = resolveFirecrawlOnlyMainContent(params.cfg, params.onlyMainContent);
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);
@@ -430,8 +450,19 @@ export async function runFirecrawlScrape(
     return { ...cached.value, cached: true };
   }
 
-  const payload = managedClient
-    ? unwrapManagedProviderPayload(
+  const directScrapeBody = {
+    url: params.url,
+    formats: ["markdown"],
+    onlyMainContent,
+    timeout: timeoutSeconds * 1000,
+    maxAge: maxAgeMs,
+    proxy,
+    storeInCache,
+  };
+  let payload: Record<string, unknown>;
+  if (managedClient) {
+    try {
+      payload = unwrapManagedProviderPayload(
         await managedClient.callManagedUtility({
           utility: "firecrawl.scrape",
           input: {
@@ -439,23 +470,32 @@ export async function runFirecrawlScrape(
           },
         }),
         "firecrawl",
-      )
-    : await postFirecrawlJson({
+      );
+    } catch (error) {
+      // Keep the packaged managed route first, but use the local BYOK key when
+      // the managed service itself fails.
+      if (!directApiKey) {
+        throw error;
+      }
+      payload = await postFirecrawlJson({
         baseUrl,
         pathname: "/v2/scrape",
         apiKey: directApiKey,
         timeoutSeconds,
         errorLabel: "Firecrawl",
-        body: {
-          url: params.url,
-          formats: ["markdown"],
-          onlyMainContent,
-          timeout: timeoutSeconds * 1000,
-          maxAge: maxAgeMs,
-          proxy,
-          storeInCache,
-        },
+        body: directScrapeBody,
       });
+    }
+  } else {
+    payload = await postFirecrawlJson({
+      baseUrl,
+      pathname: "/v2/scrape",
+      apiKey: requireDirectFirecrawlApiKey("firecrawl_scrape", directApiKey),
+      timeoutSeconds,
+      errorLabel: "Firecrawl",
+      body: directScrapeBody,
+    });
+  }
   const result = parseFirecrawlScrapePayload({
     payload,
     url: params.url,
