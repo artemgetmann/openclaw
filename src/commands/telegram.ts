@@ -194,6 +194,11 @@ type TelegramBotIdentity = {
   name: string | null;
 };
 
+type TelegramUserRuntimeOptions = {
+  envFile: string | null;
+  session: string | null;
+};
+
 type TelegramScriptCallResult = {
   ok: boolean;
   stdout: string;
@@ -539,6 +544,10 @@ export async function telegramSmokeDmReplyCommand(
   const topicId = parseOptionalPositiveInt(opts.topicId);
   const startedAt = telegramCommandDeps.now();
   const repoContext = await telegramCommandDeps.resolveRepoContext();
+  const userRuntime = resolveTelegramUserRuntimeOptions(repoContext.repoRoot, {
+    envFile: cleanString(opts.envFile),
+    session: cleanString(opts.session),
+  });
   const scenario = "dm-reply" as const;
   const message =
     cleanString(opts.message) ??
@@ -569,8 +578,8 @@ export async function telegramSmokeDmReplyCommand(
   try {
     const doctor = await buildTelegramDoctorReport({
       chat,
-      envFile: cleanString(opts.envFile),
-      session: cleanString(opts.session),
+      envFile: userRuntime.envFile,
+      session: userRuntime.session,
       topicId,
     });
     proof = {
@@ -590,17 +599,17 @@ export async function telegramSmokeDmReplyCommand(
 
     const sendResult = await telegramCommandDeps.runTelegramUserSend({
       chat,
-      envFile: cleanString(opts.envFile) ?? undefined,
+      envFile: userRuntime.envFile ?? undefined,
       message,
-      session: cleanString(opts.session) ?? undefined,
+      session: userRuntime.session ?? undefined,
     });
     const waitResult = await telegramCommandDeps.runTelegramUserWait({
       chat,
       afterId: sendResult.message.message_id,
       contains: "",
-      envFile: cleanString(opts.envFile) ?? undefined,
+      envFile: userRuntime.envFile ?? undefined,
       senderId: doctor.resolved_chat.chat_id ?? 0,
-      session: cleanString(opts.session) ?? undefined,
+      session: userRuntime.session ?? undefined,
       threadAnchor: topicId ?? undefined,
       timeoutMs: timeoutSeconds * 1000,
     });
@@ -758,6 +767,21 @@ export function buildTelegramSmokeArtifactPath(
   );
 }
 
+function resolveTelegramUserRuntimeOptions(
+  repoRoot: string,
+  params: TelegramUserRuntimeOptions,
+): TelegramUserRuntimeOptions {
+  const envFile = cleanString(params.envFile);
+  const session = cleanString(params.session);
+  const defaultEnvFile = path.join(repoRoot, "scripts", "telegram-e2e", ".env.local");
+  const defaultSession = path.join(repoRoot, "scripts", "telegram-e2e", "tmp", "userbot.session");
+
+  return {
+    envFile: envFile ?? (telegramCommandDeps.fileExists(defaultEnvFile) ? defaultEnvFile : null),
+    session: session ?? (telegramCommandDeps.fileExists(defaultSession) ? defaultSession : null),
+  };
+}
+
 async function buildTelegramDoctorReport(params: {
   chat: string | null;
   envFile: string | null;
@@ -778,13 +802,17 @@ async function buildTelegramDoctorReport(params: {
   );
   const gateway = await telegramCommandDeps.probeGateway(profile.runtimePort);
   const runtimeCommit = await telegramCommandDeps.resolveRuntimeCommit(runtimeOwnership.worktree);
+  const userRuntime = resolveTelegramUserRuntimeOptions(repo.repoRoot, {
+    envFile: params.envFile,
+    session: params.session,
+  });
 
   let userbotPrecheck: TelegramUserPrecheck | null = null;
   let userbotFailureReason: string | null = null;
   try {
     userbotPrecheck = await telegramCommandDeps.runTelegramUserPrecheck({
-      ...(params.envFile ? { envFile: params.envFile } : {}),
-      ...(params.session ? { session: params.session } : {}),
+      ...(userRuntime.envFile ? { envFile: userRuntime.envFile } : {}),
+      ...(userRuntime.session ? { session: userRuntime.session } : {}),
     });
   } catch (error) {
     userbotFailureReason = cleanFailureReason(error);
@@ -796,8 +824,8 @@ async function buildTelegramDoctorReport(params: {
     try {
       chatPrecheck = await telegramCommandDeps.runTelegramUserPrecheck({
         chat: params.chat,
-        ...(params.envFile ? { envFile: params.envFile } : {}),
-        ...(params.session ? { session: params.session } : {}),
+        ...(userRuntime.envFile ? { envFile: userRuntime.envFile } : {}),
+        ...(userRuntime.session ? { session: userRuntime.session } : {}),
       });
     } catch (error) {
       chatFailureReason = cleanFailureReason(error);
@@ -1036,6 +1064,10 @@ async function runDmReplySmoke(params: {
 
   const startedAt = telegramCommandDeps.now();
   const repoContext = await telegramCommandDeps.resolveRepoContext();
+  const userRuntime = resolveTelegramUserRuntimeOptions(repoContext.repoRoot, {
+    envFile: params.envFile,
+    session: params.session,
+  });
   let proof: TelegramSmokeProof = {
     ok: false,
     scenario: "dm-reply",
@@ -1059,8 +1091,8 @@ async function runDmReplySmoke(params: {
   try {
     const doctor = await buildTelegramDoctorReport({
       chat: params.chat,
-      envFile: params.envFile,
-      session: params.session,
+      envFile: userRuntime.envFile,
+      session: userRuntime.session,
       topicId: params.topicId,
     });
     proof = {
@@ -1080,17 +1112,17 @@ async function runDmReplySmoke(params: {
 
     const sendResult = await telegramCommandDeps.runTelegramUserSend({
       chat: params.chat,
-      envFile: params.envFile ?? undefined,
+      envFile: userRuntime.envFile ?? undefined,
       message: params.message,
-      session: params.session ?? undefined,
+      session: userRuntime.session ?? undefined,
     });
     const waitResult = await telegramCommandDeps.runTelegramUserWait({
       chat: params.chat,
       afterId: sendResult.message.message_id,
       contains: "",
-      envFile: params.envFile ?? undefined,
+      envFile: userRuntime.envFile ?? undefined,
       senderId: doctor.resolved_chat.chat_id ?? 0,
-      session: params.session ?? undefined,
+      session: userRuntime.session ?? undefined,
       threadAnchor: params.topicId ?? undefined,
       timeoutMs: params.timeoutSeconds * 1000,
     });
