@@ -1005,7 +1005,10 @@ export const dispatchTelegramMessage = async ({
   };
   const getActiveProgressController = () =>
     activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
-  const clearProgressController = async (callsite: string, options?: { timeoutMs?: number }) => {
+  const clearProgressController = async (
+    callsite: string,
+    options?: { timeoutMs?: number; flushBeforeDelete?: boolean; waitForInFlight?: boolean },
+  ) => {
     const controller =
       activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
     if (!controller) {
@@ -1018,7 +1021,10 @@ export const dispatchTelegramMessage = async ({
       messageId: controller.messageId(),
       callsite,
     });
-    const cleanupPromise = controller.clear();
+    const cleanupPromise = controller.clear({
+      flushBeforeDelete: options?.flushBeforeDelete,
+      waitForInFlight: options?.waitForInFlight,
+    });
     let cleanupResult: ProgressCleanupResult = "completed";
     try {
       const timeoutMs = options?.timeoutMs;
@@ -1952,6 +1958,8 @@ export const dispatchTelegramMessage = async ({
     // progress disappears out of order.
     await clearProgressController("before-final-answer", {
       timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+      flushBeforeDelete: false,
+      waitForInFlight: false,
     });
     setDraftDurableSendClassification("answer", {
       reason: classifyPayloadDurableSendReason(payload, "final"),

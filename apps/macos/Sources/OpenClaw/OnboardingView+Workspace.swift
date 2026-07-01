@@ -39,12 +39,35 @@ extension OnboardingView {
 
     var workspaceBootstrapCommand: String {
         let template = AgentWorkspace.defaultTemplate().trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspace = Self.workspaceBootstrapShellPath(for: OpenClawConfigFile.defaultWorkspaceURL())
         return """
-        mkdir -p ~/.openclaw/workspace
-        cat > ~/.openclaw/workspace/AGENTS.md <<'EOF'
+        workspace="\(workspace)"
+        mkdir -p "$workspace"
+        cat > "$workspace/AGENTS.md" <<'EOF'
         \(template)
         EOF
         """
+    }
+
+    private static func workspaceBootstrapShellPath(for url: URL) -> String {
+        let home = FileManager().homeDirectoryForCurrentUser.path
+        let path = url.path
+        if path == home { return "$HOME" }
+        if path.hasPrefix(home + "/") {
+            // Keep copied remote commands portable while still quoting spaces
+            // safely. Only the literal $HOME prefix should expand in the shell.
+            let relative = String(path.dropFirst(home.count + 1))
+            return "$HOME/\(self.escapeDoubleQuotedShellContent(relative))"
+        }
+        return self.escapeDoubleQuotedShellContent(path)
+    }
+
+    private static func escapeDoubleQuotedShellContent(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "$", with: "\\$")
     }
 
     func applyWorkspace() async {

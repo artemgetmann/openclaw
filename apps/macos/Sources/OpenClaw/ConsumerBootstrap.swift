@@ -1,6 +1,11 @@
 import Foundation
 
 enum ConsumerBootstrap {
+    // Jarvis users often send a thought as several rapid Telegram messages.
+    // A short Telegram-only debounce turns that burst into one agent turn while
+    // leaving other channels unchanged and preserving an explicit user opt-out.
+    private static let telegramInboundDebounceMs = 1000
+
     static func bootstrapIfNeeded() {
         guard AppFlavor.current.isConsumer else { return }
         self.ensureRuntimeDefaults()
@@ -56,6 +61,10 @@ enum ConsumerBootstrap {
             path: ["agents", "defaults", "workspace"],
             value: ConsumerRuntime.workspaceURL.path) || changed
         changed = self.setDefaultValue(in: &root, path: ["tools", "exec", "host"], value: "gateway") || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["messages", "inbound", "byChannel", "telegram"],
+            value: self.telegramInboundDebounceMs) || changed
         return changed
     }
 

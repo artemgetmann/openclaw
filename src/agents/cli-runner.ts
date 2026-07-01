@@ -168,12 +168,16 @@ function padClaudeBridgePrompt(prompt: string): string {
   return `${paddedPrompt}${".".repeat(trimmedShortfall)}`;
 }
 
-function buildClaudeBridgeIdentitySection(mode: ClaudeBridgePromptMode): string {
+function buildClaudeBridgeIdentitySection(params: {
+  mode: ClaudeBridgePromptMode;
+  workspaceDir: string;
+}): string {
+  const { mode, workspaceDir } = params;
   if (mode === "bridge_pointer_condensed") {
     return [
       "# Bridge Charter",
       "You are the OpenClaw runtime assistant running through the Claude bridge.",
-      "Your home is the runtime workspace at ~/.openclaw/workspace.",
+      `Your home is the runtime workspace at ${workspaceDir}.`,
       "Keep the prompt small. Read workspace files on demand instead of assuming giant inline context.",
       "Use the file pointers below as navigation hints, not as substituted context.",
     ].join("\n");
@@ -205,7 +209,11 @@ function buildClaudeBridgeIdentitySection(mode: ClaudeBridgePromptMode): string 
   ].join("\n");
 }
 
-function buildClaudeBridgeBehaviorSections(mode: ClaudeBridgePromptMode): string[] {
+function buildClaudeBridgeBehaviorSections(params: {
+  mode: ClaudeBridgePromptMode;
+  workspaceDir: string;
+}): string[] {
+  const { mode, workspaceDir } = params;
   const promptStyleLine =
     mode === "neutral_full" || mode === "bridge_pointer_condensed"
       ? "Be collaborative, steady, and neutral in tone."
@@ -226,12 +234,15 @@ function buildClaudeBridgeBehaviorSections(mode: ClaudeBridgePromptMode): string
         : "Use the active workspace and session context without assuming hidden inline project context.";
 
   if (mode === "bridge_pointer_condensed") {
+    // Bridge pointer mode is the fallback Claude sees before reading files, so
+    // every path must come from the resolved runtime workspace instead of a
+    // baked-in CLI default. Jarvis and source OpenClaw use different roots.
     return [
       [
         "# Core Rules",
         "State the answer or recommendation first.",
         "Do not claim to have read files, run commands, or verified behavior unless that happened in this session.",
-        "Start with ~/.openclaw/workspace/AGENTS.md, then follow its workspace contract precisely.",
+        `Start with ${workspaceDir}/AGENTS.md, then follow its workspace contract precisely.`,
         "If more context is needed, read the smallest relevant workspace file instead of asking for a giant project dump.",
         "OpenClaw tools may be deferred; use ToolSearch for mcp__openclaw__exec, mcp__openclaw__process, or mcp__openclaw__browser when a task needs runtime tools.",
         "Preserve bridge mechanics and isolate runtime-sensitive testing.",
@@ -239,13 +250,13 @@ function buildClaudeBridgeBehaviorSections(mode: ClaudeBridgePromptMode): string
       [
         "# File Pointers",
         "Primary workspace reads:",
-        "- ~/.openclaw/workspace/AGENTS.md first",
-        "- ~/.openclaw/workspace/SOUL.md next",
-        "- ~/.openclaw/workspace/USER.md next",
-        "- ~/.openclaw/workspace/TOOLS.md if it exists",
-        "- ~/.openclaw/workspace/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
-        "- ~/.openclaw/workspace/MEMORY.md only if it exists and the session is main/private",
-        "- ~/.openclaw/workspace/HEARTBEAT.md only for heartbeat runs",
+        `- ${workspaceDir}/AGENTS.md first`,
+        `- ${workspaceDir}/SOUL.md next`,
+        `- ${workspaceDir}/USER.md next`,
+        `- ${workspaceDir}/TOOLS.md if it exists`,
+        `- ${workspaceDir}/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity`,
+        `- ${workspaceDir}/MEMORY.md only if it exists and the session is main/private`,
+        `- ${workspaceDir}/HEARTBEAT.md only for heartbeat runs`,
       ].join("\n"),
       [
         "# Working Style",
@@ -332,13 +343,17 @@ function shouldPadClaudeBridgePrompt(mode: ClaudeBridgePromptMode): boolean {
   return mode !== "bridge_pointer_condensed";
 }
 
-function buildNeutralOrBrandModules(mode: ClaudeBridgePromptMode): ClaudeBridgePromptModule[] {
+function buildNeutralOrBrandModules(params: {
+  mode: ClaudeBridgePromptMode;
+  workspaceDir: string;
+}): ClaudeBridgePromptModule[] {
+  const { mode, workspaceDir } = params;
   return [
     {
       id: "identity",
-      text: buildClaudeBridgeIdentitySection(mode),
+      text: buildClaudeBridgeIdentitySection({ mode, workspaceDir }),
     },
-    ...buildClaudeBridgeBehaviorSections(mode).map((text, index) => ({
+    ...buildClaudeBridgeBehaviorSections({ mode, workspaceDir }).map((text, index) => ({
       id: `behavior_${index + 1}`,
       text,
     })),
@@ -425,6 +440,7 @@ function selectExactOldModules(splitMode: ClaudeBridgeSplitMode): ClaudeBridgePr
 function buildClaudeBridgePromptModules(
   mode: ClaudeBridgePromptMode,
   splitMode: ClaudeBridgeSplitMode,
+  workspaceDir: string,
 ): ClaudeBridgePromptModule[] {
   if (mode === "openclaw_exact_old") {
     return buildOpenClawExactOldModules();
@@ -432,17 +448,20 @@ function buildClaudeBridgePromptModules(
   if (mode === "openclaw_exact_old_split") {
     return selectExactOldModules(splitMode);
   }
-  return buildNeutralOrBrandModules(mode);
+  return buildNeutralOrBrandModules({ mode, workspaceDir });
 }
 
 function buildClaudeBridgePrompt(params: {
   mode: ClaudeBridgePromptMode;
   splitMode: ClaudeBridgeSplitMode;
+  workspaceDir: string;
   extraSystemPrompt?: string;
 }): string {
-  const sections = buildClaudeBridgePromptModules(params.mode, params.splitMode).map(
-    (module) => module.text,
-  );
+  const sections = buildClaudeBridgePromptModules(
+    params.mode,
+    params.splitMode,
+    params.workspaceDir,
+  ).map((module) => module.text);
   const prompt = [...sections, params.extraSystemPrompt?.trim()].filter(Boolean).join("\n\n");
 
   if (!shouldPadClaudeBridgePrompt(params.mode)) {
@@ -549,8 +568,10 @@ function buildBridgeSafeClaudeCliSkillsPrompt(params: {
     "These are OpenClaw workspace skills, not Claude Code native slash skills.",
     "Before saying a skill is missing or unavailable, inspect <available_skills> in this prompt.",
     "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file before any generic discovery.",
+    "Use the listed <location> path exactly. Do not construct a fallback path like workspace/skills/<name>/SKILL.md when <location> points at a bundled or product-managed skill.",
     "If a matching skill exists, prefer it over generic web/search/MCP behavior unless the user explicitly asks for a different route.",
     "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
+    "When running `openclaw ...` from this runtime, preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_LOG_DIR, OPENCLAW_PROFILE, and OPENCLAW_LAUNCHD_LABEL environment. If a diagnostic reports ~/.openclaw while runtime metadata shows an app-owned state dir, rerun with the active runtime env before claiming setup is missing.",
     skillsPrompt,
     "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
   ].join("\n");
@@ -574,8 +595,10 @@ function prependClaudeCliResumedSkillsReminder(params: {
     "OpenClaw runtime skill reminder for this resumed Claude session:",
     "These are OpenClaw workspace skills, not Claude Code native slash skills.",
     "For a Reddit URL, Telegram-as-me read request, or any task that clearly matches one listed skill, read that skill's <location> SKILL.md with Claude's Read tool and follow it before using generic web/search behavior.",
+    "Use the listed <location> path exactly. Do not invent workspace/skills/<name>/SKILL.md when the prompt points at a bundled or product-managed skill path.",
     "Do not say an OpenClaw skill is missing until you have checked <available_skills> below.",
     skillsPrompt,
+    "When running `openclaw ...`, preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_LOG_DIR, OPENCLAW_PROFILE, and OPENCLAW_LAUNCHD_LABEL environment. If a command unexpectedly checks ~/.openclaw, that is a wrong-runtime probe until rerun with the active app-owned env.",
     "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
     "Current user message:",
     params.prompt,
@@ -966,6 +989,7 @@ export async function runCliAgent(params: {
       : buildClaudeBridgePrompt({
           mode: resolveClaudeBridgePromptMode(),
           splitMode: resolveClaudeBridgeSplitMode(),
+          workspaceDir,
           extraSystemPrompt: params.extraSystemPrompt,
         });
     const { systemPrompt, systemPromptReport } = await buildCliAgentPromptStack({
@@ -1074,6 +1098,7 @@ export async function runCliAgent(params: {
         buildClaudeBridgePrompt({
           mode: resolveClaudeBridgePromptMode(),
           splitMode: resolveClaudeBridgeSplitMode(),
+          workspaceDir,
           extraSystemPrompt: params.extraSystemPrompt,
         }),
         buildClaudeCliMemoryRoutingPrompt(),

@@ -26,7 +26,9 @@ import {
   untrackSessionBrowserTab,
 } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { displayPath } from "../../utils.js";
 import { executeBrowserContractAction } from "./browser-contracts.js";
 import {
   executeActAction,
@@ -407,7 +409,7 @@ function resolveBrowserBaseUrl(params: {
   }
   if (!resolved.enabled) {
     throw new Error(
-      "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
+      `Browser control is disabled. Set browser.enabled=true in active config (${displayPath(resolveConfigPath())}).`,
     );
   }
   return undefined;

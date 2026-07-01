@@ -39,7 +39,9 @@ Defaults:
 
 ## API key
 
-Set `OPENAI_API_KEY`, or configure it in `~/.openclaw/openclaw.json`:
+Set `OPENAI_API_KEY`, or configure it in the active OpenClaw/Jarvis config.
+Prefer `$OPENCLAW_CONFIG_PATH`; otherwise use `$OPENCLAW_STATE_DIR/openclaw.json`.
+For source/dev OpenClaw with no active env override, the fallback is `~/.openclaw/openclaw.json`:
 
 ```json5
 {

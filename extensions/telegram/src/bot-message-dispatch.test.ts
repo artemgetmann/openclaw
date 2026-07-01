@@ -218,8 +218,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Checking the page.");
-    expect(progressStream.flush).toHaveBeenCalledTimes(1);
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(progressStream.flush).not.toHaveBeenCalled();
+    expect(progressStream.clear).toHaveBeenCalledWith({ waitForInFlight: false });
     expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
       deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
