@@ -7,7 +7,7 @@ ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 source "$ROOT/scripts/lib/consumer-instance.sh"
 
 INSTANCE_ARG="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
-APP_OWNED_AUTH_DIR="$HOME/Library/Application Support/OpenClaw/.openclaw/agents/main/agent"
+APP_OWNED_AUTH_DIR="${OPENCLAW_STATE_DIR:-$HOME/Library/Application Support/Jarvis/.jarvis}/agents/main/agent"
 LEGACY_AUTH_DIR="$HOME/.openclaw/agents/main/agent"
 SOURCE_AUTH_DIR="${OPENCLAW_CONSUMER_AUTH_SOURCE_DIR:-$APP_OWNED_AUTH_DIR}"
 TARGET_AGENT_ID="${OPENCLAW_CONSUMER_AUTH_AGENT_ID:-main}"
@@ -22,7 +22,7 @@ Copy the canonical auth-profiles snapshot into a consumer tester instance and
 write a non-secret fingerprint record alongside it.
 
 Default source:
-  ~/Library/Application Support/OpenClaw/.openclaw/agents/main/agent
+  $OPENCLAW_STATE_DIR/agents/main/agent, or ~/Library/Application Support/Jarvis/.jarvis/agents/main/agent
 EOF
 }
 

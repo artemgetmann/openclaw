@@ -53,7 +53,7 @@ Managed and API key paths
 - Jarvis managed mode can generate a text-to-image result through the backend without a local Gemini key.
 - Input-image editing/composition still uses the direct BYOK path.
 - Direct BYOK: `GEMINI_API_KEY` env var
-- Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in `~/.openclaw/openclaw.json`
+- Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in the active config file. Prefer `$OPENCLAW_CONFIG_PATH`; otherwise use `$OPENCLAW_STATE_DIR/openclaw.json`.
 
 Specific aspect ratio (optional)
 

@@ -197,6 +197,31 @@ async function runSnapshotToolCall(params: {
 describe("browser tool snapshot maxChars", () => {
   registerBrowserToolAfterEachReset();
 
+  it("points disabled-browser errors at the active config path", async () => {
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const activeConfigPath = "/tmp/jarvis-active/openclaw.json";
+    process.env.OPENCLAW_CONFIG_PATH = activeConfigPath;
+    browserConfigMocks.resolveBrowserConfig.mockReturnValueOnce({
+      enabled: false,
+      controlPort: 18791,
+      profiles: {},
+      defaultProfile: "openclaw",
+    });
+    const tool = createBrowserTool();
+
+    try {
+      await expect(tool.execute?.("call-1", { action: "status" })).rejects.toThrow(
+        `Browser control is disabled. Set browser.enabled=true in active config (${activeConfigPath}).`,
+      );
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+    }
+  });
+
   it("applies the default ai snapshot limit", async () => {
     await runSnapshotToolCall({ snapshotFormat: "ai" });
 
