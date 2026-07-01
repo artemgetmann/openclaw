@@ -14,6 +14,7 @@ enum ConsumerBundledRuntime {
     private static let installedPayloadDirectoryName = "openclaw-bundled"
     private static let manifestFileName = "manifest.json"
     private static let installedManifestFileName = ".consumer-bundled-runtime.json"
+    private static let installedProtectionFileName = ".consumer-bundled-runtime.protection.json"
     private static let requiredNodeEntitlements = [
         "com.apple.security.cs.allow-jit",
         "com.apple.security.cs.allow-unsigned-executable-memory",
@@ -44,6 +45,13 @@ enum ConsumerBundledRuntime {
         let uvVersion: String
     }
 
+    private struct ProtectionMarker: Codable, Equatable {
+        let format: Int
+        let protectedRuntimeGitCommit: String
+        let compatibilityManifestGitCommit: String
+        let compatibilityManifestBundleVersion: String
+    }
+
     enum SeedStatus: Equatable {
         case seeded
         case ready
@@ -60,9 +68,12 @@ enum ConsumerBundledRuntime {
                 fileManager: fileManager)
             switch status {
             case .seeded:
-                self.logger.info("seeded bundled runtime into \(ConsumerRuntime.installPrefixURL.path, privacy: .public)")
+                self.logger
+                    .info("seeded bundled runtime into \(ConsumerRuntime.installPrefixURL.path, privacy: .public)")
             case .ready:
-                self.logger.debug("bundled runtime already ready at \(ConsumerRuntime.installPrefixURL.path, privacy: .public)")
+                self.logger
+                    .debug(
+                        "bundled runtime already ready at \(ConsumerRuntime.installPrefixURL.path, privacy: .public)")
             }
         } catch {
             self.logger.error("bundled runtime seed failed: \(error.localizedDescription, privacy: .public)")
@@ -109,6 +120,13 @@ enum ConsumerBundledRuntime {
         {
             return .ready
         }
+        if try self.shouldPreserveInstalledRuntime(
+            incomingManifest: manifest,
+            installPrefixURL: installPrefixURL,
+            fileManager: fileManager)
+        {
+            return .ready
+        }
 
         let stagingRoot = try self.makeStagingRoot(near: installPrefixURL, fileManager: fileManager)
         defer { try? fileManager.removeItem(at: stagingRoot) }
@@ -122,8 +140,12 @@ enum ConsumerBundledRuntime {
             .appendingPathComponent("uv", isDirectory: true)
         let stagedBinDir = stagingRoot.appendingPathComponent("bin", isDirectory: true)
 
-        try fileManager.createDirectory(at: stagedOpenClawRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: stagedNodeRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: stagedOpenClawRoot.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: stagedNodeRoot.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
         try fileManager.createDirectory(at: stagedUvRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileManager.createDirectory(at: stagedBinDir, withIntermediateDirectories: true)
 
@@ -131,10 +153,10 @@ enum ConsumerBundledRuntime {
             at: resourceURL.appendingPathComponent(self.openclawPayloadDirectoryName, isDirectory: true),
             to: stagedOpenClawRoot)
         try fileManager.copyItem(
-            at: try self.nodeRuntimeSourceURL(from: resourceURL),
+            at: self.nodeRuntimeSourceURL(from: resourceURL),
             to: stagedNodeRoot)
         try fileManager.copyItem(
-            at: try self.uvRuntimeSourceURL(from: resourceURL),
+            at: self.uvRuntimeSourceURL(from: resourceURL),
             to: stagedUvRoot)
 
         let wrapperURL = stagedBinDir.appendingPathComponent("openclaw")
@@ -177,19 +199,57 @@ enum ConsumerBundledRuntime {
         return .seeded
     }
 
+    private static func shouldPreserveInstalledRuntime(
+        incomingManifest: Manifest,
+        installPrefixURL: URL,
+        fileManager: FileManager) throws -> Bool
+    {
+        guard let installedManifest = self.loadInstalledManifest(
+            installPrefixURL: installPrefixURL,
+            fileManager: fileManager)
+        else {
+            return false
+        }
+
+        // Compatibility protection lets an old already-installed app see a
+        // manifest it recognizes without letting future app builds get stuck
+        // behind that compatibility manifest. New code reads the marker and
+        // permits any different incoming app commit to seed normally.
+        if let marker = self.loadProtectionMarker(installPrefixURL: installPrefixURL, fileManager: fileManager),
+           marker.compatibilityManifestGitCommit == installedManifest.gitCommit,
+           marker.compatibilityManifestBundleVersion == installedManifest.bundleVersion,
+           incomingManifest.gitCommit != installedManifest.gitCommit
+        {
+            return false
+        }
+
+        guard let bundleVersionOrder = self.compareNumericBundleVersions(
+            installedManifest.bundleVersion,
+            incomingManifest.bundleVersion),
+            bundleVersionOrder == .orderedDescending
+        else {
+            return false
+        }
+
+        // A newer installed manifest is only protective when the installed
+        // runtime is still complete and executable. If manual cleanup or a
+        // failed seed left app support half-present, the bundled app must be
+        // allowed to repair it instead of treating a version number as truth.
+        return try self.installationIsCurrent(
+            manifest: installedManifest,
+            installPrefixURL: installPrefixURL,
+            fileManager: fileManager)
+    }
+
     private static func installationIsCurrent(
         manifest: Manifest,
         installPrefixURL: URL,
         fileManager: FileManager) throws -> Bool
     {
-        let installedManifestURL = installPrefixURL.appendingPathComponent(self.installedManifestFileName)
-        guard fileManager.fileExists(atPath: installedManifestURL.path) else { return false }
-        let installedManifest: Manifest
-        do {
-            installedManifest = try self.loadManifest(fromFile: installedManifestURL)
-        } catch {
-            return false
-        }
+        guard let installedManifest = self.loadInstalledManifest(
+            installPrefixURL: installPrefixURL,
+            fileManager: fileManager)
+        else { return false }
         guard installedManifest == manifest else { return false }
 
         let wrapperURL = installPrefixURL.appendingPathComponent("bin/openclaw")
@@ -251,6 +311,49 @@ enum ConsumerBundledRuntime {
         return try JSONDecoder().decode(Manifest.self, from: data)
     }
 
+    private static func loadInstalledManifest(
+        installPrefixURL: URL,
+        fileManager: FileManager) -> Manifest?
+    {
+        let installedManifestURL = installPrefixURL.appendingPathComponent(self.installedManifestFileName)
+        guard fileManager.fileExists(atPath: installedManifestURL.path) else { return nil }
+        return try? self.loadManifest(fromFile: installedManifestURL)
+    }
+
+    private static func loadProtectionMarker(
+        installPrefixURL: URL,
+        fileManager: FileManager) -> ProtectionMarker?
+    {
+        let markerURL = installPrefixURL.appendingPathComponent(self.installedProtectionFileName)
+        guard fileManager.fileExists(atPath: markerURL.path) else { return nil }
+        guard let data = try? Data(contentsOf: markerURL) else { return nil }
+        return try? JSONDecoder().decode(ProtectionMarker.self, from: data)
+    }
+
+    private static func compareNumericBundleVersions(_ lhs: String, _ rhs: String) -> ComparisonResult? {
+        let lhsParts = lhs.split(separator: ".").map(String.init)
+        let rhsParts = rhs.split(separator: ".").map(String.init)
+        guard !lhsParts.isEmpty,
+              !rhsParts.isEmpty,
+              lhsParts.allSatisfy({ Int($0) != nil }),
+              rhsParts.allSatisfy({ Int($0) != nil })
+        else {
+            return nil
+        }
+        let maxCount = max(lhsParts.count, rhsParts.count)
+
+        for index in 0..<maxCount {
+            let lhsPart = index < lhsParts.count ? lhsParts[index] : "0"
+            let rhsPart = index < rhsParts.count ? rhsParts[index] : "0"
+            let lhsInt = Int(lhsPart) ?? 0
+            let rhsInt = Int(rhsPart) ?? 0
+            if lhsInt < rhsInt { return .orderedAscending }
+            if lhsInt > rhsInt { return .orderedDescending }
+        }
+
+        return .orderedSame
+    }
+
     private static func writeManifest(_ manifest: Manifest, to fileURL: URL) throws {
         let data = try JSONEncoder().encode(manifest)
         try data.write(to: fileURL, options: .atomic)
@@ -308,7 +411,9 @@ enum ConsumerBundledRuntime {
     private static func makeStagingRoot(near installPrefixURL: URL, fileManager: FileManager) throws -> URL {
         let parent = installPrefixURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-        let stagingRoot = parent.appendingPathComponent(".openclaw-runtime-seed-\(UUID().uuidString)", isDirectory: true)
+        let stagingRoot = parent.appendingPathComponent(
+            ".openclaw-runtime-seed-\(UUID().uuidString)",
+            isDirectory: true)
         try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
         return stagingRoot
     }
@@ -338,7 +443,11 @@ enum ConsumerBundledRuntime {
         try self.replaceManagedPath(at: destinationURL, with: sourceURL, fileManager: fileManager)
     }
 
-    private static func replaceManagedPath(at destinationURL: URL, with sourceURL: URL, fileManager: FileManager) throws {
+    private static func replaceManagedPath(
+        at destinationURL: URL,
+        with sourceURL: URL,
+        fileManager: FileManager) throws
+    {
         if fileManager.fileExists(atPath: destinationURL.path) {
             try fileManager.removeItem(at: destinationURL)
         }
@@ -432,7 +541,10 @@ enum ConsumerBundledRuntime {
         }
     }
 
-    private static func runCommand(executable: String, arguments: [String]) -> (status: Int32, stdout: String, stderr: String) {
+    private static func runCommand(
+        executable: String,
+        arguments: [String]) -> (status: Int32, stdout: String, stderr: String)
+    {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -454,8 +566,7 @@ enum ConsumerBundledRuntime {
         return (
             process.terminationStatus,
             String(data: stdoutData ?? Data(), encoding: .utf8) ?? "",
-            String(data: stderrData ?? Data(), encoding: .utf8) ?? ""
-        )
+            String(data: stderrData ?? Data(), encoding: .utf8) ?? "")
     }
 }
 

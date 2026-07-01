@@ -30,7 +30,9 @@ struct ConsumerBundledRuntimeTests {
         try fm.createDirectory(
             at: resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
             withIntermediateDirectories: true)
-        let bundledRoot = resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
+        let bundledRoot = resourceRoot.appendingPathComponent(
+            ConsumerBundledRuntime.resourceDirectoryName,
+            isDirectory: true)
         try self.writeBundledWorkspaceTemplates(into: bundledRoot)
         let manifest = ConsumerBundledRuntime.Manifest(
             format: 1,
@@ -48,8 +50,11 @@ struct ConsumerBundledRuntimeTests {
         #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("bin/openclaw").path))
         #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/node/bin/node").path))
         #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/uv/bin/uv").path))
-        #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
-        #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/node_modules/chalk/package.json").path))
+        #expect(fm
+            .isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+        #expect(fm
+            .isReadableFile(atPath: installPrefix
+                .appendingPathComponent("lib/openclaw-bundled/node_modules/chalk/package.json").path))
         self.assertInstalledWorkspaceTemplates(at: installPrefix, fileManager: fm)
         self.assertInstalledTelegramUserTooling(at: installPrefix, fileManager: fm)
 
@@ -139,6 +144,110 @@ struct ConsumerBundledRuntimeTests {
         #expect(fm.isExecutableFile(atPath: existingCLI.path))
     }
 
+    @Test func `seeding preserves newer installed runtime when older app bundle launches`() throws {
+        let fm = FileManager.default
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let newerBundle = try self.writeBundledRuntimeResourceRoot(
+            under: makeTempDirForTests(),
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "200",
+                gitCommit: "newer-runtime",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+        let olderBundle = try self.writeBundledRuntimeResourceRoot(
+            under: makeTempDirForTests(),
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "100",
+                gitCommit: "older-app",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+
+        #expect(try ConsumerBundledRuntime
+            .seedIfNeeded(from: newerBundle, into: installPrefix, fileManager: fm) == .seeded)
+        #expect(try ConsumerBundledRuntime
+            .seedIfNeeded(from: olderBundle, into: installPrefix, fileManager: fm) == .ready)
+        #expect(try self.installedRuntimeManifest(at: installPrefix).gitCommit == "newer-runtime")
+    }
+
+    @Test func `older app bundle repairs incomplete newer installed runtime`() throws {
+        let fm = FileManager.default
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let newerBundle = try self.writeBundledRuntimeResourceRoot(
+            under: makeTempDirForTests(),
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "200",
+                gitCommit: "newer-runtime",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+        let olderBundle = try self.writeBundledRuntimeResourceRoot(
+            under: makeTempDirForTests(),
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "100",
+                gitCommit: "older-app",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+
+        #expect(try ConsumerBundledRuntime
+            .seedIfNeeded(from: newerBundle, into: installPrefix, fileManager: fm) == .seeded)
+        try fm.removeItem(
+            at: installPrefix
+                .appendingPathComponent("lib", isDirectory: true)
+                .appendingPathComponent("openclaw-bundled", isDirectory: true)
+                .appendingPathComponent("dist", isDirectory: true)
+                .appendingPathComponent("entry.js"))
+
+        #expect(try ConsumerBundledRuntime
+            .seedIfNeeded(from: olderBundle, into: installPrefix, fileManager: fm) == .seeded)
+        #expect(try self.installedRuntimeManifest(at: installPrefix).gitCommit == "older-app")
+        #expect(fm
+            .isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+    }
+
+    @Test func `compatibility protection does not block the next different app build`() throws {
+        let fm = FileManager.default
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let compatibilityBundle = try self.writeBundledRuntimeResourceRoot(
+            under: makeTempDirForTests(),
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "300",
+                gitCommit: "installed-app",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+        let nextBundle = try self.writeBundledRuntimeResourceRoot(
+            under: makeTempDirForTests(),
+            manifest: ConsumerBundledRuntime.Manifest(
+                format: 1,
+                bundleVersion: "200",
+                gitCommit: "next-app-build",
+                nodeVersion: "22.22.1",
+                uvVersion: "0.9.21"),
+            fileManager: fm)
+
+        #expect(try ConsumerBundledRuntime.seedIfNeeded(
+            from: compatibilityBundle,
+            into: installPrefix,
+            fileManager: fm) == .seeded)
+        try self.writeProtectionMarker(
+            at: installPrefix,
+            protectedRuntimeGitCommit: "live-hotfix",
+            compatibilityManifestGitCommit: "installed-app",
+            compatibilityManifestBundleVersion: "300")
+
+        #expect(try ConsumerBundledRuntime
+            .seedIfNeeded(from: nextBundle, into: installPrefix, fileManager: fm) == .seeded)
+        #expect(try self.installedRuntimeManifest(at: installPrefix).gitCommit == "next-app-build")
+    }
+
     @Test @MainActor func `bootstrap seeds bundled runtime when product bundle resources are available`() async throws {
         let instanceID = "consumer-bundled-runtime-hardening"
         let homeURL = try makeTempDirForTests()
@@ -155,9 +264,13 @@ struct ConsumerBundledRuntimeTests {
         }
 
         try fm.createDirectory(
-            at: bundleResourcesURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
+            at: bundleResourcesURL.appendingPathComponent(
+                ConsumerBundledRuntime.resourceDirectoryName,
+                isDirectory: true),
             withIntermediateDirectories: true)
-        let bundledRoot = bundleResourcesURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
+        let bundledRoot = bundleResourcesURL.appendingPathComponent(
+            ConsumerBundledRuntime.resourceDirectoryName,
+            isDirectory: true)
         try self.writeBundledWorkspaceTemplates(into: bundledRoot)
 
         let manifest = ConsumerBundledRuntime.Manifest(
@@ -196,10 +309,16 @@ struct ConsumerBundledRuntimeTests {
             ConsumerBundledRuntime.bootstrapIfNeeded(bundle: bundle, fileManager: fm)
             let seededProjectRoot = ConsumerBundledRuntime.installedProjectRoot()
 
-            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("bin/openclaw").path))
-            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin/node").path))
-            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/uv/bin/uv").path))
-            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+            #expect(FileManager.default
+                .fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("bin/openclaw").path))
+            #expect(FileManager.default
+                .fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin/node")
+                    .path))
+            #expect(FileManager.default
+                .fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/uv/bin/uv").path))
+            #expect(FileManager.default
+                .fileExists(atPath: ConsumerRuntime.installPrefixURL
+                    .appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
             #expect(CommandResolver.projectRootEnvironmentHint() == seededProjectRoot.path)
             #expect(CommandResolver.daemonProjectRootEnvironmentHint() == seededProjectRoot.path)
             #expect(CommandResolver.bundledConsumerRuntimeProjectRoot()?.path == seededProjectRoot.path)
@@ -258,21 +377,49 @@ struct ConsumerBundledRuntimeTests {
         }
     }
 
-    private func writeBundledRuntimeResourceRoot(under resourceRoot: URL, fileManager: FileManager) throws -> URL {
-        let bundledRoot = resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
-        try fileManager.createDirectory(at: bundledRoot, withIntermediateDirectories: true)
-        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
-        let manifest = ConsumerBundledRuntime.Manifest(
+    private func writeBundledRuntimeResourceRoot(
+        under resourceRoot: URL,
+        manifest: ConsumerBundledRuntime.Manifest = ConsumerBundledRuntime.Manifest(
             format: 1,
             bundleVersion: "123",
             gitCommit: "abc123",
             nodeVersion: "22.22.1",
-            uvVersion: "0.9.21")
+            uvVersion: "0.9.21"),
+        fileManager: FileManager) throws -> URL
+    {
+        let bundledRoot = resourceRoot.appendingPathComponent(
+            ConsumerBundledRuntime.resourceDirectoryName,
+            isDirectory: true)
+        try fileManager.createDirectory(at: bundledRoot, withIntermediateDirectories: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
         try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
             into: bundledRoot,
             manifest: manifest,
             fileManager: fileManager)
         return bundledRoot
+    }
+
+    private func installedRuntimeManifest(at installPrefix: URL) throws -> ConsumerBundledRuntime.Manifest {
+        let manifestURL = installPrefix.appendingPathComponent(".consumer-bundled-runtime.json")
+        return try JSONDecoder().decode(ConsumerBundledRuntime.Manifest.self, from: Data(contentsOf: manifestURL))
+    }
+
+    private func writeProtectionMarker(
+        at installPrefix: URL,
+        protectedRuntimeGitCommit: String,
+        compatibilityManifestGitCommit: String,
+        compatibilityManifestBundleVersion: String) throws
+    {
+        let marker: [String: Any] = [
+            "format": 1,
+            "protectedRuntimeGitCommit": protectedRuntimeGitCommit,
+            "compatibilityManifestGitCommit": compatibilityManifestGitCommit,
+            "compatibilityManifestBundleVersion": compatibilityManifestBundleVersion,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: marker, options: [.prettyPrinted, .sortedKeys])
+        try data.write(
+            to: installPrefix.appendingPathComponent(".consumer-bundled-runtime.protection.json"),
+            options: .atomic)
     }
 
     private func makeTempBundle(resourceRoot: URL, bundleIdentifier: String) throws -> Bundle {
