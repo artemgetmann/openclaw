@@ -241,6 +241,25 @@ describe("createJarvisBackendClient", () => {
     );
   });
 
+  it("adds an actionable hint for suspended managed utility backends", async () => {
+    const fetchResponse = vi.fn(async (params) => {
+      return await params.onResponse(new Response("Service Suspended", { status: 503 }));
+    });
+    const client = createJarvisBackendClient(
+      {
+        jarvis: {
+          backend: { baseUrl: "https://jarvis.example", accessToken: "backend-token" },
+          managedServices: { mode: "managed" },
+        },
+      },
+      { fetchResponse },
+    );
+
+    await expect(client.callManagedUtility({ utility: "firecrawl.search" })).rejects.toThrow(
+      /HTTP 503: Service Suspended.*backend\/provider account.*direct provider API key/,
+    );
+  });
+
   it("uses resolved runtime SecretInput refs for managed utility auth", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: {

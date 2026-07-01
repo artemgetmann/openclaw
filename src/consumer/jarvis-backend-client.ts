@@ -223,7 +223,14 @@ async function readBackendErrorDetail(response: Response): Promise<string | null
 async function buildBackendHttpErrorMessage(prefix: string, response: Response): Promise<string> {
   const detail = await readBackendErrorDetail(response);
   const base = `${prefix} with HTTP ${response.status}`;
-  return detail ? `${base}: ${detail}` : base;
+  const detailSuffix = detail ? `: ${detail}` : "";
+  const lowerDetail = detail?.toLowerCase() ?? "";
+  const managedUtilityHint =
+    prefix === "Jarvis managed utility failed" &&
+    (response.status === 503 || lowerDetail.includes("service suspended"))
+      ? " Managed utility backend/provider is unavailable; check the Jarvis backend/provider account, or configure a direct provider API key if this utility supports BYOK."
+      : "";
+  return `${base}${detailSuffix}${managedUtilityHint}`;
 }
 
 export function createJarvisBackendClient(

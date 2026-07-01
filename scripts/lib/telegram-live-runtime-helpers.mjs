@@ -2045,6 +2045,25 @@ function jsonEqual(a, b) {
   return JSON.stringify(stableJson(a ?? null)) === JSON.stringify(stableJson(b ?? null));
 }
 
+function normalizePluginSlotsForParity(slots) {
+  if (!slots || typeof slots !== "object" || Array.isArray(slots)) {
+    return {};
+  }
+  return slots;
+}
+
+function normalizeTesterModelAllowlistForParity(modelConfig, models) {
+  const allowlist = models && typeof models === "object" && !Array.isArray(models) ? models : {};
+  const primary = resolveConfiguredModelPrimary(modelConfig);
+  const prunedTwin = codexTwinModelKey(primary) || codexTwinForPlainOpenAiModel(primary) || "";
+
+  if (!prunedTwin || !Object.prototype.hasOwnProperty.call(allowlist, prunedTwin)) {
+    return allowlist;
+  }
+
+  return Object.fromEntries(Object.entries(allowlist).filter(([key]) => key !== prunedTwin));
+}
+
 function resolveConfigValue(config, dottedPath) {
   let current = config;
   for (const segment of dottedPath.split(".")) {
@@ -2084,6 +2103,24 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
     "tools",
   ];
   const unexpectedDiffs = parityPaths.filter((pathKey) => {
+    if (pathKey === "plugins.slots") {
+      return !jsonEqual(
+        normalizePluginSlotsForParity(resolveConfigValue(baseConfig, pathKey)),
+        normalizePluginSlotsForParity(resolveConfigValue(runtimeConfig, pathKey)),
+      );
+    }
+    if (pathKey === "agents.defaults.models") {
+      return !jsonEqual(
+        normalizeTesterModelAllowlistForParity(
+          resolveConfigValue(baseConfig, "agents.defaults.model"),
+          resolveConfigValue(baseConfig, pathKey),
+        ),
+        normalizeTesterModelAllowlistForParity(
+          resolveConfigValue(runtimeConfig, "agents.defaults.model"),
+          resolveConfigValue(runtimeConfig, pathKey),
+        ),
+      );
+    }
     return !jsonEqual(
       resolveConfigValue(baseConfig, pathKey),
       resolveConfigValue(runtimeConfig, pathKey),
@@ -2118,8 +2155,8 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
         resolveConfigValue(runtimeConfig, "plugins.deny"),
       ) &&
       jsonEqual(
-        resolveConfigValue(baseConfig, "plugins.slots"),
-        resolveConfigValue(runtimeConfig, "plugins.slots"),
+        normalizePluginSlotsForParity(resolveConfigValue(baseConfig, "plugins.slots")),
+        normalizePluginSlotsForParity(resolveConfigValue(runtimeConfig, "plugins.slots")),
       ),
     model_config_match:
       jsonEqual(
@@ -2127,8 +2164,14 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
         resolveConfigValue(runtimeConfig, "agents.defaults.model"),
       ) &&
       jsonEqual(
-        resolveConfigValue(baseConfig, "agents.defaults.models"),
-        resolveConfigValue(runtimeConfig, "agents.defaults.models"),
+        normalizeTesterModelAllowlistForParity(
+          resolveConfigValue(baseConfig, "agents.defaults.model"),
+          resolveConfigValue(baseConfig, "agents.defaults.models"),
+        ),
+        normalizeTesterModelAllowlistForParity(
+          resolveConfigValue(runtimeConfig, "agents.defaults.model"),
+          resolveConfigValue(runtimeConfig, "agents.defaults.models"),
+        ),
       ),
     runtime_worktree: String(params.runtimeWorktree ?? "unknown"),
     runtime_port: String(params.runtimePort ?? "unknown"),
