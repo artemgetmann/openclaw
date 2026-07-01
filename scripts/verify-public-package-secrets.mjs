@@ -142,8 +142,22 @@ function shouldSkipPath(filePath) {
   return parts.includes("node_modules") || parts.includes(".git") || parts.includes("__pycache__");
 }
 
+function isMissingPathError(error) {
+  return error && typeof error === "object" && error.code === "ENOENT";
+}
+
 async function* walkFiles(rootDir) {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(rootDir, { withFileTypes: true });
+  } catch (error) {
+    // App rebuilds replace runtime subtrees in-place. A secret audit should
+    // ignore vanished paths, while still surfacing permission and IO failures.
+    if (isMissingPathError(error)) {
+      return;
+    }
+    throw error;
+  }
   for (const entry of entries) {
     const entryPath = path.join(rootDir, entry.name);
     if (shouldSkipPath(entryPath)) {
@@ -160,7 +174,17 @@ async function* walkFiles(rootDir) {
 }
 
 async function scanTextFile(filePath, rootDir, findings) {
-  const stat = await fs.stat(filePath);
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (error) {
+    // The package verifier can race with warm rebuild cleanup. Missing files
+    // are not secret findings; readable files are still scanned normally.
+    if (isMissingPathError(error)) {
+      return;
+    }
+    throw error;
+  }
   if (stat.size > MAX_TEXT_FILE_BYTES) {
     return;
   }
@@ -170,7 +194,15 @@ async function scanTextFile(filePath, rootDir, findings) {
     return;
   }
 
-  const text = await fs.readFile(filePath, "utf8");
+  let text;
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return;
+    }
+    throw error;
+  }
   const relative = path.relative(rootDir, filePath) || path.basename(filePath);
   const reportFinding = (location, message) => {
     findings.push({ file: relative, location, message });
