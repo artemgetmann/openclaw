@@ -1727,6 +1727,7 @@ async function runWebSearch(params: {
   }
 
   const start = Date.now();
+  const hasDirectBraveApiKey = params.provider === "brave" && params.apiKey !== "jarvis-managed";
 
   if (params.provider === "perplexity") {
     if (params.perplexityTransport === "chat_completions") {
@@ -1875,8 +1876,10 @@ async function runWebSearch(params: {
   }
 
   if (effectiveBraveMode === "llm-context") {
-    const managedPayload = params.managedBraveClient
-      ? await runManagedBraveSearch({
+    let managedPayload: Record<string, unknown> | undefined;
+    if (params.managedBraveClient) {
+      try {
+        managedPayload = await runManagedBraveSearch({
           client: params.managedBraveClient,
           query: params.query,
           count: params.count,
@@ -1886,8 +1889,16 @@ async function runWebSearch(params: {
           dateAfter: params.dateAfter,
           dateBefore: params.dateBefore,
           mode: effectiveBraveMode,
-        })
-      : undefined;
+        });
+      } catch (error) {
+        // Jarvis managed search is the preferred packaged route, but a direct
+        // Brave key is a real local fallback when the managed utility backend
+        // is unavailable. Without that key, preserve the managed failure.
+        if (!hasDirectBraveApiKey) {
+          throw error;
+        }
+      }
+    }
     const { results: llmResults, sources } = managedPayload
       ? {
           results: mapBraveLlmContextResults(managedPayload as BraveLlmContextResponse),
@@ -1929,35 +1940,43 @@ async function runWebSearch(params: {
   }
 
   if (params.managedBraveClient) {
-    const data = await runManagedBraveSearch({
-      client: params.managedBraveClient,
-      query: params.query,
-      count: params.count,
-      country: params.country,
-      search_lang: params.search_lang,
-      ui_lang: params.ui_lang,
-      freshness: params.freshness,
-      dateAfter: params.dateAfter,
-      dateBefore: params.dateBefore,
-      mode: "web",
-    });
-    const mapped = mapBraveWebResults(data as BraveSearchResponse);
-    const payload = {
-      query: params.query,
-      provider: params.provider,
-      transport: "jarvis-managed" as const,
-      count: mapped.length,
-      tookMs: Date.now() - start,
-      externalContent: {
-        untrusted: true,
-        source: "web_search",
+    try {
+      const data = await runManagedBraveSearch({
+        client: params.managedBraveClient,
+        query: params.query,
+        count: params.count,
+        country: params.country,
+        search_lang: params.search_lang,
+        ui_lang: params.ui_lang,
+        freshness: params.freshness,
+        dateAfter: params.dateAfter,
+        dateBefore: params.dateBefore,
+        mode: "web",
+      });
+      const mapped = mapBraveWebResults(data as BraveSearchResponse);
+      const payload = {
+        query: params.query,
         provider: params.provider,
-        wrapped: true,
-      },
-      results: mapped,
-    };
-    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
+        transport: "jarvis-managed" as const,
+        count: mapped.length,
+        tookMs: Date.now() - start,
+        externalContent: {
+          untrusted: true,
+          source: "web_search",
+          provider: params.provider,
+          wrapped: true,
+        },
+        results: mapped,
+      };
+      writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+      return payload;
+    } catch (error) {
+      // Same recovery rule as llm-context mode: only fall back when an explicit
+      // direct Brave key exists, otherwise report the managed utility failure.
+      if (!hasDirectBraveApiKey) {
+        throw error;
+      }
+    }
   }
 
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
@@ -2074,6 +2093,7 @@ export function createWebSearchTool(options?: {
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
       const managedBraveClient =
         provider === "brave" ? createJarvisManagedUtilityClient(options?.config) : null;
+      const directBraveApiKey = provider === "brave" ? resolveSearchApiKey(search) : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
@@ -2083,9 +2103,7 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : managedBraveClient
-                  ? "jarvis-managed"
-                  : resolveSearchApiKey(search);
+                : (directBraveApiKey ?? (managedBraveClient ? "jarvis-managed" : undefined));
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));

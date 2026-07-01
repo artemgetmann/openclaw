@@ -535,15 +535,24 @@ async function fetchConfiguredFirecrawlContent(
   if (!params.firecrawlEnabled) {
     return null;
   }
+  const directFirecrawlParams = toFirecrawlContentParams(params);
   if (params.firecrawlManagedUtilityClient) {
-    return await fetchManagedFirecrawlContent({
-      client: params.firecrawlManagedUtilityClient,
-      url: params.url,
-      extractMode: params.extractMode,
-    });
+    try {
+      return await fetchManagedFirecrawlContent({
+        client: params.firecrawlManagedUtilityClient,
+        url: params.url,
+        extractMode: params.extractMode,
+      });
+    } catch (error) {
+      // Managed Jarvis utilities are preferred for packaged users, but an
+      // explicitly configured BYOK Firecrawl key is a valid local recovery path
+      // when the managed backend itself is down or suspended.
+      if (!directFirecrawlParams) {
+        throw error;
+      }
+    }
   }
-  const firecrawlParams = toFirecrawlContentParams(params);
-  return firecrawlParams ? await fetchFirecrawlContent(firecrawlParams) : null;
+  return directFirecrawlParams ? await fetchFirecrawlContent(directFirecrawlParams) : null;
 }
 
 async function maybeFetchFirecrawlWebFetchPayload(
@@ -808,11 +817,11 @@ export function createWebFetchTool(options?: {
   const firecrawl = resolveFirecrawlConfig(fetch);
   const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
   const firecrawlManagedUtilityClient = createJarvisManagedUtilityClient(options?.config);
-  // Prefer Jarvis managed routing when configured so packaged consumers do not
-  // need raw Firecrawl keys. Direct keys are only resolved for BYOK/local mode.
+  // Prefer Jarvis managed routing when configured. Still resolve direct keys
+  // when present so BYOK/local installs can recover if the managed utility
+  // backend is unavailable.
   const shouldResolveFirecrawlApiKey =
-    !firecrawlManagedUtilityClient &&
-    (runtimeFirecrawlActive === undefined ? firecrawl?.enabled !== false : runtimeFirecrawlActive);
+    runtimeFirecrawlActive === undefined ? firecrawl?.enabled !== false : runtimeFirecrawlActive;
   const firecrawlApiKey = shouldResolveFirecrawlApiKey
     ? resolveFirecrawlApiKey(firecrawl)
     : undefined;

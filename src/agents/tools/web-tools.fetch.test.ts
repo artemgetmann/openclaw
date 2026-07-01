@@ -522,6 +522,76 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.text).toContain("managed firecrawl fallback");
   });
 
+  it("falls back to direct Firecrawl when managed Firecrawl is unavailable and a direct key is configured", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = resolveRequestUrl(input);
+      if (url === "https://jarvis.example/v1/managed/utilities/firecrawl.scrape") {
+        return Promise.resolve(new Response("Service Suspended", { status: 503 }));
+      }
+      if (url === "https://api.firecrawl.dev/v2/scrape") {
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer direct-firecrawl-key");
+        expect(parseJsonRequestBody(init)).toMatchObject({
+          url: "https://example.com/managed-down",
+        });
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                markdown: "direct firecrawl fallback",
+                metadata: {
+                  title: "Direct Firecrawl",
+                  sourceURL: "https://example.com/managed-down",
+                  statusCode: 200,
+                },
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        headers: makeFetchHeaders({ "content-type": "text/html" }),
+        text: async () => "blocked",
+      } as Response);
+    });
+
+    const tool = createWebFetchTool({
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: "backend-token",
+          },
+          managedServices: { mode: "managed" },
+        },
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              firecrawl: {
+                enabled: true,
+                apiKey: "direct-firecrawl-key",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/managed-down",
+    });
+    const details = result?.details as { extractor?: string; text?: string };
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(details.extractor).toBe("firecrawl");
+    expect(details.text).toContain("direct firecrawl fallback");
+  });
+
   it("wraps external content and clamps oversized maxChars", async () => {
     const large = "a".repeat(80_000);
     installMockFetch(
