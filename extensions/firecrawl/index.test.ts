@@ -176,56 +176,39 @@ describe("firecrawl plugin", () => {
     });
   });
 
-  it("falls back to direct Firecrawl search when managed Firecrawl is unavailable and a direct key is configured", async () => {
-    const fetchSpy = installMockFetch(async (input, init) => {
+  it("does not fall back to direct Firecrawl search when managed Firecrawl is unavailable", async () => {
+    const fetchSpy = installMockFetch(async (input) => {
       const url = resolveRequestUrl(input);
-      if (url === "https://jarvis.example/v1/managed/utilities/firecrawl.search") {
-        return new Response("Service Suspended", { status: 503 });
-      }
-      if (url === "https://api.firecrawl.dev/v2/search") {
-        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer direct-firecrawl-key");
-        expect(parseJsonRequestBody(init)).toEqual({
-          query: "managed search down",
-          limit: 2,
-        });
-        return new Response(
-          JSON.stringify({
-            success: true,
-            data: [{ title: "Direct", url: "https://example.com/direct" }],
-          }),
-          { status: 200 },
-        );
-      }
-      throw new Error(`unexpected fetch: ${url}`);
+      expect(url).not.toContain("api.firecrawl.dev");
+      expect(url).toBe("https://jarvis.example/v1/managed/utilities/firecrawl.search");
+      return new Response("Service Suspended", { status: 503 });
     });
 
-    const result = await runFirecrawlSearch({
-      cfg: {
-        jarvis: {
-          backend: {
-            baseUrl: "https://jarvis.example",
-            accessToken: "backend-token",
+    await expect(
+      runFirecrawlSearch({
+        cfg: {
+          jarvis: {
+            backend: {
+              baseUrl: "https://jarvis.example",
+              accessToken: "backend-token",
+            },
+            managedServices: { mode: "managed" },
           },
-          managedServices: { mode: "managed" },
-        },
-        tools: {
-          web: {
-            search: {
-              provider: "firecrawl",
-              firecrawl: { apiKey: "direct-firecrawl-key" },
+          tools: {
+            web: {
+              search: {
+                provider: "firecrawl",
+                firecrawl: { apiKey: "direct-firecrawl-key" },
+              },
             },
           },
         },
-      },
-      query: "managed search down",
-      count: 2,
-    });
+        query: "managed search down",
+        count: 2,
+      }),
+    ).rejects.toThrow(/Jarvis managed utility failed with HTTP 503/);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({
-      provider: "firecrawl",
-      count: 1,
-    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("routes managed Firecrawl scrape through the Jarvis backend without a provider key", async () => {
@@ -277,61 +260,38 @@ describe("firecrawl plugin", () => {
     });
   });
 
-  it("falls back to direct Firecrawl scrape when managed Firecrawl is unavailable and a direct key is configured", async () => {
-    const fetchSpy = installMockFetch(async (input, init) => {
+  it("does not fall back to direct Firecrawl scrape when managed Firecrawl is unavailable", async () => {
+    const fetchSpy = installMockFetch(async (input) => {
       const url = resolveRequestUrl(input);
-      if (url === "https://jarvis.example/v1/managed/utilities/firecrawl.scrape") {
-        return new Response("Service Suspended", { status: 503 });
-      }
-      if (url === "https://api.firecrawl.dev/v2/scrape") {
-        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer direct-firecrawl-key");
-        expect(parseJsonRequestBody(init)).toMatchObject({
-          url: "https://example.com/managed-scrape-down",
-          formats: ["markdown"],
-        });
-        return new Response(
-          JSON.stringify({
-            success: true,
-            data: {
-              markdown: "# Direct Scrape",
-              metadata: {
-                sourceURL: "https://example.com/direct-final",
-                statusCode: 200,
+      expect(url).not.toContain("api.firecrawl.dev");
+      expect(url).toBe("https://jarvis.example/v1/managed/utilities/firecrawl.scrape");
+      return new Response("Service Suspended", { status: 503 });
+    });
+
+    await expect(
+      runFirecrawlScrape({
+        cfg: {
+          jarvis: {
+            backend: {
+              baseUrl: "https://jarvis.example",
+              accessToken: "backend-token",
+            },
+            managedServices: { mode: "managed" },
+          },
+          tools: {
+            web: {
+              fetch: {
+                firecrawl: { apiKey: "direct-firecrawl-key" },
               },
             },
-          }),
-          { status: 200 },
-        );
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-
-    const result = await runFirecrawlScrape({
-      cfg: {
-        jarvis: {
-          backend: {
-            baseUrl: "https://jarvis.example",
-            accessToken: "backend-token",
-          },
-          managedServices: { mode: "managed" },
-        },
-        tools: {
-          web: {
-            fetch: {
-              firecrawl: { apiKey: "direct-firecrawl-key" },
-            },
           },
         },
-      },
-      url: "https://example.com/managed-scrape-down",
-      extractMode: "markdown",
-    });
+        url: "https://example.com/managed-scrape-down",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow(/Jarvis managed utility failed with HTTP 503/);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({
-      extractor: "firecrawl",
-      finalUrl: "https://example.com/direct-final",
-    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps direct Firecrawl search intact when Jarvis backend config is absent", async () => {

@@ -47,14 +47,7 @@ function installMockFetch(
   return mockFetch;
 }
 
-function parseJsonRequestBody(init: RequestInit | undefined): unknown {
-  if (typeof init?.body !== "string") {
-    throw new Error("expected JSON string request body");
-  }
-  return JSON.parse(init.body);
-}
-
-describe("web_search managed Brave fallback", () => {
+describe("web_search managed Brave isolation", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
@@ -76,37 +69,12 @@ describe("web_search managed Brave fallback", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to direct Brave when managed Brave is unavailable and a direct key is configured", async () => {
-    const fetchSpy = installMockFetch(async (input, init) => {
+  it("does not fall back to direct Brave when managed Brave is unavailable", async () => {
+    const fetchSpy = installMockFetch(async (input) => {
       const url = resolveRequestUrl(input);
-      if (url === "https://jarvis.example/v1/managed/utilities/brave.search") {
-        expect(parseJsonRequestBody(init)).toEqual({
-          input: {
-            query: "managed brave down",
-            count: 1,
-            mode: "web",
-          },
-        });
-        return new Response("Service Suspended", { status: 503 });
-      }
-      if (url.startsWith("https://api.search.brave.com/res/v1/web/search")) {
-        expect(new Headers(init?.headers).get("X-Subscription-Token")).toBe("direct-brave-key");
-        return new Response(
-          JSON.stringify({
-            web: {
-              results: [
-                {
-                  title: "Direct Brave",
-                  url: "https://example.com/direct-brave",
-                  description: "direct brave fallback",
-                },
-              ],
-            },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      throw new Error(`unexpected fetch: ${url}`);
+      expect(url).not.toContain("api.search.brave.com");
+      expect(url).toBe("https://jarvis.example/v1/managed/utilities/brave.search");
+      return new Response("Service Suspended", { status: 503 });
     });
 
     const tool = createWebSearchTool({
@@ -131,19 +99,14 @@ describe("web_search managed Brave fallback", () => {
       sandboxed: false,
     });
 
-    const result = await tool?.execute?.("call", {
-      query: "managed brave down",
-      count: 1,
-    });
-    const details = result?.details as {
-      provider?: string;
-      results?: Array<{ url?: string; description?: string }>;
-    };
+    await expect(
+      tool?.execute?.("call", {
+        query: "managed brave down",
+        count: 1,
+      }),
+    ).rejects.toThrow(/Jarvis managed utility failed with HTTP 503/);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(details.provider).toBe("brave");
-    expect(details.results?.[0]?.url).toBe("https://example.com/direct-brave");
-    expect(details.results?.[0]?.description).toContain("direct brave fallback");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 
