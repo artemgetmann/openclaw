@@ -21,7 +21,7 @@ struct ConsumerBootstrapTests {
         let messages = missingRoot["messages"] as? [String: Any]
         let inbound = messages?["inbound"] as? [String: Any]
         let byChannel = inbound?["byChannel"] as? [String: Any]
-        #expect(byChannel?["telegram"] as? Int == 2000)
+        #expect(byChannel?["telegram"] as? Int == 1000)
 
         var optedOutRoot: [String: Any] = [
             "messages": [

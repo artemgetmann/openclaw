@@ -4,7 +4,7 @@ enum ConsumerBootstrap {
     // Jarvis users often send a thought as several rapid Telegram messages.
     // A short Telegram-only debounce turns that burst into one agent turn while
     // leaving other channels unchanged and preserving an explicit user opt-out.
-    private static let telegramInboundDebounceMs = 2000
+    private static let telegramInboundDebounceMs = 1000
 
     static func bootstrapIfNeeded() {
         guard AppFlavor.current.isConsumer else { return }
