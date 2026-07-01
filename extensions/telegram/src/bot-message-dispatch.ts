@@ -1720,6 +1720,10 @@ export const dispatchTelegramMessage = async ({
     });
     const result = await deliverReplies({
       ...deliveryBaseOptions,
+      // Final text is the durable proof point for Telegram progress/TTS UX.
+      // Bot API rich messages can arrive as unsupported media for MTProto
+      // readers, so keep finals on ordinary text transport.
+      richMessages: durableReason === "final" && !hasMedia && !isTtsSupplement ? false : undefined,
       replies: [applyQuoteReplyTarget(normalizedPayload)],
       onVoiceRecording: sendRecordVoice,
       onReplyDelivered: (event: TelegramReplyDeliveredEvent) => {

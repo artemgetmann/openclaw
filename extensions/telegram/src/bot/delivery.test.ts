@@ -794,6 +794,34 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("honors richMessages false and uses legacy text delivery", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "| Name | Score |\n| --- | --- |\n| Ada | **9** |" }],
+      runtime,
+      bot,
+      tableMode: "block",
+      richMessages: false,
+    });
+
+    expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("<table>"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
   it("falls back to legacy HTML then plain text when rich table delivery fails", async () => {
     const runtime = createRuntime();
     const parseErr = new Error("400: Bad Request: can't parse entities");
