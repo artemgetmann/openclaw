@@ -449,7 +449,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.text).toContain("firecrawl fallback");
   });
 
-  it("routes managed Firecrawl scrape fallback through Jarvis backend", async () => {
+  it("routes managed Firecrawl scrape through Jarvis backend", async () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL, init?: RequestInit) => {
       const url = resolveRequestUrl(input);
       if (url === "https://jarvis.example/v1/managed/utilities/firecrawl.scrape") {
@@ -517,9 +517,75 @@ describe("web_fetch extraction fallbacks", () => {
     });
     const details = result?.details as { extractor?: string; text?: string };
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("managed firecrawl fallback");
+  });
+
+  it("uses managed Firecrawl as the primary web_fetch transport in managed mode", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = resolveRequestUrl(input);
+      expect(url).not.toBe("https://example.com/managed-primary");
+      expect(url).not.toContain("api.firecrawl.dev");
+      expect(url).toBe("https://jarvis.example/v1/managed/utilities/firecrawl.scrape");
+      expect(parseJsonRequestBody(init)).toEqual({
+        input: {
+          url: "https://example.com/managed-primary",
+        },
+      });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: {
+              provider: "firecrawl",
+              payload: {
+                success: true,
+                data: {
+                  markdown: "managed primary fetch",
+                  metadata: {
+                    title: "Managed Primary",
+                    sourceURL: "https://example.com/managed-primary",
+                    statusCode: 200,
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+
+    const tool = createWebFetchTool({
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: "backend-token",
+          },
+          managedServices: { mode: "managed" },
+        },
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              firecrawl: { enabled: true },
+            },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/managed-primary",
+    });
+    const details = result?.details as { extractor?: string; text?: string };
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(details.extractor).toBe("firecrawl");
+    expect(details.text).toContain("managed primary fetch");
   });
 
   it("does not fall back to direct Firecrawl when managed Firecrawl is unavailable", async () => {
@@ -567,7 +633,7 @@ describe("web_fetch extraction fallbacks", () => {
       }),
     ).rejects.toThrow(/Jarvis managed utility failed with HTTP 503/);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("wraps external content and clamps oversized maxChars", async () => {
