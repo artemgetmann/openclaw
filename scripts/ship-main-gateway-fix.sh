@@ -26,7 +26,7 @@ the requested runtime scope, and print closeout proof.
 Scopes:
   openclaw-shared  Rebuild/recover ai.openclaw.gateway from sacred main.
   jarvis           Read-only proof of ai.jarvis.gateway. This never deploys,
-                   restarts, or treats ai.openclaw.gateway as Jarvis proof.
+                   restarts, or treats the shared gateway as Jarvis proof.
 EOF
 }
 
@@ -321,7 +321,7 @@ main() {
     deploy_line="no deploy/restart by this wrapper; read-only Jarvis proof only; status=${status_proof}"
     validation_line="scripts/prove-jarvis-runtime.sh --expected-commit ${expected_commit}"
     known_gaps_line="Jarvis app-support bundle refresh and Telegram live UX proof are separate approval-gated steps."
-    rollback_line="revert PR #${PR_NUMBER}. This wrapper did not mutate ai.jarvis.gateway, ai.openclaw.gateway, or /Applications/Jarvis.app in jarvis scope."
+    rollback_line="revert PR #${PR_NUMBER}. This wrapper did not mutate the Jarvis gateway, shared gateway, or /Applications/Jarvis.app in jarvis scope."
   fi
 
   local live_line="skipped"

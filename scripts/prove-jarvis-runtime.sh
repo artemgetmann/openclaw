@@ -297,7 +297,6 @@ print_proof() {
   log "launchctl_loaded_config=jarvis-managed-bundle"
   log "rpc=ok"
   log "health=healthy"
-  log "openclaw_shared_gateway_loaded=false"
   log "runtime_mutation=none"
   log "applications_jarvis_app=untouched"
 }

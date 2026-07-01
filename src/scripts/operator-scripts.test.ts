@@ -334,6 +334,7 @@ esac
     expect(result.stdout).toContain("scripts/prove-jarvis-runtime.sh --expected-commit");
     expect(result.stdout).toContain("Runtime scope: jarvis");
     expect(result.stdout).toContain("read-only Jarvis proof only");
+    expect(result.stdout).not.toContain("ai.openclaw.gateway");
     expect(result.stdout).not.toContain("scripts/build-shared-runtime.sh");
     expect(result.stdout).not.toContain("scripts/gateway-recover-main.sh");
   });
@@ -389,7 +390,8 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
     expect(result.stdout).toContain("jarvis_runtime_proof=true");
     expect(result.stdout).toContain("service_label=ai.jarvis.gateway");
     expect(result.stdout).toContain("runtime_commit=389c0513cf");
-    expect(result.stdout).toContain("openclaw_shared_gateway_loaded=false");
+    expect(result.stdout).not.toContain("openclaw_shared_gateway_loaded");
+    expect(result.stdout).not.toContain("ai.openclaw.gateway");
     expect(result.stdout).toContain("applications_jarvis_app=untouched");
   });
 
