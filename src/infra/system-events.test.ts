@@ -5,6 +5,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
   drainSystemEventEntries,
+  enqueueSystemEventForOrigin,
   enqueueSystemEvent,
   hasSystemEvents,
   isSystemEventContextChanged,
@@ -50,6 +51,43 @@ describe("system events (session routing)", () => {
     });
     expect(discord).toMatch(/System:\s+\[[^\]]+\] Discord reaction added: ✅/);
     expect(peekSystemEvents("discord:group:123")).toEqual([]);
+  });
+
+  it("does not leak origin-scoped events into another delivery route sharing the session", async () => {
+    const key = "agent:main:main";
+    const sourceOrigin = {
+      channel: "telegram",
+      to: "telegram:-100123",
+      accountId: "jarvis",
+      threadId: 77,
+    };
+
+    enqueueSystemEventForOrigin("Approved async command completed.", {
+      sessionKey: key,
+      origin: sourceOrigin,
+      contextKey: "exec-approval-followup:abc",
+    });
+
+    const otherTopic = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+      origin: {
+        ...sourceOrigin,
+        threadId: 88,
+      },
+    });
+    expect(otherTopic).toBeUndefined();
+
+    const sourceTopic = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+      origin: sourceOrigin,
+    });
+    expect(sourceTopic).toMatch(/System:\s+\[[^\]]+\] Approved async command completed\./);
   });
 
   it("requires an explicit session key", () => {

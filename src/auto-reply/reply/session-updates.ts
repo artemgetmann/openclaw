@@ -10,7 +10,8 @@ import {
   formatZonedTimestamp,
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+import { drainSystemEventEntriesForOrigin } from "../../infra/system-events.js";
+import type { DeliveryContext } from "../../utils/delivery-context.js";
 
 let channelSummaryModulePromise:
   | Promise<typeof import("../../infra/channel-summary.js")>
@@ -27,6 +28,7 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  origin?: DeliveryContext;
 }): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
@@ -93,7 +95,7 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
+  const queued = drainSystemEventEntriesForOrigin(params.sessionKey, params.origin);
   systemLines.push(
     ...queued
       .map((event) => {

@@ -381,6 +381,12 @@ export async function runPreparedReply(
     sessionKey,
     isMainSession,
     isNewSession,
+    origin: {
+      channel: ctx.OriginatingChannel,
+      to: ctx.OriginatingTo ?? ctx.To,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+    },
   });
   const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
   const bodyWithEvents = prependEvents(effectiveBaseBody);
