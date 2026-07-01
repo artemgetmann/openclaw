@@ -68,6 +68,13 @@ vi.mock("../commands/health.js", () => ({
   healthCommand: vi.fn(async () => {}),
 }));
 
+vi.mock("../commands/onboard-search.js", () => ({
+  SEARCH_PROVIDER_OPTIONS: [],
+  hasExistingKey: vi.fn(() => false),
+  hasKeyInEnv: vi.fn(() => false),
+  resolveExistingKey: vi.fn(() => undefined),
+}));
+
 vi.mock("../daemon/service.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/service.js")>();
   return {
@@ -240,6 +247,11 @@ describe("finalizeSetupWizard", () => {
           ...plan.settings,
           authMode: "password",
           gatewayToken: undefined,
+          gatewayPassword: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_PASSWORD",
+          },
         },
         prompter,
         runtime,
@@ -263,6 +275,59 @@ describe("finalizeSetupWizard", () => {
         url: "ws://127.0.0.1:18789",
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
+    );
+  });
+
+  it("shows the active config path in the gateway token note", async () => {
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const activeConfigPath = "/tmp/jarvis-active/openclaw.json";
+    process.env.OPENCLAW_CONFIG_PATH = activeConfigPath;
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({
+      note,
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+    });
+    const plan = createFinalizePlan({
+      flow: "quickstart",
+      installDaemon: false,
+      skipHealth: true,
+    });
+
+    try {
+      await finalizeSetupWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        intent: plan.intent,
+        onboardingPlan: plan.onboardingPlan,
+        settings: plan.settings,
+        prompter,
+        runtime: createRuntime(),
+      });
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+    }
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Stored in active config: ${activeConfigPath}`),
+      "Token",
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Stored in: ~/.openclaw/openclaw.json"),
+      "Token",
     );
   });
 

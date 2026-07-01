@@ -63,10 +63,12 @@ Local TTS using the sherpa-onnx offline CLI.
 
 ## Install
 
-1. Download the runtime for your OS (extracts into `~/.openclaw/tools/sherpa-onnx-tts/runtime`)
-2. Download a voice model (extracts into `~/.openclaw/tools/sherpa-onnx-tts/models`)
+1. Download the runtime for your OS into the active state dir, for example `<active-state-dir>/tools/sherpa-onnx-tts/runtime`
+2. Download a voice model into the active state dir, for example `<active-state-dir>/tools/sherpa-onnx-tts/models`
 
-Update `~/.openclaw/openclaw.json`:
+Update the active OpenClaw/Jarvis config. Prefer `$OPENCLAW_CONFIG_PATH`; otherwise use `$OPENCLAW_STATE_DIR/openclaw.json`.
+For source/dev OpenClaw with no active env override, the fallback is `~/.openclaw/openclaw.json`:
+Store resolved absolute paths in the env values:
 
 ```json5
 {
@@ -74,8 +76,8 @@ Update `~/.openclaw/openclaw.json`:
     entries: {
       "sherpa-onnx-tts": {
         env: {
-          SHERPA_ONNX_RUNTIME_DIR: "~/.openclaw/tools/sherpa-onnx-tts/runtime",
-          SHERPA_ONNX_MODEL_DIR: "~/.openclaw/tools/sherpa-onnx-tts/models/vits-piper-en_US-lessac-high",
+          SHERPA_ONNX_RUNTIME_DIR: "/path/to/active-state-dir/tools/sherpa-onnx-tts/runtime",
+          SHERPA_ONNX_MODEL_DIR: "/path/to/active-state-dir/tools/sherpa-onnx-tts/models/vits-piper-en_US-lessac-high",
         },
       },
     },
