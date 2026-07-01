@@ -35,6 +35,28 @@ browser-editor bug into transport noise.
 4. Run an agent or TUI smoke against the same isolated gateway.
 5. Use Telegram only as the final transport smoke, if needed.
 
+## Proof surface decision
+
+Choose the proof surface by the behavior under test, not by whichever client is
+most convenient.
+
+- Raw browser CLI proves gateway-to-browser control only.
+- Agent or TUI proves agent reasoning, tool routing, and browser-profile choice
+  through the gateway.
+- Telegram proves Telegram product behavior: bot ownership, per-sender session
+  state, message rendering, progress/stop/abort behavior, approval wording, and
+  user-visible reply flow.
+
+TUI is enough for sign-off only when the change is invisible to Telegram users
+and the relevant question is fully answered by gateway/agent/tool behavior.
+If the bug, acceptance criterion, or user report involves what Jarvis said or
+did inside Telegram, final product proof requires an isolated tester Telegram
+lane after browser and TUI/agent proof pass.
+
+Do not use Telegram to debug raw browser attach or agent-tool selection unless
+the failure only reproduces through Telegram session context. In that case, keep
+the Telegram lane isolated and record why TUI was insufficient.
+
 ## Step 1: runtime ownership
 
 Before debugging behavior, prove you are talking to the intended runtime.

@@ -54,7 +54,8 @@ For agent browser tool calls:
 - Default serious web work to `profile="signed-in"` for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from cloned real Chrome cookies/session state.
 - Use `profile="openclaw"` for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat it as a last-resort fallback only after `profile="signed-in"` and any explicitly required `profile="user-live"` lane are unavailable or proven unsuitable, and only when session state does not matter.
 - Use `profile="user-live"` only when the task explicitly depends on your real signed-in browser session, existing tabs, or installed extensions.
-- If the task clearly depends on existing login state and `profile="signed-in"` or `profile="user-live"` is unavailable, stop and surface the blocker instead of silently switching to a clean isolated browser.
+- If `profile="signed-in"` or `profile="user-live"` fails, ask before switching to `profile="openclaw"`. A clean isolated browser can be worse for a user's task even when the page is public. After the user explicitly approves the switch, retry the browser tool with `fallbackApproved=true`.
+- If the task clearly depends on existing login state and `profile="signed-in"` or `profile="user-live"` is unavailable, stop and surface the blocker instead of switching to a clean isolated browser.
 - If multiple Chrome profiles may exist, use a named `existing-session` profile pinned by `userDataDir`, `profileDirectory`, or `cdpUrl` instead of guessing.
 - `profile` is the explicit override when you want a specific browser mode.
 

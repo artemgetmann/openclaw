@@ -72,6 +72,21 @@ TELEGRAM_SENDER_ACCESS_STATUS="not-run"
 FAIL=0
 FAIL_REASONS=()
 
+repo_toolchain_path() {
+  local toolchain_path="${REPO_ROOT}/node_modules/.bin"
+  local candidate=""
+  # The live harness can run from inside agent shells that prepend their own
+  # runtime tools to PATH. Keep repo-local commands on the repo pnpm line so a
+  # model/auth preflight does not accidentally bootstrap through a bundled
+  # agent runtime.
+  for candidate in "/opt/homebrew/bin" "/usr/local/bin"; do
+    if [[ -x "${candidate}/pnpm" ]]; then
+      toolchain_path="${toolchain_path}:${candidate}"
+    fi
+  done
+  printf '%s:%s' "$toolchain_path" "${PATH:-}"
+}
+
 trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -1191,7 +1206,8 @@ NODE
   fi
 
   local probe_output=""
-  if OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
+  if PATH="$(repo_toolchain_path)" \
+    OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
     OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
     OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1 \
@@ -1243,6 +1259,7 @@ ensure_telegram_sender_access() {
   local precheck_output=""
   if ! precheck_output="$(
     cd "$REPO_ROOT" && \
+      PATH="$(repo_toolchain_path)" \
       OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
       OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
       OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \

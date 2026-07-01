@@ -256,6 +256,54 @@ export function findOpenClawChromeProcessMatches(params: {
   });
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code !== "ESRCH";
+  }
+}
+
+export async function stopOpenClawChromeProcessMatch(
+  match: OpenClawChromeProcessMatch,
+  timeoutMs = CHROME_STOP_TIMEOUT_MS,
+): Promise<boolean> {
+  if (!Number.isInteger(match.pid) || match.pid <= 0) {
+    return true;
+  }
+
+  log.warn(`stopping stale openclaw browser process pid=${match.pid}`);
+  try {
+    process.kill(match.pid, "SIGTERM");
+  } catch {
+    // The process may have exited between discovery and cleanup.
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!isProcessAlive(match.pid)) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  try {
+    process.kill(match.pid, "SIGKILL");
+  } catch {
+    // Best-effort cleanup; the caller will re-check or fail during relaunch.
+  }
+
+  const killStart = Date.now();
+  while (Date.now() - killStart < Math.min(1_000, timeoutMs)) {
+    if (!isProcessAlive(match.pid)) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return !isProcessAlive(match.pid);
+}
+
 export function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;

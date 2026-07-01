@@ -99,6 +99,10 @@ Use `user-live` only when the exact current Chrome tabs/session matter, or
 create your own `existing-session` profile when you need another exact browser
 target:
 
+For agent-driven work, falling back from `signed-in` or `user-live` to clean
+`openclaw` requires explicit user approval. The browser tool enforces this with
+`fallbackApproved=true` after the user approves the downgrade.
+
 ```bash
 openclaw browser --browser-profile signed-in status
 openclaw browser --browser-profile user-live tabs

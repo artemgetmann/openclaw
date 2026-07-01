@@ -47,6 +47,10 @@
   - `pnpm openclaw gateway status`
   - check the `Runtime ID:` line for `branch=...` and `worktree=...`
   - if the shared runtime points at a feature worktree, stop and move it back to the sacred home clone on `main`
+- For browser, agent, TUI, and Telegram proof sequencing, use
+  `docs/agent-guides/browser-agent-e2e.md`. In short: raw browser CLI proves
+  browser control, agent/TUI proves gateway agent behavior, and Telegram proves
+  user-visible Telegram product behavior.
 
 ## Home clone entry
 

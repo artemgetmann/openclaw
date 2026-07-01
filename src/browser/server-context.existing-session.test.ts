@@ -38,6 +38,7 @@ vi.mock("./chrome.js", () => ({
     proc: new EventEmitter(),
   })),
   stopOpenClawChrome: vi.fn(async () => {}),
+  stopOpenClawChromeProcessMatch: vi.fn(async () => true),
   resolveOpenClawUserDataDir: vi.fn(
     (profileName = "chrome-live") => `/tmp/openclaw/browser/${profileName}/user-data`,
   ),
@@ -83,6 +84,7 @@ function makeState(): BrowserServerState {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -246,6 +248,104 @@ describe("browser server-context existing-session profile", () => {
     const live = ctx.forProfile("signed-in");
 
     await expect(live.ensureBrowserAvailable()).rejects.toThrow(/Duplicate cloned Chrome/);
+    expect(chrome.launchOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("reaps one stale cloned Chrome parent and relaunches the signed-in lane", async () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    state.resolved.profiles["signed-in"] = {
+      cdpPort: 18802,
+      cdpUrl: "http://127.0.0.1:18802",
+      color: "#0066CC",
+      driver: "existing-session",
+      attachOnly: true,
+      cloneFromUserProfile: true,
+      userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+      profileDirectory: "Default",
+    };
+    const staleMatch = {
+      pid: 333,
+      command:
+        "Google Chrome --user-data-dir=/tmp/openclaw/browser/signed-in/user-data --remote-debugging-port=18802 --profile-directory=Default",
+    };
+    vi.mocked(chrome.findOpenClawChromeProcessMatches).mockReturnValueOnce([staleMatch]);
+    vi.mocked(chrome.isChromeReachable).mockResolvedValue(false);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("signed-in");
+
+    const availability = live.ensureBrowserAvailable();
+    await vi.advanceTimersByTimeAsync(8_100);
+    await availability;
+
+    expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("signed-in");
+    expect(chrome.stopOpenClawChromeProcessMatch).toHaveBeenCalledWith(staleMatch);
+    expect(chrome.launchOpenClawChrome).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reap a cloned Chrome parent after a transient reachability miss", async () => {
+    const state = makeState();
+    state.resolved.profiles["signed-in"] = {
+      cdpPort: 18802,
+      cdpUrl: "http://127.0.0.1:18802",
+      color: "#0066CC",
+      driver: "existing-session",
+      attachOnly: true,
+      cloneFromUserProfile: true,
+      userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+      profileDirectory: "Default",
+    };
+    const runningMatch = {
+      pid: 333,
+      command:
+        "Google Chrome --user-data-dir=/tmp/openclaw/browser/signed-in/user-data --remote-debugging-port=18802 --profile-directory=Default",
+    };
+    vi.mocked(chrome.findOpenClawChromeProcessMatches).mockReturnValueOnce([runningMatch]);
+    vi.mocked(chrome.isChromeReachable).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("signed-in");
+
+    await live.ensureBrowserAvailable();
+
+    expect(chromeMcp.closeChromeMcpSession).not.toHaveBeenCalledWith("signed-in");
+    expect(chrome.stopOpenClawChromeProcessMatch).not.toHaveBeenCalled();
+    expect(chrome.launchOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a stale cloned Chrome parent is still present after cleanup", async () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    state.resolved.profiles["signed-in"] = {
+      cdpPort: 18802,
+      cdpUrl: "http://127.0.0.1:18802",
+      color: "#0066CC",
+      driver: "existing-session",
+      attachOnly: true,
+      cloneFromUserProfile: true,
+      userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+      profileDirectory: "Default",
+    };
+    const staleMatch = {
+      pid: 333,
+      command:
+        "Google Chrome --user-data-dir=/tmp/openclaw/browser/signed-in/user-data --remote-debugging-port=18802 --profile-directory=Default",
+    };
+    vi.mocked(chrome.findOpenClawChromeProcessMatches)
+      .mockReturnValueOnce([staleMatch])
+      .mockReturnValueOnce([staleMatch]);
+    vi.mocked(chrome.isChromeReachable).mockResolvedValue(false);
+    vi.mocked(chrome.stopOpenClawChromeProcessMatch).mockResolvedValueOnce(false);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("signed-in");
+
+    const availability = expect(live.ensureBrowserAvailable()).rejects.toThrow(
+      /Stale cloned Chrome process.*did not exit cleanly/i,
+    );
+    await vi.advanceTimersByTimeAsync(8_100);
+    await availability;
+
+    expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("signed-in");
+    expect(chrome.stopOpenClawChromeProcessMatch).toHaveBeenCalledWith(staleMatch);
     expect(chrome.launchOpenClawChrome).not.toHaveBeenCalled();
   });
 });

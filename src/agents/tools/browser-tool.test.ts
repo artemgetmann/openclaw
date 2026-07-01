@@ -24,6 +24,7 @@ const browserClientMocks = vi.hoisted(() => ({
     pid: 1,
     cdpPort: 18792,
     cdpUrl: "http://127.0.0.1:18792",
+    availabilityError: null as string | null,
   })),
   browserStop: vi.fn(async (..._args: unknown[]) => ({})),
   browserTabs: vi.fn(async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => []),
@@ -201,7 +202,7 @@ describe("browser tool snapshot maxChars", () => {
     const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const activeConfigPath = "/tmp/jarvis-active/openclaw.json";
     process.env.OPENCLAW_CONFIG_PATH = activeConfigPath;
-    browserConfigMocks.resolveBrowserConfig.mockReturnValueOnce({
+    browserConfigMocks.resolveBrowserConfig.mockReturnValue({
       enabled: false,
       controlPort: 18791,
       profiles: {},
@@ -609,6 +610,366 @@ describe("browser tool snapshot maxChars", () => {
       expect.objectContaining({ profile: "signed-in", timeoutMs: 60_000 }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("blocks clean openclaw fallback after a signed-in lane failure until user approval", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#00AA00",
+          cdpPort: 18801,
+          cdpUrl: "http://127.0.0.1:18801",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cloneFromUserProfile: true,
+        },
+      },
+      "openclaw",
+    );
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:telegram:direct:123" });
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(new Error("signed-in attach failed"));
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "signed-in",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/signed-in attach failed/);
+
+    await expect(
+      tool.execute?.("call-2", {
+        action: "snapshot",
+        profile: "openclaw",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/fallback requires explicit user approval/i);
+
+    await tool.execute?.("call-3", {
+      action: "snapshot",
+      profile: "openclaw",
+      fallbackApproved: true,
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenLastCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "openclaw",
+      }),
+    );
+  });
+
+  it("keeps profile diagnostics available after a stateful lane failure", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#00AA00",
+          cdpPort: 18801,
+          cdpUrl: "http://127.0.0.1:18801",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cloneFromUserProfile: true,
+        },
+      },
+      "openclaw",
+    );
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:main:browser-fallback-profiles",
+    });
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(new Error("signed-in attach failed"));
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "signed-in",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/signed-in attach failed/);
+
+    await tool.execute?.("call-2", {
+      action: "profiles",
+    });
+
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
+  });
+
+  it("blocks clean openclaw fallback after status reports a stateful lane availability error", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#00AA00",
+          cdpPort: 18801,
+          cdpUrl: "http://127.0.0.1:18801",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cloneFromUserProfile: true,
+        },
+      },
+      "openclaw",
+    );
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:main:browser-fallback-status",
+    });
+    browserClientMocks.browserStatus.mockResolvedValueOnce({
+      ok: true,
+      running: false,
+      pid: 0,
+      cdpPort: 18801,
+      cdpUrl: "http://127.0.0.1:18801",
+      availabilityError: "Chrome MCP attach failed",
+    });
+
+    await tool.execute?.("call-1", {
+      action: "status",
+      profile: "signed-in",
+    });
+
+    await expect(
+      tool.execute?.("call-2", {
+        action: "snapshot",
+        profile: "openclaw",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/fallback requires explicit user approval/i);
+  });
+
+  it("does not require fallback approval after a malformed local browser call", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#00AA00",
+          cdpPort: 18801,
+          cdpUrl: "http://127.0.0.1:18801",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cloneFromUserProfile: true,
+        },
+      },
+      "openclaw",
+    );
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:main:browser-fallback-validation",
+    });
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "open",
+        profile: "signed-in",
+      }),
+    ).rejects.toThrow(/targetUrl required/);
+
+    await tool.execute?.("call-2", {
+      action: "snapshot",
+      profile: "openclaw",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+  });
+
+  it("does not require fallback approval after a malformed existing-session batch", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "existing-session",
+          attachOnly: true,
+          color: "#00AA00",
+        },
+      },
+      "openclaw",
+    );
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:main:browser-fallback-bad-batch",
+    });
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        profile: "signed-in",
+        kind: "batch",
+      }),
+    ).rejects.toThrow(/batch requires actions/);
+
+    await tool.execute?.("call-2", {
+      action: "snapshot",
+      profile: "openclaw",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserActionsMocks.browserAct).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+  });
+
+  it("keeps browser fallback approval scoped to one agent session", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#00AA00",
+          cdpPort: 18801,
+          cdpUrl: "http://127.0.0.1:18801",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cloneFromUserProfile: true,
+        },
+      },
+      "openclaw",
+    );
+    const firstSessionTool = createBrowserTool({ agentSessionKey: "agent:main:telegram:direct:1" });
+    const secondSessionTool = createBrowserTool({
+      agentSessionKey: "agent:main:telegram:direct:2",
+    });
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(new Error("signed-in attach failed"));
+
+    await expect(
+      firstSessionTool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "signed-in",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/signed-in attach failed/);
+
+    await secondSessionTool.execute?.("call-2", {
+      action: "snapshot",
+      profile: "openclaw",
+      snapshotFormat: "ai",
+    });
+
+    await expect(
+      firstSessionTool.execute?.("call-3", {
+        action: "snapshot",
+        profile: "openclaw",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/fallback requires explicit user approval/i);
+  });
+
+  it("does not remember a rejected clean browser fallback", async () => {
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+        },
+        "signed-in": {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#00AA00",
+          cdpPort: 18801,
+          cdpUrl: "http://127.0.0.1:18801",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cloneFromUserProfile: true,
+        },
+      },
+      "openclaw",
+    );
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:main:browser-fallback-rejected-memory",
+    });
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(new Error("signed-in attach failed"));
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "signed-in",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/signed-in attach failed/);
+
+    await expect(
+      tool.execute?.("call-2", {
+        action: "snapshot",
+        profile: "openclaw",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/fallback requires explicit user approval/i);
+
+    await tool.execute?.("call-3", {
+      action: "snapshot",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenLastCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "signed-in" }),
+    );
   });
 });
 
