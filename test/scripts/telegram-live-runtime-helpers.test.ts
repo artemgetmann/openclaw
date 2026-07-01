@@ -188,6 +188,64 @@ describe("summarizeTelegramTesterTokenPool", () => {
       upload_dir_ready: true,
     });
   });
+
+  it("does not report empty generated plugin slots as a parity failure", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-empty-slots-parity-"));
+    const baseConfigPath = path.join(root, "base.json");
+    const runtimeConfigPath = path.join(root, "runtime.json");
+    const shared = {
+      plugins: { allow: ["telegram"], deny: [] },
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" }, models: {} } },
+    };
+    writeFileSync(baseConfigPath, JSON.stringify(shared), "utf8");
+    writeFileSync(
+      runtimeConfigPath,
+      JSON.stringify({ ...shared, plugins: { ...shared.plugins, slots: {} } }),
+      "utf8",
+    );
+
+    const report = buildTelegramLiveRuntimeParityReport({
+      baseConfigPath,
+      runtimeConfigPath,
+    });
+
+    expect(report.config_diff_allowed_only).toBe(true);
+    expect(report.config_diff_unexpected_paths).not.toContain("plugins.slots");
+  });
+
+  it("allows tester runtime model twin pruning in the parity report", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-model-parity-"));
+    const baseConfigPath = path.join(root, "base.json");
+    const runtimeConfigPath = path.join(root, "runtime.json");
+    const baseConfig = {
+      tools: {},
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4", fallbacks: [] },
+          models: {
+            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    };
+    const runtimeConfig = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+    writeFileSync(baseConfigPath, JSON.stringify(baseConfig), "utf8");
+    writeFileSync(runtimeConfigPath, JSON.stringify(runtimeConfig), "utf8");
+
+    const report = buildTelegramLiveRuntimeParityReport({
+      baseConfigPath,
+      runtimeConfigPath,
+    });
+
+    expect(Object.keys(runtimeConfig.agents.defaults.models)).not.toContain("openai/gpt-5.4");
+    expect(report.config_diff_allowed_only).toBe(true);
+    expect(report.config_diff_unexpected_paths).not.toContain("agents.defaults.models");
+  });
 });
 
 describe("clearEnvAssignmentText", () => {

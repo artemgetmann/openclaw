@@ -602,6 +602,107 @@ describe("telegram commands", () => {
     expect(payload.current_lane_bot).toBe("@jarvis_tester_2_bot");
   });
 
+  it("uses repo-local telegram-user env and session files for baseline smoke", async () => {
+    const runTelegramUserPrecheck = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session_path: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      })
+      .mockResolvedValueOnce({
+        backend_meta: {},
+        chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_2_bot" },
+        session_path: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      });
+    const runTelegramUserSend = vi.fn(async () => ({ message: { message_id: 301 } }));
+    const runTelegramUserWait = vi.fn(async () => ({
+      matched: {
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        message_id: 302,
+        reply_to_msg_id: 301,
+        reply_to_top_id: 301,
+        sender_id: 777,
+        text: "baseline reply",
+      },
+      matched_by: "reply_to_msg_id",
+    }));
+
+    Object.assign(telegramCommandDeps, {
+      fileExists: vi.fn((filePath: string) =>
+        [
+          "/tmp/repo/scripts/telegram-e2e/.env.local",
+          "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+        ].includes(filePath),
+      ),
+      newRunId: () => "baseline",
+      now: vi.fn(() => 2_000),
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      readTelegramBotToken: vi.fn(async () => "777:token"),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 777,
+        username: "jarvis_tester_2_bot",
+        name: "Jarvis 2",
+      })),
+      resolveHelperProfile: vi.fn(async () => ({
+        profileId: "tg-live-test",
+        runtimePort: 24567,
+        runtimeStateDir: "/tmp/state",
+        worktreePath: "/tmp/repo",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "feature/test",
+        commit: "abc123",
+        repoRoot: "/tmp/repo",
+        worktree: "/tmp/repo",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      resolveRuntimeOwnership: vi.fn(async () => ({
+        pid: 31337,
+        worktree: "/tmp/repo",
+        command: "openclaw gateway run",
+        ownershipOk: true,
+        failureReason: null,
+      })),
+      resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+      runRuntimeScript: vi.fn(async () => ({
+        ok: true,
+        stdout: [
+          "branch=feature/test",
+          "runtime_worktree=/tmp/repo",
+          "runtime_pid=31337",
+          "runtime_port=24567",
+          "current_lane_bot=@jarvis_tester_2_bot",
+        ].join("\n"),
+        stderr: "",
+      })),
+      runTelegramUserPrecheck,
+      runTelegramUserSend,
+      runTelegramUserWait,
+      writeFile: vi.fn(async () => undefined),
+    });
+
+    await telegramSmokeBaselineCommand({ json: true }, runtime);
+
+    expect(runTelegramUserPrecheck).toHaveBeenNthCalledWith(1, {
+      envFile: "/tmp/repo/scripts/telegram-e2e/.env.local",
+      session: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+    });
+    expect(runTelegramUserSend).toHaveBeenCalledWith({
+      chat: "@jarvis_tester_2_bot",
+      envFile: "/tmp/repo/scripts/telegram-e2e/.env.local",
+      message: expect.stringContaining("openclaw-telegram-baseline"),
+      session: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+    });
+    expect(runTelegramUserWait).toHaveBeenCalledWith(
+      expect.objectContaining({
+        envFile: "/tmp/repo/scripts/telegram-e2e/.env.local",
+        session: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+      }),
+    );
+  });
+
   it("classifies progress plus TTS when transient progress is cleaned before final", async () => {
     const writeFile = vi.fn(async () => undefined);
     const marker = "OC_E2E_PROGRESS_PLUS_TTS_scenario";

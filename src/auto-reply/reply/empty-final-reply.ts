@@ -49,6 +49,7 @@ export function shouldReturnEmptyFinalFallback(params: {
       messagingToolSentTargets: params.messagingToolSentTargets,
       originatingTo: params.originatingTo,
       accountId: params.accountId,
+      includeMediaOnly: true,
     })
   ) {
     return false;
