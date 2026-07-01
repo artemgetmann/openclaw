@@ -122,6 +122,24 @@ install, mutate `ai.openclaw.gateway`, or touch `/Applications/Jarvis.app`.
 If the Jarvis bundle is stale, that is the result: request explicit approval for
 the bundle refresh/relaunch step before claiming Telegram UX proof.
 
+When a newer Jarvis app-support runtime has been seeded from a local build but
+`/Applications/Jarvis.app` still contains an older bundled runtime, protect the
+live state before handing the machine back:
+
+```bash
+bash scripts/protect-jarvis-runtime-from-app-reseed.sh \
+  --expected-live-commit <live-runtime-commit> \
+  --apply
+```
+
+This does not touch `/Applications/Jarvis.app`. It writes a compatibility
+manifest plus an audit marker under
+`~/Library/Application Support/Jarvis/.jarvis` so reopening the old app does not
+silently reseed over the fixed app-support runtime. Treat
+`scripts/prove-jarvis-runtime.sh` as the runtime truth after this protection;
+the compatibility manifest exists only to keep older app binaries from
+downgrading the live bundle while Jarvis app releases are batched.
+
 Use `--dry-run` before the first live rollout or whenever the PR/runtime state
 is not obvious. Use `--skip-live` only when the proof level is intentionally
 `L2`; shared runtime, LaunchAgent, bot restart, and Telegram transport changes
