@@ -509,6 +509,11 @@ describe("web_fetch extraction fallbacks", () => {
           },
         },
       },
+      runtimeFirecrawl: {
+        active: false,
+        apiKeySource: "missing",
+        diagnostics: [],
+      },
       sandboxed: false,
     });
 

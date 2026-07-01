@@ -847,11 +847,10 @@ export function createWebFetchTool(options?: {
   const managedFirecrawlEnabled = Boolean(
     firecrawlManagedUtilityClient && firecrawl?.enabled !== false,
   );
-  const firecrawlEnabled =
-    runtimeFirecrawlActive ??
-    Boolean(
-      managedFirecrawlEnabled || resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey }),
-    );
+  const firecrawlEnabled = managedFirecrawlEnabled
+    ? true
+    : (runtimeFirecrawlActive ??
+      Boolean(resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey })));
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
