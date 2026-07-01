@@ -612,7 +612,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("sends final answer text without Telegram rich-message transport", async () => {
+  it("keeps final answer text eligible for Telegram rich-message transport", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "Final answer for normal clients." },
@@ -624,12 +624,13 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    const call = deliverReplies.mock.calls[0]?.[0];
+    expect(call).toEqual(
       expect.objectContaining({
-        richMessages: false,
         replies: [expect.objectContaining({ text: "Final answer for normal clients." })],
       }),
     );
+    expect(call).not.toHaveProperty("richMessages");
   });
 
   it("disables answer preview streaming and preserves native quote replies", async () => {
