@@ -145,6 +145,7 @@ async function deliverTextReply(params: {
   replyQuotePosition?: number;
   replyQuoteEntities?: unknown[];
   linkPreview?: boolean;
+  richMessages?: boolean;
   tableMode?: MarkdownTableMode;
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -175,6 +176,7 @@ async function deliverTextReply(params: {
           textMode: "html",
           plainText: chunk.text,
           linkPreview: params.linkPreview,
+          richMessages: params.richMessages,
           tableMode: params.tableMode,
           replyMarkup,
         },
@@ -635,6 +637,8 @@ export async function deliverReplies(params: {
   onVoiceRecording?: () => Promise<void> | void;
   /** Controls whether link previews are shown. Default: true (previews enabled). */
   linkPreview?: boolean;
+  /** Controls Bot API rich-message sends. Default: true when Telegram exposes the raw API. */
+  richMessages?: boolean;
   /** Message id that the optional quote text belongs to. */
   replyQuoteMessageId?: number;
   /** Optional quote text for Telegram reply_parameters. */
@@ -726,6 +730,7 @@ export async function deliverReplies(params: {
           replyQuotePosition: params.replyQuotePosition,
           replyQuoteEntities: params.replyQuoteEntities,
           linkPreview: params.linkPreview,
+          richMessages: params.richMessages,
           tableMode: params.tableMode,
           replyToId,
           replyToMode: params.replyToMode,
@@ -772,6 +777,7 @@ export async function deliverReplies(params: {
             replyQuotePosition: params.replyQuotePosition,
             replyQuoteEntities: params.replyQuoteEntities,
             linkPreview: params.linkPreview,
+            richMessages: params.richMessages,
             tableMode: params.tableMode,
             replyToId,
             replyToMode: params.replyToMode,
