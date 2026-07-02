@@ -1,9 +1,36 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "gateway-recover-main.sh");
 const WATCHDOG_SCRIPT_PATH = path.join(process.cwd(), "scripts", "gateway-watchdog.sh");
+
+function runJarvisPortProbe(launchState: string, port = 18789) {
+  const stateFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-test-")),
+    "state.txt",
+  );
+  fs.writeFileSync(stateFile, launchState);
+  try {
+    return execFileSync(
+      "bash",
+      [
+        "-lc",
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PORT=${port}`,
+          `launch_state="$(cat ${JSON.stringify(stateFile)})"`,
+          'if jarvis_gateway_targets_shared_port "${launch_state}"; then printf yes; else printf no; fi',
+        ].join("; "),
+      ],
+      { encoding: "utf8" },
+    );
+  } finally {
+    fs.rmSync(path.dirname(stateFile), { recursive: true, force: true });
+  }
+}
 
 describe("scripts/gateway-recover-main.sh", () => {
   it("reinstalls the shared gateway with canonical App Support env only", () => {
@@ -68,10 +95,118 @@ describe("scripts/gateway-recover-main.sh", () => {
       'ALLOW_SHARED_GATEWAY_WITH_JARVIS="${OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS:-0}"',
     );
     expect(script).toContain("jarvis_gateway_targets_shared_port() {");
-    expect(script).toContain('grep -F -q "OPENCLAW_GATEWAY_PORT => ${PORT}"');
+    expect(script).toContain('if (line == "environment = {")');
+    expect(script).toContain("env_port = line");
+    expect(script).toContain("arg_port = line");
+    expect(script).toContain('effective_port = arg_port != "" ? arg_port : env_port');
     expect(script).toContain("refusing to recover %s while %s is loaded for port %s");
     expect(script).toContain("scripts/prove-jarvis-runtime.sh");
     expect(script).toContain("OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS=1");
+  });
+
+  it("ignores stale inherited launchd environment when checking Jarvis port ownership", () => {
+    const inheritedOnly = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port",
+      "    19001",
+      "  }",
+      "  inherited environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 18789",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 19001",
+      "  }",
+      "}",
+    ].join("\n");
+
+    expect(runJarvisPortProbe(inheritedOnly)).toBe("no");
+  });
+
+  it("detects Jarvis port ownership from active environment when no launch argument overrides it", () => {
+    const activeEnvOnly = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 18789",
+      "  }",
+      "}",
+    ].join("\n");
+
+    expect(runJarvisPortProbe(activeEnvOnly)).toBe("yes");
+  });
+
+  it("respects launch argument precedence over active environment when checking Jarvis port ownership", () => {
+    const launchArgumentOverride = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port",
+      "    19001",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 18789",
+      "  }",
+      "}",
+    ].join("\n");
+    const launchArgument = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port",
+      "    18789",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 19001",
+      "  }",
+      "}",
+    ].join("\n");
+
+    expect(runJarvisPortProbe(launchArgumentOverride)).toBe("no");
+    expect(runJarvisPortProbe(launchArgument)).toBe("yes");
+  });
+
+  it("supports inline launch port arguments when checking Jarvis port ownership", () => {
+    const inlineArgumentOverride = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port=19001",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 18789",
+      "  }",
+      "}",
+    ].join("\n");
+    const inlineArgument = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port=18789",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 19001",
+      "  }",
+      "}",
+    ].join("\n");
+
+    expect(runJarvisPortProbe(inlineArgumentOverride)).toBe("no");
+    expect(runJarvisPortProbe(inlineArgument)).toBe("yes");
   });
 
   it("supports shallow launchd recovery without full stop, build, or reinstall", () => {

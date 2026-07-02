@@ -305,7 +305,48 @@ jarvis_gateway_targets_shared_port() {
   # Jarvis and the shared OpenClaw gateway both default to the same loopback
   # port. If Jarvis is loaded for this port, recovering ai.openclaw.gateway
   # creates ambiguous runtime ownership and can steal the live user path.
-  printf '%s\n' "${launch_state}" | grep -F -q "OPENCLAW_GATEWAY_PORT => ${PORT}"
+  #
+  # launchd also prints an "inherited environment" block that can contain stale
+  # values from the shell that bootstrapped the job. Ignore that block; only the
+  # active environment block and explicit --port launch argument describe the
+  # running service. Match the gateway command precedence: --port wins over
+  # OPENCLAW_GATEWAY_PORT when both are present.
+  awk -v port="${PORT}" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+
+      if (line == "environment = {") {
+        in_environment = 1
+        previous = line
+        next
+      }
+      if (in_environment && line == "}") {
+        in_environment = 0
+      }
+      if (in_environment && line == "OPENCLAW_GATEWAY_PORT => " port) {
+        env_port = port
+      } else if (in_environment && line ~ /^OPENCLAW_GATEWAY_PORT => /) {
+        env_port = line
+        sub(/^OPENCLAW_GATEWAY_PORT => /, "", env_port)
+      }
+      if (previous == "--port") {
+        arg_port = line
+      } else if (line ~ /^--port=/) {
+        # launchd prints ProgramArguments one item per line. The gateway CLI
+        # supports both "--port 18789" and "--port=18789"; either form is an
+        # explicit launch argument and therefore overrides the environment.
+        arg_port = line
+        sub(/^--port=/, "", arg_port)
+      }
+      previous = line
+    }
+    END {
+      effective_port = arg_port != "" ? arg_port : env_port
+      exit(effective_port == port ? 0 : 1)
+    }
+  ' <<<"${launch_state}"
 }
 
 assert_no_jarvis_gateway_conflict() {
