@@ -11,6 +11,7 @@ import {
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserSend,
+  sleep as telegramUserSleep,
 } from "../telegram-user/backend.js";
 import type {
   TelegramUserPrecheck,
@@ -68,7 +69,7 @@ type TelegramDoctorReport = {
 
 type TelegramSmokeProof = {
   ok: boolean;
-  scenario: "dm-reply" | "baseline";
+  scenario: "dm-reply" | "baseline" | "reply-contract";
   branch: string | null;
   runtime_worktree: string | null;
   runtime_commit: string | null;
@@ -144,6 +145,25 @@ type TelegramSmokeReplyClassification = {
   ok: boolean;
   failureReason: string | null;
 };
+
+type TelegramTesterReplyContractStatus = "blocked" | "finished" | "not_observed";
+
+type TelegramTesterReplyContractProof = TelegramSmokeProof & {
+  scenario: "reply-contract";
+  proof_id: string;
+  starting_message_id: number | null;
+  final_message_id: number | null;
+  final_status: TelegramTesterReplyContractStatus;
+  final_fields: Record<string, string>;
+  last_step: string | null;
+  required_fields: string[];
+};
+
+type ParsedTelegramTesterContractMessage =
+  | { kind: "blocked"; fields: Record<string, string> }
+  | { kind: "finished"; fields: Record<string, string> }
+  | { kind: "starting"; fields: Record<string, string> }
+  | { kind: "unrelated"; fields: Record<string, string> };
 
 type TelegramRuntimeReport = {
   ok: boolean;
@@ -483,6 +503,7 @@ export const telegramCommandDeps = {
   runTelegramUserRead,
   runTelegramUserSend,
   runTelegramUserWait,
+  sleep: telegramUserSleep,
 };
 
 export async function telegramDoctorCommand(
@@ -665,6 +686,27 @@ export async function telegramSmokeBaselineCommand(
   logTelegramPayload(runtime, proof, Boolean(opts.json), renderBaselineText);
   if (!proof.ok) {
     throw new Error(proof.failure_reason ?? "telegram_smoke_baseline_failed");
+  }
+}
+
+export async function telegramSmokeReplyContractCommand(
+  opts: {
+    chat?: string;
+    envFile?: string;
+    json?: boolean;
+    message?: string;
+    proofId?: string;
+    session?: string;
+    text?: string;
+    timeout?: number | string;
+    topicId?: number | string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const proof = await runTelegramTesterReplyContractSmoke(opts);
+  logTelegramPayload(runtime, proof, Boolean(opts.json), renderTesterReplyContractText);
+  if (!proof.ok) {
+    throw new Error(proof.failure_reason ?? "telegram_smoke_reply_contract_failed");
   }
 }
 
@@ -1161,6 +1203,367 @@ async function runDmReplySmoke(params: {
   return proof;
 }
 
+async function runTelegramTesterReplyContractSmoke(opts: {
+  chat?: string;
+  envFile?: string;
+  message?: string;
+  proofId?: string;
+  session?: string;
+  text?: string;
+  timeout?: number | string;
+  topicId?: number | string;
+}): Promise<TelegramTesterReplyContractProof> {
+  const runtimeReport = await buildTelegramRuntimeReport("ensure");
+  const chat = cleanString(opts.chat) ?? runtimeReport.current_lane_bot;
+  if (!chat) {
+    throw new Error("claimed_tester_bot_unresolved");
+  }
+
+  const startedAt = telegramCommandDeps.now();
+  const repoContext = await telegramCommandDeps.resolveRepoContext();
+  const userRuntime = resolveTelegramUserRuntimeOptions(repoContext.repoRoot, {
+    envFile: cleanString(opts.envFile),
+    session: cleanString(opts.session),
+  });
+  const topicId = parseOptionalPositiveInt(opts.topicId);
+  const timeoutMs = (parseOptionalPositiveInt(opts.timeout) ?? 120) * 1000;
+  const proofId =
+    cleanString(opts.proofId) ?? `tester-reply-contract-${telegramCommandDeps.newRunId()}`;
+  const requiredFields = [
+    "branch",
+    "runtime_worktree",
+    "runtime_commit",
+    "current_lane_bot",
+    "errors",
+  ];
+
+  let proof = buildInitialTesterReplyContractProof({
+    chat,
+    proofId,
+    repoContext,
+    requiredFields,
+    runtimeReport,
+    topicId,
+  });
+
+  try {
+    if (!runtimeReport.ok) {
+      throw new Error(runtimeReport.failure_reason ?? "telegram_runtime_ensure_failed");
+    }
+
+    const doctor = await buildTelegramDoctorReport({
+      chat,
+      envFile: userRuntime.envFile,
+      session: userRuntime.session,
+      topicId,
+    });
+    proof = {
+      ...proof,
+      branch: doctor.branch,
+      runtime_worktree: doctor.runtime_worktree,
+      runtime_commit: doctor.runtime_commit,
+      runtime_pid: doctor.runtime_pid,
+      runtime_port: doctor.runtime_port,
+      current_lane_bot: doctor.current_lane_bot,
+      failure_reason: doctor.failure_reason,
+      failure_reasons: doctor.failure_reasons,
+    };
+    if (!doctor.ok || !doctor.resolved_chat) {
+      throw new Error(doctor.failure_reason ?? "telegram_doctor_failed");
+    }
+
+    const requestedMessage = cleanString(opts.message) ?? cleanString(opts.text);
+    const message =
+      requestedMessage ??
+      buildTesterReplyContractPrompt({
+        currentLaneBot: doctor.current_lane_bot,
+        proofId,
+        repoContext,
+        requiredFields,
+      });
+    const sendResult = await telegramCommandDeps.runTelegramUserSend({
+      chat,
+      envFile: userRuntime.envFile ?? undefined,
+      message,
+      session: userRuntime.session ?? undefined,
+    });
+
+    proof = {
+      ...proof,
+      sent_message_id: sendResult.message.message_id,
+    };
+
+    const contractResult = await waitForTesterReplyContract({
+      afterId: sendResult.message.message_id,
+      botId: doctor.resolved_chat.chat_id ?? 0,
+      chat,
+      envFile: userRuntime.envFile,
+      proofId,
+      requiredFields,
+      session: userRuntime.session,
+      startedAt,
+      timeoutMs,
+      topicId,
+    });
+
+    proof = {
+      ...proof,
+      ok: contractResult.ok,
+      elapsed_ms: telegramCommandDeps.now() - startedAt,
+      failure_reason: contractResult.failureReason,
+      failure_reasons: contractResult.failureReason ? [contractResult.failureReason] : [],
+      final_fields: contractResult.finalFields,
+      final_message_id: contractResult.finalMessageId,
+      final_status: contractResult.finalStatus,
+      last_step: contractResult.lastStep,
+      matched_by: contractResult.matchedBy,
+      reply_message_id: contractResult.finalMessageId,
+      reply_text: contractResult.replyText,
+      starting_message_id: contractResult.startingMessageId,
+    };
+  } catch (error) {
+    const reason = cleanFailureReason(error);
+    proof = {
+      ...proof,
+      elapsed_ms: telegramCommandDeps.now() - startedAt,
+      failure_reason: reason,
+      failure_reasons: [...new Set([...proof.failure_reasons, reason])],
+      last_step: proof.last_step ?? "setup_or_send",
+    };
+  } finally {
+    const artifactPath = await writeTelegramSmokeArtifact(repoContext.repoRoot, proof);
+    proof = {
+      ...proof,
+      artifact_path: artifactPath,
+    };
+  }
+
+  return proof;
+}
+
+function buildInitialTesterReplyContractProof(params: {
+  chat: string;
+  proofId: string;
+  repoContext: TelegramRepoContext;
+  requiredFields: string[];
+  runtimeReport: TelegramRuntimeReport;
+  topicId: number | null;
+}): TelegramTesterReplyContractProof {
+  return {
+    ok: false,
+    scenario: "reply-contract",
+    branch: params.runtimeReport.branch ?? params.repoContext.branch,
+    runtime_worktree: params.runtimeReport.runtime_worktree ?? params.repoContext.worktree,
+    runtime_commit: params.runtimeReport.runtime_commit ?? params.repoContext.commit,
+    runtime_pid: params.runtimeReport.runtime_pid,
+    runtime_port: params.runtimeReport.runtime_port,
+    current_lane_bot: params.runtimeReport.current_lane_bot,
+    chat: params.chat,
+    topic_id: params.topicId,
+    sent_message_id: null,
+    reply_message_id: null,
+    matched_by: null,
+    elapsed_ms: 0,
+    failure_reason: params.runtimeReport.failure_reason,
+    failure_reasons: [...params.runtimeReport.failure_reasons],
+    artifact_path: null,
+    proof_id: params.proofId,
+    starting_message_id: null,
+    final_message_id: null,
+    final_status: "not_observed",
+    final_fields: {},
+    last_step: "runtime_ensure",
+    required_fields: params.requiredFields,
+  };
+}
+
+function buildTesterReplyContractPrompt(params: {
+  currentLaneBot: string | null;
+  proofId: string;
+  repoContext: TelegramRepoContext;
+  requiredFields: string[];
+}) {
+  const requiredFieldLines = params.requiredFields.map((field) => `${field}=<value>`).join("\n");
+  // Keep this task deliberately harmless. It proves deterministic reporting,
+  // not lock/unlock, gateway restart, or production bot behavior.
+  return [
+    `Tester reply-contract smoke proof_id=${params.proofId}.`,
+    `Reply immediately with exactly: STARTING ${params.proofId}`,
+    "Then run only harmless local checks: pwd, git rev-parse --abbrev-ref HEAD, and git rev-parse HEAD.",
+    "Do not run lock/unlock flows. Do not restart, bootout, bootstrap, or mutate any live gateway. Do not touch production/default bots or tokens.",
+    "On success, send one final text reply in this exact shape:",
+    `FINISHED ${params.proofId}`,
+    requiredFieldLines,
+    "Set errors=none on success.",
+    "If anything blocks you, send one final text reply in this exact shape:",
+    `BLOCKED ${params.proofId} reason=<short_snake_case> last_step=<short_snake_case>`,
+    "Blank final replies are failure. JSON is not required; use key=value lines.",
+    `Expected branch=${params.repoContext.branch ?? "unknown"} runtime_worktree=${params.repoContext.worktree} current_lane_bot=${params.currentLaneBot ?? "unknown"}.`,
+  ].join("\n");
+}
+
+async function waitForTesterReplyContract(params: {
+  afterId: number;
+  botId: number;
+  chat: string;
+  envFile: string | null;
+  proofId: string;
+  requiredFields: string[];
+  session: string | null;
+  startedAt: number;
+  timeoutMs: number;
+  topicId: number | null;
+}): Promise<{
+  ok: boolean;
+  failureReason: string | null;
+  finalFields: Record<string, string>;
+  finalMessageId: number | null;
+  finalStatus: TelegramTesterReplyContractStatus;
+  lastStep: string;
+  matchedBy: TelegramSmokeProof["matched_by"];
+  replyText: string | null;
+  startingMessageId: number | null;
+}> {
+  let startingMessageId: number | null = null;
+  let lastStep = "waiting_for_starting";
+  const seenMessageIds = new Set<number>();
+  const deadline = params.startedAt + params.timeoutMs;
+
+  while (telegramCommandDeps.now() < deadline) {
+    const readResult = await telegramCommandDeps.runTelegramUserRead({
+      afterId: params.afterId,
+      chat: params.chat,
+      envFile: params.envFile ?? undefined,
+      limit: 80,
+      session: params.session ?? undefined,
+    });
+    const botMessages = readResult.messages
+      .filter((message) => message.message_id > params.afterId)
+      .filter((message) => (message.sender_id ?? 0) === params.botId)
+      .filter((message) => matchesOptionalTelegramTopic(message, params.topicId))
+      .toSorted((a, b) => a.message_id - b.message_id);
+
+    for (const message of botMessages) {
+      if (seenMessageIds.has(message.message_id)) {
+        continue;
+      }
+      seenMessageIds.add(message.message_id);
+
+      const text = cleanString(message.text);
+      if (!text) {
+        return {
+          ok: false,
+          failureReason: startingMessageId ? "blank_final_reply" : "blank_contract_reply",
+          finalFields: {},
+          finalMessageId: message.message_id,
+          finalStatus: "not_observed",
+          lastStep,
+          matchedBy: "no_thread_filter",
+          replyText: message.text,
+          startingMessageId,
+        };
+      }
+
+      const parsed = parseTesterContractMessage(text, params.proofId);
+      if (!startingMessageId) {
+        if (parsed.kind === "starting") {
+          startingMessageId = message.message_id;
+          lastStep = "waiting_for_final";
+          continue;
+        }
+        if (parsed.kind === "blocked") {
+          return buildBlockedTesterContractResult({
+            fields: parsed.fields,
+            lastStep: "blocked_before_starting",
+            message,
+            startingMessageId,
+          });
+        }
+        if (parsed.kind === "finished") {
+          return {
+            ok: false,
+            failureReason: "finished_before_starting",
+            finalFields: parsed.fields,
+            finalMessageId: message.message_id,
+            finalStatus: "finished",
+            lastStep: "waiting_for_starting",
+            matchedBy: "no_thread_filter",
+            replyText: text,
+            startingMessageId,
+          };
+        }
+        continue;
+      }
+
+      if (parsed.kind === "finished") {
+        const missingFields = params.requiredFields.filter((field) => !parsed.fields[field]);
+        const errors = parsed.fields.errors;
+        const failureReason =
+          missingFields.length > 0
+            ? `missing_final_fields:${missingFields.join(",")}`
+            : errors && errors !== "none"
+              ? "tester_reported_errors"
+              : null;
+        return {
+          ok: failureReason === null,
+          failureReason,
+          finalFields: parsed.fields,
+          finalMessageId: message.message_id,
+          finalStatus: "finished",
+          lastStep: "finished",
+          matchedBy: "no_thread_filter",
+          replyText: text,
+          startingMessageId,
+        };
+      }
+
+      if (parsed.kind === "blocked") {
+        return buildBlockedTesterContractResult({
+          fields: parsed.fields,
+          lastStep,
+          message,
+          startingMessageId,
+        });
+      }
+    }
+
+    await telegramCommandDeps.sleep(1_000);
+  }
+
+  return {
+    ok: false,
+    failureReason: startingMessageId ? "final_reply_timeout" : "starting_reply_timeout",
+    finalFields: {},
+    finalMessageId: null,
+    finalStatus: "not_observed",
+    lastStep,
+    matchedBy: null,
+    replyText: null,
+    startingMessageId,
+  };
+}
+
+function buildBlockedTesterContractResult(params: {
+  fields: Record<string, string>;
+  lastStep: string;
+  message: TelegramUserWaitResult["matched"];
+  startingMessageId: number | null;
+}) {
+  const hasReason = Boolean(params.fields.reason);
+  const hasLastStep = Boolean(params.fields.last_step);
+  return {
+    ok: false,
+    failureReason: hasReason && hasLastStep ? "tester_blocked" : "blocked_reply_missing_fields",
+    finalFields: params.fields,
+    finalMessageId: params.message.message_id,
+    finalStatus: "blocked" as const,
+    lastStep: params.fields.last_step ?? params.lastStep,
+    matchedBy: "no_thread_filter" as const,
+    replyText: params.message.text,
+    startingMessageId: params.startingMessageId,
+  };
+}
+
 async function runTelegramFeatureScenario(
   scenario: TelegramE2eScenarioName,
   opts: TelegramScenarioCommandOptions,
@@ -1413,8 +1816,8 @@ function classifyTelegramSmokeReply(
   const normalized = cleanString(text)?.toLowerCase() ?? "";
   if (!normalized) {
     return {
-      ok: true,
-      failureReason: null,
+      ok: false,
+      failureReason: "blank_reply",
     };
   }
 
@@ -1454,6 +1857,76 @@ function classifyTelegramSmokeReply(
     ok: true,
     failureReason: null,
   };
+}
+
+function parseTesterContractMessage(
+  text: string,
+  proofId: string,
+): ParsedTelegramTesterContractMessage {
+  const fields = parseTesterContractFields(text);
+  const normalizedProofId = escapeRegExp(proofId);
+  const headerPattern = new RegExp(
+    `^(STARTING|FINISHED|BLOCKED)\\s+${normalizedProofId}(?:\\s|$)`,
+    "i",
+  );
+  const header = text
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .find((line) => headerPattern.test(line));
+  if (!header) {
+    return { kind: "unrelated", fields };
+  }
+
+  const status = header.match(headerPattern)?.[1]?.toUpperCase();
+  if (status === "STARTING") {
+    return { kind: "starting", fields };
+  }
+  if (status === "FINISHED") {
+    return { kind: "finished", fields };
+  }
+  if (status === "BLOCKED") {
+    return { kind: "blocked", fields };
+  }
+  return { kind: "unrelated", fields };
+}
+
+function parseTesterContractFields(text: string): Record<string, string> {
+  const fields: Record<string, string> = {};
+  // The contract intentionally uses shell-friendly key=value tokens. Keep the
+  // parser strict enough to reject prose, but permissive across lines so humans
+  // and models can format final reports naturally.
+  for (const token of text.split(/\s+/g)) {
+    const separatorIndex = token.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = token.slice(0, separatorIndex).trim();
+    const value = token.slice(separatorIndex + 1).trim();
+    if (!key || !value) {
+      continue;
+    }
+    fields[key] = value;
+  }
+  return fields;
+}
+
+function matchesOptionalTelegramTopic(
+  message: TelegramUserWaitResult["matched"],
+  topicId: number | null,
+) {
+  if (topicId === null) {
+    return true;
+  }
+  const directTopicId = message.direct_messages_topic?.topic_id ?? message.direct_messages_topic_id;
+  return (
+    directTopicId === topicId ||
+    message.reply_to_top_id === topicId ||
+    message.reply_to_msg_id === topicId
+  );
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function sendAndWaitForAnyReply(params: {
@@ -1849,6 +2322,33 @@ function renderBaselineText(report: TelegramBaselineProof): string {
     `reply_message_id=${report.reply_message_id ?? "-"}`,
     `pass_fail_reason=${report.failure_reason ?? "pass"}`,
   ];
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTesterReplyContractText(report: TelegramTesterReplyContractProof): string {
+  const lines = [
+    report.ok
+      ? "Telegram smoke reply-contract ok."
+      : `Telegram smoke reply-contract failed. failure_reason=${report.failure_reason ?? "unknown"}`,
+    `proof_id=${report.proof_id}`,
+    `artifact_path=${report.artifact_path ?? "-"}`,
+    `branch=${report.branch ?? "-"}`,
+    `runtime_worktree=${report.runtime_worktree ?? "-"}`,
+    `runtime_commit=${report.runtime_commit ?? "-"}`,
+    `runtime_pid=${report.runtime_pid ?? "-"}`,
+    `runtime_port=${report.runtime_port ?? "-"}`,
+    `current_lane_bot=${report.current_lane_bot ?? "-"}`,
+    `chat=${report.chat ?? "-"}`,
+    `sent_message_id=${report.sent_message_id ?? "-"}`,
+    `starting_message_id=${report.starting_message_id ?? "-"}`,
+    `final_message_id=${report.final_message_id ?? "-"}`,
+    `final_status=${report.final_status}`,
+    `last_step=${report.last_step ?? "-"}`,
+    `required_fields=${report.required_fields.join(",")}`,
+  ];
+  if (report.reply_text) {
+    lines.push(`reply_text=${report.reply_text}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 

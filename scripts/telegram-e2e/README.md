@@ -51,6 +51,18 @@ pnpm openclaw:local telegram smoke baseline --json
 Baseline proves wiring only: current branch, runtime ownership, tester bot
 claim, gateway health, userbot session, and a basic send/read/wait loop.
 
+When the tester bot itself is part of the proof surface, run the reply contract
+smoke:
+
+```bash
+pnpm openclaw:local telegram smoke reply-contract --json
+```
+
+It sends a harmless local-check task and requires deterministic text replies:
+`STARTING <proof-id>` first, then either structured `FINISHED <proof-id>` fields
+or `BLOCKED <proof-id> reason=... last_step=...`. Blank final replies fail the
+smoke instead of being treated as delivery success.
+
 A baseline pass is not merge proof. It says the lane can talk to Telegram; it
 does not prove the feature under review works. After baseline passes, run the
 smallest feature-specific scenario that matches the change:
@@ -66,6 +78,10 @@ pnpm openclaw:local telegram scenario progress-plus-tts --json
 - `progress-long-task`: proves progress updates during a long-running task and
   a final answer after cleanup.
 - `progress-plus-tts`: proves progress updates plus final TTS output behavior.
+
+The reply-contract smoke is a proof-bot reliability check, not feature proof.
+Run it before trusting a tester bot for release validation when a previous lane
+showed blank final replies, parser drift, or inconsistent tester behavior.
 
 When the lane is done, release the runtime and tester-bot claim:
 

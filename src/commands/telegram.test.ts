@@ -8,6 +8,7 @@ import {
   telegramScenarioProgressPlusTtsCommand,
   telegramSmokeDmReplyCommand,
   telegramSmokeBaselineCommand,
+  telegramSmokeReplyContractCommand,
 } from "./telegram.js";
 
 const runtime: RuntimeEnv = {
@@ -20,6 +21,88 @@ const originalDeps = { ...telegramCommandDeps };
 
 function resetDeps() {
   Object.assign(telegramCommandDeps, originalDeps);
+}
+
+function installHealthyTelegramHarnessDeps(params: {
+  botUsername?: string;
+  readMessages?: unknown[];
+  runtimeBot?: string;
+  writeFile?: ReturnType<typeof vi.fn>;
+}) {
+  const botUsername = params.botUsername ?? "jarvis_tester_2_bot";
+  const runtimeBot = params.runtimeBot ?? `@${botUsername}`;
+  const writeFile = params.writeFile ?? vi.fn(async () => undefined);
+  const runTelegramUserPrecheck = vi
+    .fn()
+    .mockResolvedValueOnce({
+      session_path: "/tmp/userbot.session",
+      user: { user_id: 99, username: "artem" },
+    })
+    .mockResolvedValueOnce({
+      backend_meta: {},
+      chat: { chat_id: 777, peer_type: "User", username: botUsername },
+      session_path: "/tmp/userbot.session",
+      user: { user_id: 99, username: "artem" },
+    });
+  const runTelegramUserSend = vi.fn(async () => ({
+    message: {
+      message_id: 101,
+    },
+  }));
+
+  Object.assign(telegramCommandDeps, {
+    newRunId: () => "contract",
+    now: vi.fn(() => 2_000),
+    probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+    readTelegramBotToken: vi.fn(async () => "777:token"),
+    resolveBotIdentity: vi.fn(async () => ({
+      id: 777,
+      username: botUsername,
+      name: "Jarvis tester",
+    })),
+    resolveHelperProfile: vi.fn(async () => ({
+      profileId: "tg-live-test",
+      runtimePort: 24567,
+      runtimeStateDir: "/tmp/state",
+      worktreePath: "/tmp/repo",
+    })),
+    resolveRepoContext: vi.fn(async () => ({
+      branch: "feature/test",
+      commit: "abc123",
+      repoRoot: "/tmp/repo",
+      worktree: "/tmp/repo",
+    })),
+    resolveRuntimeCommit: vi.fn(async () => "abc123"),
+    resolveRuntimeOwnership: vi.fn(async () => ({
+      pid: 31337,
+      worktree: "/tmp/repo",
+      command: "openclaw gateway run",
+      ownershipOk: true,
+      failureReason: null,
+    })),
+    resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+    runRuntimeScript: vi.fn(async () => ({
+      ok: true,
+      stdout: [
+        "branch=feature/test",
+        "runtime_worktree=/tmp/repo",
+        "runtime_pid=31337",
+        "runtime_port=24567",
+        `current_lane_bot=${runtimeBot}`,
+      ].join("\n"),
+      stderr: "",
+    })),
+    runTelegramUserPrecheck,
+    runTelegramUserRead: vi.fn(async () => ({
+      messages: params.readMessages ?? [],
+    })),
+    runTelegramUserSend,
+    runTelegramUserWait: vi.fn(),
+    sleep: vi.fn(async () => undefined),
+    writeFile,
+  });
+
+  return { runTelegramUserPrecheck, runTelegramUserSend, writeFile };
 }
 
 describe("telegram commands", () => {
@@ -502,6 +585,222 @@ describe("telegram commands", () => {
     expect(payload.failure_reason).toBe("ai_access_unavailable");
     expect(payload.reply_text).toContain("Reconnect the credential");
     expect(writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("marks blank dm-reply smoke output as failed proof", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const runTelegramUserPrecheck = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      })
+      .mockResolvedValueOnce({
+        backend_meta: {},
+        chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_1_bot" },
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      });
+
+    Object.assign(telegramCommandDeps, {
+      newRunId: () => "runblank1",
+      now: vi.fn(() => 1_700),
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      readTelegramBotToken: vi.fn(async () => "123456:token"),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 123456,
+        username: "jarvis_tester_1_bot",
+        name: "Jarvis",
+      })),
+      resolveHelperProfile: vi.fn(async () => ({
+        profileId: "tg-live-test",
+        runtimePort: 24567,
+        runtimeStateDir: "/tmp/state",
+        worktreePath: "/tmp/repo",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "feature/test",
+        commit: "abc123",
+        repoRoot: "/tmp/repo",
+        worktree: "/tmp/repo",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      resolveRuntimeOwnership: vi.fn(async () => ({
+        pid: 31337,
+        worktree: "/tmp/repo",
+        command: "openclaw gateway run",
+        ownershipOk: true,
+        failureReason: null,
+      })),
+      resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+      runTelegramUserPrecheck,
+      runTelegramUserSend: vi.fn(async () => ({
+        message: {
+          message_id: 101,
+        },
+      })),
+      runTelegramUserWait: vi.fn(async () => ({
+        matched: {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 202,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: "",
+        },
+        matched_by: "reply_to_msg_id",
+      })),
+      writeFile,
+    });
+
+    await expect(
+      telegramSmokeDmReplyCommand(
+        {
+          chat: "@jarvis_tester_1_bot",
+          json: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("blank_reply");
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(false);
+    expect(payload.failure_reason).toBe("blank_reply");
+    expect(payload.reply_text).toBe("");
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("passes reply-contract smoke only after STARTING and structured FINISHED", async () => {
+    const proofId = "contract-proof-ok";
+    const { runTelegramUserSend, writeFile } = installHealthyTelegramHarnessDeps({
+      readMessages: [
+        {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 102,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: `STARTING ${proofId}`,
+        },
+        {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 103,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: [
+            `FINISHED ${proofId}`,
+            "branch=feature/test",
+            "runtime_worktree=/tmp/repo",
+            "runtime_commit=abc123",
+            "current_lane_bot=@jarvis_tester_2_bot",
+            "errors=none",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    await telegramSmokeReplyContractCommand({ json: true, proofId }, runtime);
+
+    expect(runTelegramUserSend).toHaveBeenCalledWith({
+      chat: "@jarvis_tester_2_bot",
+      envFile: undefined,
+      message: expect.stringContaining(`STARTING ${proofId}`),
+      session: undefined,
+    });
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(true);
+    expect(payload.scenario).toBe("reply-contract");
+    expect(payload.proof_id).toBe(proofId);
+    expect(payload.starting_message_id).toBe(102);
+    expect(payload.final_message_id).toBe(103);
+    expect(payload.final_status).toBe("finished");
+    expect(payload.final_fields.errors).toBe("none");
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("fails reply-contract smoke when the final bot reply is blank", async () => {
+    const proofId = "contract-proof-blank";
+    installHealthyTelegramHarnessDeps({
+      readMessages: [
+        {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 102,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: `STARTING ${proofId}`,
+        },
+        {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 103,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: "   ",
+        },
+      ],
+    });
+
+    await expect(
+      telegramSmokeReplyContractCommand({ json: true, proofId }, runtime),
+    ).rejects.toThrow("blank_final_reply");
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(false);
+    expect(payload.failure_reason).toBe("blank_final_reply");
+    expect(payload.starting_message_id).toBe(102);
+    expect(payload.final_message_id).toBe(103);
+  });
+
+  it("fails reply-contract smoke with structured BLOCKED details", async () => {
+    const proofId = "contract-proof-blocked";
+    installHealthyTelegramHarnessDeps({
+      readMessages: [
+        {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 102,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: `STARTING ${proofId}`,
+        },
+        {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 103,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: `BLOCKED ${proofId} reason=local_check_failed last_step=git_rev_parse`,
+        },
+      ],
+    });
+
+    await expect(
+      telegramSmokeReplyContractCommand({ json: true, proofId }, runtime),
+    ).rejects.toThrow("tester_blocked");
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(false);
+    expect(payload.failure_reason).toBe("tester_blocked");
+    expect(payload.final_status).toBe("blocked");
+    expect(payload.final_fields.reason).toBe("local_check_failed");
+    expect(payload.last_step).toBe("git_rev_parse");
   });
 
   it("runs baseline smoke from the claimed bot and prevents merge-readiness inflation", async () => {
