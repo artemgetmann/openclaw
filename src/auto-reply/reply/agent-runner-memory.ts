@@ -544,6 +544,21 @@ export async function runMemoryFlushIfNeeded(params: {
       if (isCli && activeSessionEntry) {
         clearCliSessionId(activeSessionEntry, params.followupRun.run.provider);
       }
+      // A completed memory compaction rewrites the usable context into a
+      // smaller summary/tail. Token totals measured before that rewrite are
+      // stale; keeping them would make the reply hard-reserve preflight block
+      // the freshly compacted session before the provider can see it.
+      params.followupRun.run.persistedPromptTokens = undefined;
+      if (activeSessionEntry) {
+        activeSessionEntry.totalTokens = undefined;
+        activeSessionEntry.totalTokensFresh = false;
+        activeSessionEntry.inputTokens = undefined;
+        activeSessionEntry.outputTokens = undefined;
+        activeSessionEntry.cacheRead = undefined;
+        activeSessionEntry.cacheWrite = undefined;
+        activeSessionEntry.contextPressureNoticeAt = undefined;
+        activeSessionEntry.contextPressureNoticeCompactionCount = undefined;
+      }
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -563,9 +578,31 @@ export async function runMemoryFlushIfNeeded(params: {
             if (isCli) {
               clearCliSessionId(entry, params.followupRun.run.provider);
             }
+            if (memoryCompactionCompleted) {
+              entry.totalTokens = undefined;
+              entry.totalTokensFresh = false;
+              entry.inputTokens = undefined;
+              entry.outputTokens = undefined;
+              entry.cacheRead = undefined;
+              entry.cacheWrite = undefined;
+              entry.contextPressureNoticeAt = undefined;
+              entry.contextPressureNoticeCompactionCount = undefined;
+            }
             return {
               memoryFlushAt: Date.now(),
               memoryFlushCompactionCount,
+              ...(memoryCompactionCompleted
+                ? {
+                    totalTokens: undefined,
+                    totalTokensFresh: false,
+                    inputTokens: undefined,
+                    outputTokens: undefined,
+                    cacheRead: undefined,
+                    cacheWrite: undefined,
+                    contextPressureNoticeAt: undefined,
+                    contextPressureNoticeCompactionCount: undefined,
+                  }
+                : {}),
             };
           },
         });

@@ -111,6 +111,7 @@ function createMinimalRun(params?: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
+  agentCfgContextTokens?: number;
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
@@ -176,6 +177,7 @@ function createMinimalRun(params?: {
         sessionStore: params?.sessionStore,
         sessionKey,
         storePath: params?.storePath,
+        agentCfgContextTokens: params?.agentCfgContextTokens,
         sessionCtx,
         defaultModel: "anthropic/claude-opus-4-5",
         resolvedVerboseLevel: params?.resolvedVerboseLevel ?? "off",
@@ -1238,6 +1240,179 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("runs memory flush before hard-reserve preflight and preserves the Telegram topic session", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "b17264e8-4cdf-45bc-9e95-d3ae455f50e9";
+      const sessionKey = "agent:main:telegram:group:-1003783709877:topic:8209";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "openai-codex": { command: "codex" },
+            },
+            compaction: {
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        totalTokens: 195_103,
+        totalTokensFresh: true,
+        inputTokens: 195_103,
+        contextTokens: 200_000,
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+        cliSessionIds: {
+          "openai-codex": "old-codex-resume-id",
+        },
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "visa workflow transcript", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(
+        async (params: EmbeddedRunParams & { trigger?: string }) => {
+          params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "end", willRetry: false },
+          });
+          return { payloads: [], meta: {} };
+        },
+      );
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Continuing the visa workflow." }],
+        meta: { agentMeta: { usage: { input: 1_000, output: 50, total: 1_050 } } },
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        agentCfgContextTokens: 200_000,
+        runOverrides: {
+          agentId: "main",
+          agentDir: stateDir,
+          sessionId,
+          sessionFile: transcriptPath,
+          messageProvider: "telegram",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          config: cfg,
+          persistedPromptTokens: 195_103,
+        },
+      });
+      const res = await run();
+
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        trigger: "memory",
+        memoryFlushWritePath: expect.stringMatching(/^memory\/\d{4}-\d{2}-\d{2}\.md$/),
+      });
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        sessionId,
+      });
+      expect(
+        (state.runCliAgentMock.mock.calls[0]?.[0] as { persistedPromptTokens?: number })
+          ?.persistedPromptTokens,
+      ).toBeUndefined();
+      expect(res).toMatchObject({ text: "Continuing the visa workflow." });
+      expect(sessionStore[sessionKey].sessionId).toBe(sessionId);
+      expect(sessionStore[sessionKey].totalTokens).toBeUndefined();
+      expect(sessionStore[sessionKey].totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey].cliSessionIds?.["openai-codex"]).toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted[sessionKey].sessionId).toBe(sessionId);
+      expect(persisted[sessionKey].totalTokens).toBeUndefined();
+      expect(persisted[sessionKey].totalTokensFresh).toBe(false);
+      expect(persisted[sessionKey].cliSessionIds?.["openai-codex"]).toBeUndefined();
+    });
+  });
+
+  it("surfaces hard-reserve overflow without resetting when memory flush cannot recover", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "b17264e8-4cdf-45bc-9e95-d3ae455f50e9";
+      const sessionKey = "agent:main:telegram:group:-1003783709877:topic:8209";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "openai-codex": { command: "codex" },
+            },
+            compaction: {
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        totalTokens: 195_103,
+        totalTokensFresh: true,
+        contextTokens: 200_000,
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "visa workflow transcript", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("memory compaction failed");
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        agentCfgContextTokens: 200_000,
+        runOverrides: {
+          agentId: "main",
+          agentDir: stateDir,
+          sessionId,
+          sessionFile: transcriptPath,
+          messageProvider: "telegram",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          config: cfg,
+          persistedPromptTokens: 195_103,
+        },
+      });
+      const res = await run();
+
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(res).toMatchObject({
+        text: expect.stringContaining("automatic compaction could not recover enough room"),
+      });
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Use /new only if you want to intentionally start fresh"),
+      });
+      expect(sessionStore[sessionKey].sessionId).toBe(sessionId);
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted[sessionKey].sessionId).toBe(sessionId);
+    });
+  });
+
   it("retries after context overflow payload by resetting the session", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "session";
@@ -1621,7 +1796,7 @@ describe("runReplyAgent memory flush", () => {
     }
   });
 
-  it("skips memory flush for CLI providers", async () => {
+  it("runs memory flush before CLI providers when the session is over threshold", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
       const sessionEntry: SessionEntry = {
@@ -1659,7 +1834,10 @@ describe("runReplyAgent memory flush", () => {
       expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
       const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
       expect(call?.prompt).toBe("hello");
-      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        trigger: "memory",
+      });
     });
   });
 

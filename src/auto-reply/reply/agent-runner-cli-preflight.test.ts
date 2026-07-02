@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { evaluateReplyHardReservePrecheck } from "./agent-runner-cli-preflight.js";
 
 describe("evaluateReplyHardReservePrecheck", () => {
-  it("requests a session reset when persisted prompt tokens breach the reserve", () => {
+  it("detects persisted prompt tokens that breach the reserve", () => {
     const result = evaluateReplyHardReservePrecheck({
       provider: "openai-codex",
       modelId: "opus-4.5",

@@ -423,14 +423,14 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
-  const resetSessionBeforeHardReservePrompt = async (prompt: string): Promise<void> => {
+  const buildHardReserveOverflowPayload = (prompt: string): ReplyPayload | undefined => {
     const persistedPromptTokens = followupRun.run.persistedPromptTokens;
     if (
       typeof persistedPromptTokens !== "number" ||
       !Number.isFinite(persistedPromptTokens) ||
       persistedPromptTokens <= 0
     ) {
-      return;
+      return undefined;
     }
     const contextTokenBudget =
       agentCfgContextTokens ??
@@ -449,31 +449,26 @@ export async function runReplyAgent(params: {
       sessionFile: followupRun.run.sessionFile,
     });
     if (!precheck) {
-      return;
+      return undefined;
     }
-    // A persisted hard-reserve breach means the next prompt has already lost
-    // the configured headroom. Reset the OpenClaw session before memory flush
-    // or provider submission so no runtime path can spend another over-budget
-    // call trying to repair stale context.
+    // At this point memory flush has already had a chance to compact the
+    // transcript. If the persisted prompt total still breaches the reserve,
+    // stop before provider submission and report the overflow explicitly. A
+    // silent reset detaches Telegram topics from the task they were already
+    // executing, which is worse than surfacing the failure.
     defaultRuntime.log(precheck.logLine);
-    const clearCliProvider = isCliProvider(followupRun.run.provider, cfg)
-      ? followupRun.run.provider
-      : undefined;
-    const didReset = await resetSession({
-      failureLabel: "hard-reserve preflight",
-      buildLogMessage: (nextSessionId) =>
-        `Pre-prompt context precheck reset ${sessionKey} -> ${nextSessionId} before provider submission.`,
-      clearTokenUsage: true,
-      ...(clearCliProvider ? { clearCliProvider } : {}),
-      incrementCompactionCount: true,
-    });
-    if (didReset) {
-      followupRun.run.persistedPromptTokens = undefined;
-    }
+    defaultRuntime.error(
+      `Pre-prompt context precheck blocked provider submission for ${sessionKey ?? followupRun.run.sessionId}; ` +
+        `memory compaction did not recover enough context headroom.`,
+    );
+    return {
+      text:
+        "⚠️ Context overflow — this conversation is too large for the model, and automatic compaction could not recover enough room. " +
+        "Use /new only if you want to intentionally start fresh.",
+    };
   };
 
   await typingSignals.signalRunStart();
-  await resetSessionBeforeHardReservePrompt(followupRun.prompt);
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
@@ -503,11 +498,19 @@ export async function runReplyAgent(params: {
     agentCfgContextTokens,
   });
 
+  const initialHardReservePayload = buildHardReserveOverflowPayload(followupRun.prompt);
+  if (initialHardReservePayload) {
+    return finalizeWithFollowup(initialHardReservePayload, queueKey, runFollowupTurn);
+  }
+
   let stopReplyRunWatchdog = () => {};
   try {
     const runStartedAt = Date.now();
     const runSingleTurn = async (prompt: string) => {
-      await resetSessionBeforeHardReservePrompt(prompt);
+      const hardReservePayload = buildHardReserveOverflowPayload(prompt);
+      if (hardReservePayload) {
+        return { kind: "final" as const, payload: hardReservePayload };
+      }
       stopReplyRunWatchdog = startReplyRunWatchdog({
         cfg,
         enabled:
