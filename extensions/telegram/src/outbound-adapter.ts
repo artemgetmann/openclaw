@@ -32,6 +32,7 @@ function resolveTelegramSendContext(params: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
     textMode: "html";
+    richMessages: false;
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
@@ -44,6 +45,10 @@ function resolveTelegramSendContext(params: {
     baseOpts: {
       verbose: false,
       textMode: "html",
+      // Direct outbound sends power tools, monitors, and cron wake notices.
+      // Keep them on legacy text transport so operator/userbot transcripts
+      // always contain visible text instead of raw rich-message shells.
+      richMessages: false,
       cfg: params.cfg,
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),

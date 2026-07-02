@@ -70,6 +70,7 @@ type TelegramSendOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  richMessages?: boolean;
   plainText?: string;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   asVoice?: boolean;
@@ -644,7 +645,7 @@ export async function sendMessageTelegram(
     supportsBlockTables: true,
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
-  const richMessagesEnabled = account.config.richMessages !== false;
+  const richMessagesEnabled = opts.richMessages !== false && account.config.richMessages !== false;
 
   // Resolve link preview setting from config (default: enabled).
   const linkPreviewEnabled = account.config.linkPreview ?? true;
