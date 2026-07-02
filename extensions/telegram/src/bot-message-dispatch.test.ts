@@ -628,7 +628,32 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(call).toEqual(
       expect.objectContaining({
         richMessages: false,
+        copySafeBlockquotes: true,
         replies: [expect.objectContaining({ text: "Final answer for normal clients." })],
+      }),
+    );
+  });
+
+  it("enables copy-safe blockquote rendering for final draft-style answers", async () => {
+    const draftText = [
+      "I would send:",
+      "",
+      "> Hi Sveta, here is the booking link: https://example.com.",
+      "> Confirm if this works.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: draftText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: draftText })],
       }),
     );
   });

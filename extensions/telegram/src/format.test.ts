@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
+  rewriteMarkdownBlockquotesAsCopyBlocks,
   splitTelegramHtmlChunks,
   splitTelegramRichMessageTextChunks,
 } from "./format.js";
@@ -55,6 +56,34 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("<blockquote>first");
     expect(res).toContain("<blockquote>second</blockquote>");
     expect(res.match(/<blockquote>/g)).toHaveLength(2);
+  });
+
+  it("can render blockquoted draft text as copyable code blocks", () => {
+    const res = markdownToTelegramHtml(
+      [
+        "I would send:",
+        "",
+        "> Hi Sveta, here is the page: [booking](https://example.com/booking).",
+        "> Please confirm the passenger names.",
+      ].join("\n"),
+      { copySafeBlockquotes: true },
+    );
+
+    expect(res).toContain("I would send:");
+    expect(res).toContain("<pre><code>");
+    expect(res).toContain("Hi Sveta, here is the page: booking (https://example.com/booking).");
+    expect(res).toContain("Please confirm the passenger names.");
+    expect(res).not.toContain("<blockquote>");
+    expect(res).not.toContain("<a href");
+  });
+
+  it("rewrites only Markdown blockquotes when preparing copy-safe draft blocks", () => {
+    const res = rewriteMarkdownBlockquotesAsCopyBlocks(
+      "Normal **bold**.\n\n> Draft [link](https://e.com)",
+    );
+
+    expect(res).toContain("Normal **bold**.");
+    expect(res).toContain("```\nDraft link (https://e.com)\n```");
   });
 
   it("renders fenced code blocks", () => {

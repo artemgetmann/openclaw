@@ -87,6 +87,7 @@ function buildChunkTextResolver(params: {
   textLimit: number;
   chunkMode: ChunkMode;
   tableMode?: MarkdownTableMode;
+  copySafeBlockquotes?: boolean;
 }): ChunkTextFn {
   return (markdown: string) => {
     const markdownChunks =
@@ -111,11 +112,16 @@ function buildChunkTextResolver(params: {
       }
       const nested = markdownToTelegramChunks(chunk, params.textLimit, {
         tableMode: params.tableMode,
+        copySafeBlockquotes: params.copySafeBlockquotes,
       });
       if (!nested.length && chunk) {
         chunks.push({
           html: wrapFileReferencesInHtml(
-            markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
+            markdownToTelegramHtml(chunk, {
+              tableMode: params.tableMode,
+              wrapFileRefs: false,
+              copySafeBlockquotes: params.copySafeBlockquotes,
+            }),
           ),
           text: chunk,
         });
@@ -632,6 +638,8 @@ export async function deliverReplies(params: {
   textLimit: number;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
+  /** Render Markdown blockquotes as copyable code blocks for user-drafted text. */
+  copySafeBlockquotes?: boolean;
   chunkMode?: ChunkMode;
   /** Callback invoked before sending a voice message to switch typing indicator. */
   onVoiceRecording?: () => Promise<void> | void;
@@ -662,6 +670,7 @@ export async function deliverReplies(params: {
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
+    copySafeBlockquotes: params.copySafeBlockquotes,
   });
   for (const originalReply of params.replies) {
     let reply = originalReply;

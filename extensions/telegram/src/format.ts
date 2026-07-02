@@ -107,12 +107,95 @@ function renderTelegramHtml(ir: MarkdownIR): string {
   });
 }
 
+function expandMarkdownLinksForCopy(text: string): string {
+  // Copy-safe blocks should contain the URL bytes, not a Telegram link entity.
+  // This intentionally handles the common model-authored Markdown link shape
+  // without trying to be a full parser; the normal Markdown parser still owns
+  // rendering outside copy blocks.
+  return text.replace(
+    /\[([^\]\n]+)\]\((\S+?)(?:\s+["'][^)\n]*["'])?\)/g,
+    (_match, labelRaw: string, hrefRaw: string) => {
+      const label = labelRaw.trim();
+      const href = hrefRaw.trim();
+      if (!label || label === href) {
+        return href || label;
+      }
+      return `${label} (${href})`;
+    },
+  );
+}
+
+function longestRun(text: string, char: "`" | "~"): number {
+  let longest = 0;
+  let current = 0;
+  for (const candidate of text) {
+    if (candidate === char) {
+      current += 1;
+      longest = Math.max(longest, current);
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
+function buildSafeMarkdownFence(text: string): string {
+  const backtickLength = Math.max(3, longestRun(text, "`") + 1);
+  const tildeLength = Math.max(3, longestRun(text, "~") + 1);
+  const fenceChar = backtickLength <= tildeLength ? "`" : "~";
+  const fenceLength = Math.min(backtickLength, tildeLength);
+  return fenceChar.repeat(fenceLength);
+}
+
+export function rewriteMarkdownBlockquotesAsCopyBlocks(markdown: string): string {
+  const normalized = (markdown ?? "").replace(/\r\n?/g, "\n");
+  const output: string[] = [];
+  let quoteLines: string[] = [];
+
+  const flushQuote = () => {
+    if (quoteLines.length === 0) {
+      return;
+    }
+    const quoteText = expandMarkdownLinksForCopy(quoteLines.join("\n")).trim();
+    quoteLines = [];
+    if (!quoteText) {
+      return;
+    }
+    const fence = buildSafeMarkdownFence(quoteText);
+    // Telegram clients expose code/pre blocks as the reliable tap-to-copy
+    // primitive. Rendering draft-like quote bodies this way keeps links literal
+    // and avoids native rich-message/blockquote interaction bugs.
+    output.push(`${fence}\n${quoteText}\n${fence}`);
+  };
+
+  for (const line of normalized.split("\n")) {
+    const quoteMatch = /^(?: {0,3}>\s?)(.*)$/.exec(line);
+    if (quoteMatch) {
+      quoteLines.push(quoteMatch[1] ?? "");
+      continue;
+    }
+    flushQuote();
+    output.push(line);
+  }
+  flushQuote();
+
+  return output.join("\n");
+}
+
 export function markdownToTelegramHtml(
   markdown: string,
-  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
+  options: {
+    tableMode?: MarkdownTableMode;
+    wrapFileRefs?: boolean;
+    copySafeBlockquotes?: boolean;
+  } = {},
 ): string {
   const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
-  const ir = markdownToIR(markdown ?? "", {
+  const sourceMarkdown =
+    options.copySafeBlockquotes === true
+      ? rewriteMarkdownBlockquotesAsCopyBlocks(markdown ?? "")
+      : (markdown ?? "");
+  const ir = markdownToIR(sourceMarkdown, {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
@@ -231,7 +314,11 @@ export function wrapFileReferencesInHtml(html: string): string {
 
 export function renderTelegramHtmlText(
   text: string,
-  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+  options: {
+    textMode?: "markdown" | "html";
+    tableMode?: MarkdownTableMode;
+    copySafeBlockquotes?: boolean;
+  } = {},
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
@@ -239,7 +326,10 @@ export function renderTelegramHtmlText(
     return text;
   }
   // markdownToTelegramHtml already wraps file references by default
-  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+  return markdownToTelegramHtml(text, {
+    tableMode: options.tableMode,
+    copySafeBlockquotes: options.copySafeBlockquotes,
+  });
 }
 
 const TELEGRAM_RICH_HTML_TABLE_PATTERN = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
@@ -1070,9 +1160,13 @@ function renderTelegramChunksWithinHtmlLimit(
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,
-  options: { tableMode?: MarkdownTableMode } = {},
+  options: { tableMode?: MarkdownTableMode; copySafeBlockquotes?: boolean } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(markdown ?? "", {
+  const sourceMarkdown =
+    options.copySafeBlockquotes === true
+      ? rewriteMarkdownBlockquotesAsCopyBlocks(markdown ?? "")
+      : (markdown ?? "");
+  const ir = markdownToIR(sourceMarkdown, {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
