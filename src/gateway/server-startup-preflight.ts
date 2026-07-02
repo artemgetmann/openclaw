@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { repairConsumerDefaultBundledSkillAllowlist } from "../agents/consumer-default-bundled-skills.js";
+import { syncBundledSkillsToSharedPersonalRoot } from "../agents/skills/shared-personal-mirror.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   migrateLegacyConfig,
@@ -146,6 +147,7 @@ type GatewayStartupPreflightDeps = {
   env?: NodeJS.ProcessEnv;
   migrateLegacyConfigFn?: typeof migrateLegacyConfig;
   applyPluginAutoEnableFn?: typeof applyPluginAutoEnable;
+  syncBundledSkillsToSharedPersonalRootFn?: typeof syncBundledSkillsToSharedPersonalRoot;
 };
 
 function buildInvalidConfigMessage(snapshot: ConfigFileSnapshot): string {
@@ -209,6 +211,8 @@ export async function runGatewayStartupConfigPreflight(
 ): Promise<GatewayStartupContext> {
   const migrateLegacy = deps.migrateLegacyConfigFn ?? migrateLegacyConfig;
   const autoEnablePlugins = deps.applyPluginAutoEnableFn ?? applyPluginAutoEnable;
+  const syncSharedBundledSkills =
+    deps.syncBundledSkillsToSharedPersonalRootFn ?? syncBundledSkillsToSharedPersonalRoot;
   const env = deps.env ?? process.env;
 
   let configSnapshot = await deps.readSnapshot();
@@ -293,6 +297,60 @@ export async function runGatewayStartupConfigPreflight(
       } catch (err) {
         deps.log.warn(`gateway: failed to repair consumer bundled skill allowlist: ${String(err)}`);
       }
+    }
+  }
+
+  if (
+    !deps.isNixMode &&
+    isConsumerJarvisRuntime({
+      config: configSnapshot.config,
+      configPath: configSnapshot.path,
+      env,
+    })
+  ) {
+    try {
+      const sharedSkillsHome = env.HOME?.trim() || os.homedir();
+      // Startup preflight can be run against profile-isolated HOME values in
+      // tests and recovery lanes. Mirror into that effective home, not
+      // blindly into the operator account returned by os.homedir().
+      const syncResult = await syncSharedBundledSkills({
+        sharedSkillsDir: path.join(sharedSkillsHome, ".agents", "skills"),
+      });
+      const changed = syncResult.entries.filter((entry) =>
+        ["copied", "updated", "adopted", "removed"].includes(entry.status),
+      );
+      const conflicts = syncResult.entries.filter((entry) => entry.status === "skipped-local");
+      const failures = syncResult.entries.filter(
+        (entry) => entry.status === "failed" || entry.status === "missing-source",
+      );
+      if (changed.length > 0 || conflicts.length > 0) {
+        deps.log.info(
+          [
+            `gateway: synced bundled skills to shared personal root (${syncResult.targetDir})`,
+            changed.length > 0 ? `- changed: ${changed.length}` : undefined,
+            conflicts.length > 0 ? `- local overrides skipped: ${conflicts.length}` : undefined,
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n"),
+        );
+      }
+      if (failures.length > 0) {
+        deps.log.warn(
+          [
+            `gateway: failed to sync bundled skills to shared personal root (${syncResult.targetDir})`,
+            ...failures
+              .slice(0, 10)
+              .map((entry) => `- ${entry.name}: ${entry.message ?? entry.status}`),
+            failures.length > 10 ? `- ...and ${failures.length - 10} more` : undefined,
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n"),
+        );
+      }
+    } catch (err) {
+      deps.log.warn(
+        `gateway: failed to sync bundled skills to shared personal root: ${String(err)}`,
+      );
     }
   }
 

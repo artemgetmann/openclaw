@@ -827,6 +827,73 @@ describe("runCliAgent with process supervisor", () => {
     }
   });
 
+  it("routes Telegram topic handoffs to chat management and Telegram-as-me skills", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-telegram-topic-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "telegram-chat-management"),
+      name: "telegram-chat-management",
+      description: "Manage Telegram chats, topics, threads, handoffs, and send-as-me flows.",
+      body: "# Telegram Chat Management\n\nUse this before sending a handoff into a topic.\n",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "telegram-user"),
+      name: "telegram-user",
+      description: "Use Telegram-as-me from the user's real account.",
+      body: "# Telegram User\n\nUse telegram-user topic-create and send --topic-anchor.\n",
+    });
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s-telegram-topic",
+        sessionKey: "agent:main:telegram:topic:123",
+        sessionFile,
+        workspaceDir,
+        config: createTextClaudeCliConfig(),
+        prompt:
+          "open a new Telegram topic and send this plan as me so Jarvis in that topic sees it",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-telegram-topic-skill",
+        messageChannel: "telegram",
+      });
+
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      const systemPrompt = argv[argv.indexOf("--append-system-prompt") + 1] ?? "";
+      expect(systemPrompt).toContain("<name>telegram-chat-management</name>");
+      expect(systemPrompt).toContain("<name>telegram-user</name>");
+      expect(systemPrompt).toContain("Manage Telegram chats, topics, threads");
+      expect(systemPrompt).toContain("Use Telegram-as-me from the user&apos;s real account");
+      expect(systemPrompt).toContain(
+        "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file before any generic discovery.",
+      );
+      expect(systemPrompt.indexOf("<name>telegram-chat-management</name>")).toBeLessThan(
+        systemPrompt.indexOf("openclaw skills list"),
+      );
+      expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toEqual(
+        expect.arrayContaining(["telegram-chat-management", "telegram-user"]),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards streaming callbacks to the claude bridge backend", async () => {
     const preparedBackend = { command: "claude", args: ["--mcp-overlay"] };
     prepareCliBundleMcpConfigMock.mockResolvedValueOnce({ backend: preparedBackend });

@@ -21,9 +21,16 @@ vi.mock("./onboard-helpers.js", () => ({
 vi.mock("./onboard-shared-skills-root.js", () => ({
   ensureSharedPersonalSkillsManagedRoot: vi.fn(),
 }));
+vi.mock("../agents/skills/shared-personal-mirror.js", () => ({
+  syncBundledSkillsToSharedPersonalRoot: vi.fn(async () => ({
+    entries: [],
+    targetDir: "/tmp/shared",
+  })),
+}));
 
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { syncBundledSkillsToSharedPersonalRoot } from "../agents/skills/shared-personal-mirror.js";
 import { detectBinary } from "./onboard-helpers.js";
 import { setupSkills } from "./onboard-skills.js";
 
@@ -156,6 +163,8 @@ describe("setupSkills", () => {
 
     const { prompter, notes } = createPrompter({ multiselect: ["__skip__"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(syncBundledSkillsToSharedPersonalRoot).toHaveBeenCalled();
 
     // OS-mismatched skill should be counted as unsupported, not installable/missing.
     const status = notes.find((n) => n.title === "Skills status")?.message ?? "";

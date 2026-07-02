@@ -81,7 +81,20 @@ Per-skill fields:
   automatically when the target is missing or empty. For OpenClaw, that managed
   root is `~/.openclaw/skills` for the legacy runtime or
   `~/Library/Application Support/OpenClaw/.openclaw/skills` for the app-owned
-  runtime.
+  runtime. Packaged Jarvis runtimes use the same pattern under the Jarvis app
+  support state root.
+
+Bundled skills are owned by the installed package. Keep package-shipped skills
+in `skills/*`; keep personal cross-agent skills in `~/.agents/skills`.
+Jarvis/OpenClaw mirrors bundled skills into `~/.agents/skills` with
+`.openclaw-skill.json` markers so Codex and other local agents can see the same
+official skills without maintaining a second copy by hand. Use
+`openclaw skills sync-shared` to refresh the mirror manually; packaged Jarvis
+startup and skills onboarding run it automatically. If a mirrored skill was
+locally edited, sync leaves it untouched and reports it as a local override.
+Use `openclaw skills sync-shared --force <skill-name>` only when the bundled
+copy should replace that named local override. If the local copy is better,
+promote its change back into `skills/<skill-name>` first, then sync.
 
 ### Sandboxed skills + env vars
 

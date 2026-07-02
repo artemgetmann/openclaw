@@ -21,6 +21,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "mcporter",
   "nano-banana-pro",
   "telegram-user",
+  "telegram-chat-management",
   "notion",
   "obsidian",
   "things-mac",
@@ -57,19 +58,14 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   changes: string[];
 } {
   const currentAllowlist = config.skills?.allowBundled ?? [];
-  const guiControlSkillName = "jarvis-gui-control";
-  const jarvisGuiControlDisabled = config.skills?.entries?.[guiControlSkillName]?.enabled === false;
-  if (
-    currentAllowlist.includes("__none__") ||
-    currentAllowlist.includes(guiControlSkillName) ||
-    jarvisGuiControlDisabled
-  ) {
+  const repairableDefaultSkills = new Set(["jarvis-gui-control", "telegram-chat-management"]);
+  if (currentAllowlist.includes("__none__")) {
     return { config, changes: [] };
   }
 
   const current = new Set(currentAllowlist);
   const looksLikeGeneratedConsumerDefault = CONSUMER_DEFAULT_BUNDLED_SKILLS.every((skillName) => {
-    if (skillName === guiControlSkillName) {
+    if (repairableDefaultSkills.has(skillName)) {
       return true;
     }
     const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
@@ -80,11 +76,32 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   }
 
   const nextAllowlist = [...currentAllowlist];
-  const peekabooIndex = nextAllowlist.indexOf("peekaboo");
-  if (peekabooIndex >= 0) {
-    nextAllowlist.splice(peekabooIndex, 0, guiControlSkillName);
-  } else {
-    nextAllowlist.push(guiControlSkillName);
+  const changes: string[] = [];
+  for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
+    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
+    if (!repairableDefaultSkills.has(skillName) || explicitlyDisabled || current.has(skillName)) {
+      continue;
+    }
+
+    const defaultIndex = CONSUMER_DEFAULT_BUNDLED_SKILLS.indexOf(skillName);
+    const nextKnownDefaultIndex = nextAllowlist.findIndex((candidate) => {
+      const candidateDefaultIndex = CONSUMER_DEFAULT_BUNDLED_SKILLS.indexOf(
+        candidate as (typeof CONSUMER_DEFAULT_BUNDLED_SKILLS)[number],
+      );
+      return candidateDefaultIndex > defaultIndex;
+    });
+
+    if (nextKnownDefaultIndex >= 0) {
+      nextAllowlist.splice(nextKnownDefaultIndex, 0, skillName);
+    } else {
+      nextAllowlist.push(skillName);
+    }
+    current.add(skillName);
+    changes.push(`skills.allowBundled += ${skillName}`);
+  }
+
+  if (changes.length === 0) {
+    return { config, changes: [] };
   }
 
   return {
@@ -95,6 +112,6 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
         allowBundled: nextAllowlist,
       },
     },
-    changes: [`skills.allowBundled += ${guiControlSkillName}`],
+    changes,
   };
 }

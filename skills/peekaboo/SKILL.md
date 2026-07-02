@@ -174,6 +174,52 @@ peekaboo paste --text "$TEXT" --app TextEdit
 peekaboo see --app TextEdit --annotate --path /tmp/peekaboo-after.png --json
 ```
 
+## Permission triage
+
+Peekaboo has two runtime modes:
+
+- default: use a remote Bridge host app if one is available
+- `--no-remote`: skip the host app and run locally/in-process
+
+This matters because macOS TCC permissions are app-scoped. The app that needs
+Accessibility / Screen Recording is usually the host app or the launcher app,
+not necessarily the `peekaboo` binary itself.
+
+Use this exact sequence when permissions look wrong:
+
+```bash
+peekaboo permissions
+peekaboo permissions --no-remote
+peekaboo bridge status --json
+peekaboo list apps --json
+```
+
+Interpretation:
+
+- `peekaboo permissions` green, `--no-remote` red: default Bridge mode works;
+  local mode is the one missing permissions.
+- `peekaboo permissions` red, `--no-remote` green: local mode works; Bridge
+  host app is the one missing permissions.
+- both red: neither runtime has the needed macOS grants.
+
+Practical rule:
+
+- For normal usage, prefer default mode and grant the Bridge host app.
+- Use `--no-remote` only as a fallback/debug path.
+
+How to identify what app to grant:
+
+- `peekaboo permissions` tells you whether you are on `Peekaboo Bridge` or
+  `local runtime`.
+- `peekaboo bridge status --json` shows which socket/host was selected.
+- `peekaboo list apps --json` helps confirm the actual launcher app in use, for
+  example `Alacritty`, not `Terminal`.
+
+Common pitfall: if commands are launched from `Alacritty -> tmux`, granting
+`Terminal` does not fix local mode. Grant the actual launcher app in
+`System Settings > Privacy & Security > Accessibility` and
+`System Settings > Privacy & Security > Screen & System Audio Recording`.
+
 ## Common targeting parameters (most interaction commands)
 
 - App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`

@@ -19,6 +19,7 @@ import {
 import { loadSkillsFromDirWithFrontmatterFallback } from "./loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
+import { isSharedBundledSkillMirrorDir } from "./shared-personal-mirror.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -368,6 +369,19 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
   return [];
 }
 
+function preserveSharedBundledMirrorSource(params: { skill: Skill; source: string }): Skill {
+  if (params.source !== "openclaw-managed") {
+    return params.skill;
+  }
+  if (!isSharedBundledSkillMirrorDir(params.skill.baseDir)) {
+    return params.skill;
+  }
+  // Mirrored package skills live under the managed personal root so Codex and
+  // Jarvis share one filesystem copy. At runtime they must still behave like
+  // bundled skills, otherwise `skills.allowBundled` can be bypassed.
+  return { ...params.skill, source: "openclaw-bundled" };
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -432,7 +446,7 @@ function loadSkillEntries(
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
-      });
+      }).map((skill) => preserveSharedBundledMirrorSource({ skill, source: params.source }));
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -510,7 +524,7 @@ function loadSkillEntries(
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
-        }),
+        }).map((skill) => preserveSharedBundledMirrorSource({ skill, source: params.source })),
       );
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {

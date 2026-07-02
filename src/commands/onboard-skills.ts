@@ -1,5 +1,6 @@
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { syncBundledSkillsToSharedPersonalRoot } from "../agents/skills/shared-personal-mirror.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -55,6 +56,9 @@ export async function setupSkills(
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   ensureSharedPersonalSkillsManagedRoot();
+  await syncBundledSkillsToSharedPersonalRoot().catch((err) => {
+    runtime.log(`Skipped shared bundled skill sync: ${String(err)}`);
+  });
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
   const unsupportedOs = report.skills.filter(

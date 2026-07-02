@@ -8,6 +8,7 @@ const buildWorkspaceSkillStatusMock = vi.fn();
 const formatSkillsListMock = vi.fn();
 const formatSkillInfoMock = vi.fn();
 const formatSkillsCheckMock = vi.fn();
+const syncBundledSkillsToSharedPersonalRootMock = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: buildWorkspaceSkillStatusMock,
+}));
+
+vi.mock("../agents/skills/shared-personal-mirror.js", () => ({
+  syncBundledSkillsToSharedPersonalRoot: syncBundledSkillsToSharedPersonalRootMock,
 }));
 
 vi.mock("./skills-cli.format.js", () => ({
@@ -66,6 +71,19 @@ describe("registerSkillsCli", () => {
     formatSkillsListMock.mockReturnValue("skills-list-output");
     formatSkillInfoMock.mockReturnValue("skills-info-output");
     formatSkillsCheckMock.mockReturnValue("skills-check-output");
+    syncBundledSkillsToSharedPersonalRootMock.mockResolvedValue({
+      sourceDir: "/tmp/bundled",
+      targetDir: "/tmp/shared",
+      entries: [
+        { name: "telegram-user", status: "copied", targetDir: "/tmp/shared/telegram-user" },
+        { name: "wacli", status: "current", targetDir: "/tmp/shared/wacli" },
+        {
+          name: "local-only",
+          status: "skipped-local",
+          targetDir: "/tmp/shared/local-only",
+        },
+      ],
+    });
   });
 
   it("runs list command with resolved report and formatter options", async () => {
@@ -108,6 +126,37 @@ describe("registerSkillsCli", () => {
 
     expect(formatSkillsListMock).toHaveBeenCalledWith(report, {});
     expect(runtime.log).toHaveBeenCalledWith("skills-list-output");
+  });
+
+  it("syncs bundled skills into the shared personal root", async () => {
+    await runCli(["skills", "sync-shared"]);
+
+    expect(syncBundledSkillsToSharedPersonalRootMock).toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Shared skills root: /tmp/shared"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("1 changed, 1 current"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Local overrides skipped: local-only"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw skills sync-shared --force <skill-name>"),
+    );
+  });
+
+  it("forwards named forced skills to shared sync", async () => {
+    await runCli(["skills", "sync-shared", "--force", "wacli", "--force", "skill-creator"]);
+
+    expect(syncBundledSkillsToSharedPersonalRootMock).toHaveBeenCalledWith({
+      forceSkillNames: ["wacli", "skill-creator"],
+    });
+  });
+
+  it("syncs bundled skills into the shared personal root with json output", async () => {
+    await runCli(["skills", "sync-shared", "--json"]);
+
+    expect(syncBundledSkillsToSharedPersonalRootMock).toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"targetDir": "/tmp/shared"'));
   });
 
   it("reports runtime errors when report loading fails", async () => {
