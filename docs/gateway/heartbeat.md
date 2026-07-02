@@ -103,18 +103,39 @@ custom body.
 Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripped
 and logged; a message that is only `HEARTBEAT_OK` is dropped.
 
+## Source-linked task routing
+
+For Telegram task topics, the product rule is: **task topic = workbench; DM =
+pager**.
+
+When a heartbeat run is attached to a trusted Telegram source topic and the
+model returns an alert that needs user action, OpenClaw prefers delivering that
+alert back into the source topic/thread. The user can scroll up for context and
+reply naturally in the same task home: “use the photo I sent yesterday”, “tell
+them I’ll send it tonight”, or “continue without it”.
+
+The configured heartbeat target still matters. It remains the fallback when no
+trusted topic is available, and it still handles passive `HEARTBEAT_OK` delivery
+when OK messages are enabled. This keeps passive checkpoints from creating
+visible source-topic noise.
+
+If a heartbeat must use a DM, the DM is a pager back to the source task, not the
+new task home. The run preserves source metadata and injects source context so
+the prompt can include enough context or a source link.
+
 ## Source-linked action receipts
 
-When a heartbeat run is attached to a Telegram source session but delivers the
-approval prompt somewhere else, such as the owner DM, message sends do not make
-the DM the new task home. After a successful non-Telegram `message action=send`,
-OpenClaw posts a receipt back to the original Telegram source topic/thread when
-stored runtime metadata proves that source.
+Exact external-send approvals stay exact. If the user approves a stored
+non-Telegram send payload, OpenClaw sends the preserved draft/channel/recipient
+content rather than reconstructing it from the latest chat text. After a
+successful non-Telegram `message action=send`, OpenClaw posts a receipt back to
+the original Telegram source topic/thread when stored runtime metadata proves
+that source.
 
 Example receipt:
 
 ```text
-Artem approved/sent this exact message via WhatsApp to +15555550123:
+The user approved/sent this exact message via WhatsApp to +15555550123:
 
 Confirmed for Tuesday.
 ```
@@ -123,8 +144,10 @@ Routing boundaries:
 
 - Receipts only post for heartbeat runs with stored Telegram source metadata
   (`origin.provider`, `origin.to`, and optional `origin.threadId`).
-- If the heartbeat target is already the same Telegram source surface, the
-  receipt is skipped to avoid duplicate noise.
+- Source-topic alert prompts are allowed when the user needs to act; passive
+  OK/checkpoint delivery should not create visible source-topic posts.
+- Natural-language follow-up is the default. `approve`/`cancel`-style shortcuts
+  are allowed for exact stored drafts, but they are not the whole heartbeat UX.
 - If an exact Telegram topic link can be derived, private supergroup topics use
   `https://t.me/c/<chat>/<thread>`. Otherwise the receipt preserves the source
   label plus chat/thread ids for recovery.

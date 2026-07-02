@@ -73,8 +73,12 @@ import {
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { resolveHeartbeatSourceReceiptContext } from "./outbound/source-receipt.js";
 import {
+  buildTelegramSourceLink,
+  resolveHeartbeatSourceReceiptContext,
+} from "./outbound/source-receipt.js";
+import {
+  type OutboundTarget,
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
@@ -164,6 +168,88 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
+}
+
+function parseTelegramSourceTarget(raw: string): { to: string; threadId?: string } | null {
+  const stripped = raw
+    .trim()
+    .replace(/^telegram:/i, "")
+    .replace(/^group:/i, "")
+    .replace(/^channel:/i, "")
+    .trim();
+  if (!stripped) {
+    return null;
+  }
+  const topicMatch = /^(.*):topic:([^:]+)$/i.exec(stripped);
+  if (!topicMatch) {
+    return { to: stripped };
+  }
+  const to = topicMatch[1]?.trim();
+  if (!to) {
+    return null;
+  }
+  return {
+    to,
+    threadId: topicMatch[2]?.trim() || undefined,
+  };
+}
+
+function resolveSourceTopicAlertDelivery(params: {
+  sourceReceipt?: ReturnType<typeof resolveHeartbeatSourceReceiptContext>;
+  fallbackDelivery: OutboundTarget;
+}): OutboundTarget {
+  const source = params.sourceReceipt;
+  if (!source || source.sourceChannel !== "telegram") {
+    return params.fallbackDelivery;
+  }
+  const parsed = parseTelegramSourceTarget(source.sourceTo);
+  const threadId = source.sourceThreadId ?? parsed?.threadId;
+  if (!parsed?.to || threadId == null || String(threadId).trim() === "") {
+    return params.fallbackDelivery;
+  }
+  // Heartbeat prompts that need user action belong in the task topic. The
+  // configured delivery target still handles OK/pager behavior, but actionable
+  // nudges should keep the user's scrollback and natural reply context local.
+  return {
+    channel: "telegram",
+    to: parsed.to,
+    reason: "source-topic",
+    accountId: source.sourceAccountId,
+    threadId,
+    lastChannel: params.fallbackDelivery.lastChannel,
+    lastAccountId: params.fallbackDelivery.lastAccountId,
+  };
+}
+
+function appendHeartbeatSourceContext(
+  prompt: string,
+  sourceReceipt?: ReturnType<typeof resolveHeartbeatSourceReceiptContext>,
+): string {
+  if (!sourceReceipt || sourceReceipt.sourceChannel !== "telegram") {
+    return prompt;
+  }
+  const link = buildTelegramSourceLink({
+    to: sourceReceipt.sourceTo,
+    threadId: sourceReceipt.sourceThreadId,
+  });
+  const sourceBits = [
+    sourceReceipt.sourceLabel?.trim(),
+    link,
+    `telegram:${sourceReceipt.sourceTo.replace(/^telegram:/i, "")}${
+      sourceReceipt.sourceThreadId != null ? ` thread ${sourceReceipt.sourceThreadId}` : ""
+    }`,
+  ].filter((value): value is string => Boolean(value?.trim()));
+  const contextLine = [
+    "Heartbeat source task context:",
+    sourceBits.join(" | "),
+    "Task topic is the workbench; DM is only a pager/escalation.",
+    "If asking in DM, include enough source context or the source link.",
+    "Accept natural-language follow-up in the source task context; exact approve/cancel shortcuts are optional for stored external-send drafts, not the whole UX.",
+  ].join(" ");
+  if (prompt.includes("Heartbeat source task context:")) {
+    return prompt;
+  }
+  return `${prompt}\n\n${contextLine}`;
 }
 
 function resolveHeartbeatSession(
@@ -710,7 +796,7 @@ export async function runHeartbeatOnce(opts: {
       channel: delivery.channel,
     });
   }
-  const visibility =
+  const okVisibility =
     delivery.channel !== "none"
       ? resolveHeartbeatVisibility({
           cfg,
@@ -718,17 +804,37 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
-  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const sourceReceipt = resolveHeartbeatSourceReceiptContext({
+    entry,
+    sessionKey,
+    agentId,
+    heartbeatDelivery: delivery,
+  });
+  const alertDelivery = resolveSourceTopicAlertDelivery({
+    sourceReceipt,
+    fallbackDelivery: delivery,
+  });
+  const alertVisibility =
+    alertDelivery === delivery
+      ? okVisibility
+      : alertDelivery.channel !== "none"
+        ? resolveHeartbeatVisibility({
+            cfg,
+            channel: alertDelivery.channel,
+            accountId: alertDelivery.accountId,
+          })
+        : { showOk: false, showAlerts: true, useIndicator: true };
+  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery: alertDelivery });
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
-    channel: delivery.channel !== "none" ? delivery.channel : undefined,
-    accountId: delivery.accountId,
+    channel: alertDelivery.channel !== "none" ? alertDelivery.channel : undefined,
+    accountId: alertDelivery.accountId,
   }).responsePrefix;
 
   const canRelayToUser = Boolean(
-    delivery.channel !== "none" && delivery.to && visibility.showAlerts,
+    alertDelivery.channel !== "none" && alertDelivery.to && alertVisibility.showAlerts,
   );
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
+  const promptResolution = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
     preflight,
@@ -736,12 +842,8 @@ export async function runHeartbeatOnce(opts: {
     workspaceDir,
     recentHeartbeats: entry?.recentHeartbeats,
   });
-  const sourceReceipt = resolveHeartbeatSourceReceiptContext({
-    entry,
-    sessionKey,
-    agentId,
-    heartbeatDelivery: delivery,
-  });
+  const prompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
+  const { hasExecCompletion, hasCronEvents } = promptResolution;
   const originContext = sourceReceipt
     ? {
         channel: sourceReceipt.sourceChannel,
@@ -750,10 +852,10 @@ export async function runHeartbeatOnce(opts: {
         threadId: sourceReceipt.sourceThreadId,
       }
     : {
-        channel: delivery.channel !== "none" ? delivery.channel : undefined,
-        to: delivery.to,
-        accountId: delivery.accountId,
-        threadId: delivery.threadId,
+        channel: alertDelivery.channel !== "none" ? alertDelivery.channel : undefined,
+        to: alertDelivery.to,
+        accountId: alertDelivery.accountId,
+        threadId: alertDelivery.threadId,
       };
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
@@ -767,13 +869,13 @@ export async function runHeartbeatOnce(opts: {
     SessionKey: runSessionKey,
     SourceReceipt: sourceReceipt,
   };
-  if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
+  if (!alertVisibility.showAlerts && !okVisibility.showOk && !okVisibility.useIndicator) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
       durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
+      channel: alertDelivery.channel !== "none" ? alertDelivery.channel : undefined,
+      accountId: alertDelivery.accountId,
     });
     return { status: "skipped", reason: "alerts-disabled" };
   }
@@ -785,7 +887,7 @@ export async function runHeartbeatOnce(opts: {
     sessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
-    visibility.showOk && delivery.channel !== "none" && delivery.to,
+    okVisibility.showOk && delivery.channel !== "none" && delivery.to,
   );
   const maybeSendHeartbeatOk = async () => {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
@@ -862,7 +964,7 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
         silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
+        indicatorType: okVisibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -898,7 +1000,7 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
         silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+        indicatorType: okVisibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -948,19 +1050,19 @@ export async function runHeartbeatOnce(opts: {
           .join("\n")
       : normalized.text;
 
-    if (delivery.channel === "none" || !delivery.to) {
+    if (alertDelivery.channel === "none" || !alertDelivery.to) {
       emitHeartbeatEvent({
         status: "skipped",
-        reason: delivery.reason ?? "no-target",
+        reason: alertDelivery.reason ?? "no-target",
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
-        accountId: delivery.accountId,
+        accountId: alertDelivery.accountId,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!visibility.showAlerts) {
+    if (!alertVisibility.showAlerts) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -971,16 +1073,16 @@ export async function runHeartbeatOnce(opts: {
         reason: "alerts-disabled",
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
-        channel: delivery.channel,
+        channel: alertDelivery.channel,
         hasMedia: mediaUrls.length > 0,
-        accountId: delivery.accountId,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+        accountId: alertDelivery.accountId,
+        indicatorType: alertVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId = delivery.accountId;
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const deliveryAccountId = alertDelivery.accountId;
+    const heartbeatPlugin = getChannelPlugin(alertDelivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -994,11 +1096,11 @@ export async function runHeartbeatOnce(opts: {
           preview: previewText?.slice(0, 200),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
-          channel: delivery.channel,
-          accountId: delivery.accountId,
+          channel: alertDelivery.channel,
+          accountId: alertDelivery.accountId,
         });
         log.info("heartbeat: channel not ready", {
-          channel: delivery.channel,
+          channel: alertDelivery.channel,
           reason: readiness.reason,
         });
         return { status: "skipped", reason: readiness.reason };
@@ -1007,11 +1109,11 @@ export async function runHeartbeatOnce(opts: {
 
     await deliverOutboundPayloads({
       cfg,
-      channel: delivery.channel,
-      to: delivery.to,
+      channel: alertDelivery.channel,
+      to: alertDelivery.to,
       accountId: deliveryAccountId,
       session: outboundSession,
-      threadId: delivery.threadId,
+      threadId: alertDelivery.threadId,
       payloads: [
         ...reasoningPayloads,
         ...(shouldSkipMain
@@ -1038,8 +1140,8 @@ export async function runHeartbeatOnce(opts: {
           recentHeartbeats: recordRecentHeartbeat({
             previous: current.recentHeartbeats,
             sentAt: startedAt,
-            channel: delivery.channel,
-            to: delivery.to,
+            channel: alertDelivery.channel,
+            to: alertDelivery.to,
             preview: previewText,
           }),
         };
@@ -1049,13 +1151,13 @@ export async function runHeartbeatOnce(opts: {
 
     emitHeartbeatEvent({
       status: "sent",
-      to: delivery.to,
+      to: alertDelivery.to,
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
-      channel: delivery.channel,
-      accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      channel: alertDelivery.channel,
+      accountId: alertDelivery.accountId,
+      indicatorType: alertVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
@@ -1064,9 +1166,9 @@ export async function runHeartbeatOnce(opts: {
       status: "failed",
       reason,
       durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      channel: alertDelivery.channel !== "none" ? alertDelivery.channel : undefined,
+      accountId: alertDelivery.accountId,
+      indicatorType: alertVisibility.useIndicator ? resolveIndicatorType("failed") : undefined,
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
