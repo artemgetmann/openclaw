@@ -87,6 +87,7 @@ describe("registerSubCliCommands", () => {
     expect(names).toContain("clawbot");
     expect(names).toContain("telegram");
     expect(names).toContain("media");
+    expect(names).toContain("screen");
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 

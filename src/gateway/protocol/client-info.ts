@@ -38,6 +38,9 @@ export type GatewayClientInfo = {
   platform: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  bundleIdentifier?: string;
+  bundlePath?: string;
+  executablePath?: string;
   mode: GatewayClientMode;
   instanceId?: string;
 };

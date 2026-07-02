@@ -6,6 +6,9 @@ enum MacNodeScreenCommand: String, Codable {
 
 struct MacNodeScreenRecordParams: Codable, Equatable {
     var screenIndex: Int?
+    var appName: String?
+    var bundleId: String?
+    var windowId: Int?
     var durationMs: Int?
     var fps: Double?
     var format: String?

@@ -12,6 +12,9 @@ export type NodeSession = {
   uiVersion?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  bundleIdentifier?: string;
+  bundlePath?: string;
+  executablePath?: string;
   remoteIp?: string;
   caps: string[];
   commands: string[];
@@ -66,6 +69,18 @@ export class NodeRegistry {
       uiVersion: (connect as { uiVersion?: string }).uiVersion,
       deviceFamily: connect.client.deviceFamily,
       modelIdentifier: connect.client.modelIdentifier,
+      bundleIdentifier:
+        typeof (connect.client as { bundleIdentifier?: unknown }).bundleIdentifier === "string"
+          ? (connect.client as { bundleIdentifier: string }).bundleIdentifier
+          : undefined,
+      bundlePath:
+        typeof (connect.client as { bundlePath?: unknown }).bundlePath === "string"
+          ? (connect.client as { bundlePath: string }).bundlePath
+          : undefined,
+      executablePath:
+        typeof (connect.client as { executablePath?: unknown }).executablePath === "string"
+          ? (connect.client as { executablePath: string }).executablePath
+          : undefined,
       remoteIp: opts.remoteIp,
       caps,
       commands,

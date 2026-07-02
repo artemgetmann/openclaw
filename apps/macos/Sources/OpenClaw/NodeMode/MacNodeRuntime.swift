@@ -325,9 +325,24 @@ actor MacNodeRuntime {
                 code: .invalidRequest,
                 message: "INVALID_REQUEST: screen format must be mp4")
         }
+        let windowId: UInt32?
+        if let rawWindowId = params.windowId {
+            guard rawWindowId >= 0 && rawWindowId <= Int(UInt32.max) else {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: windowId must be between 0 and \(UInt32.max)")
+            }
+            windowId = UInt32(rawWindowId)
+        } else {
+            windowId = nil
+        }
         let services = await self.mainActorServices()
         let res = try await services.recordScreen(
             screenIndex: params.screenIndex,
+            appName: params.appName,
+            bundleId: params.bundleId,
+            windowId: windowId,
             durationMs: params.durationMs,
             fps: params.fps,
             includeAudio: params.includeAudio,
@@ -340,6 +355,9 @@ actor MacNodeRuntime {
             var durationMs: Int?
             var fps: Double?
             var screenIndex: Int?
+            var appName: String?
+            var bundleId: String?
+            var windowId: Int?
             var hasAudio: Bool
         }
         let payload = try Self.encodePayload(ScreenPayload(
@@ -348,6 +366,9 @@ actor MacNodeRuntime {
             durationMs: params.durationMs,
             fps: params.fps,
             screenIndex: params.screenIndex,
+            appName: params.appName,
+            bundleId: params.bundleId,
+            windowId: params.windowId,
             hasAudio: res.hasAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }

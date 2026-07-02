@@ -8,6 +8,9 @@ export type ScreenRecordPayload = {
   durationMs?: number;
   fps?: number;
   screenIndex?: number;
+  appName?: string;
+  bundleId?: string;
+  windowId?: number;
   hasAudio?: boolean;
 };
 
@@ -24,6 +27,9 @@ export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
     durationMs: typeof obj.durationMs === "number" ? obj.durationMs : undefined,
     fps: typeof obj.fps === "number" ? obj.fps : undefined,
     screenIndex: typeof obj.screenIndex === "number" ? obj.screenIndex : undefined,
+    appName: typeof obj.appName === "string" ? obj.appName : undefined,
+    bundleId: typeof obj.bundleId === "string" ? obj.bundleId : undefined,
+    windowId: typeof obj.windowId === "number" ? obj.windowId : undefined,
     hasAudio: typeof obj.hasAudio === "boolean" ? obj.hasAudio : undefined,
   };
 }

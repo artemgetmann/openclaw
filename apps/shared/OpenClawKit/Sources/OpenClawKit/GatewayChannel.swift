@@ -400,6 +400,15 @@ public actor GatewayChannelActor {
         if let model = InstanceIdentity.modelIdentifier {
             client["modelIdentifier"] = ProtoAnyCodable(model)
         }
+        if let bundleIdentifier = InstanceIdentity.bundleIdentifier {
+            client["bundleIdentifier"] = ProtoAnyCodable(bundleIdentifier)
+        }
+        if let bundlePath = InstanceIdentity.bundlePath {
+            client["bundlePath"] = ProtoAnyCodable(bundlePath)
+        }
+        if let executablePath = InstanceIdentity.executablePath {
+            client["executablePath"] = ProtoAnyCodable(executablePath)
+        }
         var params: [String: ProtoAnyCodable] = [
             "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),

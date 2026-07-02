@@ -6,6 +6,9 @@ import OpenClawKit
 protocol MacNodeRuntimeMainActorServices: Sendable {
     func recordScreen(
         screenIndex: Int?,
+        appName: String?,
+        bundleId: String?,
+        windowId: UInt32?,
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
@@ -26,6 +29,9 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func recordScreen(
         screenIndex: Int?,
+        appName: String?,
+        bundleId: String?,
+        windowId: UInt32?,
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
@@ -33,6 +39,9 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     {
         try await self.screenRecorder.record(
             screenIndex: screenIndex,
+            appName: appName,
+            bundleId: bundleId,
+            windowId: windowId,
             durationMs: durationMs,
             fps: fps,
             includeAudio: includeAudio,

@@ -134,6 +134,9 @@ const NodesToolSchema = Type.Object({
   // screen_record
   fps: Type.Optional(Type.Number()),
   screenIndex: Type.Optional(Type.Number()),
+  appName: Type.Optional(Type.String()),
+  bundleId: Type.Optional(Type.String()),
+  windowId: Type.Optional(Type.Number({ minimum: 0, maximum: 4_294_967_295 })),
   outPath: Type.Optional(Type.String()),
   // location_get
   maxAgeMs: Type.Optional(Type.Number()),
@@ -533,7 +536,6 @@ export function createNodesTool(options?: {
           }
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
             const durationMs = Math.min(
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
@@ -547,15 +549,41 @@ export function createNodesTool(options?: {
             const screenIndex =
               typeof params.screenIndex === "number" && Number.isFinite(params.screenIndex)
                 ? params.screenIndex
-                : 0;
+                : params.appName || params.bundleId || params.windowId
+                  ? undefined
+                  : 0;
+            const appName =
+              typeof params.appName === "string" && params.appName.trim()
+                ? params.appName.trim()
+                : undefined;
+            const bundleId =
+              typeof params.bundleId === "string" && params.bundleId.trim()
+                ? params.bundleId.trim()
+                : undefined;
+            let windowId: number | undefined;
+            if (params.windowId !== undefined) {
+              if (
+                typeof params.windowId !== "number" ||
+                !Number.isInteger(params.windowId) ||
+                params.windowId < 0 ||
+                params.windowId > 4_294_967_295
+              ) {
+                throw new Error("windowId must be an integer between 0 and 4294967295");
+              }
+              windowId = params.windowId;
+            }
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
+            const nodeId = await resolveNodeId(gatewayOpts, node);
             const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "screen.record",
               params: {
                 durationMs,
                 screenIndex,
+                appName,
+                bundleId,
+                windowId,
                 fps,
                 format: "mp4",
                 includeAudio,
@@ -575,6 +603,9 @@ export function createNodesTool(options?: {
                 durationMs: payload.durationMs,
                 fps: payload.fps,
                 screenIndex: payload.screenIndex,
+                appName: payload.appName,
+                bundleId: payload.bundleId,
+                windowId: payload.windowId,
                 hasAudio: payload.hasAudio,
               },
             };

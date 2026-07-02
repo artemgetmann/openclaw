@@ -54,11 +54,17 @@ struct MacNodeRuntimeTests {
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
             func recordScreen(
                 screenIndex: Int?,
+                appName: String?,
+                bundleId: String?,
+                windowId: UInt32?,
                 durationMs: Int?,
                 fps: Double?,
                 includeAudio: Bool?,
                 outPath: String?) async throws -> (path: String, hasAudio: Bool)
             {
+                #expect(appName == "Telegram")
+                #expect(bundleId == "ru.keepcoder.Telegram")
+                #expect(windowId == 42)
                 let url = FileManager().temporaryDirectory
                     .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
                 try Data("ok".utf8).write(to: url)
@@ -85,7 +91,11 @@ struct MacNodeRuntimeTests {
         let services = await MainActor.run { FakeMainActorServices() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let params = MacNodeScreenRecordParams(durationMs: 250)
+        let params = MacNodeScreenRecordParams(
+            appName: "Telegram",
+            bundleId: "ru.keepcoder.Telegram",
+            windowId: 42,
+            durationMs: 250)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-5", command: MacNodeScreenCommand.record.rawValue, paramsJSON: json))

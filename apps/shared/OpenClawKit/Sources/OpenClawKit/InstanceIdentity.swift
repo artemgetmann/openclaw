@@ -76,6 +76,21 @@ public enum InstanceIdentity {
 #endif
     }()
 
+    public static let bundleIdentifier: String? = {
+        let trimmed = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }()
+
+    public static let bundlePath: String? = {
+        let path = Bundle.main.bundlePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : path
+    }()
+
+    public static let executablePath: String? = {
+        let path = Bundle.main.executablePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return path.isEmpty ? nil : path
+    }()
+
     public static let deviceFamily: String = {
 #if canImport(UIKit)
         return Self.readMainActor {

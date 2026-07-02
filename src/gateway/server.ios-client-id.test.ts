@@ -21,6 +21,24 @@ function makeConnectParams(clientId: string) {
 }
 
 describe("connect params client id validation", () => {
+  test("accepts native app identity metadata on client connect", () => {
+    const base = makeConnectParams(GATEWAY_CLIENT_IDS.MACOS_APP);
+    const params = {
+      ...base,
+      client: {
+        ...base.client,
+        platform: "macOS 26.5.1",
+        bundleIdentifier: "ai.jarvis.mac",
+        bundlePath: "/Applications/Jarvis.app",
+        executablePath: "/Applications/Jarvis.app/Contents/MacOS/OpenClaw",
+      },
+    };
+
+    const ok = validateConnectParams(params);
+    expect(ok).toBe(true);
+    expect(validateConnectParams.errors ?? []).toHaveLength(0);
+  });
+
   test.each([GATEWAY_CLIENT_IDS.IOS_APP, GATEWAY_CLIENT_IDS.ANDROID_APP])(
     "accepts %s as a valid gateway client id",
     (clientId) => {

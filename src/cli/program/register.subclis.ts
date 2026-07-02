@@ -119,6 +119,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "screen",
+    description: "Capture target-aware screen recordings",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../screen-cli.js");
+      mod.registerScreenCli(program);
+    },
+  },
+  {
     name: "devices",
     description: "Device pairing + token management",
     hasSubcommands: true,

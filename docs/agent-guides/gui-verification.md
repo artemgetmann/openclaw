@@ -45,6 +45,51 @@ Use Computer Use when it can see and control the target app. It is the best
 option when the task needs app selection, scrolling, clicking, or visual
 inspection.
 
+Use `openclaw screen record` when the proof needs a short video. Record the
+target app or window by default:
+
+```bash
+openclaw screen record --app Telegram --duration 60s --out ".artifacts/<run>/review.mp4"
+openclaw screen record --bundle com.google.Chrome --duration 90s --out ".artifacts/<run>/review.mp4"
+openclaw screen record --window-id <id> --duration 60s --out ".artifacts/<run>/review.mp4"
+```
+
+Use full-display recording only when the flow genuinely switches apps or windows
+and write the reason into the command:
+
+```bash
+openclaw screen record --display 0 --reason "workflow switches between Chrome and Telegram" --duration 60s --out ".artifacts/<run>/review.mp4"
+```
+
+Do not send long runs of separate screenshot messages to the user. Prefer
+progress text while work is ongoing, then send or offer one compressed final
+review video depending on whether the user requested automatic video proof.
+
+For live Jarvis macOS proof, launch the app through a named consumer instance
+instead of relying on `launchctl setenv` to override runtime paths. The consumer
+app bootstraps its own config, state directory, and gateway port, so the
+instance scripts are the source of truth:
+
+```bash
+OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
+  ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
+  npx -y pnpm@10.23.0 exec bash scripts/package-consumer-mac-app-fast.sh --instance <id>
+
+OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
+  npx -y pnpm@10.23.0 exec bash scripts/open-consumer-mac-app.sh --instance <id> --replace --refresh-gateway
+```
+
+Use the stable TCC identity only when reusing an existing Screen Recording
+permission row is necessary. In that mode, `--replace` terminates other running
+Jarvis debug apps with the same stable bundle id before launching the proof
+instance, which avoids duplicate-instance exits during recording checks.
+
+Before running `openclaw screen record`, confirm the native macOS node is
+connected and advertises `screen.record`. If the app appears in the device
+pairing queue as a role-upgrade or repair request, approve it with
+`openclaw devices approve`; `openclaw nodes pending` is not the right queue for
+this path.
+
 If Computer Use is unavailable or fails to attach, use macOS screenshot capture
 as the fallback:
 
@@ -115,9 +160,16 @@ answer stability, or TTS voice-caption snippets:
    `PreventUserIdleDisplaySleep 1`. Stop the lease and lock the screen again
    after proof if the run required unlocking.
 
-5. Start a native macOS recording. Pass `screencapture` video options without
-   spaces between the flag and value; some macOS builds treat the spaced form as
-   file arguments and produce a tiny non-proof clip:
+5. Start a target-aware native recording:
+
+   ```bash
+   openclaw screen record --app Telegram --duration 60s --out ".artifacts/<run>/telegram-preview.mp4"
+   ```
+
+   If `openclaw screen record` is unavailable, use native macOS display
+   recording as a fallback. Pass `screencapture` video options without spaces
+   between the flag and value; some macOS builds treat the spaced form as file
+   arguments and produce a tiny non-proof clip:
 
    ```bash
    screencapture -v -V60 -D1 -k ".artifacts/<run>/telegram-preview.mov"
@@ -204,10 +256,11 @@ proof gap even when logs and `telegram-user read` prove the message sequence.
 Denying a prompt is acceptable only when it is needed to restore the pre-proof
 state; never click `Allow` as part of a proof run.
 
-Use native `screencapture -v` as the primary recorder for this proof. Peekaboo
-still screenshots are useful for quick checks, but Peekaboo live capture can
-produce black frames even when native stills and video are usable. If you do use
+Use `openclaw screen record` as the primary recorder for this proof. Native
+`screencapture -v` remains the display-capture fallback. Peekaboo still
+screenshots are useful for quick checks, but Peekaboo live capture can produce
+black frames even when native stills and video are usable. If you do use
 `peekaboo capture live --mode screen --duration <seconds> --video-out <path>
---path <frames-dir> --json`, inspect the contact sheet before trusting it.
-Do not use Computer Use unless the local `cua-guard acquire` check passes in the
+--path <frames-dir> --json`, inspect the contact sheet before trusting it. Do
+not use Computer Use unless the local `cua-guard acquire` check passes in the
 same process.

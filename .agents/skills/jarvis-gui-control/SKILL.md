@@ -21,9 +21,11 @@ canonical file is not reachable, use this portable fallback:
 
 - Prefer `openclaw gui-control --runtime open-computer-use` for GUI operation
   and GUI proof.
-- Do not use Peekaboo as the default GUI-operation proof path. Peekaboo is only
-  for screenshots, video/capture artifacts, diagnostics, explicit Peekaboo
-  requests, or fallback after GUI Control is unavailable.
+- Use the `screen-record` skill and `openclaw screen record` for target-aware
+  video proof. Do not use Peekaboo as the default GUI-operation proof path.
+  Peekaboo is only for still screenshots, UI maps, diagnostics, explicit
+  Peekaboo requests, or fallback after GUI Control or screen recording is
+  unavailable.
 - Do not use benchmark scripts as product behavior. They are proof tools, not
   live assistant workflows.
 - Do not use raw coordinates, AppleScript/JXA, browser plugins, or clipboard

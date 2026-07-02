@@ -43,6 +43,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "checkpoint",
         "monitor-router",
         "jarvis-gui-control",
+        "screen-record",
         "mcporter",
         "nano-banana-pro",
         "telegram-user",

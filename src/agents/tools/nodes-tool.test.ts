@@ -91,6 +91,21 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
+  it("rejects invalid screen_record window ids before resolving a node", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "screen_record",
+        node: "macbook",
+        windowId: -1,
+      }),
+    ).rejects.toThrow(/windowId must be an integer between 0 and 4294967295/i);
+
+    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("falls back to a local plan when the node only supports system.run", async () => {
     nodeUtilsMocks.listNodes.mockResolvedValue([
       {
