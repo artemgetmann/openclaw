@@ -152,8 +152,9 @@ assert_pr_not_redundant() {
     return 0
   fi
 
-  git -C "${REPO_ROOT}" fetch origin main >/dev/null 2>&1 || true
-  if git -C "${REPO_ROOT}" merge-base --is-ancestor "${head_sha}" origin/main 2>/dev/null; then
+  assert_sacred_main_clean
+  git -C "${MAIN_REPO}" fetch origin main >/dev/null 2>&1 || true
+  if git -C "${MAIN_REPO}" merge-base --is-ancestor "${head_sha}" origin/main 2>/dev/null; then
     log "refusing PR #${PR_NUMBER}: head ${head_sha} is already reachable from origin/main; likely superseded or redundant" >&2
     exit 1
   fi

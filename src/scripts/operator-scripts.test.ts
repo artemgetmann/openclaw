@@ -298,6 +298,52 @@ esac
     expect(result.stdout).toContain("Rollback:");
   });
 
+  it("ship wrapper checks redundant PR ancestry from sacred main, not caller worktree", () => {
+    const root = makeTempRoot();
+    const mainRepo = path.join(root, "main");
+    const callerRepo = path.join(root, "caller");
+    initMainRepo(mainRepo);
+    initMainRepo(callerRepo);
+    const originRepo = path.join(root, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", originRepo]);
+    execFileSync("git", ["remote", "add", "origin", originRepo], { cwd: mainRepo });
+    execFileSync("git", ["push", "-q", "-u", "origin", "main"], { cwd: mainRepo });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: mainRepo,
+      encoding: "utf8",
+    }).trim();
+    const gh = path.join(root, "gh");
+    writeExecutable(
+      gh,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "pr view 92 --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeCommit,title,url" ]]; then
+  printf '%s\\n' '{"number":92,"state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"x","headRefOid":"${headSha}","title":"Already there","url":"https://example.test/pr/92"}'
+  exit 0
+fi
+exit 9
+`,
+    );
+
+    const result = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-main-gateway-fix.sh"), "--pr", "92", "--dry-run"],
+      {
+        cwd: callerRepo,
+        env: {
+          ...process.env,
+          OPENCLAW_GH_BIN: gh,
+          OPENCLAW_MAIN_REPO: mainRepo,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("already reachable from origin/main");
+    expect(result.stderr).not.toContain("not a git repository");
+  });
+
   it("ship wrapper dry-run has an explicit read-only Jarvis runtime scope", () => {
     const root = makeTempRoot();
     const mainRepo = path.join(root, "main");
