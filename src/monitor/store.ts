@@ -160,6 +160,7 @@ export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): M
     ...(input.expiryAt?.trim() ? { expiryAt: input.expiryAt.trim() } : {}),
     ...(input.stopCondition?.trim() ? { stopCondition: input.stopCondition.trim() } : {}),
     actionPolicy: input.actionPolicy ?? "notify_draft",
+    ...(input.goal ? { goal: input.goal } : {}),
     status: "active",
     ...(input.lastCheckpoint ? { lastCheckpoint: input.lastCheckpoint } : {}),
     cronJobId: input.cronJobId,

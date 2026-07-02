@@ -213,6 +213,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Voice (TTS) is enabled.");
   });
 
+  it("includes compact goal-tool routing when goal tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["get_goal", "create_goal", "update_goal", "monitor"],
+    });
+
+    expect(prompt).toContain("## Goal Tools");
+    expect(prompt).toContain("use the `goal-mode` skill from <available_skills>");
+    expect(prompt).toContain("Use /goal as a recovery/control surface");
+    expect(prompt).not.toContain("Scoped autonomy");
+    expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
+  });
+
+  it("omits monitor-specific goal guidance when monitor is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["get_goal", "create_goal", "update_goal"],
+    });
+
+    expect(prompt).toContain("## Goal Tools");
+    expect(prompt).not.toContain("create or reuse a durable monitor");
+  });
+
   it("adds reasoning tag hint when enabled", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -14,6 +14,7 @@ import { handleBashCommand } from "./commands-bash.js";
 import { handleBtwCommand } from "./commands-btw.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleGoalCommand } from "./commands-goal.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -194,6 +195,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleContextCommand,
       handleExportSessionCommand,
       handleWhoamiCommand,
+      handleGoalCommand,
       handleSubagentsCommand,
       handleAcpCommand,
       handleConfigCommand,

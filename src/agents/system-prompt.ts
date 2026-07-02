@@ -177,6 +177,30 @@ function buildMessagingSection(params: {
   ];
 }
 
+function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  const hasGoalTools =
+    params.availableTools.has("get_goal") &&
+    params.availableTools.has("create_goal") &&
+    params.availableTools.has("update_goal");
+  if (!hasGoalTools) {
+    return [];
+  }
+  return [
+    "## Goal Tools",
+    "Goal tools manage durable, user-approved session goals. For goal-mode behavior, use the `goal-mode` skill from <available_skills> when present instead of relying on inline prompt rules.",
+    "Use /goal as a recovery/control surface; do not make slash commands the primary consumer UX.",
+    ...(params.availableTools.has("monitor")
+      ? [
+          "When a goal needs waiting or follow-up, pair it with the monitor tool only inside the boundaries described by the goal-mode skill.",
+        ]
+      : []),
+    "",
+  ];
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -279,6 +303,9 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
     message: "Send messages and channel actions",
+    get_goal: "Read the current session goal",
+    create_goal: "Create the current session goal when explicitly approved/requested",
+    update_goal: "Mark the current session goal complete or blocked",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
@@ -314,6 +341,9 @@ export function buildAgentSystemPrompt(params: {
     "nodes",
     "cron",
     "message",
+    "get_goal",
+    "create_goal",
+    "update_goal",
     "gateway",
     "agents_list",
     "sessions_list",
@@ -617,6 +647,7 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }),
+    ...buildGoalModeSection({ isMinimal, availableTools }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
