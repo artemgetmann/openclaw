@@ -140,6 +140,17 @@ function isMacNodePlatform(platform: string | undefined): boolean {
   return normalized === "darwin" || normalized.startsWith("macos") || normalized.startsWith("mac ");
 }
 
+function describeMacScreenPermissionTarget(node: NodeListNode): string {
+  const parts = [
+    node.bundleIdentifier ? `bundle ${node.bundleIdentifier}` : undefined,
+    node.bundlePath ? `app ${node.bundlePath}` : undefined,
+    node.executablePath && node.executablePath !== node.bundlePath
+      ? `executable ${node.executablePath}`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(", ") : node.displayName || node.nodeId;
+}
+
 export function pickDefaultScreenRecordNode(nodes: NodeListNode[]): NodeListNode | null {
   const capable = nodes.filter((node) => {
     if (node.connected === false) {
@@ -170,8 +181,9 @@ export function resolveDefaultScreenRecordNodeOrThrow(nodes: NodeListNode[]): No
     throw new Error("multiple macOS screen recording nodes available; pass --node");
   }
   if (connectedMacs.length > 0) {
+    const targets = connectedMacs.map(describeMacScreenPermissionTarget).join("; ");
     throw new Error(
-      "no macOS screen recording node available: connected macOS node does not advertise screen.record. Enable Screen Recording for Jarvis/OpenClaw in System Settings, relaunch the app, then retry.",
+      `no macOS screen recording node available: connected macOS node does not advertise screen.record. Enable Screen Recording for ${targets} in System Settings, relaunch that app, then retry.`,
     );
   }
 

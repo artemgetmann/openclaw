@@ -8,6 +8,9 @@ export type NodeListNode = {
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  bundleIdentifier?: string;
+  bundlePath?: string;
+  executablePath?: string;
   pathEnv?: string;
   caps?: string[];
   commands?: string[];
@@ -39,6 +42,9 @@ export type PairedNode = {
   coreVersion?: string;
   uiVersion?: string;
   remoteIp?: string;
+  bundleIdentifier?: string;
+  bundlePath?: string;
+  executablePath?: string;
   permissions?: Record<string, boolean>;
   createdAtMs?: number;
   approvedAtMs?: number;

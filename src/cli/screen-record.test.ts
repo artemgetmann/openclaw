@@ -126,8 +126,10 @@ describe("screen record CLI params", () => {
           connected: true,
           commands: ["system.run"],
           permissions: { screenRecording: false },
+          bundleIdentifier: "ai.openclaw.consumer.mac.debug",
+          bundlePath: "/Users/user/Programming_Projects/openclaw/dist/Jarvis.app",
         },
       ]),
-    ).toThrow(/Enable Screen Recording/i);
+    ).toThrow(/ai\.openclaw\.consumer\.mac\.debug/i);
   });
 });
