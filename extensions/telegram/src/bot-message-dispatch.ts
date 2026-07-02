@@ -8,6 +8,7 @@ import {
 import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
 import { isControlCommandReplyPayload } from "../../../src/auto-reply/reply/control-command-reply.js";
+import { isCopySafeDraftReplyPayload } from "../../../src/auto-reply/reply/copy-safe-reply.js";
 import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
@@ -1720,7 +1721,11 @@ export const dispatchTelegramMessage = async ({
       isError: normalizedPayload.isError === true,
     });
     const shouldUseLegacyTextTransport =
-      isControlCommandReplyPayload(normalizedPayload) || (durableReason === "final" && !hasMedia);
+      isControlCommandReplyPayload(normalizedPayload) ||
+      isCopySafeDraftReplyPayload(normalizedPayload) ||
+      (durableReason === "final" && !hasMedia);
+    const shouldUseCopySafeBlockquotes =
+      !hasMedia && (isCopySafeDraftReplyPayload(normalizedPayload) || durableReason === "final");
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       // Control command replies are product UI, not rich content. Some attach
@@ -1729,6 +1734,10 @@ export const dispatchTelegramMessage = async ({
       // finals also stay on legacy transport because Telegram rich sends have
       // repeatedly rendered as unsupported blank bubbles in Jarvis Lab topics.
       ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
+      // Final-answer blockquotes are commonly used for draft messages the user
+      // wants to copy into another chat. Render those quote bodies as Telegram
+      // code/pre blocks so links stay literal and one-tap copy works.
+      ...(shouldUseCopySafeBlockquotes ? { copySafeBlockquotes: true } : {}),
       replies: [applyQuoteReplyTarget(normalizedPayload)],
       onVoiceRecording: sendRecordVoice,
       onReplyDelivered: (event: TelegramReplyDeliveredEvent) => {
