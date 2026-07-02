@@ -311,7 +311,7 @@ export function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   if (params.deliveryPromptMode === "reply") {
-    return `${params.commandBody}\n\nReturn only the exact reply content to deliver automatically. Write it like a direct reply, not a monitor note. Do not include monitoring narration, summaries, labels, markdown wrappers, or recipient notes. If no message should be sent, return exactly NO_REPLY.`.trim();
+    return `${params.commandBody}\n\nReturn only the exact reply content to deliver automatically. Write it like a direct reply, not a monitor note. Do not include monitoring narration, summaries, labels, markdown wrappers, or recipient notes. If the task needs user input or approval, use the message tool to ask on the configured origin route from the monitor instructions, then return exactly NO_REPLY. If no message should be sent, return exactly NO_REPLY.`.trim();
   }
   return `${params.commandBody}\n\nWrite your response like an assistant talking to the user: natural, concise, and ready to send. Return plain text only. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }

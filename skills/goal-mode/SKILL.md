@@ -42,6 +42,23 @@ durable monitor instead of inventing a scheduler.
 Default monitor behavior should be notify/draft unless the user clearly
 authorized autonomous sending.
 
+Use `actionPolicy: "auto_send"` only when both are true:
+
+- the user authorized Jarvis to act on the external surface, for example "text
+  Alex and handle it", "drive this until success", "follow up until they
+  refund me", or "book it under $15"
+- the monitor has a real watched-surface delivery target through `watchDelivery`
+  or a source target that resolves to a message target
+
+For `auto_send` monitors, green-zone replies go directly to the watched surface.
+Do not bring normal in-scope negotiation back to the user as a draft.
+
+For `notify_draft` monitors, report to the origin chat and include any draft
+text there. Use this when the user asks to watch, draft, report, or explicitly
+says not to send.
+
+For `notify_only` monitors, report status without drafting a send.
+
 ## Scoped Autonomy
 
 Green zone: proceed without asking when the next action is clearly inside the
@@ -55,6 +72,18 @@ payment-sensitive, or out-of-scope actions.
 
 Do not ask before every normal follow-up inside the approved goal. That defeats
 the product.
+
+Examples:
+
+- Restaurant: if the user says "organize dinner with Alex, only 8 or 9, ask
+  before anything paid", then push back on 7:30/7:45 automatically and ask the
+  user only for another day/time, paid reservation, deposit, sensitive info, or
+  a real ambiguity.
+- Refund: if the user says "get me a refund", follow up with support
+  autonomously on normal status questions and ask before accepting store credit,
+  changing the desired resolution, or sharing sensitive info.
+- Purchase: if the user says "buy under $15", purchase only inside that clear
+  constraint; otherwise ask before purchase/payment.
 
 ## Evaluator
 

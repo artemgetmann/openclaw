@@ -81,6 +81,7 @@ describe("buildMonitorWakeMessage", () => {
         monitorId: "monitor-3",
         agentId: "main",
         originSessionKey: "agent:main:main",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
         monitorSessionKey: "agent:main:monitor:monitor-3",
         sourceType: "whatsapp",
         sourceTarget: { target: "74333133234289@lid" },
@@ -97,11 +98,18 @@ describe("buildMonitorWakeMessage", () => {
       "Watched-surface delivery is authorized and configured for this wake.",
     );
     expect(message).toContain(
-      "Reply only with the exact content that should be sent to the watched surface.",
+      'originDelivery: {"mode":"announce","channel":"telegram","to":"user-1"}',
     );
     expect(message).toContain(
-      "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply'.",
+      "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
     );
+    expect(message).toContain(
+      "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+    );
+    expect(message).toContain(
+      "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
+    );
+    expect(message).toContain("Do not send approval questions");
     expect(message).toContain("return exactly NO_REPLY");
   });
 });

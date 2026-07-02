@@ -3,6 +3,7 @@ import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/sessio
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 function buildMonitorBootstrapPrompt(params: {
@@ -16,6 +17,7 @@ function buildMonitorBootstrapPrompt(params: {
   goal?: { id: string; objective: string };
   watchDeliveryConfigured: boolean;
   originSessionKey: string;
+  originDelivery?: CronDelivery;
 }) {
   // Seed the monitor session with the durable task contract once so later cron
   // wakes can stay tiny and resume the same conversation instead of
@@ -31,6 +33,7 @@ function buildMonitorBootstrapPrompt(params: {
     `- cadence: ${JSON.stringify(params.cadence)}`,
     `- actionPolicy: ${params.actionPolicy}`,
     `- originSessionKey: ${params.originSessionKey}`,
+    `- originDelivery: ${params.originDelivery ? JSON.stringify(params.originDelivery) : "none"}`,
     "- defaultRoute: origin chat",
     ...(params.goal
       ? [
@@ -49,8 +52,10 @@ function buildMonitorBootstrapPrompt(params: {
       ? params.watchDeliveryConfigured
         ? [
             "Watched-surface delivery is authorized and configured for this monitor.",
-            "Reply only with the exact content that should be sent to the watched surface.",
-            "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply'.",
+            "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
+            "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+            "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
+            "Do not send approval questions, private status, or monitor narration to the watched surface.",
             "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
           ]
         : [
@@ -85,6 +90,7 @@ export async function seedMonitorSession(params: {
   goal?: { id: string; objective: string };
   watchDeliveryConfigured: boolean;
   originSessionKey: string;
+  originDelivery?: CronDelivery;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
   const sessionStore: Record<string, SessionEntry> = {};
@@ -137,6 +143,7 @@ export async function seedMonitorSession(params: {
       goal: params.goal,
       watchDeliveryConfigured: params.watchDeliveryConfigured,
       originSessionKey: params.originSessionKey,
+      originDelivery: params.originDelivery,
     }),
     timestamp: Date.now(),
   });

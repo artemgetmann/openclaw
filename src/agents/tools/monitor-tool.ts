@@ -79,6 +79,8 @@ For monitor creation:
 - sourceType/sourceTarget identify what is being checked.
 - cadence is the cron schedule object for repeated wakes.
 - default actionPolicy is notify_draft.
+- use actionPolicy=auto_send only when the user authorized Jarvis to act on the watched surface and a watched-surface delivery target is available.
+- for auto_send, provide watchDelivery when sourceTarget alone does not resolve to the external conversation; green-zone replies go to that watched surface, while approval questions must go back to the origin chat.
 - default report route is the origin chat from the current session.
 
 For monitor-related user replies/status:

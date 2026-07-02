@@ -395,7 +395,14 @@ describe("buildGatewayCronService", () => {
             }),
           }),
           message: expect.stringContaining(
-            "Reply only with the exact content that should be sent to the watched surface.",
+            "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
+          ),
+        }),
+      );
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
           ),
         }),
       );
