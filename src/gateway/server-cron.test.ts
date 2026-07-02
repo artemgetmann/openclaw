@@ -6,6 +6,12 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
+type FakeCronRunResult = {
+  status: "ok" | "error";
+  error?: string;
+  summary?: string;
+};
+
 const {
   enqueueSystemEventMock,
   requestHeartbeatNowMock,
@@ -17,7 +23,10 @@ const {
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  runCronIsolatedAgentTurnMock: vi.fn<() => Promise<FakeCronRunResult>>(async () => ({
+    status: "ok",
+    summary: "ok",
+  })),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -262,6 +271,84 @@ describe("buildGatewayCronService", () => {
           message: expect.stringContaining("sourceType: gmail"),
         }),
       );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("marks monitor records degraded after runner errors and active again after recovery", async () => {
+    const cfg = createCronConfig("server-cron-monitor-degraded");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-degraded",
+            agentId: "main",
+            originSessionKey: "agent:main:telegram:direct:user-1",
+            originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+            monitorSessionKey: "agent:main:monitor:monitor-degraded",
+            sourceType: "gmail",
+            sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            status: "active",
+            cronJobId: "cron-monitor-degraded",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake degraded",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:agent:main:monitor:monitor-degraded",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-degraded" },
+      });
+
+      runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+        status: "error",
+        error:
+          "OAuth token refresh failed for openai-codex; provider returned refresh_token_reused.",
+      });
+      await state.cron.run(job.id, "force");
+      const degradedStore = JSON.parse(await fs.readFile(monitorStorePath, "utf-8")) as {
+        monitors: Array<{ status: string; lastWakeStatus?: string }>;
+      };
+      expect(degradedStore.monitors[0]).toMatchObject({
+        status: "degraded",
+        lastWakeStatus: "degraded",
+      });
+      expect(state.cron.getJob(job.id)?.enabled).toBe(true);
+
+      runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+        status: "ok",
+        summary: "recovered",
+      });
+      await state.cron.run(job.id, "force");
+      const recoveredStore = JSON.parse(await fs.readFile(monitorStorePath, "utf-8")) as {
+        monitors: Array<{ status: string; lastWakeStatus?: string }>;
+      };
+      expect(recoveredStore.monitors[0]).toMatchObject({
+        status: "active",
+        lastWakeStatus: "active",
+      });
     } finally {
       state.cron.stop();
     }

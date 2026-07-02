@@ -9,7 +9,7 @@ import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 
 const MONITOR_ACTIONS = ["list", "get", "create", "update", "stop"] as const;
 const MONITOR_ACTION_POLICIES = ["notify_draft", "notify_only", "auto_send"] as const;
-const MONITOR_STATUSES = ["active", "stopped", "completed", "expired"] as const;
+const MONITOR_STATUSES = ["active", "degraded", "stopped", "completed", "expired"] as const;
 
 const MonitorToolSchema = Type.Object(
   {
@@ -48,6 +48,7 @@ Key behavior:
 - update: persist checkpoint/status changes after a successful source check.
 - stop: stop a monitor cleanly.
 - get/list: inspect current monitor state.
+- degraded: monitor runner failed but should keep retrying; do not create a duplicate monitor.
 
 For monitor creation:
 - instructions should capture the actual monitoring task in plain language.

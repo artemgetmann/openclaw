@@ -28,6 +28,7 @@ function createFailureAlertCron(params: {
   storePath: string;
   cronConfig?: CronServiceParams["cronConfig"];
   runIsolatedAgentJob: NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
+  runMonitorJob?: CronServiceParams["runMonitorJob"];
   sendCronFailureAlert: NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 }) {
   return new CronService({
@@ -38,6 +39,7 @@ function createFailureAlertCron(params: {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
+    runMonitorJob: params.runMonitorJob,
     sendCronFailureAlert: params.sendCronFailureAlert,
   });
 }
@@ -160,6 +162,126 @@ describe("CronService failure alerts", () => {
     expect(alertPayload?.text).not.toContain("raw stack / provider key / internal path");
 
     await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("sends a first-failure degraded alert for monitor auth failures and keeps retrying", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+    }));
+    const runMonitorJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "OAuth token refresh failed for openai-codex; provider returned refresh_token_reused.",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 2,
+        },
+      },
+      runIsolatedAgentJob,
+      runMonitorJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "Watch Trishnanda otitis externa medication advice",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "session:agent:main:monitor:e5993afc66a4a8dc8effcc4b",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "monitorWake", monitorId: "e5993afc66a4a8dc8effcc4b" },
+      delivery: { mode: "announce", channel: "telegram", to: "-1003783709877:topic:17607" },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id }),
+        channel: "telegram",
+        to: "-1003783709877:topic:17607",
+        mode: "announce",
+        text: "Monitor degraded: auth expired; re-auth required. I will retry after re-auth.",
+      }),
+    );
+    const updated = cron.getJob(job.id);
+    expect(updated?.enabled).toBe(true);
+    expect(updated?.state.lastErrorReason).toBe("auth_permanent");
+    expect(updated?.state.nextRunAtMs).toEqual(expect.any(Number));
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("alerts once and disables orphaned monitorWake jobs when the monitor record is missing", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+    }));
+    const runMonitorJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "monitor not found: 427d252fd6f46b0dabd356f8",
+      stopJob: true,
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 2,
+        },
+      },
+      runIsolatedAgentJob,
+      runMonitorJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "ApotekKU Pererenan ear drops media-aware reply",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "session:agent:main:monitor:427d252fd6f46b0dabd356f8",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "monitorWake", monitorId: "427d252fd6f46b0dabd356f8" },
+      delivery: { mode: "announce", channel: "telegram", to: "-1003783709877:topic:17607" },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id }),
+        channel: "telegram",
+        to: "-1003783709877:topic:17607",
+        mode: "announce",
+        text: "Monitor degraded: monitor record is missing, so I stopped the orphaned schedule.",
+      }),
+    );
+    const updated = cron.getJob(job.id);
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(updated?.state.lastError).toBe("monitor not found: 427d252fd6f46b0dabd356f8");
+
+    await cron.run(job.id, "due");
+    expect(runMonitorJob).toHaveBeenCalledTimes(1);
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
 
     cron.stop();

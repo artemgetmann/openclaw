@@ -297,13 +297,19 @@ function shouldEmitImplicitDeliveryFailureAlert(
   if (params.consecutiveErrors !== 1) {
     return false;
   }
-  if (params.job.payload.kind !== "agentTurn" || params.job.sessionTarget === "main") {
+  if (
+    !(params.job.payload.kind === "agentTurn" || params.job.payload.kind === "monitorWake") ||
+    params.job.sessionTarget === "main"
+  ) {
     return false;
   }
-  // Explicit alert config keeps its existing behavior. The implicit path is
-  // only the product-safety fallback for delivery-owned jobs that would
-  // otherwise fail quietly after the isolated run returns status:error.
-  if (params.job.failureAlert !== undefined || state.deps.cronConfig?.failureAlert) {
+  // Explicit alert config keeps the old agentTurn behavior. Monitor wakes are
+  // different: an orphaned monitor may disable after this first failure, so
+  // waiting for global alert cadence can mean "never alert".
+  if (
+    params.job.payload.kind === "agentTurn" &&
+    (params.job.failureAlert !== undefined || state.deps.cronConfig?.failureAlert)
+  ) {
     return false;
   }
   if (
@@ -319,13 +325,23 @@ function emitImplicitDeliveryFailureAlert(
   state: CronServiceState,
   params: {
     job: CronJob;
+    error?: string;
   },
 ) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const safeJobName = params.job.name || params.job.id;
   // Do not include the raw error here. It can contain provider internals,
   // paths, or auth/account details; the run record keeps the detailed error.
-  const text = `Cron job "${safeJobName}" failed before it could complete. I'll retry on the next scheduled run.`;
+  const errorReason = resolveFailoverReasonFromError(params.error);
+  const isMonitorWake = params.job.payload.kind === "monitorWake";
+  const isMissingMonitor =
+    isMonitorWake && typeof params.error === "string" && /monitor not found:/i.test(params.error);
+  const text =
+    isMonitorWake && (errorReason === "auth" || errorReason === "auth_permanent")
+      ? `Monitor degraded: auth expired; re-auth required. I will retry after re-auth.`
+      : isMissingMonitor
+        ? `Monitor degraded: monitor record is missing, so I stopped the orphaned schedule.`
+        : `Cron job "${safeJobName}" failed before it could complete. I'll retry on the next scheduled run.`;
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps
@@ -364,6 +380,7 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    stopJob?: boolean;
     startedAt: number;
     endedAt: number;
   },
@@ -403,17 +420,19 @@ export function applyJobResult(
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
-    if (
-      !alertConfig &&
-      shouldEmitImplicitDeliveryFailureAlert(state, {
-        job,
-        consecutiveErrors: job.state.consecutiveErrors,
-      })
-    ) {
-      emitImplicitDeliveryFailureAlert(state, { job });
+    const shouldEmitImplicitFailureAlert = shouldEmitImplicitDeliveryFailureAlert(state, {
+      job,
+      consecutiveErrors: job.state.consecutiveErrors,
+    });
+    if (shouldEmitImplicitFailureAlert) {
+      emitImplicitDeliveryFailureAlert(state, { job, error: result.error });
       job.state.lastFailureAlertAtMs = state.deps.nowMs();
     }
-    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
+    if (
+      !shouldEmitImplicitFailureAlert &&
+      alertConfig &&
+      job.state.consecutiveErrors >= alertConfig.after
+    ) {
       const isBestEffort =
         job.delivery?.bestEffort === true ||
         (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
@@ -445,7 +464,14 @@ export function applyJobResult(
     job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
 
   if (!shouldDelete) {
-    if (job.schedule.kind === "at") {
+    if (result.stopJob === true) {
+      // Monitor wrapper jobs can discover that their durable record is gone or
+      // terminal only at execution time. Disable after recording the failure so
+      // list/status surfaces show why the job stopped instead of pretending the
+      // schedule is still healthy.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+    } else if (job.schedule.kind === "at") {
       if (result.status === "ok" || result.status === "skipped") {
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
@@ -567,6 +593,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    stopJob: result.stopJob,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -1008,6 +1035,7 @@ async function runStartupCatchupCandidate(
       jobId: candidate.jobId,
       status: result.status,
       error: result.error,
+      stopJob: result.stopJob,
       summary: result.summary,
       delivered: result.delivered,
       sessionId: result.sessionId,
@@ -1210,12 +1238,10 @@ export async function executeJobCore(
       monitorId: job.payload.monitorId,
       abortSignal,
     });
-    if (res.stopJob) {
-      job.enabled = false;
-    }
     return {
       status: res.status,
       error: res.error,
+      stopJob: res.stopJob,
       summary: res.summary,
       sessionId: res.sessionId,
       sessionKey: res.sessionKey,
@@ -1277,6 +1303,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    stopJob?: boolean;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1290,6 +1317,7 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    stopJob: coreResult.stopJob,
     startedAt,
     endedAt,
   });

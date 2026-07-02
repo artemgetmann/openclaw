@@ -1,6 +1,6 @@
 import type { CronDelivery, CronSchedule } from "../cron/types.js";
 
-export type MonitorStatus = "active" | "stopped" | "completed" | "expired";
+export type MonitorStatus = "active" | "degraded" | "stopped" | "completed" | "expired";
 
 // `completed` is preserved for backward compatibility as a task-level hint
 // from the agent, but only `stopped` and `expired` should end the monitor

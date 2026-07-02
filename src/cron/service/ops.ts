@@ -483,6 +483,7 @@ async function finishPreparedManualRun(
         status: coreResult.status,
         error: coreResult.error,
         delivered: coreResult.delivered,
+        stopJob: coreResult.stopJob,
         startedAt,
         endedAt,
       },
