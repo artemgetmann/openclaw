@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
@@ -25,6 +26,11 @@ const routeState = vi.hoisted(() => ({
 
 const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
+  downloadChromeMcpElement: vi.fn(async () => ({
+    url: "https://example.com/report.pdf",
+    suggestedFilename: "report.pdf",
+    path: "/tmp/openclaw/downloads/report.pdf",
+  })),
   fillChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
@@ -40,6 +46,11 @@ const chromeMcpMocks = vi.hoisted(() => ({
     name: "Example",
     children: [{ id: "btn-1", role: "button", name: "Continue" }],
   })),
+  waitForChromeMcpDownload: vi.fn(async () => ({
+    url: "https://example.com/report.pdf",
+    suggestedFilename: "report.pdf",
+    path: "/tmp/openclaw/downloads/report.pdf",
+  })),
 }));
 
 const selectAllKey = process.platform === "darwin" ? "Meta+A" : "Control+A";
@@ -47,6 +58,7 @@ const selectAllKey = process.platform === "darwin" ? "Meta+A" : "Control+A";
 vi.mock("../chrome-mcp.js", () => ({
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
+  downloadChromeMcpElement: chromeMcpMocks.downloadChromeMcpElement,
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
@@ -58,6 +70,7 @@ vi.mock("../chrome-mcp.js", () => ({
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
+  waitForChromeMcpDownload: chromeMcpMocks.waitForChromeMcpDownload,
 }));
 
 vi.mock("../cdp.js", () => ({
@@ -138,6 +151,16 @@ function getActPostHandler() {
   return handler;
 }
 
+function getDownloadPostHandler(path: "/download" | "/wait/download") {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentActDownloadRoutes(app, {
+    state: () => ({ resolved: { evaluateEnabled: true } }),
+  } as never);
+  const handler = postHandlers.get(path);
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 function getDialogHookPostHandler() {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActRoutes(app, {
@@ -152,6 +175,7 @@ describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
+    chromeMcpMocks.downloadChromeMcpElement.mockClear();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.insertTextViaCdp.mockClear();
@@ -160,6 +184,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.resolveChromeMcpPageWebSocketUrl.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
+    chromeMcpMocks.waitForChromeMcpDownload.mockClear();
     routeState.tab = {
       targetId: "7",
       url: "https://example.com",
@@ -188,6 +213,69 @@ describe("existing-session browser routes", () => {
       targetId: "7",
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
+  });
+
+  it("clicks and saves downloads for existing-session profiles", async () => {
+    const handler = getDownloadPostHandler("/download");
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { ref: "download-button", path: "report.pdf", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      targetId: "7",
+      download: {
+        path: "/tmp/openclaw/downloads/report.pdf",
+        suggestedFilename: "report.pdf",
+      },
+    });
+    expect(chromeMcpMocks.downloadChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      userDataDir: undefined,
+      targetId: "7",
+      uid: "download-button",
+      downloadDir: expect.stringContaining("downloads"),
+      path: expect.stringContaining("report.pdf"),
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("waits for downloads for existing-session profiles", async () => {
+    const handler = getDownloadPostHandler("/wait/download");
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { path: "report.pdf", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      targetId: "7",
+      download: {
+        path: "/tmp/openclaw/downloads/report.pdf",
+        suggestedFilename: "report.pdf",
+      },
+    });
+    expect(chromeMcpMocks.waitForChromeMcpDownload).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      userDataDir: undefined,
+      targetId: "7",
+      downloadDir: expect.stringContaining("downloads"),
+      path: expect.stringContaining("report.pdf"),
+      timeoutMs: 12_000,
+    });
   });
 
   it("falls back to full-page snapshots when selector/frame is requested for existing-session profiles", async () => {

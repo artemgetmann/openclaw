@@ -37,6 +37,15 @@ const browserActionsMocks = vi.hoisted(() => ({
   ),
   browserArmDialog: vi.fn(async () => ({ ok: true })),
   browserArmFileChooser: vi.fn(async () => ({ ok: true })),
+  browserDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+      path: "/tmp/openclaw/downloads/report.pdf",
+    },
+  })),
   browserConsoleMessages: vi.fn(async () => ({
     ok: true,
     targetId: "t1",
@@ -51,6 +60,15 @@ const browserActionsMocks = vi.hoisted(() => ({
   browserNavigate: vi.fn(async () => ({ ok: true })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
+  browserWaitForDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+      path: "/tmp/openclaw/downloads/report.pdf",
+    },
+  })),
 }));
 vi.mock("../../browser/client-actions.js", () => browserActionsMocks);
 
@@ -1120,6 +1138,142 @@ describe("browser tool url alias support", () => {
         timeoutMs: 60000,
       }),
     );
+  });
+
+  it("passes download requests to the browser download helper", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "download",
+      ref: "download-link-1",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 15000,
+      profile: "signed-in",
+    });
+
+    expect(browserActionsMocks.browserDownload).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        ref: "download-link-1",
+        path: "report.pdf",
+        targetId: "tab-1",
+        timeoutMs: 15000,
+        profile: "signed-in",
+      }),
+    );
+    expect(result?.content?.[0]).toMatchObject({
+      type: "text",
+      text: "FILE:/tmp/openclaw/downloads/report.pdf",
+    });
+  });
+
+  it("requires ref and path for download before calling the browser helper", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "download",
+        path: "report.pdf",
+      }),
+    ).rejects.toThrow("ref required");
+    await expect(
+      tool.execute?.("call-2", {
+        action: "download",
+        ref: "download-link-1",
+      }),
+    ).rejects.toThrow("path required");
+
+    expect(browserActionsMocks.browserDownload).not.toHaveBeenCalled();
+  });
+
+  it("passes waitDownload requests to the browser wait helper", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "waitDownload",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 15000,
+      profile: "signed-in",
+    });
+
+    expect(browserActionsMocks.browserWaitForDownload).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        path: "report.pdf",
+        targetId: "tab-1",
+        timeoutMs: 15000,
+        profile: "signed-in",
+      }),
+    );
+    expect(result?.content?.[0]).toMatchObject({
+      type: "text",
+      text: "FILE:/tmp/openclaw/downloads/report.pdf",
+    });
+  });
+
+  it("allows waitDownload without an explicit output path", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "waitDownload",
+      targetId: "tab-1",
+    });
+
+    expect(browserActionsMocks.browserWaitForDownload).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        path: undefined,
+        targetId: "tab-1",
+      }),
+    );
+  });
+
+  it("routes download through the node browser proxy when requested", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: {
+            url: "https://example.com/report.pdf",
+            suggestedFilename: "report.pdf",
+            path: "/tmp/node-downloads/report.pdf",
+          },
+        },
+      },
+    } as never);
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "download",
+      target: "node",
+      ref: "download-link-1",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 15000,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/download",
+          body: {
+            ref: "download-link-1",
+            path: "report.pdf",
+            targetId: "tab-1",
+            timeoutMs: 15000,
+          },
+          timeoutMs: 15000,
+        }),
+      }),
+    );
+    expect(browserActionsMocks.browserDownload).not.toHaveBeenCalled();
   });
 
   it("keeps targetUrl required error label when both params are missing", async () => {

@@ -3,9 +3,11 @@ import {
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
+  browserDownload,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
+  browserWaitForDownload,
 } from "../../browser/client-actions.js";
 import {
   browserCloseTab,
@@ -582,7 +584,7 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
+      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/download/actions).",
       'Browser choice: default serious web work to profile="signed-in"; it launches a cloned signed-in Chrome profile and controls it through Chrome DevTools MCP.',
       'Use profile="openclaw" for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat profile="openclaw" as a last-resort fallback only after profile="signed-in" and any explicitly required profile="user-live" lane are unavailable or proven unsuitable, and only when session state does not matter.',
       'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
@@ -608,6 +610,7 @@ export function createBrowserTool(opts?: {
       'Use act kind="evaluate" only for inspection or recovery after normal browser actions fail; it is not the default automation path.',
       "Never click payment, Pay Now, final booking, final purchase, or any charge-confirming control without explicit user confirmation.",
       "Do not use exec/curl for browser checkout navigation unless the user explicitly asks; browser pages must be controlled through browser actions.",
+      'For browser-initiated file saves, use action="download" with a snapshot ref and output path, or action="waitDownload" for an already-triggered download. Only use GUI save-dialog automation if browser download reports unsupported or native-save-dialog required; endpoint discovery/curl is the last resort.',
       "Prefer ref from snapshot over selector. Use screenshot only when pixels are explicitly needed; structured snapshots are faster and more reliable for automation.",
       "Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
@@ -939,6 +942,63 @@ export function createBrowserTool(opts?: {
                 timeoutMs,
               }),
             );
+          }
+          case "download": {
+            const ref = readStringParam(params, "ref", { required: true });
+            const path = readStringParam(params, "path", { required: true });
+            const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
+            browserBackendAttempted = true;
+            const result = proxyRequest
+              ? ((await proxyRequest({
+                  method: "POST",
+                  path: "/download",
+                  profile,
+                  body: {
+                    ref,
+                    path,
+                    targetId,
+                    timeoutMs,
+                  },
+                  timeoutMs: timeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
+                })) as Awaited<ReturnType<typeof browserDownload>>)
+              : await browserDownload(baseUrl, {
+                  ref,
+                  path,
+                  targetId,
+                  timeoutMs,
+                  profile,
+                });
+            return {
+              content: [{ type: "text" as const, text: `FILE:${result.download.path}` }],
+              details: result,
+            };
+          }
+          case "waitDownload": {
+            const path = readStringParam(params, "path");
+            const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
+            browserBackendAttempted = true;
+            const result = proxyRequest
+              ? ((await proxyRequest({
+                  method: "POST",
+                  path: "/wait/download",
+                  profile,
+                  body: {
+                    path,
+                    targetId,
+                    timeoutMs,
+                  },
+                  timeoutMs: timeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
+                })) as Awaited<ReturnType<typeof browserWaitForDownload>>)
+              : await browserWaitForDownload(baseUrl, {
+                  path,
+                  targetId,
+                  timeoutMs,
+                  profile,
+                });
+            return {
+              content: [{ type: "text" as const, text: `FILE:${result.download.path}` }],
+              details: result,
+            };
           }
           case "console":
             browserBackendAttempted = true;
