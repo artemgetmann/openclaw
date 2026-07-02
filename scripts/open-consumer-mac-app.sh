@@ -19,7 +19,14 @@ Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when opening an isolated runtime
 lane that was packaged with the stable consumer debug app identity.
 
 By default this only opens the app. Use --refresh-gateway when the caller
-intentionally wants to reinstall the per-instance gateway LaunchAgent.
+intentionally wants to reinstall a per-instance gateway LaunchAgent from this
+source checkout.
+
+Default Jarvis runtime warning:
+  --refresh-gateway on the empty/default instance would install ai.jarvis.gateway
+  from the current source checkout. That is not app-managed bundled runtime
+  proof. Use scripts/prove-jarvis-runtime.sh for read-only bundled proof, or
+  pass --instance <id> for isolated source-checkout debug lanes.
 EOF
 }
 
@@ -78,6 +85,40 @@ refresh_gateway_service_env() {
   done
 }
 
+require_refresh_gateway_scope_is_explicit() {
+  local normalized="${1:-}"
+
+  if [[ "$REFRESH_GATEWAY" != "1" ]]; then
+    return
+  fi
+
+  if [[ -n "$normalized" ]]; then
+    return
+  fi
+
+  # The default instance is the real Jarvis app-support runtime. Reinstalling
+  # its gateway through `pnpm openclaw:local` makes launchd run this checkout,
+  # which is fine for an intentional emergency debug session but invalid for
+  # any claim that runtime_source=jarvis-managed-bundle. Force the operator to
+  # name that provenance change instead of hiding it behind a generic relaunch.
+  if [[ "${OPENCLAW_ALLOW_SOURCE_CHECKOUT_JARVIS_REFRESH:-0}" == "1" ]]; then
+    echo "WARNING: --refresh-gateway is reinstalling the default Jarvis gateway from source checkout: $ROOT_DIR" >&2
+    echo "WARNING: do not claim runtime_source=jarvis-managed-bundle after this; prove actual runtime provenance first." >&2
+    return
+  fi
+
+  echo "ERROR: refusing --refresh-gateway for the default Jarvis runtime." >&2
+  echo "  It would install ai.jarvis.gateway from this source checkout:" >&2
+  echo "  $ROOT_DIR" >&2
+  echo "  That is not jarvis-managed-bundle proof." >&2
+  echo "" >&2
+  echo "Use one of these explicit paths instead:" >&2
+  echo "  - Read-only managed-bundle proof: bash scripts/prove-jarvis-runtime.sh --expected-commit <sha>" >&2
+  echo "  - Isolated source-checkout debug lane: scripts/open-consumer-mac-app.sh --instance <id> --refresh-gateway" >&2
+  echo "  - Break-glass source-checkout default refresh: OPENCLAW_ALLOW_SOURCE_CHECKOUT_JARVIS_REFRESH=1 ..." >&2
+  exit 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --instance)
@@ -119,6 +160,7 @@ if [[ -z "$INSTANCE_ID" ]]; then
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
+require_refresh_gateway_scope_is_explicit "$NORMALIZED_INSTANCE_ID"
 if [[ -z "$NORMALIZED_INSTANCE_ID" && -z "$APP_PATH" ]]; then
   if ! consumer_instance_default_checkout_allowed "$ROOT_DIR"; then
     echo "ERROR: default Jarvis app launch is reserved for the sacred home clone." >&2

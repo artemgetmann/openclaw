@@ -93,6 +93,56 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
 - Use `scripts/clawlog.sh` for macOS unified logs.
 - Temporary worktrees are the required implementation surface for development and pre-merge validation. The primary bot still must run from `main`, not from a worktree build. The `main` sacred home clone stays on `main`; shared-runtime restarts happen only after that clone is back on clean, fast-forwarded `main`.
 
+## Jarvis Runtime Shipping Lanes
+
+Keep these lanes separate. They answer different questions, mutate different
+state, and produce different proof:
+
+1. Fast live hotfix from sacred `main`
+   - Use this when a tested PR needs to be live for Artem's local validation.
+   - Merge the PR, fast-forward `~/Programming_Projects/openclaw`, then restart
+     and prove the runtime that is actually under test from the sacred `main`
+     checkout.
+   - For the shared gateway, use `scripts/deploy-shared-main-runtime.sh` or
+     `scripts/ship-main-gateway-fix.sh --pr <number>`.
+   - For Jarvis-managed proof, use
+     `scripts/prove-jarvis-runtime.sh --expected-commit <main-sha>`. That proof
+     is read-only and must report `runtime_source=jarvis-managed-bundle`.
+   - Do not rebuild `dist/Jarvis.app`, package a DMG, run Sparkle, or notarize
+     just to ship a normal runtime bug fix.
+
+2. Local Jarvis app-support bundled runtime refresh
+   - Use this only when the `ai.jarvis.gateway` app-support runtime itself must
+     be refreshed and the user has explicitly approved that mutation.
+   - The honest proof is still `scripts/prove-jarvis-runtime.sh` after the
+     refresh. If the installed app bundle is older than the refreshed
+     app-support runtime, run
+     `scripts/protect-jarvis-runtime-from-app-reseed.sh --expected-live-commit <sha>`
+     first in dry-run mode, then use `--apply` only when the live runtime state
+     is clearly the one being protected.
+   - `scripts/open-consumer-mac-app.sh --refresh-gateway` is for isolated
+     source-checkout debug lanes. On the default Jarvis instance it would make
+     `ai.jarvis.gateway` run from the current checkout, so it is not valid
+     `jarvis-managed-bundle` proof.
+
+3. Public macOS app release
+   - Use this only for a sendable Jarvis DMG/app update or Sparkle release.
+   - Start from `bash scripts/jarvis-release-worktree.sh`, then follow
+     `apps/macos/README.md` and `scripts/jarvis-public-release.sh`.
+   - This lane owns package artifacts, notarization, appcast generation, and
+     release asset publishing. It is not the default post-merge runtime ship
+     path.
+
+Optional Telegram proof belongs after the runtime proof it depends on. For
+shared-main Telegram proof, use `scripts/prove-main-telegram-runtime.sh` or the
+`--live-telegram-restart` option on `scripts/ship-main-gateway-fix.sh`. For
+worktree tester-bot proof, start with `bash scripts/telegram-live-runtime.sh
+ensure`, then run the smallest feature-specific `pnpm openclaw:local telegram
+smoke ...` or `pnpm openclaw:local telegram scenario ...` command. Capture the
+unique prompt token, bot username, token fingerprint, message IDs, and the
+relevant send path lines, including `sendRichMessage ok` when rich Telegram
+rendering is under test.
+
 ## Shared-Main Ship Lane
 
 For a PR that explicitly needs shared-main deploy proof after merge, use:
