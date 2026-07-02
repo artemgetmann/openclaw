@@ -130,7 +130,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     } as unknown as FollowupRun;
 
-    await runMemoryFlushIfNeeded({
+    const updatedEntry = await runMemoryFlushIfNeeded({
       cfg,
       followupRun,
       promptForEstimate: "hello",
@@ -155,5 +155,10 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
     expect(stored[sessionKey].cliSessionIds?.["openai-codex"]).toBeUndefined();
+    expect(stored[sessionKey].totalTokens).toBeUndefined();
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(followupRun.run.persistedPromptTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokensFresh).toBe(false);
   });
 });
