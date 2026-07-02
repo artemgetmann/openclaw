@@ -9,6 +9,7 @@ const telegramScenarioProgressPlusTtsCommand = vi.fn().mockResolvedValue(undefin
 const telegramScenarioTtsFinalCaptionCommand = vi.fn().mockResolvedValue(undefined);
 const telegramSmokeBaselineCommand = vi.fn().mockResolvedValue(undefined);
 const telegramSmokeDmReplyCommand = vi.fn().mockResolvedValue(undefined);
+const telegramSmokeReplyContractCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/telegram.js", () => ({
   telegramDoctorCommand,
@@ -19,6 +20,7 @@ vi.mock("../commands/telegram.js", () => ({
   telegramScenarioTtsFinalCaptionCommand,
   telegramSmokeBaselineCommand,
   telegramSmokeDmReplyCommand,
+  telegramSmokeReplyContractCommand,
 }));
 
 describe("telegram cli", () => {
@@ -77,7 +79,7 @@ describe("telegram cli", () => {
     const scenario = telegram?.commands.find((command) => command.name() === "scenario");
 
     expect(smoke?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["baseline", "dm-reply"]),
+      expect.arrayContaining(["baseline", "dm-reply", "reply-contract"]),
     );
     expect(scenario?.commands.map((command) => command.name())).toEqual(
       expect.arrayContaining(["progress-long-task", "progress-plus-tts", "tts-final-caption"]),
@@ -150,6 +152,34 @@ describe("telegram cli", () => {
         text: "baseline text",
         timeout: "60",
         topicId: "42",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes harness options to smoke reply-contract without requiring chat", async () => {
+    const program = new Command();
+    registerTelegramCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram",
+        "smoke",
+        "reply-contract",
+        "--proof-id",
+        "proof-123",
+        "--timeout",
+        "75",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramSmokeReplyContractCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        proofId: "proof-123",
+        timeout: "75",
       }),
       expect.any(Object),
     );
