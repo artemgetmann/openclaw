@@ -168,6 +168,11 @@ describe("monitor gateway handlers", () => {
       expect.objectContaining({
         sessionKey: monitor?.monitorSessionKey,
         originSessionKey: "agent:main:telegram:direct:user-1",
+        originDelivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        }),
         instructions: "Monitor Empower replies and draft the next response.",
         goal: { id: "goal-1", objective: "Get the refund confirmed." },
       }),
@@ -497,6 +502,7 @@ describe("monitor gateway handlers", () => {
         instructions: "Watch this WhatsApp thread and reply directly when needed.",
         agentId: "main",
         originSessionKey: "agent:main:main",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
         sourceType: "whatsapp",
         sourceTarget: { target: "74333133234289@lid", accountId: "default" },
         cadence: { kind: "every", everyMs: 300_000 },
@@ -524,6 +530,13 @@ describe("monitor gateway handlers", () => {
       to: "74333133234289@lid",
       accountId: "default",
     });
+    expect(seedMonitorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionPolicy: "auto_send",
+        watchDeliveryConfigured: true,
+        originDelivery: expect.anything(),
+      }),
+    );
   });
 
   it("routes matching webhook events to an existing durable monitor session", async () => {

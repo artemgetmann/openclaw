@@ -241,6 +241,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       goal: monitor.goal,
       watchDeliveryConfigured: Boolean(watchDelivery),
       originSessionKey: p.originSessionKey,
+      originDelivery: monitor.originDelivery,
     });
     respond(true, monitor, undefined);
   },

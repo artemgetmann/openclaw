@@ -24,6 +24,9 @@ export function buildMonitorWakeMessage(params: {
     `sourceType: ${monitor.sourceType}`,
     `sourceTarget: ${JSON.stringify(monitor.sourceTarget)}`,
     `actionPolicy: ${monitor.actionPolicy}`,
+    ...(monitor.originDelivery
+      ? [`originDelivery: ${JSON.stringify(monitor.originDelivery)}`]
+      : ["originDelivery: none"]),
     `status: ${monitor.status}`,
     ...(monitor.goal
       ? [
@@ -49,8 +52,10 @@ export function buildMonitorWakeMessage(params: {
       ? watchDeliveryConfigured
         ? [
             "Watched-surface delivery is authorized and configured for this wake.",
-            "Reply only with the exact content that should be sent to the watched surface.",
-            "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply'.",
+            "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
+            "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+            "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
+            "Do not send approval questions, private status, or monitor narration to the watched surface.",
             "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
           ]
         : [

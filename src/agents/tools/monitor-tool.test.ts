@@ -97,6 +97,9 @@ describe("monitor tool", () => {
       "if multiple active monitors could match, ask a short clarification",
     );
     expect(tool.description).toContain("include the actual draft text");
+    expect(tool.description).toContain("use actionPolicy=auto_send");
+    expect(tool.description).toContain("green-zone replies go to that watched surface");
+    expect(tool.description).toContain("approval questions must go back to the origin chat");
     expect(tool.description).toContain("only reporting status");
     expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
     expect(tool.description).toContain("if there is an active goal");
