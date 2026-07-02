@@ -40,6 +40,7 @@ describe("scripts/gateway-recover-main.sh", () => {
   it("exits before restart work when the canonical gateway is already healthy", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
+    const jarvisGuardCallIndex = script.indexOf("assert_no_jarvis_gateway_conflict");
     const healthyCallIndex = script.indexOf("if canonical_gateway_healthy; then");
     const healthyMessageIndex = script.indexOf(
       "canonical gateway is already healthy; exiting without restart",
@@ -48,10 +49,29 @@ describe("scripts/gateway-recover-main.sh", () => {
     const fullStopIndex = script.indexOf('log_block "Full clean stop"');
 
     expect(script).toContain("canonical_gateway_healthy() {");
+    expect(script).toContain("assert_no_jarvis_gateway_conflict() {");
+    expect(jarvisGuardCallIndex).toBeGreaterThanOrEqual(0);
     expect(healthyCallIndex).toBeGreaterThanOrEqual(0);
+    expect(jarvisGuardCallIndex).toBeLessThan(healthyCallIndex);
     expect(healthyMessageIndex).toBeGreaterThan(healthyCallIndex);
     expect(healthyMessageIndex).toBeLessThan(shallowRecoveryIndex);
     expect(healthyMessageIndex).toBeLessThan(fullStopIndex);
+  });
+
+  it("refuses shared gateway recovery while Jarvis owns the same port unless explicitly overridden", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'JARVIS_GATEWAY_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"',
+    );
+    expect(script).toContain(
+      'ALLOW_SHARED_GATEWAY_WITH_JARVIS="${OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS:-0}"',
+    );
+    expect(script).toContain("jarvis_gateway_targets_shared_port() {");
+    expect(script).toContain('grep -F -q "OPENCLAW_GATEWAY_PORT => ${PORT}"');
+    expect(script).toContain("refusing to recover %s while %s is loaded for port %s");
+    expect(script).toContain("scripts/prove-jarvis-runtime.sh");
+    expect(script).toContain("OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS=1");
   });
 
   it("supports shallow launchd recovery without full stop, build, or reinstall", () => {
