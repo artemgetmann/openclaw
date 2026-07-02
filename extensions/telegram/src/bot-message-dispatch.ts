@@ -1719,15 +1719,14 @@ export const dispatchTelegramMessage = async ({
       hasMedia,
       isError: normalizedPayload.isError === true,
     });
-    const shouldUseLegacyTextTransport =
-      isControlCommandReplyPayload(normalizedPayload) || (durableReason === "final" && !hasMedia);
+    const shouldUseLegacyTextTransport = isControlCommandReplyPayload(normalizedPayload);
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       // Control command replies are product UI, not rich content. Some attach
       // media, such as the /tts on voice preview, so keep their text bubble on
-      // ordinary Telegram transport while preserving media delivery. Text-only
-      // finals also stay on legacy transport because Telegram rich sends have
-      // repeatedly rendered as unsupported blank bubbles in Jarvis Lab topics.
+      // ordinary Telegram transport while preserving media delivery. Normal
+      // final answer text must stay on the rich-capable durable path so tables
+      // can render natively, with deliverReplies handling legacy fallbacks.
       ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
       replies: [applyQuoteReplyTarget(normalizedPayload)],
       onVoiceRecording: sendRecordVoice,
