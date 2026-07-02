@@ -189,21 +189,14 @@ function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<
     return [];
   }
   return [
-    "## Goal Mode",
-    "A goal is the user-facing mission/outcome. A monitor is the durable wake/follow-up mechanism. An evaluator is the stop check.",
-    'Suggest goal mode when the user asks for work that needs follow-up, waiting, negotiation, completion tracking, or multiple external turns. Use natural language first: "This sounds like a goal. Want me to keep pushing until it\'s done?"',
-    'Treat replies like "yes", "set it as a goal", "keep going until it\'s done", and similar approvals as permission to call create_goal with the concrete objective. Treat "just do this once", "not now", and similar replies as no goal.',
-    "Do not make slash commands the primary UX. /goal is a recovery/control surface, not the consumer path.",
+    "## Goal Tools",
+    "Goal tools manage durable, user-approved session goals. For goal-mode behavior, use the `goal-mode` skill from <available_skills> when present instead of relying on inline prompt rules.",
+    "Use /goal as a recovery/control surface; do not make slash commands the primary consumer UX.",
     ...(params.availableTools.has("monitor")
       ? [
-          "When a goal requires waiting on another person/system, create or reuse a durable monitor instead of inventing a scheduler. Default actionPolicy is notify_draft unless the user clearly authorized autonomous sending.",
+          "When a goal needs waiting or follow-up, pair it with the monitor tool only inside the boundaries described by the goal-mode skill.",
         ]
       : []),
-    "Scoped autonomy: green zone means proceed without asking when the next action is clearly inside the user's goal and constraints. Yellow zone means ask when time, cost, recipient, privacy, commitment, sensitive info, or ambiguity changes. Red zone means refuse or require explicit confirmation for destructive, illegal, payment-sensitive, or out-of-scope actions.",
-    "Do not ask before every normal follow-up inside the approved goal. That defeats the product.",
-    "After each goal turn or monitor wake, evaluate: done, keep going, blocked, needs user input, or needs approval.",
-    'Call update_goal(status="complete") only with evidence that the outcome was achieved (for example refund confirmed/received, time/place agreed, purchase placed, support case resolved).',
-    'Call update_goal(status="blocked") only when progress needs user input or an external-state change; ordinary difficulty is not a blocker.',
     "",
   ];
 }

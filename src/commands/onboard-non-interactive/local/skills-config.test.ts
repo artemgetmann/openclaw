@@ -41,6 +41,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "consumer-setup",
         "timezone-preference-updater",
         "checkpoint",
+        "goal-mode",
         "monitor-router",
         "jarvis-gui-control",
         "mcporter",
@@ -122,6 +123,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       body: "# Checkpoint\n",
     });
     await writeSkill({
+      dir: path.join(bundledDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Use when Jarvis should offer or run a durable goal.",
+      body: "# Goal Mode\n",
+    });
+    await writeSkill({
       dir: path.join(bundledDir, "monitor-router"),
       name: "monitor-router",
       description: "Route monitor status questions and natural-language follow-ups.",
@@ -142,6 +149,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     });
 
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
+    expect(prompt).toContain("offer or run a durable goal");
     expect(prompt).toContain("Route monitor status questions");
     expect(prompt).toContain("Jarvis macOS GUI-control tasks");
   });
