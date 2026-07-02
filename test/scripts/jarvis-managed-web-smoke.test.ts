@@ -148,4 +148,30 @@ describe("scripts/smoke-jarvis-managed-web.mjs", () => {
       }),
     ).rejects.toThrow(/mode must be managed/);
   });
+
+  it("fails when a managed utility returns the wrong provider", async () => {
+    await expect(
+      runManagedWebSmoke({
+        configPath: "/tmp/test-openclaw.json",
+        config: {
+          jarvis: {
+            backend: { baseUrl: "https://jarvis.example", accessToken: "token" },
+            managedServices: { mode: "managed" },
+          },
+        },
+        skipScrape: true,
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              result: {
+                provider: "placeholder",
+                payload: { web: { results: [] } },
+              },
+            }),
+            { status: 200 },
+          ),
+      }),
+    ).rejects.toThrow(/brave\.search returned unexpected provider: placeholder/);
+  });
 });

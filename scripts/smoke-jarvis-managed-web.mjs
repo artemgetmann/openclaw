@@ -277,6 +277,9 @@ function firstResultHost(results) {
 }
 
 function summarizeBraveResult(result) {
+  if (result.provider !== "brave") {
+    throw new Error(`brave.search returned unexpected provider: ${String(result.provider)}`);
+  }
   const payload = isRecord(result.payload) ? result.payload : {};
   const web = isRecord(payload.web) ? payload.web : {};
   const results = Array.isArray(web.results) ? web.results : [];
@@ -289,6 +292,9 @@ function summarizeBraveResult(result) {
 }
 
 function summarizeFirecrawlResult(result) {
+  if (result.provider !== "firecrawl") {
+    throw new Error(`firecrawl.scrape returned unexpected provider: ${String(result.provider)}`);
+  }
   const payload = isRecord(result.payload) ? result.payload : {};
   const data = isRecord(payload.data) ? payload.data : {};
   const markdown = typeof data.markdown === "string" ? data.markdown : "";
