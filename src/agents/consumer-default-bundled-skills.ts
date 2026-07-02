@@ -60,38 +60,34 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   changes: string[];
 } {
   const currentAllowlist = config.skills?.allowBundled ?? [];
-  const repairableDefaultSkills = new Set([
-    "jarvis-gui-control",
-    "telegram-chat-management",
-    "screen-record",
-  ]);
   if (currentAllowlist.includes("__none__")) {
     return { config, changes: [] };
   }
 
+  const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
   const current = new Set(currentAllowlist);
-  const missingRepairableSkills = CONSUMER_DEFAULT_BUNDLED_SKILLS.filter((skillName) => {
-    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
-    return repairableDefaultSkills.has(skillName) && !explicitlyDisabled && !current.has(skillName);
-  });
-  if (missingRepairableSkills.length === 0) {
-    return { config, changes: [] };
-  }
-
-  const looksLikeGeneratedConsumerDefault = CONSUMER_DEFAULT_BUNDLED_SKILLS.every((skillName) => {
-    if (repairableDefaultSkills.has(skillName)) {
-      return true;
-    }
-    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
-    return explicitlyDisabled || current.has(skillName);
-  });
+  const hasEnoughDefaultSkillsToLookGenerated = currentAllowlist.length >= 3;
+  const looksLikeGeneratedConsumerDefault =
+    hasEnoughDefaultSkillsToLookGenerated &&
+    currentAllowlist.every((skillName) => defaultSkills.has(skillName));
   if (!looksLikeGeneratedConsumerDefault) {
     return { config, changes: [] };
   }
 
   const nextAllowlist = [...currentAllowlist];
-  for (const skillName of missingRepairableSkills) {
+  const added: string[] = [];
+  for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
+    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
+    if (explicitlyDisabled || current.has(skillName)) {
+      continue;
+    }
     insertBundledSkillInDefaultOrder(nextAllowlist, skillName);
+    current.add(skillName);
+    added.push(skillName);
+  }
+
+  if (added.length === 0) {
+    return { config, changes: [] };
   }
 
   return {
@@ -102,7 +98,7 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
         allowBundled: nextAllowlist,
       },
     },
-    changes: missingRepairableSkills.map((skillName) => `skills.allowBundled += ${skillName}`),
+    changes: [`skills.allowBundled += ${added.join(",")}`],
   };
 }
 
