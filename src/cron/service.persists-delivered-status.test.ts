@@ -37,6 +37,17 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
   };
 }
 
+function buildMonitorWakeJob(name: string): CronAddInput {
+  return {
+    name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "session:agent:main:monitor:monitor-1",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "monitorWake", monitorId: "monitor-1" },
+  };
+}
+
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
@@ -149,6 +160,40 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDelivered).toBe(true);
     expect(updated?.state.lastDeliveryStatus).toBe("delivered");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists delivered status passed through by monitor wake runs", async () => {
+    const store = await makeStorePath();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runMonitorJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "monitor delivered",
+        delivered: true,
+        deliveryAttempted: true,
+      })),
+    });
+
+    await cron.start();
+    try {
+      const job = await cron.add(buildMonitorWakeJob("monitor-delivered"));
+      const result = await cron.run(job.id, "force");
+      const jobs = await cron.list({ includeDisabled: true });
+      const updated = jobs.find((entry) => entry.id === job.id);
+
+      expect(result).toEqual({ ok: true, ran: true });
+      expectSuccessfulCronRun(updated);
+      expect(updated?.state.lastDelivered).toBe(true);
+      expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+      expect(updated?.state.lastDeliveryError).toBeUndefined();
+    } finally {
+      cron.stop();
+    }
   });
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {

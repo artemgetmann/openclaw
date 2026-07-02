@@ -1243,6 +1243,8 @@ export async function executeJobCore(
       error: res.error,
       stopJob: res.stopJob,
       summary: res.summary,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
       sessionId: res.sessionId,
       sessionKey: res.sessionKey,
       model: res.model,
