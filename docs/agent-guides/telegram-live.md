@@ -62,10 +62,15 @@ and more reliable default.
   - `pnpm openclaw:local telegram doctor --chat @jarvis_tester_1_bot`
   - `pnpm openclaw:local telegram runtime ensure`
   - `pnpm openclaw:local telegram smoke dm-reply --chat @jarvis_tester_1_bot --json`
+  - `pnpm openclaw:local telegram smoke reply-contract --chat @jarvis_tester_1_bot --json`
 - Reusable live E2E harness:
   - `pnpm openclaw:local telegram smoke baseline --json`
     - Wiring proof only: runtime ownership, bot claim, userbot session, send/read/wait.
     - A baseline pass is not merge proof for a feature change.
+  - `pnpm openclaw:local telegram smoke reply-contract --json`
+    - Tester-bot proof only: requires `STARTING <proof-id>`, then structured
+      `FINISHED <proof-id>` fields or `BLOCKED <proof-id> reason=... last_step=...`.
+    - Blank tester replies are failures, even when Telegram delivered a message.
   - `pnpm openclaw:local telegram scenario tts-final-caption --json`
     - Feature-specific proof for final caption behavior after TTS output.
   - `pnpm openclaw:local telegram scenario progress-long-task --json`

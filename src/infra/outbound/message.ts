@@ -60,6 +60,10 @@ export type MessageSendResult = {
   via: "direct" | "gateway";
   mediaUrl: string | null;
   mediaUrls?: string[];
+  /** Text that reached the outbound adapter after message_sending hooks rewrote it. */
+  deliveredText?: string;
+  /** True when best-effort delivery continued after one or more payload failures. */
+  partialFailure?: boolean;
   result?: OutboundDeliveryResult | { messageId: string };
   dryRun?: boolean;
 };
@@ -236,6 +240,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       agentId: params.agentId,
       sessionKey: params.mirror?.sessionKey,
     });
+    const deliveredPayloadTexts: string[] = [];
+    const deliveryErrors: string[] = [];
     const results = await deliverOutboundPayloads({
       cfg,
       channel: outboundChannel,
@@ -251,6 +257,18 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      onPayload: (payload) => {
+        // Capture the post-hook text. Source-topic approval receipts must describe
+        // what was actually handed to the adapter, not the pre-hook model text.
+        // Empty strings are meaningful: hooks can intentionally strip text while
+        // leaving media, and receipts must not resurrect the pre-hook content.
+        deliveredPayloadTexts.push(payload.text);
+      },
+      onError: (err) => {
+        // Best-effort sends may continue after failures. Keep a compact signal so
+        // callers that need exact-delivery proof can reject partial success.
+        deliveryErrors.push(err instanceof Error ? err.message : String(err));
+      },
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -267,6 +285,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       via: "direct",
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+      deliveredText: deliveredPayloadTexts.length ? deliveredPayloadTexts.join("\n") : undefined,
+      partialFailure: deliveryErrors.length > 0 ? true : undefined,
       result: results.at(-1),
     };
   }

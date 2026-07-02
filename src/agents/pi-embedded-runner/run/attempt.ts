@@ -1628,6 +1628,7 @@ export async function runEmbeddedAttempt(
           currentMessageId: params.currentMessageId,
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
+          sourceReceipt: params.sourceReceipt,
           modelHasVision,
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),

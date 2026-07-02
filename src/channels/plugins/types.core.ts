@@ -362,6 +362,20 @@ export type ChannelThreadingToolContext = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   /**
+   * Runtime-trusted source metadata for narrow relay receipts. Models cannot
+   * set this through tool args; callers inject it from inbound/session state.
+   */
+  sourceReceipt?: {
+    kind: "heartbeat";
+    sourceChannel: "telegram";
+    sourceTo: string;
+    sourceAccountId?: string;
+    sourceThreadId?: string | number;
+    sourceLabel?: string;
+    sourceSessionKey?: string;
+    agentId?: string;
+  };
+  /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
    * Use this for direct tool invocations where the agent is composing a new message,
    * not forwarding/relaying a message from another conversation.

@@ -38,6 +38,10 @@ export function registerTelegramCli(program: Command) {
             "Send one DM and wait for a real reply with proof output.",
           ],
           [
+            "openclaw telegram smoke reply-contract --json",
+            "Require deterministic STARTING and FINISHED/BLOCKED tester-bot proof replies.",
+          ],
+          [
             "openclaw telegram scenario progress-plus-tts --json",
             "Run a reusable live scenario against the claimed tester bot.",
           ],
@@ -124,6 +128,20 @@ export function registerTelegramCli(program: Command) {
       await telegramSmokeBaselineCommand(opts, defaultRuntime);
     });
   });
+
+  addTelegramHarnessOptions(
+    smoke
+      .command("reply-contract")
+      .description("Require STARTING and structured FINISHED/BLOCKED tester-bot replies"),
+    { requireChat: false },
+  )
+    .option("--proof-id <id>", "Stable proof id to require in STARTING/FINISHED/BLOCKED replies")
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { telegramSmokeReplyContractCommand } = await import("../commands/telegram.js");
+        await telegramSmokeReplyContractCommand(opts, defaultRuntime);
+      });
+    });
 
   const scenario = telegram
     .command("scenario")

@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HeartbeatSourceReceiptContext } from "../infra/outbound/source-receipt.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -171,6 +172,11 @@ export type MsgContext = {
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
    */
   ExplicitDeliverRoute?: boolean;
+  /**
+   * Trusted runtime metadata for heartbeat action receipts. This is injected
+   * from stored session origin, never from model/user text.
+   */
+  SourceReceipt?: HeartbeatSourceReceiptContext;
   /**
    * Provider-specific parent conversation id for threaded contexts.
    * For Discord threads, this is the parent channel id.
