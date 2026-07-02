@@ -96,9 +96,11 @@ export type SpawnAcpResult = {
 };
 
 export const ACP_SPAWN_ACCEPTED_NOTE =
-  "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
+  "one-shot ACP task queued in isolated session; the parent session should relay or inspect results.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+export const ACP_SPAWN_RUN_THREAD_IGNORED_NOTE =
+  'one-shot ACP task queued in isolated session; thread=true was ignored because mode="run". Use mode="session" with thread=true only for an explicit thread binding request.';
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
@@ -128,15 +130,11 @@ type PreparedAcpThreadBinding = {
   placement: "current" | "child";
 };
 
-function resolveSpawnMode(params: {
-  requestedMode?: SpawnAcpMode;
-  threadRequested: boolean;
-}): SpawnAcpMode {
+function resolveSpawnMode(params: { requestedMode?: SpawnAcpMode }): SpawnAcpMode {
   if (params.requestedMode === "run" || params.requestedMode === "session") {
     return params.requestedMode;
   }
-  // Thread-bound spawns should default to persistent sessions.
-  return params.threadRequested ? "session" : "run";
+  return "run";
 }
 
 function resolveAcpSessionMode(mode: SpawnAcpMode): AcpRuntimeSessionMode {
@@ -462,7 +460,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
+  const requestedThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -478,8 +476,8 @@ export async function spawnAcpDirect(
 
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
-    threadRequested: requestThreadBinding,
   });
+  const requestThreadBinding = requestedThreadBinding && spawnMode === "session";
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
@@ -799,7 +797,12 @@ export async function spawnAcpDirect(
       runId: childRunId,
       mode: spawnMode,
       ...(streamLogPath ? { streamLogPath } : {}),
-      note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      note:
+        spawnMode === "session"
+          ? ACP_SPAWN_SESSION_ACCEPTED_NOTE
+          : requestedThreadBinding
+            ? ACP_SPAWN_RUN_THREAD_IGNORED_NOTE
+            : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
 
@@ -808,6 +811,11 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
-    note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    note:
+      spawnMode === "session"
+        ? ACP_SPAWN_SESSION_ACCEPTED_NOTE
+        : requestedThreadBinding
+          ? ACP_SPAWN_RUN_THREAD_IGNORED_NOTE
+          : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

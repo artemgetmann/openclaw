@@ -105,7 +105,7 @@ We should not guess which one to optimize for.
 
 ### Current Read From Code And Docs
 
-- ACP routing guidance explicitly prefers `thread: true` with `mode: "session"` for Telegram ACP requests.
+- ACP routing guidance now treats normal Telegram ACP requests as one-shot worker calls (`mode: "run"`) and reserves `thread: true` with `mode: "session"` for explicit bind/focus requests.
 - Telegram's adapter currently supports **current conversation placement**, not true child-thread placement.
 - That means the codebase has logic for "bind ACP to this Telegram conversation" but not for "create a separate Telegram child conversation owned by Codex."
 - The live tester behavior still shows parent relay semantics in logs, so intended path and observed path are not fully aligned yet.

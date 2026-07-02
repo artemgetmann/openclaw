@@ -159,7 +159,8 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
     hoisted.resolveAcpSpawnStreamLogPathMock(...args),
 }));
 
-const { spawnAcpDirect } = await import("./acp-spawn.js");
+const { ACP_SPAWN_ACCEPTED_NOTE, ACP_SPAWN_RUN_THREAD_IGNORED_NOTE, spawnAcpDirect } =
+  await import("./acp-spawn.js");
 
 function createSessionBindingCapabilities() {
   return {
@@ -437,6 +438,141 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
     expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it('ignores thread=true for explicit mode="run" ACP requests in Telegram topics', async () => {
+    hoisted.state.cfg = createTelegramSpawnConfig();
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] as const,
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Ask Codex to browse and summarize the result",
+        agentId: "codex",
+        mode: "run",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:17730",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+        agentThreadId: "17730",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.note).toBe(ACP_SPAWN_RUN_THREAD_IGNORED_NOTE);
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agent: "codex",
+        mode: "oneshot",
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.channel).toBeUndefined();
+    expect(agentCall?.params?.to).toBeUndefined();
+    expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it('streams explicit mode="run" ACP requests to parent without binding Telegram topics', async () => {
+    hoisted.state.cfg = createTelegramSpawnConfig();
+    const relayHandle = createRelayHandle();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Ask Codex to browse and summarize the result",
+        agentId: "codex",
+        mode: "run",
+        thread: true,
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:17730",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+        agentThreadId: "17730",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
+    expect(result.note).toBe(ACP_SPAWN_RUN_THREAD_IGNORED_NOTE);
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "agent:main:telegram:group:-1003342490704:topic:17730",
+        agentId: "codex",
+        replyChannel: "telegram",
+        replyTo: "telegram:-1003342490704",
+        replyAccountId: "default",
+        threadId: "17730",
+        logPath: "/tmp/sess-main.acp-stream.jsonl",
+        emitStartNotice: false,
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(false);
+  });
+
+  it("defaults ACP thread requests without session mode to one-shot runs", async () => {
+    hoisted.state.cfg = createTelegramSpawnConfig();
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Ask Codex to check the docs once",
+        agentId: "codex",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:17730",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+        agentThreadId: "17730",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.note).toBe(ACP_SPAWN_RUN_THREAD_IGNORED_NOTE);
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the normal one-shot ACP note when thread binding was not requested", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Ask Codex to check the docs once",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:17730",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+        agentThreadId: "17730",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.note).toBe(ACP_SPAWN_ACCEPTED_NOTE);
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {
