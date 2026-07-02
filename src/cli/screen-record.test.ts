@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildScreenRecordParams } from "./screen-record.js";
+import { buildScreenRecordParams, pickDefaultScreenRecordNode } from "./screen-record.js";
 
 describe("screen record CLI params", () => {
   it("requires an explicit target for the top-level command", () => {
@@ -82,5 +82,34 @@ describe("screen record CLI params", () => {
         },
       ),
     ).toThrow(/--window-id must be between/i);
+  });
+
+  it("defaults to the only Mac node when another screen-capable node exists", () => {
+    expect(
+      pickDefaultScreenRecordNode([
+        {
+          nodeId: "mac-1",
+          platform: "macOS 26.2.0",
+          commands: ["screen.record"],
+        },
+        {
+          nodeId: "phone-1",
+          platform: "iOS 18.0",
+          commands: ["screen.record"],
+        },
+      ]),
+    )?.toMatchObject({ nodeId: "mac-1" });
+  });
+
+  it("does not default to non-Mac nodes for target-aware screen recording", () => {
+    expect(
+      pickDefaultScreenRecordNode([
+        {
+          nodeId: "phone-1",
+          platform: "iOS 18.0",
+          commands: ["screen.record"],
+        },
+      ]),
+    ).toBeNull();
   });
 });

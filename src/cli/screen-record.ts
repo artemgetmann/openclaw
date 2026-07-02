@@ -136,19 +136,21 @@ export function buildScreenRecordParams(
   };
 }
 
-function pickDefaultScreenRecordNode(nodes: NodeListNode[]): NodeListNode | null {
+function isMacNodePlatform(platform: string | undefined): boolean {
+  const normalized = platform?.trim().toLowerCase() ?? "";
+  return normalized === "darwin" || normalized.startsWith("macos") || normalized.startsWith("mac ");
+}
+
+export function pickDefaultScreenRecordNode(nodes: NodeListNode[]): NodeListNode | null {
   const capable = nodes.filter((node) => {
     if (node.connected === false) {
       return false;
     }
     return !Array.isArray(node.commands) || node.commands.includes("screen.record");
   });
-  const localMacs = capable.filter((node) => node.platform?.toLowerCase() === "darwin");
+  const localMacs = capable.filter((node) => isMacNodePlatform(node.platform));
   if (localMacs.length === 1) {
     return localMacs[0] ?? null;
-  }
-  if (capable.length === 1) {
-    return capable[0] ?? null;
   }
   return null;
 }
