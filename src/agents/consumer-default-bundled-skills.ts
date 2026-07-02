@@ -4,6 +4,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "consumer-setup",
   "timezone-preference-updater",
   "checkpoint",
+  "goal-mode",
   "monitor-router",
   "cross-channel-triage",
   "apple-notes",
