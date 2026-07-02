@@ -16,6 +16,7 @@ import {
   applyNonInteractiveSkillsConfig,
   buildConsumerBundledSkillAllowlist,
   CONSUMER_DEFAULT_BUNDLED_SKILLS,
+  repairConsumerDefaultBundledSkillAllowlist,
 } from "./skills-config.js";
 
 const runtime = {
@@ -110,6 +111,48 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
     expect(allowlist).toEqual([...CONSUMER_DEFAULT_BUNDLED_SKILLS, "workspace-only"]);
     expect(CONSUMER_DEFAULT_BUNDLED_SKILLS).not.toContain("workspace-only");
+  });
+
+  it("repairs legacy generated consumer allowlists with newly bundled defaults", () => {
+    const legacyGeneratedAllowlist = [
+      "consumer-setup",
+      "timezone-preference-updater",
+      "apple-notes",
+      "apple-reminders",
+      "peekaboo",
+      "summarize",
+      "weather",
+      "wacli",
+      "mcporter",
+      "nano-banana-pro",
+      "telegram-user",
+    ];
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: legacyGeneratedAllowlist },
+    });
+
+    expect(repaired.changes).toEqual([
+      expect.stringContaining("skills.allowBundled += checkpoint,goal-mode"),
+    ]);
+    expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-gui-control")).toBe(
+      (repaired.config.skills?.allowBundled?.indexOf("peekaboo") ?? 0) - 1,
+    );
+    expect(repaired.config.skills?.allowBundled?.indexOf("telegram-user")).toBeGreaterThan(
+      repaired.config.skills?.allowBundled?.indexOf("nano-banana-pro") ?? -1,
+    );
+    expect(repaired.config.skills?.allowBundled).toEqual(
+      expect.arrayContaining(["checkpoint", "goal-mode", "monitor-router", "jarvis-gui-control"]),
+    );
+  });
+
+  it("does not repair custom bundled skill allowlists", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["custom-skill", "checkpoint"] },
+    });
+
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill", "checkpoint"]);
   });
 
   it("exposes checkpoint and monitor-router to fresh consumer skill prompts without a model call", async () => {

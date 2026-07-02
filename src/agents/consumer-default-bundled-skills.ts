@@ -58,34 +58,40 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   changes: string[];
 } {
   const currentAllowlist = config.skills?.allowBundled ?? [];
-  const guiControlSkillName = "jarvis-gui-control";
-  const jarvisGuiControlDisabled = config.skills?.entries?.[guiControlSkillName]?.enabled === false;
-  if (
-    currentAllowlist.includes("__none__") ||
-    currentAllowlist.includes(guiControlSkillName) ||
-    jarvisGuiControlDisabled
-  ) {
+  if (currentAllowlist.includes("__none__")) {
     return { config, changes: [] };
   }
 
+  const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
   const current = new Set(currentAllowlist);
-  const looksLikeGeneratedConsumerDefault = CONSUMER_DEFAULT_BUNDLED_SKILLS.every((skillName) => {
-    if (skillName === guiControlSkillName) {
-      return true;
-    }
-    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
-    return explicitlyDisabled || current.has(skillName);
-  });
+  const hasEnoughDefaultSkillsToLookGenerated = currentAllowlist.length >= 3;
+  const looksLikeGeneratedConsumerDefault =
+    hasEnoughDefaultSkillsToLookGenerated &&
+    currentAllowlist.every((skillName) => defaultSkills.has(skillName));
   if (!looksLikeGeneratedConsumerDefault) {
     return { config, changes: [] };
   }
 
   const nextAllowlist = [...currentAllowlist];
-  const peekabooIndex = nextAllowlist.indexOf("peekaboo");
-  if (peekabooIndex >= 0) {
-    nextAllowlist.splice(peekabooIndex, 0, guiControlSkillName);
-  } else {
-    nextAllowlist.push(guiControlSkillName);
+  const added: string[] = [];
+  for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
+    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
+    if (explicitlyDisabled || current.has(skillName)) {
+      continue;
+    }
+    const insertBeforePeekaboo = skillName === "jarvis-gui-control";
+    const peekabooIndex = nextAllowlist.indexOf("peekaboo");
+    if (insertBeforePeekaboo && peekabooIndex >= 0) {
+      nextAllowlist.splice(peekabooIndex, 0, skillName);
+    } else {
+      nextAllowlist.push(skillName);
+    }
+    current.add(skillName);
+    added.push(skillName);
+  }
+
+  if (added.length === 0) {
+    return { config, changes: [] };
   }
 
   return {
@@ -96,6 +102,6 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
         allowBundled: nextAllowlist,
       },
     },
-    changes: [`skills.allowBundled += ${guiControlSkillName}`],
+    changes: [`skills.allowBundled += ${added.join(",")}`],
   };
 }
