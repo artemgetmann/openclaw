@@ -69,6 +69,7 @@ def install_mock_preflight(
     status_code: int = 204,
     location: str | None = None,
     response_by_host: dict[str, tuple[int, str | None]] | None = None,
+    error_by_host: dict[str, Exception] | None = None,
 ):
     """Fake the backend socket preflight while recording pinned connection targets."""
 
@@ -100,6 +101,8 @@ def install_mock_preflight(
 
     async def open_connection(**kwargs):
         calls.append(kwargs)
+        if error_by_host and kwargs["host"] in error_by_host:
+            raise error_by_host[kwargs["host"]]
         response_status_code, response_location = (response_by_host or {}).get(
             kwargs["host"],
             (status_code, location),
@@ -970,6 +973,73 @@ def test_firecrawl_scrape_checks_private_redirects_on_all_resolved_addresses(mon
     assert response.status_code == 400
     assert "private/internal" in response.text
     assert [call["host"] for call in preflight_calls] == ["93.184.216.34", "93.184.216.35"]
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_allows_dual_stack_host_when_ipv4_preflight_succeeds(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    install_mock_dns(monkeypatch, ["93.184.216.34", "2606:4700:10::6814:179a"])
+    preflight_calls = install_mock_preflight(
+        monkeypatch,
+        error_by_host={"2606:4700:10::6814:179a": OSError("No route to host")},
+    )
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/scrape"
+        assert json.loads(request.content) == {
+            "url": "https://example.com",
+            "formats": ["markdown"],
+        }
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"markdown": "# Example"}, "creditsUsed": 1},
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://example.com"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["provider"] == "firecrawl"
+    assert [call["host"] for call in preflight_calls] == [
+        "93.184.216.34",
+        "2606:4700:10::6814:179a",
+    ]
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_rejects_url_when_all_preflights_are_unreachable(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    install_mock_dns(monkeypatch, ["2606:4700:10::6814:179a"])
+    preflight_calls = install_mock_preflight(
+        monkeypatch,
+        error_by_host={"2606:4700:10::6814:179a": OSError("No route to host")},
+    )
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"provider should not be called for unreachable URL: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://example.com"}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "could not be validated" in response.text
+    assert [call["host"] for call in preflight_calls] == ["2606:4700:10::6814:179a"]
     assert "test-firecrawl-provider-placeholder" not in response.text
 
 

@@ -17,7 +17,13 @@ Trigger this skill when the user asks OpenClaw to:
 - relay instructions to an external coding harness
 - keep an external harness conversation in a thread-like conversation
 
-Mandatory preflight for coding-agent thread requests:
+Default interpretation:
+
+- "ask Codex/Claude/Gemini", "use Codex through ACP", "have Codex check/browse/research", and similar wording means a one-shot worker call relayed or inspected by the parent session.
+- Do not bind or focus the current chat/thread for those requests.
+- Binding/focus requires explicit words such as "bind Codex to this topic", "focus this thread to Codex", "make Codex respond in this Telegram topic", or "route this conversation to Claude Code".
+
+Mandatory preflight for coding-agent thread binding requests:
 
 - Before creating any thread for Pi/Claude/Codex/OpenCode/Gemini work, read this skill first in the same turn.
 - After reading, follow `OpenClaw ACP runtime path` below; do not use `message(action="thread-create")` for ACP harness thread spawn.
@@ -32,7 +38,7 @@ Choose one of these paths:
 Use direct `acpx` only when one of these is true:
 
 - user explicitly asks for direct `acpx` driving
-- user explicitly asks for one-shot behavior instead of a reusable session/thread
+- user explicitly asks to bypass OpenClaw ACP runtime tools
 
 Do not use direct `acpx` as a fallback for:
 
@@ -66,11 +72,15 @@ If policy rejects the chosen id, report the policy error clearly and ask for the
 
 Required behavior:
 
-1. For ACP harness thread spawn requests, read this skill first in the same turn before calling tools.
-2. Use `sessions_spawn` with:
+1. For normal ACP harness requests, use a one-shot worker call:
+   - `runtime: "acp"`
+   - `mode: "run"`
+   - `streamTo: "parent"`
+   - do not set `thread: true`
+2. For explicit ACP harness thread binding requests only, tell the user you are binding this conversation, then use `sessions_spawn` with:
    - `runtime: "acp"`
    - `thread: true`
-   - `mode: "session"` (unless user explicitly wants one-shot)
+   - `mode: "session"`
 3. For ACP harness thread creation, do not use `message` with `action=thread-create`; `sessions_spawn` is the only thread-create path.
 4. Put requested work in `task` so the ACP session gets it immediately.
 5. Set `agentId` explicitly unless ACP default agent is known.
@@ -82,7 +92,23 @@ Persistence invariant:
 - For those requests, do not silently switch execution models.
 - If ACP cannot be repaired into a usable persistent session, fail loudly with the exact ACP error instead of using direct `acpx exec`.
 
-Example:
+One-shot example:
+
+User: "ask Codex through ACP to browse and summarize the docs"
+
+Call:
+
+```json
+{
+  "task": "Browse and summarize the docs requested by the user.",
+  "runtime": "acp",
+  "agentId": "codex",
+  "mode": "run",
+  "streamTo": "parent"
+}
+```
+
+Explicit binding example:
 
 User: "spawn a test codex session in thread and tell it to say hi"
 

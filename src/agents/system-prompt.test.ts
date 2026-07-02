@@ -367,7 +367,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("not agents_list");
   });
 
-  it("guides harness requests to ACP thread-bound spawns", () => {
+  it("guides harness requests to one-shot ACP worker spawns by default", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
@@ -376,14 +376,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
     );
+    expect(prompt).toContain('`runtime: "acp"`, `mode: "run"`, and `streamTo: "parent"`');
     expect(prompt).toContain(
-      'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
+      "Default ACP harness requests are one-shot worker calls streamed back to the parent session",
     );
     expect(prompt).toContain(
       "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
     );
     expect(prompt).toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+      'For explicit ACP harness thread binding, tell the user you are binding the conversation, then call `sessions_spawn` with `runtime: "acp"`, `thread: true`, and `mode: "session"`',
     );
   });
 
@@ -418,7 +419,7 @@ describe("buildAgentSystemPrompt", () => {
       'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
     );
     expect(prompt).not.toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+      "Default ACP harness requests are one-shot worker calls streamed back to the parent session",
     );
     expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
     expect(prompt).toContain('`runtime: "acp"`');
@@ -839,7 +840,10 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Do not ask users to run slash commands or CLI");
     expect(prompt).toContain("Do not use `exec` (`openclaw ...`, `acpx ...`)");
     expect(prompt).toContain("Use `subagents` only for OpenClaw subagents");
-    expect(prompt).toContain("Subagent results auto-announce back to you");
+    expect(prompt).toContain(
+      'Default ACP harness work uses one-shot `mode: "run"` calls with `streamTo: "parent"`',
+    );
+    expect(prompt).toContain("only for explicit bind/focus requests");
     expect(prompt).toContain(
       "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
     );
