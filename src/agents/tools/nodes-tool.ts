@@ -134,6 +134,9 @@ const NodesToolSchema = Type.Object({
   // screen_record
   fps: Type.Optional(Type.Number()),
   screenIndex: Type.Optional(Type.Number()),
+  appName: Type.Optional(Type.String()),
+  bundleId: Type.Optional(Type.String()),
+  windowId: Type.Optional(Type.Number()),
   outPath: Type.Optional(Type.String()),
   // location_get
   maxAgeMs: Type.Optional(Type.Number()),
@@ -547,7 +550,21 @@ export function createNodesTool(options?: {
             const screenIndex =
               typeof params.screenIndex === "number" && Number.isFinite(params.screenIndex)
                 ? params.screenIndex
-                : 0;
+                : params.appName || params.bundleId || params.windowId
+                  ? undefined
+                  : 0;
+            const appName =
+              typeof params.appName === "string" && params.appName.trim()
+                ? params.appName.trim()
+                : undefined;
+            const bundleId =
+              typeof params.bundleId === "string" && params.bundleId.trim()
+                ? params.bundleId.trim()
+                : undefined;
+            const windowId =
+              typeof params.windowId === "number" && Number.isFinite(params.windowId)
+                ? params.windowId
+                : undefined;
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
             const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
@@ -556,6 +573,9 @@ export function createNodesTool(options?: {
               params: {
                 durationMs,
                 screenIndex,
+                appName,
+                bundleId,
+                windowId,
                 fps,
                 format: "mp4",
                 includeAudio,
@@ -575,6 +595,9 @@ export function createNodesTool(options?: {
                 durationMs: payload.durationMs,
                 fps: payload.fps,
                 screenIndex: payload.screenIndex,
+                appName: payload.appName,
+                bundleId: payload.bundleId,
+                windowId: payload.windowId,
                 hasAudio: payload.hasAudio,
               },
             };

@@ -328,6 +328,9 @@ actor MacNodeRuntime {
         let services = await self.mainActorServices()
         let res = try await services.recordScreen(
             screenIndex: params.screenIndex,
+            appName: params.appName,
+            bundleId: params.bundleId,
+            windowId: params.windowId,
             durationMs: params.durationMs,
             fps: params.fps,
             includeAudio: params.includeAudio,
@@ -340,6 +343,9 @@ actor MacNodeRuntime {
             var durationMs: Int?
             var fps: Double?
             var screenIndex: Int?
+            var appName: String?
+            var bundleId: String?
+            var windowId: UInt32?
             var hasAudio: Bool
         }
         let payload = try Self.encodePayload(ScreenPayload(
@@ -348,6 +354,9 @@ actor MacNodeRuntime {
             durationMs: params.durationMs,
             fps: params.fps,
             screenIndex: params.screenIndex,
+            appName: params.appName,
+            bundleId: params.bundleId,
+            windowId: params.windowId,
             hasAudio: res.hasAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }

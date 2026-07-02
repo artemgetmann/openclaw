@@ -9,6 +9,7 @@ final class ScreenRecordService {
     enum ScreenRecordError: LocalizedError {
         case noDisplays
         case invalidScreenIndex(Int)
+        case noMatchingTarget(String)
         case noFramesCaptured
         case writeFailed(String)
 
@@ -18,6 +19,8 @@ final class ScreenRecordService {
                 "No displays available for screen recording"
             case let .invalidScreenIndex(idx):
                 "Invalid screen index \(idx)"
+            case let .noMatchingTarget(target):
+                "No matching screen recording target: \(target)"
             case .noFramesCaptured:
                 "No frames captured"
             case let .writeFailed(msg):
@@ -30,6 +33,9 @@ final class ScreenRecordService {
 
     func record(
         screenIndex: Int?,
+        appName: String?,
+        bundleId: String?,
+        windowId: UInt32?,
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
@@ -49,17 +55,16 @@ final class ScreenRecordService {
         try? FileManager().removeItem(at: outURL)
 
         let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else { throw ScreenRecordError.noDisplays }
+        let plan = try self.resolveCapturePlan(
+            content: content,
+            screenIndex: screenIndex,
+            appName: appName,
+            bundleId: bundleId,
+            windowId: windowId)
 
-        let idx = screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else { throw ScreenRecordError.invalidScreenIndex(idx) }
-        let display = displays[idx]
-
-        let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
-        config.width = display.width
-        config.height = display.height
+        config.width = plan.width
+        config.height = plan.height
         config.queueDepth = 8
         config.showsCursor = true
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, Int32(fps.rounded()))))
@@ -69,19 +74,19 @@ final class ScreenRecordService {
 
         let recorder = try StreamRecorder(
             outputURL: outURL,
-            width: display.width,
-            height: display.height,
+            width: plan.width,
+            height: plan.height,
             includeAudio: includeAudio,
             logger: self.logger)
 
-        let stream = SCStream(filter: filter, configuration: config, delegate: recorder)
+        let stream = SCStream(filter: plan.filter, configuration: config, delegate: recorder)
         try stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: recorder.queue)
         if includeAudio {
             try stream.addStreamOutput(recorder, type: .audio, sampleHandlerQueue: recorder.queue)
         }
 
         self.logger.info(
-            "screen record start idx=\(idx) durationMs=\(durationMs) fps=\(fps) out=\(outURL.path, privacy: .public)")
+            "screen record start target=\(plan.label, privacy: .public) durationMs=\(durationMs) fps=\(fps) out=\(outURL.path, privacy: .public)")
 
         var started = false
         do {
@@ -96,6 +101,105 @@ final class ScreenRecordService {
 
         try await recorder.finish()
         return (path: outURL.path, hasAudio: recorder.hasAudio)
+    }
+
+    private struct CapturePlan {
+        var filter: SCContentFilter
+        var width: Int
+        var height: Int
+        var label: String
+    }
+
+    private func resolveCapturePlan(
+        content: SCShareableContent,
+        screenIndex: Int?,
+        appName: String?,
+        bundleId: String?,
+        windowId: UInt32?) throws -> CapturePlan
+    {
+        if let windowId {
+            guard let window = content.windows.first(where: { $0.windowID == windowId }) else {
+                throw ScreenRecordError.noMatchingTarget("window-id=\(windowId)")
+            }
+            return self.windowCapturePlan(window, label: "window-id=\(windowId)")
+        }
+
+        if let requested = Self.trimmed(appName) ?? Self.trimmed(bundleId) {
+            let windows = self.matchingWindows(content: content, appName: appName, bundleId: bundleId)
+            guard let window = Self.pickBestWindow(windows) else {
+                throw ScreenRecordError.noMatchingTarget(requested)
+            }
+            let app = window.owningApplication
+            let label = [
+                app?.applicationName,
+                app?.bundleIdentifier,
+                window.title,
+            ]
+            .compactMap(Self.trimmed)
+            .joined(separator: " · ")
+            return self.windowCapturePlan(window, label: label.isEmpty ? requested : label)
+        }
+
+        let displays = content.displays.sorted { $0.displayID < $1.displayID }
+        guard !displays.isEmpty else { throw ScreenRecordError.noDisplays }
+
+        let idx = screenIndex ?? 0
+        guard idx >= 0, idx < displays.count else { throw ScreenRecordError.invalidScreenIndex(idx) }
+        let display = displays[idx]
+        return CapturePlan(
+            filter: SCContentFilter(display: display, excludingWindows: []),
+            width: display.width,
+            height: display.height,
+            label: "display-index=\(idx)")
+    }
+
+    private func matchingWindows(
+        content: SCShareableContent,
+        appName: String?,
+        bundleId: String?) -> [SCWindow]
+    {
+        let requestedName = Self.trimmed(appName)?.lowercased()
+        let requestedBundle = Self.trimmed(bundleId)?.lowercased()
+        return content.windows.filter { window in
+            guard let app = window.owningApplication else { return false }
+            if let requestedBundle, app.bundleIdentifier.lowercased() == requestedBundle {
+                return true
+            }
+            if let requestedName {
+                let appName = app.applicationName.lowercased()
+                let bundle = app.bundleIdentifier.lowercased()
+                return appName == requestedName || bundle == requestedName
+            }
+            return false
+        }
+    }
+
+    private func windowCapturePlan(_ window: SCWindow, label: String) -> CapturePlan {
+        let frame = window.frame
+        let width = max(1, Int(frame.width.rounded(.up)))
+        let height = max(1, Int(frame.height.rounded(.up)))
+        return CapturePlan(
+            filter: SCContentFilter(desktopIndependentWindow: window),
+            width: width,
+            height: height,
+            label: label)
+    }
+
+    private static func pickBestWindow(_ windows: [SCWindow]) -> SCWindow? {
+        windows
+            .filter { $0.isOnScreen && $0.frame.width > 0 && $0.frame.height > 0 }
+            .sorted {
+                if $0.isActive != $1.isActive { return $0.isActive && !$1.isActive }
+                let lhsArea = $0.frame.width * $0.frame.height
+                let rhsArea = $1.frame.width * $1.frame.height
+                return lhsArea > rhsArea
+            }
+            .first
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

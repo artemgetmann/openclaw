@@ -230,6 +230,9 @@ describe("nodes screen helpers", () => {
       durationMs: 1000,
       fps: 12,
       screenIndex: 0,
+      appName: "Telegram",
+      bundleId: "ru.keepcoder.Telegram",
+      windowId: 42,
       hasAudio: true,
     });
     expect(payload.format).toBe("mp4");
@@ -237,6 +240,9 @@ describe("nodes screen helpers", () => {
     expect(payload.durationMs).toBe(1000);
     expect(payload.fps).toBe(12);
     expect(payload.screenIndex).toBe(0);
+    expect(payload.appName).toBe("Telegram");
+    expect(payload.bundleId).toBe("ru.keepcoder.Telegram");
+    expect(payload.windowId).toBe(42);
     expect(payload.hasAudio).toBe(true);
   });
 

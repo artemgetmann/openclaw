@@ -32,8 +32,10 @@ openclaw gui-control set-value --runtime open-computer-use --app TextEdit --inte
 
 - Prefer `openclaw gui-control --runtime open-computer-use` for GUI operation.
 - Do not use Peekaboo as the first choice for normal GUI-operation requests.
-  Peekaboo is for screenshots, video/capture artifacts, diagnostics, or an
-  explicit fallback after `openclaw gui-control` is unavailable or insufficient.
+  Use the `screen-record` skill and `openclaw screen record` for target-aware
+  video proof. Peekaboo is for still screenshots, UI maps, diagnostics, or an
+  explicit fallback after `openclaw gui-control` or `openclaw screen record` is
+  unavailable or insufficient.
 - Do not use benchmark scripts as product behavior. Benchmarks are proof tools,
   not the live assistant workflow.
 - Do not use raw coordinates, AppleScript/JXA, browser plugins, or clipboard
@@ -46,7 +48,10 @@ openclaw gui-control set-value --runtime open-computer-use --app TextEdit --inte
    fresh element ref.
 3. Act through `openclaw gui-control --runtime open-computer-use` with structured JSON output.
 4. Re-observe the app and verify the requested visible result.
-5. Reply with the app used, whether clipboard was used, and the visible proof
+5. For visual proof that depends on motion, sequence, or feel, record the target
+   app/window through `openclaw screen record` instead of sending repeated
+   screenshots.
+6. Reply with the app used, whether clipboard was used, and the visible proof
    value that was verified.
 
 For simple text-entry proof in TextEdit:

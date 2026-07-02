@@ -34,6 +34,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "screen",
+    description: "Capture target-aware screen recordings",
+    hasSubcommands: true,
+  },
+  {
     name: "devices",
     description: "Device pairing + token management",
     hasSubcommands: true,

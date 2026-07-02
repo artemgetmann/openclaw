@@ -286,9 +286,13 @@ describe("runGatewayStartupConfigPreflight", () => {
       "openclaw.json",
     );
     const staleAllowBundled: string[] = CONSUMER_DEFAULT_BUNDLED_SKILLS.filter(
-      (skillName) => skillName !== "jarvis-gui-control" && skillName !== "telegram-chat-management",
+      (skillName) =>
+        skillName !== "jarvis-gui-control" &&
+        skillName !== "telegram-chat-management" &&
+        skillName !== "screen-record",
     );
     const repairedAllowBundled = [...staleAllowBundled];
+    repairedAllowBundled.splice(repairedAllowBundled.indexOf("gog"), 0, "screen-record");
     repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-gui-control");
     repairedAllowBundled.splice(
       repairedAllowBundled.indexOf("notion"),
@@ -333,6 +337,7 @@ describe("runGatewayStartupConfigPreflight", () => {
     );
     expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill allowlist"));
     expect(result.config.skills?.allowBundled).toContain("jarvis-gui-control");
+    expect(result.config.skills?.allowBundled).toContain("screen-record");
     expect(result.config.skills?.allowBundled).toContain("telegram-chat-management");
   });
 
