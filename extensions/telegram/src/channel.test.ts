@@ -347,6 +347,7 @@ describe("telegramPlugin duplicate token guard", () => {
       "12345",
       "hello",
       expect.objectContaining({
+        richMessages: false,
         mediaUrl: "/tmp/image.png",
         mediaLocalRoots: ["/tmp/agent-root"],
       }),
@@ -378,6 +379,7 @@ describe("telegramPlugin duplicate token guard", () => {
       "12345",
       "Approval required",
       expect.objectContaining({
+        richMessages: false,
         buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
       }),
     );
@@ -494,7 +496,7 @@ describe("telegramPlugin outbound sendPayload forceDocument", () => {
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "12345",
       expect.any(String),
-      expect.objectContaining({ forceDocument: true }),
+      expect.objectContaining({ forceDocument: true, richMessages: false }),
     );
   });
 });
