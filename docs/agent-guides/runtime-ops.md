@@ -122,6 +122,11 @@ install, mutate `ai.openclaw.gateway`, or touch `/Applications/Jarvis.app`.
 If the Jarvis bundle is stale, that is the result: request explicit approval for
 the bundle refresh/relaunch step before claiming Telegram UX proof.
 
+For managed `web_search` / `web_fetch` backend proof, use
+`/agent-guides/managed-web`. That runbook keeps config presence, backend
+provider smoke, runtime commit proof, local provider env scrub, and
+`/Applications/Jarvis.app` mutation state separate.
+
 When a newer Jarvis app-support runtime has been seeded from a local build but
 `/Applications/Jarvis.app` still contains an older bundled runtime, protect the
 live state before handing the machine back:
