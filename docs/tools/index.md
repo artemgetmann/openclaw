@@ -493,10 +493,11 @@ Notes:
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
 - `sessions_spawn` supports `runtime: "subagent" | "acp"` (`subagent` default). For ACP runtime behavior, see [ACP Agents](/tools/acp-agents).
-- For ACP runtime, `streamTo: "parent"` routes initial-run progress summaries back to the requester session as system events instead of direct child delivery.
+- For ACP runtime, `streamTo: "parent"` routes initial-run progress summaries back to the requester session as system events instead of direct child delivery; use it for normal user-facing one-shot ACP requests.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
   - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
-  - If `thread: true` and `mode` is omitted, mode defaults to `session`.
+  - For subagent runtime, if `thread: true` and `mode` is omitted, mode defaults to `session`.
+  - For ACP runtime, `thread: true` is ignored unless `mode: "session"` is also set.
   - `mode: "session"` requires `thread: true`.
   - If `runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise timeout defaults to `0` (no timeout).
   - Discord thread-bound flows depend on `session.threadBindings.*` and `channels.discord.threadBindings.*`.

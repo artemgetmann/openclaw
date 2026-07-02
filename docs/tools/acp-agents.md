@@ -220,8 +220,8 @@ Use `runtime: "acp"` to start an ACP session from an agent turn or tool call.
   "task": "Open the repo and summarize failing tests",
   "runtime": "acp",
   "agentId": "codex",
-  "thread": true,
-  "mode": "session"
+  "mode": "run",
+  "streamTo": "parent"
 }
 ```
 
@@ -229,6 +229,7 @@ Notes:
 
 - `runtime` defaults to `subagent`, so set `runtime: "acp"` explicitly for ACP sessions.
 - If `agentId` is omitted, OpenClaw uses `acp.defaultAgent` when configured.
+- `mode: "run"` is the default for one-shot worker-style ACP calls. Add `streamTo: "parent"` for user-facing requests so the parent session can relay, inspect, or steer the spawned ACP session without binding the requester conversation.
 - `mode: "session"` requires `thread: true` to keep a persistent bound conversation.
 
 Interface details:
@@ -239,7 +240,7 @@ Interface details:
 - `thread` (optional, default `false`): request thread binding flow where supported.
 - `mode` (optional): `run` (one-shot) or `session` (persistent).
   - default is `run`
-  - if `thread: true` and mode omitted, OpenClaw may default to persistent behavior per runtime path
+  - for ACP runtime, `thread: true` is ignored unless `mode: "session"` is also set
   - `mode: "session"` requires `thread: true`
 - `cwd` (optional): requested runtime working directory (validated by backend/runtime policy).
 - `label` (optional): operator-facing label used in session/banner text.
