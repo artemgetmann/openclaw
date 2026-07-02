@@ -538,6 +538,37 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow(/returned no message_id/i);
   });
 
+  it("honors richMessages false for direct text sends", async () => {
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 7,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const api = {
+      raw: { sendRichMessage },
+      sendMessage,
+    } as unknown as {
+      raw: { sendRichMessage: typeof sendRichMessage };
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram("123", "Monitor wake text", {
+      token: "tok",
+      api,
+      richMessages: false,
+    });
+
+    expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Monitor wake text",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
   it("fails when Telegram media send returns no message_id", async () => {
     mockLoadedMedia({ contentType: "image/png", fileName: "photo.png" });
     const sendPhoto = vi.fn().mockResolvedValue({
