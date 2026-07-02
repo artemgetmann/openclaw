@@ -616,10 +616,10 @@ export function resolveTelegramLiveModelAuthProbe(params) {
   const slashIndex = model.indexOf("/");
   const provider = slashIndex > 0 ? model.slice(0, slashIndex).trim().toLowerCase() : "";
 
-  if (provider !== "openai-codex") {
+  if (!provider) {
     return {
       required: false,
-      reason: provider ? `provider_not_probe_gated:${provider}` : "model_unresolved",
+      reason: "model_unresolved",
       model,
       provider,
       profile: "",
@@ -628,10 +628,13 @@ export function resolveTelegramLiveModelAuthProbe(params) {
 
   return {
     required: true,
-    reason: "codex_model_selected",
+    reason: provider === "openai-codex" ? "codex_model_selected" : "model_provider_selected",
     model,
     provider,
-    profile: "openai-codex:default",
+    // Codex tester auth is bootstrapped into this deterministic profile. Other
+    // providers may have user-named profiles, so probe all profiles for that
+    // provider instead of guessing "<provider>:default".
+    profile: provider === "openai-codex" ? "openai-codex:default" : "",
   };
 }
 
@@ -2272,6 +2275,68 @@ export function pruneTesterRuntimeAuthStore(params) {
     order: pruneOrder(sourceStore.order),
     lastGood: pruneLastGood(sourceStore.lastGood),
     usageStats: pruneRecord(sourceStore.usageStats),
+  };
+}
+
+export function resolveTesterRuntimeAuthStoreFromSources(params = {}) {
+  const modelProvider =
+    resolveModelProvider(params?.preferredModel) || resolveModelProvider(params?.defaultModel);
+  const sourceAuthPaths = normalizeStringList(params?.sourceAuthPaths ?? []);
+  const checkedPaths = [];
+
+  if (!modelProvider) {
+    return {
+      ok: false,
+      reason: "model_provider_unresolved",
+      provider: "",
+      sourceAuthPath: "",
+      checkedPathCount: 0,
+      store: { version: 1, profiles: {} },
+    };
+  }
+
+  for (const sourceAuthPath of sourceAuthPaths) {
+    if (!fs.existsSync(sourceAuthPath)) {
+      continue;
+    }
+    checkedPaths.push(sourceAuthPath);
+
+    let parsedStore;
+    try {
+      parsedStore = JSON.parse(fs.readFileSync(sourceAuthPath, "utf8"));
+    } catch {
+      continue;
+    }
+
+    const store = pruneTesterRuntimeAuthStore({
+      store: parsedStore,
+      preferredModel: params?.preferredModel,
+      defaultModel: params?.defaultModel,
+    });
+    const profileIds = Object.keys(store.profiles ?? {});
+    if (profileIds.length === 0) {
+      continue;
+    }
+
+    return {
+      ok: true,
+      reason: "ok",
+      provider: modelProvider,
+      sourceAuthPath,
+      checkedPathCount: checkedPaths.length,
+      profileCount: profileIds.length,
+      profileIds,
+      store,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: checkedPaths.length > 0 ? "no_matching_provider_profile" : "no_source_auth_store",
+    provider: modelProvider,
+    sourceAuthPath: "",
+    checkedPathCount: checkedPaths.length,
+    store: { version: 1, profiles: {} },
   };
 }
 
