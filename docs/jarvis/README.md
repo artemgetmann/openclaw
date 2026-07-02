@@ -37,6 +37,8 @@ Jarvis docs should create action, not emotional debt.
   artifact truth.
 - `docs/consumer/jarvis-identity-migration-checklist.md` - active identity
   migration proof checklist.
+- `docs/consumer/heartbeat-approval-routing-plan.md` - short-lived follow-up
+  plan for exact pending approvals and source-session routing.
 
 ## Reference
 
