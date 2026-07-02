@@ -11,6 +11,24 @@ const MONITOR_ACTIONS = ["list", "get", "create", "update", "stop"] as const;
 const MONITOR_ACTION_POLICIES = ["notify_draft", "notify_only", "auto_send"] as const;
 const MONITOR_STATUSES = ["active", "stopped", "completed", "expired"] as const;
 
+function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined) {
+  if (!delivery) {
+    return undefined;
+  }
+  if (typeof delivery.mode === "string") {
+    return delivery;
+  }
+  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
+  const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
+  if (!channel || !to) {
+    return delivery;
+  }
+  return {
+    ...delivery,
+    mode: "announce",
+  };
+}
+
 const MonitorToolSchema = Type.Object(
   {
     action: stringEnum(MONITOR_ACTIONS),
@@ -103,9 +121,9 @@ For monitor-related user replies/status:
             displayKey: agentSessionKey,
           });
           const originDelivery =
-            (params.originDelivery as Record<string, unknown> | undefined) ??
-            resolvedOriginDelivery ??
-            undefined;
+            normalizeAnnounceDelivery(
+              params.originDelivery as Record<string, unknown> | undefined,
+            ) ?? normalizeAnnounceDelivery(resolvedOriginDelivery ?? undefined);
           const sourceTarget = params.sourceTarget;
           const cadence = params.cadence;
           if (!sourceTarget || typeof sourceTarget !== "object" || Array.isArray(sourceTarget)) {

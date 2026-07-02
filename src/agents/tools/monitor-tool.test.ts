@@ -52,11 +52,38 @@ describe("monitor tool", () => {
       expect.objectContaining({
         originSessionKey: "agent:main:telegram:direct:19098680",
         originDelivery: expect.objectContaining({
+          mode: "announce",
           channel: "telegram",
           to: "19098680",
         }),
         actionPolicy: "notify_draft",
         sourceType: "gmail",
+      }),
+    );
+  });
+
+  it("adds announce mode to explicit bare origin delivery", async () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    await tool.execute?.("call-explicit-bare", {
+      action: "create",
+      instructions: "Monitor replies and report back.",
+      originDelivery: { channel: "telegram", to: "19098680", accountId: "default" },
+      sourceType: "synthetic",
+      sourceTarget: { source: "proof" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "monitor.create",
+      expect.any(Object),
+      expect.objectContaining({
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "19098680",
+          accountId: "default",
+        },
       }),
     );
   });
