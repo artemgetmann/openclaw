@@ -250,8 +250,8 @@ function resolveReceiptMessage(
 ): string {
   // Core direct sends expose post-hook text. Prefer it so source-topic receipts
   // do not claim the user sent text that a message_sending hook rewrote.
-  const deliveredText = send.sendResult?.deliveredText?.trim();
-  return deliveredText || fallbackMessage;
+  const deliveredText = send.sendResult?.deliveredText;
+  return deliveredText !== undefined ? deliveredText : fallbackMessage;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

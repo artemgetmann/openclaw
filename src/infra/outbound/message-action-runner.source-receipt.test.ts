@@ -167,6 +167,97 @@ describe("runMessageAction heartbeat source receipt", () => {
     expect(receiptText).not.toContain("Original confirmation.");
   });
 
+  it("does not resurrect original text when outbound hooks rewrite delivery to empty text", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "msteams", messageId: "media-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "msteams",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => {
+                await (sendExternal as (to: string, text: string) => Promise<unknown>)(to, text);
+                return { channel: "msteams", messageId: "external-1" };
+              },
+              sendMedia,
+            },
+            messaging: {
+              targetResolver: {
+                looksLikeId: () => true,
+                resolveTarget: async ({ input }) => ({
+                  to: input,
+                  kind: "channel",
+                  source: "normalized",
+                }),
+              },
+            },
+          }),
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPlugin,
+        },
+      ]),
+    );
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "message_sending",
+          handler: vi.fn((event: unknown) => {
+            const channel = (event as { metadata?: { channel?: string } }).metadata?.channel;
+            return channel === "msteams" ? { content: "" } : undefined;
+          }),
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "msteams",
+        target: "room-1",
+        message: "Original confirmation.",
+        media: "https://example.test/proof.png",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123456",
+        sourceReceipt: {
+          kind: "heartbeat",
+          sourceChannel: "telegram",
+          sourceTo: "telegram:group:-1003841603622",
+          sourceThreadId: 928,
+          sourceAccountId: "default",
+          sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+          agentId: "jarvis",
+        },
+      },
+      deps: { sendTelegram },
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.sourceReceipt).toMatchObject({ status: "sent" });
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "room-1",
+        text: "",
+        mediaUrl: "https://example.test/proof.png",
+      }),
+    );
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    const receiptText = String(sendTelegram.mock.calls[0]?.[1] ?? "");
+    expect(receiptText).toContain("Media: https://example.test/proof.png");
+    expect(receiptText).not.toContain("Original confirmation.");
+  });
+
   it("does not post receipts without runtime source metadata", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "-100999" });
 

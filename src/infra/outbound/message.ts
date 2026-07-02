@@ -260,9 +260,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       onPayload: (payload) => {
         // Capture the post-hook text. Source-topic approval receipts must describe
         // what was actually handed to the adapter, not the pre-hook model text.
-        if (payload.text.trim()) {
-          deliveredPayloadTexts.push(payload.text);
-        }
+        // Empty strings are meaningful: hooks can intentionally strip text while
+        // leaving media, and receipts must not resurrect the pre-hook content.
+        deliveredPayloadTexts.push(payload.text);
       },
       onError: (err) => {
         // Best-effort sends may continue after failures. Keep a compact signal so
