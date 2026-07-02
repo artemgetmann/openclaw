@@ -82,8 +82,15 @@ describe("scripts/smoke-jarvis-managed-web.mjs", () => {
         deviceIdConfigured: true,
       },
       calls: [
-        { utility: "brave.search", provider: "brave", resultCount: 1, firstHost: "openai.com" },
         {
+          tool: "web_search",
+          utility: "brave.search",
+          provider: "brave",
+          resultCount: 1,
+          firstHost: "openai.com",
+        },
+        {
+          tool: "web_fetch",
           utility: "firecrawl.scrape",
           provider: "firecrawl",
           markdownLength: 11,
@@ -130,6 +137,50 @@ describe("scripts/smoke-jarvis-managed-web.mjs", () => {
 
     expect(result.backend.tokenConfigured).toBe(true);
     expect(JSON.stringify(result)).not.toContain("env-token");
+  });
+
+  it("scrubs local provider env vars and reports only redacted presence proof", async () => {
+    const result = await runManagedWebSmoke({
+      configPath: "/tmp/test-openclaw.json",
+      env: {
+        JARVIS_BACKEND_ACCESS_TOKEN: "backend-token",
+        BRAVE_API_KEY: "local-brave-key",
+        FIRECRAWL_API_KEY: "local-firecrawl-key",
+        FIRECRAWL_BASE_URL: "https://local-firecrawl.example",
+      },
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: "${JARVIS_BACKEND_ACCESS_TOKEN}",
+          },
+          managedServices: { mode: "managed" },
+        },
+      },
+      skipScrape: true,
+      fetchImpl: async (_url: string | URL | Request, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer backend-token");
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            result: {
+              provider: "brave",
+              payload: { web: { results: [] } },
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    expect(result.localProviderEnv).toEqual({
+      BRAVE_API_KEY: { wasConfigured: true, scrubbed: true },
+      FIRECRAWL_API_KEY: { wasConfigured: true, scrubbed: true },
+      FIRECRAWL_BASE_URL: { wasConfigured: true, scrubbed: true },
+    });
+    expect(JSON.stringify(result)).not.toContain("local-brave-key");
+    expect(JSON.stringify(result)).not.toContain("local-firecrawl-key");
+    expect(JSON.stringify(result)).not.toContain("local-firecrawl.example");
   });
 
   it("rejects non-managed config before making backend calls", async () => {

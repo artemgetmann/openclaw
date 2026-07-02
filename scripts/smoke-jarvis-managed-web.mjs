@@ -8,12 +8,13 @@ const DEFAULT_SEARCH_QUERY = "OpenAI";
 const DEFAULT_SEARCH_COUNT = 1;
 const DEFAULT_SCRAPE_URL = "https://openai.com/";
 const DEFAULT_TIMEOUT_MS = 60_000;
+const LOCAL_PROVIDER_ENV_VARS = ["BRAVE_API_KEY", "FIRECRAWL_API_KEY", "FIRECRAWL_BASE_URL"];
 
 function usage() {
   return `Usage: node scripts/smoke-jarvis-managed-web.mjs [options]
 
 Read Jarvis app config, call the managed Brave and Firecrawl utility endpoints,
-and print redacted JSON proof.
+and print redacted JSON proof for web_search and web_fetch.
 
 Options:
   --config <path>          Config path. Defaults to OPENCLAW_CONFIG_PATH or Jarvis app-support config.
@@ -23,6 +24,7 @@ Options:
   --skip-search            Do not call brave.search.
   --skip-scrape            Do not call firecrawl.scrape.
   --timeout-ms <ms>        Request timeout. Default: config timeout or ${DEFAULT_TIMEOUT_MS}.
+  --keep-provider-env      Do not scrub local Brave/Firecrawl env vars before smoke calls.
   --help                   Show this help.
 `;
 }
@@ -42,6 +44,7 @@ function parseArgs(argv) {
     scrapeUrl: DEFAULT_SCRAPE_URL,
     skipSearch: false,
     skipScrape: false,
+    scrubProviderEnv: true,
     timeoutMs: undefined,
   };
 
@@ -68,6 +71,9 @@ function parseArgs(argv) {
         break;
       case "--timeout-ms":
         options.timeoutMs = Number.parseInt(argv[++index], 10);
+        break;
+      case "--keep-provider-env":
+        options.scrubProviderEnv = false;
         break;
       case "--help":
       case "-h":
@@ -98,6 +104,21 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+function buildSmokeEnv(env, scrubProviderEnv) {
+  const smokeEnv = { ...env };
+  const providerEnv = {};
+  for (const key of LOCAL_PROVIDER_ENV_VARS) {
+    providerEnv[key] = {
+      wasConfigured: typeof env[key] === "string" && env[key].trim().length > 0,
+      scrubbed: scrubProviderEnv,
+    };
+    if (scrubProviderEnv) {
+      delete smokeEnv[key];
+    }
+  }
+  return { smokeEnv, providerEnv };
 }
 
 async function readJsonFile(filePath) {
@@ -284,6 +305,7 @@ function summarizeBraveResult(result) {
   const web = isRecord(payload.web) ? payload.web : {};
   const results = Array.isArray(web.results) ? web.results : [];
   return {
+    tool: "web_search",
     utility: "brave.search",
     provider: result.provider ?? null,
     resultCount: results.length,
@@ -300,6 +322,7 @@ function summarizeFirecrawlResult(result) {
   const markdown = typeof data.markdown === "string" ? data.markdown : "";
   const metadata = isRecord(data.metadata) ? data.metadata : {};
   return {
+    tool: "web_fetch",
     utility: "firecrawl.scrape",
     provider: result.provider ?? null,
     markdownLength: markdown.length,
@@ -308,10 +331,11 @@ function summarizeFirecrawlResult(result) {
 }
 
 export async function runManagedWebSmoke(options = {}) {
-  const env = options.env ?? process.env;
-  const configPath = options.configPath ?? defaultConfigPath(env);
+  const sourceEnv = options.env ?? process.env;
+  const { smokeEnv, providerEnv } = buildSmokeEnv(sourceEnv, options.scrubProviderEnv ?? true);
+  const configPath = options.configPath ?? defaultConfigPath(smokeEnv);
   const config = options.config ?? (await readJsonFile(configPath));
-  const backend = normalizeBackendConfig(config, env);
+  const backend = normalizeBackendConfig(config, smokeEnv);
   const timeoutMs = options.timeoutMs ?? backend.timeoutMs;
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") {
@@ -350,6 +374,7 @@ export async function runManagedWebSmoke(options = {}) {
     ok: true,
     configPath,
     backend: redactBackendConfig(backend),
+    localProviderEnv: providerEnv,
     calls,
   };
 }
