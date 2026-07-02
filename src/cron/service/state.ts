@@ -111,6 +111,13 @@ export type CronServiceDeps = {
     {
       summary?: string;
       stopJob?: boolean;
+      /**
+       * Monitor wakes delegate actual work to the isolated cron runner. Preserve
+       * that runner's delivery result so cron state and run logs reflect the
+       * user-visible delivery outcome instead of degrading to "unknown".
+       */
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

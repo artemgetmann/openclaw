@@ -1217,6 +1217,8 @@ export async function executeJobCore(
       status: res.status,
       error: res.error,
       summary: res.summary,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
       sessionId: res.sessionId,
       sessionKey: res.sessionKey,
       model: res.model,
