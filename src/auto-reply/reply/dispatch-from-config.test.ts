@@ -215,6 +215,7 @@ vi.mock("../../tts/tts.js", () => ({
   resolveTtsAutoMode: (params: unknown) => ttsMocks.resolveTtsAutoMode(params),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
   resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
+  shouldSkipTtsForMediaDirectiveText: (text: string) => text.includes("MEDIA:"),
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -1875,6 +1876,44 @@ describe("dispatchReplyFromConfig", () => {
         openclaw: {
           finalTtsSupplement: true,
           ttsFailureStatus: true,
+        },
+      },
+    });
+  });
+
+  it("does not report a Telegram voice failure when final TTS is intentionally skipped for media directive text", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const finalText = "Final answer explains MEDIA::/tmp/example.mp3 syntax for a local proof.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: finalText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
         },
       },
     });
