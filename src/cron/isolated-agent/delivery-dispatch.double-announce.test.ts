@@ -92,6 +92,7 @@ function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
   runSessionId?: string;
+  deliveryPayloads?: Array<{ text?: string; channelData?: Record<string, unknown> }>;
 }) {
   const resolvedDelivery = makeResolvedDelivery();
   return {
@@ -115,7 +116,9 @@ function makeBaseParams(overrides: {
     skipHeartbeatDelivery: false,
     deliveryBestEffort: false,
     deliveryPayloadHasStructuredContent: false,
-    deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
+    deliveryPayloads:
+      overrides.deliveryPayloads ??
+      (overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : []),
     synthesizedText: overrides.synthesizedText ?? "on it",
     summary: overrides.synthesizedText ?? "on it",
     outputText: overrides.synthesizedText ?? "on it",
@@ -253,6 +256,25 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("uses synthesized text when selected direct delivery payload has no visible content", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Alex replied. Draft: 8 or 9 works.",
+      deliveryPayloads: [{ text: "", channelData: { telegram: { silentShell: true } } }],
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Alex replied. Draft: 8 or 9 works." }],
+      }),
+    );
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
