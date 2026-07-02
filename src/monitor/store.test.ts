@@ -63,4 +63,21 @@ describe("monitor store identity", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("matches degraded monitors as the same active duplicate", () => {
+    const store: MonitorStoreFile = {
+      version: 1,
+      monitors: [monitorRecord({ status: "degraded" })],
+    };
+
+    expect(
+      findActiveMonitorByIdentity(store, {
+        agentId: "main",
+        sourceType: "gmail",
+        sourceTarget: { threadId: "thread-1", account: "me@example.com" },
+        actionPolicy: "notify_draft",
+        purposeLabel: "Customer reply",
+      }),
+    ).toMatchObject({ monitorId: "monitor-1", status: "degraded" });
+  });
 });

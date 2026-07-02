@@ -319,7 +319,11 @@ export function buildGatewayCronService(params: {
       const monitorStore = await loadMonitorStore(monitorStorePath);
       const monitor = findMonitor(monitorStore, monitorId);
       if (!monitor) {
-        return { status: "error", error: `monitor not found: ${monitorId}` };
+        return {
+          status: "error",
+          error: `monitor not found: ${monitorId}`,
+          stopJob: true,
+        };
       }
       if (isTerminalMonitorStatus(monitor.status)) {
         return {
@@ -397,9 +401,15 @@ export function buildGatewayCronService(params: {
         // "fresh mini-brain on every wake" bug this redesign is fixing.
         sessionDefaultResetMode: "manual",
       });
+      const nextMonitorStatus =
+        result.status === "error" ? "degraded" : result.status === "ok" ? "active" : monitor.status;
       const updated = updateMonitorRecord(
         monitor,
-        { lastWakeAtMs: nowMs, lastWakeStatus: monitor.status },
+        {
+          status: nextMonitorStatus,
+          lastWakeAtMs: nowMs,
+          lastWakeStatus: nextMonitorStatus,
+        },
         nowMs,
       );
       const index = monitorStore.monitors.findIndex((entry) => entry.monitorId === monitorId);

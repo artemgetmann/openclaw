@@ -60,7 +60,7 @@ export function findActiveMonitorByIdentity(
   const identityKey = createMonitorIdentityKey(input);
   return store.monitors.find(
     (monitor) =>
-      monitor.status === "active" &&
+      (monitor.status === "active" || monitor.status === "degraded") &&
       createMonitorIdentityKey({
         agentId: monitor.agentId,
         sourceType: monitor.sourceType,
