@@ -79,9 +79,33 @@
 5. Open or update a draft PR early.
 6. Validate in the temp worktree.
 7. Mark the PR ready when validation is complete.
-8. Merge if the task and policy allow it.
-9. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
-10. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
+8. Give a next-step handoff before stopping, especially if the PR is still
+   draft, waiting for review, waiting for CI, or not deployed to runtime yet.
+9. Merge if the task and policy allow it.
+10. If the merged change needs live runtime behavior, ship it from the sacred
+    home clone and prove the runtime separately from PR merge state.
+11. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
+12. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
+
+## Next-step handoff
+
+Agents must not end a coding task at "draft PR opened" or "PR updated" without
+the operator path. If the task is not fully merged, deployed, and proven in the
+intended runtime, the final reply must include:
+
+- Current state: branch, PR number or URL, draft/ready state, validation status,
+  and whether CI is already running or still pending.
+- Next decision: the smallest useful user action, such as review the PR, approve
+  merge, wait for CI, ask for a live tester proof, or say `ship to runtime`.
+- Runtime path: if the change affects Jarvis, Telegram, gateway ownership,
+  packaged runtime, or shared main behavior, say whether runtime deployment is
+  still required after merge and point to the relevant command or guide.
+- Blockers and risk: what is stopping the next step, what was not verified, and
+  the fastest safe fallback if the change misbehaves.
+
+The point is to make the next move obvious without the user asking "what now?"
+again. Plain language beats process theater: state what is ready, what is not
+ready, and exactly what should happen next.
 
 ## Release preflight operator notes
 
@@ -202,6 +226,9 @@ ready`.
 - Group related changes. Do not bundle unrelated refactors.
 - Do not leave non-trivial implementation work only in the working tree. Create a checkpoint commit once the first meaningful slice of the change exists, even if end-to-end validation is still pending.
 - Open or update the draft PR as soon as the first coherent slice exists so review context and CI history do not live only in local state.
+- When stopping after opening or updating a PR, include the next-step handoff
+  from this guide. A PR link alone is incomplete if review, merge, CI, runtime
+  deploy, or live proof still needs to happen.
 - Validation gates PR readiness and merge, not whether you are allowed to commit. If a task would be painful to re-create, it should already be committed.
 - For long or risky tasks, prefer this sequence:
   - checkpoint commit after the first coherent implementation slice
