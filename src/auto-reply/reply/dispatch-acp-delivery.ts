@@ -8,6 +8,7 @@ import {
   resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  shouldSkipTtsForMediaDirectiveText,
 } from "../../tts/tts.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -130,6 +131,9 @@ function shouldExpectFinalTtsAttempt(params: {
 }): boolean {
   const text = params.text.trim();
   if (text.length < 10) {
+    return false;
+  }
+  if (shouldSkipTtsForMediaDirectiveText(text)) {
     return false;
   }
   const config = resolveTtsConfig(params.cfg);

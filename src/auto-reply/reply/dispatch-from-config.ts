@@ -47,6 +47,7 @@ import {
   getLastTtsAttempt,
   maybeApplyTtsToPayload,
   normalizeTtsAutoMode,
+  shouldSkipTtsForMediaDirectiveText,
   type ResolvedTtsModelOverrides,
   resolveTtsAutoMode,
   resolveTtsConfig,
@@ -91,6 +92,9 @@ function shouldExpectFinalTtsAttempt(params: {
 }): boolean {
   const text = params.text.trim();
   if (text.length < 10) {
+    return false;
+  }
+  if (shouldSkipTtsForMediaDirectiveText(text)) {
     return false;
   }
   const config = resolveTtsConfig(params.cfg);

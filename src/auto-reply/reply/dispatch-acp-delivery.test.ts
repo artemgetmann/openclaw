@@ -76,6 +76,7 @@ vi.mock("../../tts/tts.js", () => ({
   resolveTtsAutoMode: (params: unknown) => ttsMocks.resolveTtsAutoMode(params),
   resolveTtsConfig: () => ttsMocks.resolveTtsConfig(),
   resolveTtsPrefsPath: () => ttsMocks.resolveTtsPrefsPath(),
+  shouldSkipTtsForMediaDirectiveText: (text: string) => text.includes("MEDIA:"),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -482,6 +483,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       }),
     );
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not route a Telegram voice failure when final TTS is intentionally skipped for media directive text", async () => {
+    ttsMocks.state.autoMode = "always";
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+    const text = "Final answer explains MEDIA::/tmp/example.mp3 syntax for a local proof.";
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts(text);
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement(text);
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(false);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({ text }),
+      }),
+    );
   });
 
   it("sends a lightweight direct Telegram status when final TTS was expected but no attempt is recorded", async () => {
