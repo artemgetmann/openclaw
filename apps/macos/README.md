@@ -181,6 +181,11 @@ generic upstream OpenClaw appcast. A release package should verify as
 `CFBundleIdentifier=ai.jarvis.mac`; older trusted-tester packages used
 `ai.openclaw.consumer.mac`.
 
+This is the public app-release lane, not the default post-merge runtime ship
+lane. For normal hotfix validation, follow the fast runtime/app-support split in
+`docs/agent-guides/runtime-ops.md` instead of rebuilding, notarizing, or
+publishing app artifacts.
+
 ```bash
 # Read-only. Reports missing/present state without printing secret values.
 bash scripts/preflight-consumer-mac-release.sh
