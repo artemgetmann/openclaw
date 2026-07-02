@@ -1722,17 +1722,16 @@ export const dispatchTelegramMessage = async ({
     });
     const shouldUseLegacyTextTransport =
       isControlCommandReplyPayload(normalizedPayload) ||
-      isCopySafeDraftReplyPayload(normalizedPayload) ||
-      (durableReason === "final" && !hasMedia);
+      isCopySafeDraftReplyPayload(normalizedPayload);
     const shouldUseCopySafeBlockquotes =
       !hasMedia && (isCopySafeDraftReplyPayload(normalizedPayload) || durableReason === "final");
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       // Control command replies are product UI, not rich content. Some attach
       // media, such as the /tts on voice preview, so keep their text bubble on
-      // ordinary Telegram transport while preserving media delivery. Text-only
-      // finals also stay on legacy transport because Telegram rich sends have
-      // repeatedly rendered as unsupported blank bubbles in Jarvis Lab topics.
+      // ordinary Telegram transport while preserving media delivery. Normal
+      // final answer text must stay on the rich-capable durable path so tables
+      // can render natively, with deliverReplies handling legacy fallbacks.
       ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
       // Final-answer blockquotes are commonly used for draft messages the user
       // wants to copy into another chat. Render those quote bodies as Telegram
