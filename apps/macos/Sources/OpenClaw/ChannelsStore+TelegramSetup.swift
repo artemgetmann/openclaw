@@ -384,7 +384,14 @@ extension ChannelsStore {
         self.updateConfigValue(
             path: [.key("channels"), .key("telegram"), .key("groups"), .key("*"), .key("requireMention")],
             value: false)
+        let previousAllowFrom = Self.telegramAllowFromRecipients(in: self.configDraft)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("allowFrom")], value: allowFrom)
+        if AppFlavor.current.isConsumer {
+            _ = Self.configureConsumerTelegramHeartbeatDefaults(
+                into: &self.configDraft,
+                allowFrom: allowFrom,
+                previousAllowFrom: previousAllowFrom)
+        }
         JarvisAccountActivationConfig.configureManagedRuntime(into: &self.configDraft)
         let persisted: [String: Any]
         if AppFlavor.current.isConsumer,
@@ -410,6 +417,141 @@ extension ChannelsStore {
         let workspace = AgentWorkspaceConfig.workspace(from: self.configDraft)
         let workspaceURL = AgentWorkspace.resolveWorkspaceURL(from: workspace)
         try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: workspaceURL)
+    }
+
+    @discardableResult
+    static func configureConsumerTelegramHeartbeatDefaults(
+        into root: inout [String: Any],
+        allowFrom: [String]?,
+        previousAllowFrom: [String]? = nil)
+        -> Bool
+    {
+        var agents = root["agents"] as? [String: Any] ?? [:]
+        var defaults = agents["defaults"] as? [String: Any] ?? [:]
+        var heartbeat = defaults["heartbeat"] as? [String: Any] ?? [:]
+        var changed = false
+        let target = (heartbeat["target"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let existingRecipient = (heartbeat["to"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let target, !target.isEmpty, target != "none", target != "telegram" {
+            return false
+        }
+        let previousRecipients = Set(
+            (previousAllowFrom ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty })
+
+        guard let recipient = self.firstNonEmptyTelegramRecipient(from: allowFrom) else {
+            // During managed setup/re-pair there is a short window after the new
+            // bot config is saved but before the owner sends the first DM. If a
+            // previous pairing left a setup-owned Telegram heartbeat recipient,
+            // disable delivery until the fresh DM proves the new recipient.
+            let setupOwnsExistingTelegramTarget = target == "telegram"
+                && (existingRecipient == nil
+                    || existingRecipient == ""
+                    || previousRecipients.contains(existingRecipient ?? ""))
+            guard setupOwnsExistingTelegramTarget else { return false }
+            heartbeat["target"] = "none"
+            heartbeat.removeValue(forKey: "to")
+            heartbeat.removeValue(forKey: "accountId")
+            heartbeat.removeValue(forKey: "directPolicy")
+            defaults["heartbeat"] = heartbeat
+            agents["defaults"] = defaults
+            root["agents"] = agents
+            return true
+        }
+
+        let setupOwnsDeliveryTarget = target == nil
+            || target == ""
+            || target == "none"
+            || existingRecipient == nil
+            || existingRecipient == ""
+            || previousRecipients.contains(existingRecipient ?? "")
+
+        func setIfMissing(_ key: String, _ value: Any) {
+            guard Self.configValueIsMissing(heartbeat[key]) else { return }
+            heartbeat[key] = value
+            changed = true
+        }
+
+        setIfMissing("every", "1d")
+        setIfMissing("activeHours", [
+            "start": "09:00",
+            "end": "20:00",
+            "timezone": "user",
+        ])
+
+        if setupOwnsDeliveryTarget {
+            // Telegram setup installs the paired consumer bot under the default
+            // account. Keep heartbeat on that account during setup/re-pair instead
+            // of preserving a stale account that may belong to an old bot.
+            if heartbeat["accountId"] as? String != Self.consumerDefaultTelegramAccountId {
+                heartbeat["accountId"] = Self.consumerDefaultTelegramAccountId
+                changed = true
+            }
+            // The setup path is explicitly configuring the paired Telegram DM as
+            // the heartbeat delivery target, so pin the direct-send policy instead
+            // of leaving doctor to warn about an implicit safety decision.
+            if heartbeat["directPolicy"] as? String != "allow" {
+                heartbeat["directPolicy"] = "allow"
+                changed = true
+            }
+            if target == nil || target == "" || target == "none" {
+                heartbeat["target"] = "telegram"
+                changed = true
+            }
+            // Telegram setup owns the paired-DM delivery target. On re-pair, keep
+            // heartbeat aligned with the freshly captured allowlist entry instead
+            // of leaking future heartbeat messages to a stale explicit recipient.
+            if existingRecipient != recipient {
+                heartbeat["to"] = recipient
+                changed = true
+            }
+        } else {
+            setIfMissing("directPolicy", "allow")
+        }
+
+        guard changed else { return false }
+        defaults["heartbeat"] = heartbeat
+        agents["defaults"] = defaults
+        root["agents"] = agents
+        return true
+    }
+
+    private static func telegramAllowFromRecipients(in root: [String: Any]) -> [String]? {
+        guard let telegram = (root["channels"] as? [String: Any])?["telegram"] as? [String: Any],
+              let raw = telegram["allowFrom"] as? [Any]
+        else {
+            return nil
+        }
+        return raw.compactMap { value in
+            if let string = value as? String {
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            if let number = value as? NSNumber {
+                return number.stringValue
+            }
+            return nil
+        }
+    }
+
+    private static func firstNonEmptyTelegramRecipient(from allowFrom: [String]?) -> String? {
+        allowFrom?
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private static func configValueIsMissing(_ value: Any?) -> Bool {
+        guard let value else { return true }
+        if value is NSNull { return true }
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return false
     }
 
     private func openTelegramURL(_ raw: String) {

@@ -7,28 +7,23 @@ read_when:
 
 # HEARTBEAT.md
 
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Heartbeat is a quiet periodic check-in. Keep it broad, low-burn, and DM-safe.
 
-# Heartbeat is for broad periodic sweeps and ambient awareness. Do not use it as the default
+# If you want Jarvis to stop heartbeat API calls, leave this file empty or with
 
-# home for reminders or explicit inbox/thread/person monitors.
+# only comments.
 
-# Prefer cron for reminders, exact scheduled checks, or "watch this until X happens".
+- Once each workday during active hours, do one broad sweep and only alert me if something needs attention.
+- Check configured, connected personal tools only. If selected email, calendar, WhatsApp-as-me, Telegram-as-me, or another personal account tool is not set up, skip it silently.
+- Prioritize items blocked on my approval, decision, quick reply, or a short "continue".
+- For follow-ups from prior chats or tasks, include the source chat/thread link when available. If no link is available, say which source you used.
+- Prefer net-new action-needed items. Do not repeat the same unresolved item unless something materially changed.
+- If the same blocker still matters, send a short nudge instead of the same full message.
+- If a dedicated recurring monitor would help, suggest one with cadence, stop condition, and expiry before creating it.
+- Do not send external messages, make purchases, delete data, or take risky actions without approval.
+- Keep heartbeat output short: at most 1-3 items.
+- If nothing actually matters, reply HEARTBEAT_OK and nothing else.
 
-#
+# Do not use heartbeat as the home for exact reminders or "watch this thread
 
-# Safe example to try:
-
-# - Once each morning, do one broad sweep of my world and only alert me if something looks important.
-
-# - Prefer net-new action-needed items. If you already surfaced the same unresolved blocker recently,
-
-# do not resend the full alert unless something materially changed; use a shorter nudge if needed.
-
-#
-
-# - If something is blocked on my approval/decision/input, say that explicitly and keep the ask short.
-
-#
-
-# - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
+# until X happens" jobs. Use cron/monitors for those.

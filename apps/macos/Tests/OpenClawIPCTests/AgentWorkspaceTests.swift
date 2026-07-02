@@ -65,6 +65,9 @@ struct AgentWorkspaceTests {
         let bootstrap = try String(
             contentsOf: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
             encoding: .utf8)
+        let heartbeat = try String(
+            contentsOf: tmp.appendingPathComponent(AgentWorkspace.heartbeatFilename),
+            encoding: .utf8)
 
         #expect(identity.contains("- **Name:**"))
         #expect(identity.contains("- **Role / persona:**"))
@@ -91,6 +94,11 @@ struct AgentWorkspaceTests {
         #expect(!bootstrap.contains("creature/vibe"))
         #expect(!bootstrap.contains("chaos coordinator"))
         #expect(!bootstrap.contains("tiny menace"))
+
+        #expect(heartbeat.contains("quiet periodic check-in"))
+        #expect(heartbeat.contains("Check configured, connected personal tools only"))
+        #expect(heartbeat.contains("Do not repeat the same unresolved item"))
+        #expect(heartbeat.contains("reply HEARTBEAT_OK and nothing else"))
     }
 
     @Test
@@ -172,6 +180,68 @@ struct AgentWorkspaceTests {
         let identity = try String(contentsOf: identityURL, encoding: .utf8)
         #expect(identity.contains("- Name: Friday"))
         #expect(!identity.contains("- Name: Jarvis"))
+
+        let heartbeat = try String(
+            contentsOf: tmp.appendingPathComponent(AgentWorkspace.heartbeatFilename),
+            encoding: .utf8)
+        #expect(heartbeat.contains("quiet periodic check-in"))
+    }
+
+    @Test
+    func `consumer Jarvis preset preserves custom heartbeat`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        let heartbeatURL = tmp.appendingPathComponent(AgentWorkspace.heartbeatFilename)
+        try """
+        # HEARTBEAT.md
+
+        - Check the support inbox once per morning.
+        """.write(to: heartbeatURL, atomically: true, encoding: .utf8)
+
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let heartbeat = try String(contentsOf: heartbeatURL, encoding: .utf8)
+        #expect(heartbeat.contains("Check the support inbox once per morning."))
+        #expect(!heartbeat.contains("quiet periodic check-in"))
+    }
+
+    @Test
+    func `consumer Jarvis preset preserves blank heartbeat opt out`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        let heartbeatURL = tmp.appendingPathComponent(AgentWorkspace.heartbeatFilename)
+        try """
+        # HEARTBEAT.md
+
+        # Keep this comment-only to disable heartbeat model calls.
+        """.write(to: heartbeatURL, atomically: true, encoding: .utf8)
+
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let heartbeat = try String(contentsOf: heartbeatURL, encoding: .utf8)
+        #expect(heartbeat.contains("Keep this comment-only to disable heartbeat model calls."))
+        #expect(!heartbeat.contains("quiet periodic check-in"))
+    }
+
+    @Test
+    func `consumer Jarvis preset does not seed heartbeat into unsafe workspace`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        try "existing project".write(
+            to: tmp.appendingPathComponent("notes.txt"),
+            atomically: true,
+            encoding: .utf8)
+
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let heartbeatURL = tmp.appendingPathComponent(AgentWorkspace.heartbeatFilename)
+        #expect(!FileManager().fileExists(atPath: heartbeatURL.path))
     }
 
     @Test
