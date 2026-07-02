@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runManagedWebSmoke } from "../../scripts/smoke-jarvis-managed-web.mjs";
 
 const tempRoots: string[] = [];
+const repoRoot = process.cwd();
 
 function makeTempRoot() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-web-smoke-"));
@@ -224,5 +225,34 @@ describe("scripts/smoke-jarvis-managed-web.mjs", () => {
           ),
       }),
     ).rejects.toThrow(/brave\.search returned unexpected provider: placeholder/);
+  });
+});
+
+describe("docs/agent-guides/managed-web.md", () => {
+  it("keeps the operator proof tied to managed backend smoke and Jarvis runtime truth", () => {
+    const runbook = fs.readFileSync(
+      path.join(repoRoot, "docs", "agent-guides", "managed-web.md"),
+      "utf8",
+    );
+
+    expect(runbook).toContain("node scripts/smoke-jarvis-managed-web.mjs");
+    expect(runbook).toContain("BRAVE_API_KEY=local-brave-should-not-matter");
+    expect(runbook).toContain("FIRECRAWL_API_KEY=local-firecrawl-should-not-matter");
+    expect(runbook).toContain("FIRECRAWL_BASE_URL=https://local-firecrawl.invalid");
+    expect(runbook).toContain("localProviderEnv.BRAVE_API_KEY.scrubbed=true");
+    expect(runbook).toContain("localProviderEnv.FIRECRAWL_API_KEY.scrubbed=true");
+    expect(runbook).toContain("localProviderEnv.FIRECRAWL_BASE_URL.scrubbed=true");
+    expect(runbook).toContain("web_search");
+    expect(runbook).toContain("brave.search");
+    expect(runbook).toContain("web_fetch");
+    expect(runbook).toContain("firecrawl.scrape");
+    expect(runbook).toContain(
+      "bash scripts/prove-jarvis-runtime.sh --expected-commit <expected-runtime-commit>",
+    );
+    expect(runbook).toContain("runtime_source=jarvis-managed-bundle");
+    expect(runbook).toContain("runtime_mutation=none");
+    expect(runbook).toContain("applications_jarvis_app=untouched");
+    expect(runbook).toContain("Do not use local `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`, or");
+    expect(runbook).toContain("`/Applications/Jarvis.app` without explicit approval");
   });
 });
