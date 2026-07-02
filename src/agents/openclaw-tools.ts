@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { HeartbeatSourceReceiptContext } from "../infra/outbound/source-receipt.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -72,6 +73,8 @@ export function createOpenClawTools(
     replyToMode?: "off" | "first" | "all";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
     hasRepliedRef?: { value: boolean };
+    /** Runtime-trusted heartbeat source for post-send receipts. */
+    sourceReceipt?: HeartbeatSourceReceiptContext;
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
@@ -164,6 +167,7 @@ export function createOpenClawTools(
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,
         hasRepliedRef: options?.hasRepliedRef,
+        sourceReceipt: options?.sourceReceipt,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,

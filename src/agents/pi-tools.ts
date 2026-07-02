@@ -2,6 +2,7 @@ import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-a
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+import type { HeartbeatSourceReceiptContext } from "../infra/outbound/source-receipt.js";
 import { resolvePermissionDefaults } from "../infra/permissions-mode.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -266,6 +267,8 @@ export function createOpenClawCodingTools(options?: {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Runtime-trusted heartbeat source for post-send receipts. */
+  sourceReceipt?: HeartbeatSourceReceiptContext;
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** If true, nodes action="invoke" can call media-returning commands directly. */
@@ -538,6 +541,7 @@ export function createOpenClawCodingTools(options?: {
       currentMessageId: options?.currentMessageId,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
+      sourceReceipt: options?.sourceReceipt,
       modelHasVision: options?.modelHasVision,
       allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,

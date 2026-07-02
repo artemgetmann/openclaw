@@ -50,6 +50,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { deliverHeartbeatSourceReceipt, type SourceReceiptDelivery } from "./source-receipt.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -116,6 +117,7 @@ export type MessageActionRunResult =
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
+      sourceReceipt?: SourceReceiptDelivery;
       dryRun: boolean;
     }
   | {
@@ -214,6 +216,76 @@ async function maybeApplyCrossContextMarker(params: {
     decoration,
     preferComponents: params.preferComponents,
   });
+}
+
+function hasConfirmedSendDelivery(send: Awaited<ReturnType<typeof executeSendAction>>): boolean {
+  if (send.handledBy === "plugin" && send.toolResult) {
+    if (toolResultReportsError(send.toolResult)) {
+      return false;
+    }
+    return !payloadReportsFailedOrCancelledDelivery(send.payload);
+  }
+  if (send.sendResult?.partialFailure) {
+    return false;
+  }
+  const result = send.sendResult?.result;
+  if (!result) {
+    return false;
+  }
+  const meta =
+    "meta" in result && result.meta && typeof result.meta === "object" ? result.meta : undefined;
+  if ((meta as { cancelled?: unknown } | undefined)?.cancelled === true) {
+    return false;
+  }
+  const messageId =
+    "messageId" in result && typeof result.messageId === "string" ? result.messageId.trim() : "";
+  // Some adapters use sentinel ids for hook-cancelled/skipped sends. Those are
+  // not external delivery proof, so do not produce source-topic receipts.
+  return Boolean(messageId && messageId !== "cancelled-by-hook" && messageId !== "skipped");
+}
+
+function resolveReceiptMessage(
+  send: Awaited<ReturnType<typeof executeSendAction>>,
+  fallbackMessage: string,
+): string {
+  // Core direct sends expose post-hook text. Prefer it so source-topic receipts
+  // do not claim the user sent text that a message_sending hook rewrote.
+  const deliveredText = send.sendResult?.deliveredText;
+  return deliveredText !== undefined ? deliveredText : fallbackMessage;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function toolResultReportsError(toolResult: unknown): boolean {
+  const record = asRecord(toolResult);
+  return record?.isError === true || record?.is_error === true;
+}
+
+function payloadReportsFailedOrCancelledDelivery(payload: unknown): boolean {
+  const record = asRecord(payload);
+  if (!record) {
+    return false;
+  }
+  const meta = asRecord(record.meta);
+  if (record.cancelled === true || record.canceled === true || meta?.cancelled === true) {
+    return true;
+  }
+  if (record.ok === false || record.success === false) {
+    return true;
+  }
+  const status = typeof record.status === "string" ? record.status.trim().toLowerCase() : "";
+  if (
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "skipped" ||
+    status === "failed"
+  ) {
+    return true;
+  }
+  const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
+  return messageId === "cancelled-by-hook" || messageId === "skipped";
 }
 
 async function resolveChannel(
@@ -584,6 +656,20 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     replyToId: replyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
+  const sourceReceipt =
+    !dryRun && channel !== "telegram"
+      ? hasConfirmedSendDelivery(send)
+        ? await deliverHeartbeatSourceReceipt({
+            cfg,
+            toolContext: input.toolContext,
+            sentChannel: channel,
+            sentTo: to,
+            message: resolveReceiptMessage(send, message),
+            mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined,
+            deps: input.deps,
+          })
+        : ({ status: "skipped", reason: "unconfirmed-send" } satisfies SourceReceiptDelivery)
+      : undefined;
 
   return {
     kind: "send",
@@ -594,6 +680,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     payload: send.payload,
     toolResult: send.toolResult,
     sendResult: send.sendResult,
+    sourceReceipt,
     dryRun,
   };
 }

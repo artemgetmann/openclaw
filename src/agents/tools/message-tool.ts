@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import type { HeartbeatSourceReceiptContext } from "../../infra/outbound/source-receipt.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { POLL_CREATION_PARAM_DEFS, POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
@@ -569,6 +570,7 @@ type MessageToolOptions = {
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
+  sourceReceipt?: HeartbeatSourceReceiptContext;
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   requesterSenderId?: string;
@@ -888,6 +890,24 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+function resolveContextualAgentAccountId(params: {
+  params: Record<string, unknown>;
+  agentAccountId?: string;
+  currentChannelProvider?: string;
+}): string | undefined {
+  if (!params.agentAccountId) {
+    return undefined;
+  }
+  const requestedChannel = normalizeMessageChannel(readStringParam(params.params, "channel"));
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  // A context account belongs to the context channel. Reuse it for implicit
+  // current-channel sends, but do not leak it into explicit cross-channel sends.
+  if (requestedChannel && currentChannel && requestedChannel !== currentChannel) {
+    return undefined;
+  }
+  return params.agentAccountId;
+}
+
 function filterActionsForContext(params: {
   actions: ChannelMessageActionName[];
   channel?: string;
@@ -1042,7 +1062,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const accountId = readStringParam(params, "accountId") ?? agentAccountId;
+      const accountId =
+        readStringParam(params, "accountId") ??
+        resolveContextualAgentAccountId({
+          params,
+          agentAccountId,
+          currentChannelProvider: options?.currentChannelProvider,
+        });
       if (accountId) {
         params.accountId = accountId;
       }
@@ -1071,7 +1097,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.currentThreadTs ||
         hasCurrentMessageId ||
         options?.replyToMode ||
-        options?.hasRepliedRef
+        options?.hasRepliedRef ||
+        options?.sourceReceipt
           ? {
               currentChannelId: options?.currentChannelId,
               currentChannelProvider: options?.currentChannelProvider,
@@ -1079,6 +1106,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               currentMessageId: options?.currentMessageId,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
+              sourceReceipt: options?.sourceReceipt,
               // Direct tool invocations should not add cross-context decoration.
               // The agent is composing a message, not forwarding from another chat.
               skipCrossContextDecoration: true,

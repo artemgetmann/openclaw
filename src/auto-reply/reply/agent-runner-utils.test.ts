@@ -176,6 +176,32 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
+  it("carries heartbeat source receipts into embedded run context", () => {
+    const run = makeRun();
+    const sourceReceipt = {
+      kind: "heartbeat" as const,
+      sourceChannel: "telegram" as const,
+      sourceTo: "telegram:group:-1003841603622",
+      sourceThreadId: 928,
+      sourceSessionKey: "agent:jarvis:telegram:-1003841603622:topic:928",
+      agentId: "jarvis",
+    };
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "heartbeat",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123456",
+        SourceReceipt: sourceReceipt,
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.sourceReceipt).toEqual(sourceReceipt);
+  });
+
   it("uses OriginatingTo for threading tool context on telegram native commands", () => {
     const context = buildThreadingToolContext({
       sessionCtx: {
