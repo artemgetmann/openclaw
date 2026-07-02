@@ -38,4 +38,6 @@ export function selectTelegramTesterToken(params?: unknown): {
 };
 export function summarizeTelegramTesterTokenPool(params?: unknown): unknown;
 export function buildTelegramLiveRuntimeConfig(params?: unknown): unknown;
+export function pruneTesterRuntimeAuthStore(params?: unknown): Record<string, unknown>;
+export function resolveTesterRuntimeAuthStoreFromSources(params?: unknown): Record<string, unknown>;
 export function extractTelegramBotTokensFromConfig(config?: unknown): string[];

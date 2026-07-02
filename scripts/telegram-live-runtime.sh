@@ -986,8 +986,8 @@ const { deriveWorktreeTesterBaseline, resolveTesterBaselineAgentIds } = await im
 );
 const {
   bootstrapTelegramLiveCodexAuthStoreFromSources,
-  pruneTesterRuntimeAuthStore,
   readUsableOpenClawCodexAuthStore,
+  resolveTesterRuntimeAuthStoreFromSources,
   syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
 } = await import(pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href);
@@ -1022,7 +1022,10 @@ const preferredModel =
     : typeof config?.agents?.defaults?.model === "string"
       ? config.agents.defaults.model
       : "";
-const needsCodexAuth = preferredModel.trim().toLowerCase().startsWith("openai-codex/");
+const preferredProvider = preferredModel.includes("/")
+  ? preferredModel.slice(0, preferredModel.indexOf("/")).trim().toLowerCase()
+  : "";
+const needsCodexAuth = preferredProvider === "openai-codex";
 
 const baseline = deriveWorktreeTesterBaseline({ worktreePath });
 const baselineStateDir = baseline.stateDir;
@@ -1069,9 +1072,12 @@ for (const agentId of agentIds) {
   );
   const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
   const sourceAuthPaths = [sourceAuthPath, fallbackAuthPath, sharedMainAuthPath];
-  const resolvedSourcePath = sourceAuthPaths.find((candidate) => fs.existsSync(candidate)) ?? "";
+  const selectedAuthStore = resolveTesterRuntimeAuthStoreFromSources({
+    sourceAuthPaths,
+    preferredModel,
+  });
 
-  if (!resolvedSourcePath) {
+  if (!selectedAuthStore.ok) {
     if (needsCodexAuth) {
       const bootstrap = bootstrapTelegramLiveCodexAuthStoreFromSources({
         runtimeStateDir,
@@ -1085,12 +1091,17 @@ for (const agentId of agentIds) {
       }
       emitCodexAuthBootstrapDiagnostic(agentId, bootstrap);
     }
+    if (preferredProvider && !needsCodexAuth) {
+      throw new Error(
+        `Tester runtime auth sync could not find a usable ${preferredProvider} auth profile for ${agentId}; checked ${selectedAuthStore.checkedPathCount ?? 0} auth store(s). Run clean tester-lane adoption or sync main runtime auth before E2E proof.`,
+      );
+    }
     continue;
   }
 
   if (needsCodexAuth) {
     const sourceCodexAuth = readUsableOpenClawCodexAuthStore({
-      authStorePath: resolvedSourcePath,
+      authStorePath: selectedAuthStore.sourceAuthPath,
       preferredModel,
     });
     if (sourceCodexAuth.ok) {
@@ -1109,20 +1120,7 @@ for (const agentId of agentIds) {
     }
   }
 
-  let sourceStore = { version: 1, profiles: {} };
-  try {
-    const parsedStore = JSON.parse(fs.readFileSync(resolvedSourcePath, "utf8"));
-    if (parsedStore && typeof parsedStore === "object") {
-      sourceStore = parsedStore;
-    }
-  } catch {
-    continue;
-  }
-
-  const runtimeStore = pruneTesterRuntimeAuthStore({
-    store: sourceStore,
-    preferredModel,
-  });
+  const runtimeStore = selectedAuthStore.store;
 
   if (needsCodexAuth && Object.keys(runtimeStore.profiles ?? {}).length === 0) {
     const bootstrap = bootstrapTelegramLiveCodexAuthStoreFromSources({
@@ -1205,6 +1203,19 @@ NODE
     probe_timeout=60000
   fi
 
+  local probe_args=(
+    models status
+    --json
+    --probe
+    --probe-provider "$MODEL_AUTH_PREFLIGHT_PROVIDER"
+    --probe-timeout "$probe_timeout"
+    --probe-concurrency 1
+    --probe-max-tokens "${OPENCLAW_TELEGRAM_LIVE_MODEL_PROBE_MAX_TOKENS:-8}"
+  )
+  if [[ -n "$MODEL_AUTH_PREFLIGHT_PROFILE" && "$MODEL_AUTH_PREFLIGHT_PROFILE" != "unknown" ]]; then
+    probe_args+=(--probe-profile "$MODEL_AUTH_PREFLIGHT_PROFILE")
+  fi
+
   local probe_output=""
   if PATH="$(repo_toolchain_path)" \
     OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
@@ -1212,14 +1223,7 @@ NODE
     OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
     OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1 \
     OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-0}" \
-    node scripts/run-node.mjs models status \
-      --json \
-      --probe \
-      --probe-provider "$MODEL_AUTH_PREFLIGHT_PROVIDER" \
-      --probe-profile "$MODEL_AUTH_PREFLIGHT_PROFILE" \
-      --probe-timeout "$probe_timeout" \
-      --probe-concurrency 1 \
-      --probe-max-tokens "${OPENCLAW_TELEGRAM_LIVE_MODEL_PROBE_MAX_TOKENS:-8}" \
+    node scripts/run-node.mjs "${probe_args[@]}" \
       >/tmp/openclaw-telegram-live-model-probe.$$ 2>&1; then
     MODEL_AUTH_PREFLIGHT_STATUS="ok"
     rm -f /tmp/openclaw-telegram-live-model-probe.$$

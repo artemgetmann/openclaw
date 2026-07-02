@@ -17,6 +17,7 @@ import {
   isCanonicalSharedGatewayActive,
   isTelegramLiveIsolatedRuntimeProfile,
   pruneTesterRuntimeAuthStore,
+  resolveTesterRuntimeAuthStoreFromSources,
   resolveTelegramLiveModelAuthProbe,
   selectTelegramTesterToken,
   syncTelegramLiveRuntimeMemoryStore,
@@ -313,12 +314,12 @@ describe("telegram live runtime helpers", () => {
     });
     expect(config.plugins).toMatchObject({
       enabled: true,
-      allow: ["telegram"],
-      slots: { memory: "none" },
+      allow: ["slack"],
+      slots: { memory: "default" },
     });
-    expect(config.plugins?.deny).toEqual(["acpx"]);
+    expect(config.plugins?.deny).toEqual(["legacy"]);
     expect(config.plugins?.entries?.telegram).toMatchObject({ enabled: true });
-    expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: false });
+    expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: true });
     expect(config.auth).toEqual({
       profiles: {
         "anthropic:default": { provider: "anthropic", mode: "api_key" },
@@ -441,6 +442,25 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("requires a model auth probe for inherited non-Codex tester runtime configs", () => {
+    const runtimeStateDir = makeTempDir();
+    const runtimeConfigPath = path.join(runtimeStateDir, "openclaw.telegram-live.json");
+    fs.writeFileSync(
+      runtimeConfigPath,
+      JSON.stringify({
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+      }),
+    );
+
+    expect(resolveTelegramLiveModelAuthProbe({ runtimeConfigPath })).toMatchObject({
+      required: true,
+      reason: "model_provider_selected",
+      provider: "anthropic",
+      model: "anthropic/claude-opus-4-6",
+      profile: "",
+    });
+  });
+
   it("honors an explicit preferred model for isolated Telegram tester lanes", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
@@ -504,7 +524,7 @@ describe("telegram live runtime helpers", () => {
     expect(config.agents?.defaults?.models).not.toHaveProperty("openai-codex/gpt-5.4");
   });
 
-  it("defaults isolated tester lanes to Codex when local Codex auth is available", () => {
+  it("inherits the configured non-Codex model for parity tester lanes", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
         agents: {
@@ -521,15 +541,16 @@ describe("telegram live runtime helpers", () => {
         },
       },
       assignedToken: "tester-token",
-      preferCodexAuth: true,
       runtimePort: 24567,
     });
 
     expect(config.agents?.defaults?.model).toMatchObject({
-      primary: "openai-codex/gpt-5.4",
-      fallbacks: [],
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["anthropic/claude-sonnet-4-5"],
     });
-    expect(config.agents?.defaults?.models).toEqual({
+    expect(config.agents?.defaults?.models).toMatchObject({
+      "anthropic/claude-opus-4-6": { alias: "Claude Opus" },
+      "anthropic/claude-sonnet-4-5": {},
       "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
     });
   });
@@ -578,7 +599,7 @@ describe("telegram live runtime helpers", () => {
     }
   });
 
-  it("derives a safe effective model when the inherited default is plain openai", () => {
+  it("preserves the inherited plain OpenAI model for parity tester lanes", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
         agents: {
@@ -600,13 +621,13 @@ describe("telegram live runtime helpers", () => {
     });
 
     expect(config.agents?.defaults?.model).toMatchObject({
-      primary: "anthropic/claude-sonnet-4-5",
-      fallbacks: [],
+      primary: "openai/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-5", "openai/gpt-5.2"],
     });
     expect(config.agents?.defaults?.models).toEqual({
       "openai/gpt-5.4": { alias: "GPT 5.4" },
-      "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
       "anthropic/claude-sonnet-4-5": { alias: "Claude Sonnet" },
+      "openai/gpt-5.2": {},
     });
   });
 
@@ -661,8 +682,7 @@ describe("telegram live runtime helpers", () => {
       dispatch: { enabled: true },
     });
     expect(config.plugins).toMatchObject({
-      allow: ["telegram", "acpx"],
-      deny: [],
+      deny: ["legacy"],
     });
     expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: true });
     expect(config.auth).toEqual({
@@ -675,7 +695,7 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
-  it("derives a Codex twin when the inherited plain OpenAI default has no safe fallback", () => {
+  it("preserves an inherited plain OpenAI default even without a fallback", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
         agents: {
@@ -695,11 +715,11 @@ describe("telegram live runtime helpers", () => {
     });
 
     expect(config.agents?.defaults?.model).toMatchObject({
-      primary: "openai-codex/gpt-5.4",
+      primary: "openai/gpt-5.4",
       fallbacks: [],
     });
     expect(config.agents?.defaults?.models).toEqual({
-      "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+      "openai/gpt-5.4": { alias: "GPT 5.4" },
     });
   });
 
@@ -773,6 +793,73 @@ describe("telegram live runtime helpers", () => {
     expect(pruned.order).toEqual({ "openai-codex": ["openai-codex:default"] });
     expect(pruned.lastGood).toEqual({ "openai-codex": "openai-codex:default" });
     expect(pruned.usageStats).toEqual({ "openai-codex:default": { lastUsed: 1 } });
+  });
+
+  it("selects a later source auth store when the first store lacks the runtime model provider", () => {
+    const staleRuntimeStateDir = makeTempDir();
+    const mainStateDir = makeTempDir();
+    const staleAuthPath = path.join(
+      staleRuntimeStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const mainAuthPath = path.join(mainStateDir, "agents", "main", "agent", "auth-profiles.json");
+    fs.mkdirSync(path.dirname(staleAuthPath), { recursive: true });
+    fs.mkdirSync(path.dirname(mainAuthPath), { recursive: true });
+    fs.writeFileSync(
+      staleAuthPath,
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "codex-access",
+            refresh: "codex-refresh",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      mainAuthPath,
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+          },
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "codex-access",
+            refresh: "codex-refresh",
+          },
+        },
+        order: {
+          anthropic: ["anthropic:default"],
+          "openai-codex": ["openai-codex:default"],
+        },
+      }),
+    );
+
+    const selected = resolveTesterRuntimeAuthStoreFromSources({
+      preferredModel: "anthropic/claude-opus-4-6",
+      sourceAuthPaths: [staleAuthPath, mainAuthPath],
+    });
+
+    expect(selected).toMatchObject({
+      ok: true,
+      provider: "anthropic",
+      sourceAuthPath: mainAuthPath,
+      profileIds: ["anthropic:default"],
+    });
+    expect(Object.keys((selected.store as { profiles: Record<string, unknown> }).profiles)).toEqual(
+      ["anthropic:default"],
+    );
   });
 
   it("keeps external CLI auth sync compatible with ACP validation Codex lanes", () => {

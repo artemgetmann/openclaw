@@ -110,6 +110,9 @@ declare module "*telegram-live-runtime-helpers.mjs" {
   export function isLocalCodexAuthAvailable(params?: unknown): boolean;
   export function isCanonicalSharedGatewayActive(params?: unknown): boolean;
   export function pruneTesterRuntimeAuthStore(params?: unknown): Record<string, unknown>;
+  export function resolveTesterRuntimeAuthStoreFromSources(
+    params?: unknown,
+  ): Record<string, unknown>;
   export function validateLocalCodexAuth(params?: unknown): Record<string, unknown>;
   export function selectTelegramTesterToken(params?: unknown): {
     ok: boolean;
