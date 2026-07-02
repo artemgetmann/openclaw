@@ -56,14 +56,19 @@ describe("goal tools", () => {
     });
   });
 
-  it("rejects invalid token budgets and model-updated statuses", async () => {
+  it("ignores model-supplied token budgets", async () => {
     const create = createCreateGoalTool({
       agentSessionKey: sessionKey,
       config: { session: { store: storePath } },
     });
-    await expect(
-      create.execute?.("call-1", { objective: "Do it.", token_budget: 0 }),
-    ).rejects.toThrow("token_budget must be positive");
+    const created = await create.execute?.("call-1", { objective: "Do it.", token_budget: 1 });
+    expect(created?.details).toMatchObject({
+      status: "created",
+      goal: { objective: "Do it.", status: "active" },
+    });
+    expect((created?.details as { goal?: { tokenBudget?: number } })?.goal?.tokenBudget).toBe(
+      undefined,
+    );
   });
 
   it("updates the origin session goal when called from a monitor session", async () => {
