@@ -1,9 +1,36 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "gateway-recover-main.sh");
 const WATCHDOG_SCRIPT_PATH = path.join(process.cwd(), "scripts", "gateway-watchdog.sh");
+
+function runJarvisPortProbe(launchState: string, port = 18789) {
+  const stateFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-test-")),
+    "state.txt",
+  );
+  fs.writeFileSync(stateFile, launchState);
+  try {
+    return execFileSync(
+      "bash",
+      [
+        "-lc",
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PORT=${port}`,
+          `launch_state="$(cat ${JSON.stringify(stateFile)})"`,
+          'if jarvis_gateway_targets_shared_port "${launch_state}"; then printf yes; else printf no; fi',
+        ].join("; "),
+      ],
+      { encoding: "utf8" },
+    );
+  } finally {
+    fs.rmSync(path.dirname(stateFile), { recursive: true, force: true });
+  }
+}
 
 describe("scripts/gateway-recover-main.sh", () => {
   it("reinstalls the shared gateway with canonical App Support env only", () => {
@@ -40,6 +67,7 @@ describe("scripts/gateway-recover-main.sh", () => {
   it("exits before restart work when the canonical gateway is already healthy", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
+    const jarvisGuardCallIndex = script.indexOf("assert_no_jarvis_gateway_conflict");
     const healthyCallIndex = script.indexOf("if canonical_gateway_healthy; then");
     const healthyMessageIndex = script.indexOf(
       "canonical gateway is already healthy; exiting without restart",
@@ -48,10 +76,87 @@ describe("scripts/gateway-recover-main.sh", () => {
     const fullStopIndex = script.indexOf('log_block "Full clean stop"');
 
     expect(script).toContain("canonical_gateway_healthy() {");
+    expect(script).toContain("assert_no_jarvis_gateway_conflict() {");
+    expect(jarvisGuardCallIndex).toBeGreaterThanOrEqual(0);
     expect(healthyCallIndex).toBeGreaterThanOrEqual(0);
+    expect(jarvisGuardCallIndex).toBeLessThan(healthyCallIndex);
     expect(healthyMessageIndex).toBeGreaterThan(healthyCallIndex);
     expect(healthyMessageIndex).toBeLessThan(shallowRecoveryIndex);
     expect(healthyMessageIndex).toBeLessThan(fullStopIndex);
+  });
+
+  it("refuses shared gateway recovery while Jarvis owns the same port unless explicitly overridden", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'JARVIS_GATEWAY_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"',
+    );
+    expect(script).toContain(
+      'ALLOW_SHARED_GATEWAY_WITH_JARVIS="${OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS:-0}"',
+    );
+    expect(script).toContain("jarvis_gateway_targets_shared_port() {");
+    expect(script).toContain('if (line == "environment = {")');
+    expect(script).toContain('line == "OPENCLAW_GATEWAY_PORT => " port');
+    expect(script).toContain('previous == "--port" && line == port');
+    expect(script).toContain("refusing to recover %s while %s is loaded for port %s");
+    expect(script).toContain("scripts/prove-jarvis-runtime.sh");
+    expect(script).toContain("OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS=1");
+  });
+
+  it("ignores stale inherited launchd environment when checking Jarvis port ownership", () => {
+    const inheritedOnly = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port",
+      "    19001",
+      "  }",
+      "  inherited environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 18789",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 19001",
+      "  }",
+      "}",
+    ].join("\n");
+
+    expect(runJarvisPortProbe(inheritedOnly)).toBe("no");
+  });
+
+  it("detects Jarvis port ownership from active environment and launch arguments", () => {
+    const activeEnv = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port",
+      "    19001",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 18789",
+      "  }",
+      "}",
+    ].join("\n");
+    const launchArgument = [
+      "gui/501/ai.jarvis.gateway = {",
+      "  arguments = {",
+      "    node",
+      "    dist/index.js",
+      "    gateway",
+      "    --port",
+      "    18789",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_GATEWAY_PORT => 19001",
+      "  }",
+      "}",
+    ].join("\n");
+
+    expect(runJarvisPortProbe(activeEnv)).toBe("yes");
+    expect(runJarvisPortProbe(launchArgument)).toBe("yes");
   });
 
   it("supports shallow launchd recovery without full stop, build, or reinstall", () => {

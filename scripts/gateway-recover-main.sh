@@ -10,11 +10,13 @@ RPC_TIMEOUT_SECONDS="${OPENCLAW_GATEWAY_RPC_TIMEOUT_SECONDS:-120}"
 RETRY_KICKSTART_AFTER_SECONDS="${OPENCLAW_GATEWAY_RETRY_KICKSTART_AFTER_SECONDS:-30}"
 POLL_INTERVAL_SECONDS="${OPENCLAW_GATEWAY_POLL_INTERVAL_SECONDS:-2}"
 GATEWAY_LABEL="ai.openclaw.gateway"
+JARVIS_GATEWAY_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
 WATCHDOG_LABEL="ai.openclaw.gateway-watchdog"
 WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
 MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
+ALLOW_SHARED_GATEWAY_WITH_JARVIS="${OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS:-0}"
 DEFAULT_GATEWAY_STOPPED_FOR_RECOVERY=0
 RECOVERY_MODE="${OPENCLAW_GATEWAY_RECOVER_MODE:-full}"
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
@@ -295,6 +297,67 @@ canonical_gateway_healthy() {
   fi
 
   return 0
+}
+
+jarvis_gateway_targets_shared_port() {
+  local launch_state="$1"
+
+  # Jarvis and the shared OpenClaw gateway both default to the same loopback
+  # port. If Jarvis is loaded for this port, recovering ai.openclaw.gateway
+  # creates ambiguous runtime ownership and can steal the live user path.
+  #
+  # launchd also prints an "inherited environment" block that can contain stale
+  # values from the shell that bootstrapped the job. Ignore that block; only the
+  # active environment block and explicit --port launch argument describe the
+  # running service.
+  awk -v port="${PORT}" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+
+      if (line == "environment = {") {
+        in_environment = 1
+        previous = line
+        next
+      }
+      if (in_environment && line == "}") {
+        in_environment = 0
+      }
+      if (in_environment && line == "OPENCLAW_GATEWAY_PORT => " port) {
+        found = 1
+      }
+      if (previous == "--port" && line == port) {
+        found = 1
+      }
+      previous = line
+    }
+    END { exit(found ? 0 : 1) }
+  ' <<<"${launch_state}"
+}
+
+assert_no_jarvis_gateway_conflict() {
+  local launch_state=""
+
+  if [[ "${ALLOW_SHARED_GATEWAY_WITH_JARVIS}" == "1" ]]; then
+    log "OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS=1; bypassing Jarvis ownership guard"
+    return 0
+  fi
+
+  if ! launch_state="$(launchctl print "gui/$(id -u)/${JARVIS_GATEWAY_LABEL}" 2>/dev/null)"; then
+    return 0
+  fi
+
+  if ! jarvis_gateway_targets_shared_port "${launch_state}"; then
+    return 0
+  fi
+
+  printf '[gateway-recover-main] refusing to recover %s while %s is loaded for port %s\n' \
+    "${GATEWAY_LABEL}" "${JARVIS_GATEWAY_LABEL}" "${PORT}" >&2
+  printf '[gateway-recover-main] Jarvis proof must use scripts/prove-jarvis-runtime.sh; shared OpenClaw proof is not Jarvis proof.\n' >&2
+  printf '[gateway-recover-main] If you intentionally want the shared gateway instead, unload %s first or set OPENCLAW_ALLOW_SHARED_GATEWAY_WITH_JARVIS=1.\n' \
+    "${JARVIS_GATEWAY_LABEL}" >&2
+  exit 1
 }
 
 launch_agent_registered() {
@@ -648,6 +711,8 @@ main() {
   capture_best_effort \
     "Baseline: launchctl print (program/arguments/pid/state)" \
     bash -lc "launchctl print gui/\$(id -u)/${GATEWAY_LABEL} | grep -E 'program =|arguments =|pid =|state ='"
+
+  assert_no_jarvis_gateway_conflict
 
   if canonical_gateway_healthy; then
     log "canonical gateway is already healthy; exiting without restart"
