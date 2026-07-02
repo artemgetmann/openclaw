@@ -1326,10 +1326,27 @@ async def _validate_managed_scrape_url(url: str, depth: int = 0) -> None:
     parsed = _require_managed_scrape_http_url(url)
     addresses = await _resolve_public_managed_scrape_addresses(parsed.hostname or "")
     redirect_urls: list[str] = []
+    reachable_preflight_count = 0
+    transient_preflight_failures: list[HTTPException] = []
     for address in addresses:
-        redirect_url = await _managed_scrape_redirect_target(parsed, address)
+        try:
+            redirect_url = await _managed_scrape_redirect_target(parsed, address)
+        except HTTPException as exc:
+            # Public dual-stack sites often publish IPv6 even when the backend
+            # runtime has no IPv6 egress. DNS/IP safety was already enforced
+            # above, so treat per-address network failures as availability
+            # signals instead of rejecting a URL that is reachable through
+            # another public address. Private redirects still raise immediately.
+            if exc.detail == "firecrawl.scrape input.url could not be validated":
+                transient_preflight_failures.append(exc)
+                continue
+            raise
+        reachable_preflight_count += 1
         if redirect_url and redirect_url not in redirect_urls:
             redirect_urls.append(redirect_url)
+
+    if reachable_preflight_count == 0 and transient_preflight_failures:
+        raise transient_preflight_failures[0]
 
     for redirect_url in redirect_urls:
         await _validate_managed_scrape_url(redirect_url, depth + 1)
