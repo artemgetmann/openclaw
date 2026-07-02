@@ -770,6 +770,17 @@ type CdpResponse = {
   result?: unknown;
   error?: { message?: string };
 };
+type CdpEvent = CdpResponse & {
+  method?: string;
+  params?: unknown;
+};
+type ChromeMcpDownloadResult = {
+  url: string;
+  suggestedFilename: string;
+  path: string;
+};
+
+const CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS = 250;
 
 function decodeChromeDevToolsRawMessage(data: RawData): string {
   if (typeof data === "string") {
@@ -904,6 +915,280 @@ async function captureChromeScreenshotViaWebSocket(params: {
     }
     return Buffer.from(data, "base64");
   } finally {
+    ws.close();
+  }
+}
+
+async function isNewOrFreshDownloadCandidate(params: {
+  filePath: string;
+  fileName: string;
+  beforeNames: Set<string>;
+  startedAtMs: number;
+}): Promise<boolean> {
+  const stat = await fs.stat(params.filePath).catch(() => null);
+  if (!stat) {
+    return false;
+  }
+  return !params.beforeNames.has(params.fileName) || stat.mtimeMs >= params.startedAtMs - 1_000;
+}
+
+async function listDownloadCandidates(params: {
+  directory: string;
+  startedAtMs: number;
+  beforeNames: Set<string>;
+}): Promise<Array<{ name: string; path: string; mtimeMs: number; size: number }>> {
+  const entries = await fs.readdir(params.directory, { withFileTypes: true }).catch(() => []);
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name.endsWith(".crdownload")) {
+      continue;
+    }
+    const filePath = path.join(params.directory, entry.name);
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat) {
+      continue;
+    }
+    const isNewName = !params.beforeNames.has(entry.name);
+    const isFreshWrite = stat.mtimeMs >= params.startedAtMs - 1_000;
+    if (!isNewName && !isFreshWrite) {
+      continue;
+    }
+    candidates.push({ name: entry.name, path: filePath, mtimeMs: stat.mtimeMs, size: stat.size });
+  }
+  return candidates.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+async function moveCompletedDownload(params: {
+  currentPath: string;
+  requestedPath?: string;
+}): Promise<string> {
+  const requestedPath = params.requestedPath?.trim();
+  if (!requestedPath) {
+    return params.currentPath;
+  }
+  const finalPath = path.resolve(requestedPath);
+  const currentPath = path.resolve(params.currentPath);
+  if (currentPath === finalPath) {
+    return finalPath;
+  }
+
+  // Chrome decides the temporary filename. Once it reports completion, normalize
+  // to the caller-requested artifact path so agents have one stable file to send.
+  await fs.mkdir(path.dirname(finalPath), { recursive: true });
+  await fs.rm(finalPath, { force: true });
+  await fs.rename(currentPath, finalPath);
+  return finalPath;
+}
+
+async function waitForChromeDownloadFile(params: {
+  directory: string;
+  requestedPath?: string;
+  suggestedFilename?: string;
+  startedAtMs: number;
+  beforeNames: Set<string>;
+  timeoutMs: number;
+}): Promise<string> {
+  const deadline = Date.now() + params.timeoutMs;
+  let stableCandidatePath: string | undefined;
+  let stableCandidateSize: number | undefined;
+
+  while (Date.now() <= deadline) {
+    if (params.suggestedFilename) {
+      const suggestedPath = path.join(params.directory, params.suggestedFilename);
+      if (
+        await isNewOrFreshDownloadCandidate({
+          filePath: suggestedPath,
+          fileName: params.suggestedFilename,
+          beforeNames: params.beforeNames,
+          startedAtMs: params.startedAtMs,
+        })
+      ) {
+        return await moveCompletedDownload({
+          currentPath: suggestedPath,
+          requestedPath: params.requestedPath,
+        });
+      }
+    }
+
+    const candidates = await listDownloadCandidates({
+      directory: params.directory,
+      startedAtMs: params.startedAtMs,
+      beforeNames: params.beforeNames,
+    });
+    const candidate = candidates[0];
+    if (candidate) {
+      if (stableCandidatePath === candidate.path && stableCandidateSize === candidate.size) {
+        return await moveCompletedDownload({
+          currentPath: candidate.path,
+          requestedPath: params.requestedPath,
+        });
+      }
+      stableCandidatePath = candidate.path;
+      stableCandidateSize = candidate.size;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS));
+  }
+
+  throw new Error("Timeout waiting for Chrome download to finish");
+}
+
+async function runChromeMcpDownloadSession(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  downloadDir: string;
+  path?: string;
+  timeoutMs?: number;
+  trigger?: () => Promise<void>;
+}): Promise<ChromeMcpDownloadResult> {
+  const timeoutMs = Math.max(1_000, params.timeoutMs ?? 120_000);
+  const wsUrl = await resolveChromeMcpPageWebSocketUrl({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+  });
+  if (!wsUrl) {
+    throw new Error(
+      "existing-session download requires a per-tab DevTools websocket; retry after Chrome exposes remote debugging for this profile.",
+    );
+  }
+
+  const downloadDir = path.resolve(params.downloadDir);
+  await fs.mkdir(downloadDir, { recursive: true });
+  const beforeEntries = await fs.readdir(downloadDir).catch(() => []);
+  const beforeNames = new Set(beforeEntries);
+  const startedAtMs = Date.now();
+  let downloadUrl = "";
+  let suggestedFilename = "";
+  let completed = false;
+
+  const ws = new WebSocket(wsUrl, {
+    handshakeTimeout: Math.min(timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+  });
+  let nextId = 0;
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+
+  const failAll = (err: Error): void => {
+    for (const [id, entry] of pending.entries()) {
+      clearTimeout(entry.timer);
+      pending.delete(id);
+      entry.reject(err);
+    }
+  };
+
+  ws.on("message", (data: RawData) => {
+    let message: CdpEvent;
+    try {
+      message = JSON.parse(decodeChromeDevToolsRawMessage(data)) as CdpEvent;
+    } catch {
+      return;
+    }
+    if (typeof message.method === "string") {
+      const event = asRecord(message.params);
+      if (message.method.endsWith(".downloadWillBegin") && event) {
+        downloadUrl = typeof event.url === "string" ? event.url : downloadUrl;
+        suggestedFilename =
+          typeof event.suggestedFilename === "string" ? event.suggestedFilename : suggestedFilename;
+      }
+      if (message.method.endsWith(".downloadProgress") && event?.state === "completed") {
+        completed = true;
+      }
+    }
+    if (typeof message.id !== "number") {
+      return;
+    }
+    const entry = pending.get(message.id);
+    if (!entry) {
+      return;
+    }
+    clearTimeout(entry.timer);
+    pending.delete(message.id);
+    if (message.error) {
+      entry.reject(new Error(message.error.message ?? "Chrome DevTools command failed"));
+      return;
+    }
+    entry.resolve(message.result);
+  });
+
+  ws.on("error", (err) => failAll(err instanceof Error ? err : new Error(String(err))));
+  ws.on("close", () => failAll(new Error("Chrome DevTools WebSocket closed")));
+
+  await new Promise<void>((resolve, reject) => {
+    const openTimeoutMs = Math.min(timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => reject(new Error("Chrome DevTools WebSocket open timed out")),
+      openTimeoutMs,
+    );
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+
+  const send = async (
+    method: string,
+    commandParams?: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const id = ++nextId;
+    return await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(new Error(`${method} timed out`));
+        },
+        Math.min(timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+      );
+      pending.set(id, { resolve, reject, timer });
+      ws.send(JSON.stringify({ id, method, params: commandParams ?? {} }), (err) => {
+        if (!err) {
+          return;
+        }
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(err);
+      });
+    });
+  };
+
+  try {
+    await send("Page.enable");
+    await send("Page.setDownloadBehavior", {
+      behavior: "allow",
+      downloadPath: downloadDir,
+    });
+
+    await params.trigger?.();
+    const savedPath = await waitForChromeDownloadFile({
+      directory: downloadDir,
+      requestedPath: params.path,
+      suggestedFilename,
+      startedAtMs,
+      beforeNames,
+      timeoutMs,
+    });
+    if (!completed) {
+      // Completion events are best-effort across Chrome versions; the stable-file
+      // check above is the proof that matters.
+    }
+    return {
+      url: downloadUrl,
+      suggestedFilename: suggestedFilename || path.basename(savedPath),
+      path: savedPath,
+    };
+  } finally {
+    failAll(new Error("Chrome DevTools WebSocket closed"));
     ws.close();
   }
 }
@@ -2002,6 +2287,52 @@ export async function clickChromeMcpElement(params: {
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
+}
+
+export async function downloadChromeMcpElement(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  uid: string;
+  downloadDir: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpDownloadResult> {
+  return await runChromeMcpDownloadSession({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    downloadDir: params.downloadDir,
+    path: params.path,
+    timeoutMs: params.timeoutMs,
+    trigger: async () => {
+      await clickChromeMcpElement({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+        uid: params.uid,
+        timeoutMs: params.timeoutMs,
+      });
+    },
+  });
+}
+
+export async function waitForChromeMcpDownload(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  downloadDir: string;
+  path?: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpDownloadResult> {
+  return await runChromeMcpDownloadSession({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    downloadDir: params.downloadDir,
+    path: params.path,
+    timeoutMs: params.timeoutMs,
+  });
 }
 
 export async function fillChromeMcpElement(params: {

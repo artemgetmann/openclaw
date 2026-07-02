@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type RawData, type WebSocket, WebSocketServer } from "ws";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
   closeChromeMcpSession,
+  downloadChromeMcpElement,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
   fillChromeMcpForm,
@@ -41,6 +44,24 @@ type ChromeMcpSessionBundle = {
   session: ChromeMcpSession;
   callTool: ReturnType<typeof vi.fn>;
 };
+type CdpTestMessage = {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+};
+
+function decodeWsFrame(data: RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
 
 function createFakeSessionBundle(): ChromeMcpSessionBundle {
   const callTool = vi.fn(async ({ name }: ToolCall) => {
@@ -1199,6 +1220,157 @@ describe("chrome MCP page parsing", () => {
     const calls = (session.client.callTool as unknown as { mock: { calls: unknown[][] } }).mock
       .calls;
     expect(calls[0]?.[2]).toEqual(expect.objectContaining({ timeout: 1234 }));
+  });
+
+  it("clicks an existing-session element and saves the DevTools download artifact", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-download-"));
+    const downloadDir = path.join(tempDir, "downloads");
+    const finalPath = path.join(downloadDir, "final-report.txt");
+    const previousBrowserUrl = process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+    let activeSocket: WebSocket | undefined;
+    let cdpDownloadDir = "";
+    let httpServer: ReturnType<typeof createServer> | undefined;
+    let wsServer: WebSocketServer | undefined;
+
+    const closeHttpServer = async () => {
+      await new Promise<void>((resolve) => {
+        if (!httpServer) {
+          resolve();
+          return;
+        }
+        httpServer.close(() => resolve());
+      });
+    };
+    const closeWsServer = async () => {
+      await new Promise<void>((resolve) => {
+        if (!wsServer) {
+          resolve();
+          return;
+        }
+        wsServer.close(() => resolve());
+      });
+    };
+
+    try {
+      wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+      const wsPort = (wsServer.address() as { port: number }).port;
+      wsServer.on("connection", (socket) => {
+        activeSocket = socket;
+        socket.on("message", (data) => {
+          const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
+          if (message.method === "Page.setDownloadBehavior") {
+            const downloadPath = message.params?.downloadPath;
+            cdpDownloadDir = typeof downloadPath === "string" ? downloadPath : "";
+          }
+          socket.send(JSON.stringify({ id: message.id, result: {} }));
+        });
+      });
+
+      httpServer = createServer((req, res) => {
+        if (req.url === "/json/list") {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify([
+              {
+                type: "page",
+                url: "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/1`,
+              },
+            ]),
+          );
+          return;
+        }
+        res.statusCode = 404;
+        res.end("not found");
+      });
+      await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+      const httpPort = (httpServer.address() as { port: number }).port;
+      process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
+
+      const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name === "list_pages") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: [
+                  "## Pages",
+                  "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session [selected]",
+                ].join("\n"),
+              },
+            ],
+          };
+        }
+        if (name === "click") {
+          await fs.mkdir(cdpDownloadDir, { recursive: true });
+          await fs.writeFile(path.join(cdpDownloadDir, "report.txt"), "download ok");
+          activeSocket?.send(
+            JSON.stringify({
+              method: "Page.downloadWillBegin",
+              params: {
+                url: "https://example.com/report.txt",
+                suggestedFilename: "report.txt",
+              },
+            }),
+          );
+          activeSocket?.send(
+            JSON.stringify({
+              method: "Page.downloadProgress",
+              params: { state: "completed" },
+            }),
+          );
+          return { content: [{ type: "text", text: "ok" }] };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      setChromeMcpSessionFactoryForTest(
+        async () =>
+          ({
+            client: {
+              callTool,
+              listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+              close: vi.fn().mockResolvedValue(undefined),
+              connect: vi.fn().mockResolvedValue(undefined),
+            },
+            transport: { pid: 123 },
+            ready: Promise.resolve(),
+          }) as unknown as ChromeMcpSession,
+      );
+
+      const result = await downloadChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "download-button",
+        downloadDir,
+        path: finalPath,
+        timeoutMs: 5_000,
+      });
+
+      expect(result).toEqual({
+        url: "https://example.com/report.txt",
+        suggestedFilename: "report.txt",
+        path: finalPath,
+      });
+      expect(await fs.readFile(finalPath, "utf8")).toBe("download ok");
+      expect(callTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "click",
+          arguments: expect.objectContaining({ uid: "download-button" }),
+        }),
+        undefined,
+        expect.anything(),
+      );
+    } finally {
+      if (previousBrowserUrl === undefined) {
+        delete process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+      } else {
+        process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = previousBrowserUrl;
+      }
+      await closeWsServer();
+      await closeHttpServer();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("fails fast when Chrome MCP session readiness exceeds timeout", async () => {

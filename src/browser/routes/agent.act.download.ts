@@ -1,3 +1,4 @@
+import { downloadChromeMcpElement, waitForChromeMcpDownload } from "../chrome-mcp.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -36,11 +37,29 @@ export function registerBrowserAgentActDownloadRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(
-            res,
-            501,
-            "download waiting is not supported for existing-session profiles yet.",
-          );
+          await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
+          let downloadPath: string | undefined;
+          if (out.trim()) {
+            const resolvedDownloadPath = await resolveWritableOutputPathOrRespond({
+              res,
+              rootDir: DEFAULT_DOWNLOAD_DIR,
+              requestedPath: out,
+              scopeLabel: "downloads directory",
+            });
+            if (!resolvedDownloadPath) {
+              return;
+            }
+            downloadPath = resolvedDownloadPath;
+          }
+          const result = await waitForChromeMcpDownload({
+            profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
+            targetId: tab.targetId,
+            downloadDir: DEFAULT_DOWNLOAD_DIR,
+            path: downloadPath,
+            timeoutMs,
+          });
+          return res.json({ ok: true, targetId: tab.targetId, download: result });
         }
         const pw = await requirePwAi(res, "wait for download");
         if (!pw) {
@@ -90,11 +109,26 @@ export function registerBrowserAgentActDownloadRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(
+          await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
+          const downloadPath = await resolveWritableOutputPathOrRespond({
             res,
-            501,
-            "downloads are not supported for existing-session profiles yet.",
-          );
+            rootDir: DEFAULT_DOWNLOAD_DIR,
+            requestedPath: out,
+            scopeLabel: "downloads directory",
+          });
+          if (!downloadPath) {
+            return;
+          }
+          const result = await downloadChromeMcpElement({
+            profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
+            targetId: tab.targetId,
+            uid: ref,
+            downloadDir: DEFAULT_DOWNLOAD_DIR,
+            path: downloadPath,
+            timeoutMs,
+          });
+          return res.json({ ok: true, targetId: tab.targetId, download: result });
         }
         const pw = await requirePwAi(res, "download");
         if (!pw) {

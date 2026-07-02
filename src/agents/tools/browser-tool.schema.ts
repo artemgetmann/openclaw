@@ -31,6 +31,8 @@ const BROWSER_TOOL_ACTIONS = [
   "snapshot",
   "screenshot",
   "navigate",
+  "download",
+  "waitDownload",
   "console",
   "contract",
   "pdf",
@@ -211,6 +213,12 @@ export const BrowserToolSchema = Type.Object({
   type: optionalStringEnum(BROWSER_IMAGE_TYPES),
   level: Type.Optional(Type.String()),
   paths: Type.Optional(Type.Array(Type.String())),
+  path: Type.Optional(
+    Type.String({
+      description:
+        "For action=download or action=waitDownload, output file path relative to the browser downloads directory.",
+    }),
+  ),
   inputRef: Type.Optional(
     Type.String({
       description:
