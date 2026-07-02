@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 REPLACE=1
 
@@ -47,14 +49,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+EFFECTIVE_INSTANCE_ID="$INSTANCE_ID"
+if [[ -z "$EFFECTIVE_INSTANCE_ID" ]]; then
+  # Match the lower-level packaging/open helpers before doing any expensive
+  # package work. Worktrees become isolated instance lanes automatically; the
+  # sacred home clone stays the empty/default Jarvis runtime and must not be
+  # source-checkout refreshed by accident.
+  EFFECTIVE_INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT_DIR")"
+fi
+
+NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$EFFECTIVE_INSTANCE_ID")"
+if [[ -z "$NORMALIZED_INSTANCE_ID" && "${OPENCLAW_ALLOW_SOURCE_CHECKOUT_JARVIS_REFRESH:-0}" != "1" ]]; then
+  echo "ERROR: refusing default Jarvis rebuild/relaunch with gateway refresh." >&2
+  echo "  This wrapper would package first, then ask open-consumer-mac-app.sh to install" >&2
+  echo "  ai.jarvis.gateway from the source checkout. That is not jarvis-managed-bundle proof." >&2
+  echo "" >&2
+  echo "Use one of these explicit paths instead:" >&2
+  echo "  - Isolated debug lane: bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>" >&2
+  echo "  - Read-only managed-bundle proof: bash scripts/prove-jarvis-runtime.sh --expected-commit <sha>" >&2
+  echo "  - Break-glass default refresh: OPENCLAW_ALLOW_SOURCE_CHECKOUT_JARVIS_REFRESH=1 ..." >&2
+  exit 1
+fi
+
 PACKAGE_ARGS=()
 OPEN_ARGS=()
 DEFAULT_SKIP_PNPM_INSTALL="${SKIP_PNPM_INSTALL:-1}"
 DEFAULT_SKIP_TSC="${SKIP_TSC:-1}"
 
-if [[ -n "$INSTANCE_ID" ]]; then
-  PACKAGE_ARGS+=(--instance "$INSTANCE_ID")
-  OPEN_ARGS+=(--instance "$INSTANCE_ID")
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  PACKAGE_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
+  OPEN_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
 if [[ "$REPLACE" == "1" ]]; then
