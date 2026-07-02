@@ -163,6 +163,82 @@ esac
 `;
 }
 
+function jarvisPlistBuddyFixture(stateDir: string) {
+  const jarvisHome = path.dirname(stateDir);
+  const nodeBin = path.join(stateDir, "tools", "node", "bin", "node");
+  const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
+  const runtimeRoot = path.join(stateDir, "lib", "openclaw-bundled");
+
+  return `#!/usr/bin/env bash
+set -euo pipefail
+key="\${2#Print :}"
+case "$key" in
+  ProgramArguments:0) printf '%s\\n' '${nodeBin}' ;;
+  ProgramArguments:1) printf '%s\\n' '${entrypoint}' ;;
+  ProgramArguments:2) printf '%s\\n' 'gateway' ;;
+  ProgramArguments:3) printf '%s\\n' '--port' ;;
+  ProgramArguments:4) printf '%s\\n' '18789' ;;
+  WorkingDirectory) printf '%s\\n' '${runtimeRoot}' ;;
+  EnvironmentVariables:OPENCLAW_HOME) printf '%s\\n' '${jarvisHome}' ;;
+  EnvironmentVariables:OPENCLAW_STATE_DIR) printf '%s\\n' '${stateDir}' ;;
+  EnvironmentVariables:OPENCLAW_CONFIG_PATH) printf '%s\\n' '${stateDir}/openclaw.json' ;;
+  EnvironmentVariables:OPENCLAW_LOG_DIR) printf '%s\\n' '${stateDir}/logs' ;;
+  EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL) printf '%s\\n' 'ai.jarvis.gateway' ;;
+  EnvironmentVariables:OPENCLAW_PROFILE) printf '%s\\n' 'consumer' ;;
+  EnvironmentVariables:OPENCLAW_GATEWAY_PORT) printf '%s\\n' '18789' ;;
+  *) exit 1 ;;
+esac
+`;
+}
+
+function writeJarvisUnlockProofFixture(
+  options: { wrongRuntime?: boolean; missingNoAutoLeaseSupport?: boolean } = {},
+) {
+  const root = makeTempRoot();
+  const home = path.join(root, "home");
+  const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+  const nodeBin = path.join(stateDir, "tools", "node", "bin", "node");
+  const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
+  const workspaceBin = path.join(stateDir, "workspace", "bin");
+  const launchAgents = path.join(home, "Library", "LaunchAgents");
+  const tccDir = path.join(home, "Library", "Application Support", "com.apple.TCC");
+  const binDir = path.join(root, "bin");
+
+  fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.mkdirSync(workspaceBin, { recursive: true });
+  fs.mkdirSync(launchAgents, { recursive: true });
+  fs.mkdirSync(tccDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(entrypoint, "fixture\n");
+  fs.writeFileSync(path.join(launchAgents, "ai.jarvis.gateway.plist"), "<plist/>\n");
+  fs.writeFileSync(path.join(tccDir, "TCC.db"), "fixture\n");
+
+  writeExecutable(
+    nodeBin,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"jarvis-managed-bundle","runtimeCommit":"389c0513cf","runtimePackageVersion":"2026.6.28","launchServiceVersion":"2026.6.28","stateDir":"${stateDir}","configPath":"${stateDir}/openclaw.json"},"rpc":{"ok":true},"health":{"healthy":true}}'
+`,
+  );
+  writeExecutable(
+    path.join(workspaceBin, "openclaw-mac-unlock-session.sh"),
+    options.missingNoAutoLeaseSupport
+      ? '#!/usr/bin/env bash\ncase "${1:-status}" in status) echo active=false ;; *) exit 0 ;; esac\n'
+      : '#!/usr/bin/env bash\n# supports --no-auto-lease and auto_lock=armed phase=auto_relock\ncase "${1:-status}" in status) echo active=false ;; *) exit 0 ;; esac\n',
+  );
+  writeExecutable(path.join(workspaceBin, "openclaw-unlock.sh"), "#!/usr/bin/env bash\nexit 0\n");
+  writeExecutable(
+    path.join(workspaceBin, "openclaw-gui-lease.sh"),
+    "#!/usr/bin/env bash\nexit 0\n",
+  );
+  writeExecutable(path.join(binDir, "launchctl"), jarvisLaunchctlFixture(stateDir, options));
+  writeExecutable(path.join(binDir, "plistbuddy"), jarvisPlistBuddyFixture(stateDir));
+  writeExecutable(path.join(binDir, "sqlite3"), "#!/usr/bin/env bash\nprintf '%s\\n' 2\n");
+
+  return { root, home, stateDir, binDir };
+}
+
 afterEach(() => {
   for (const dir of tempRoots.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -656,6 +732,64 @@ exit 9
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("both ai.jarvis.gateway");
     expect(result.stderr).toContain("refuse ambiguous Jarvis proof");
+  });
+
+  it("proves Jarvis unlock preflight without live unlock or LaunchAgent mutation", () => {
+    const fixture = writeJarvisUnlockProofFixture();
+
+    const result = runScript("scripts/prove-jarvis-unlock-runtime.sh", [], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+      OPENCLAW_PLISTBUDDY_BIN: path.join(fixture.binDir, "plistbuddy"),
+      OPENCLAW_SQLITE3_BIN: path.join(fixture.binDir, "sqlite3"),
+      OPENCLAW_ID_BIN: "id",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("jarvis_unlock_preflight=true");
+    expect(result.stdout).toContain("launchagent_plist_valid=true");
+    expect(result.stdout).toContain("launchagent_active_matches_plist=true");
+    expect(result.stdout).toContain("tcc_accessibility_preflight=granted");
+    expect(result.stdout).toContain("unlock_wrapper_no_auto_lease=supported");
+    expect(result.stdout).toContain("unlock_wrapper_no_auto_lease_auto_lock=supported");
+    expect(result.stdout).toContain("lease_cleanup=ok");
+    expect(result.stdout).toContain("gateway_rpc_health=ok");
+    expect(result.stdout).toContain("runtime_mutation=none");
+    expect(result.stdout).toContain("lock_unlock_mutation=none");
+  });
+
+  it("rejects Jarvis unlock preflight when launchd cached a source-checkout runtime", () => {
+    const fixture = writeJarvisUnlockProofFixture({ wrongRuntime: true });
+
+    const result = runScript("scripts/prove-jarvis-unlock-runtime.sh", [], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+      OPENCLAW_PLISTBUDDY_BIN: path.join(fixture.binDir, "plistbuddy"),
+      OPENCLAW_SQLITE3_BIN: path.join(fixture.binDir, "sqlite3"),
+      OPENCLAW_ID_BIN: "id",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("launchagent_plist_valid=true");
+    expect(result.stdout).toContain("launchagent_active_matches_plist=false");
+    expect(result.stderr).toContain("active launchd cached service does not match");
+  });
+
+  it("reports missing explicit no-auto-lease support in the unlock session wrapper", () => {
+    const fixture = writeJarvisUnlockProofFixture({ missingNoAutoLeaseSupport: true });
+
+    const result = runScript("scripts/prove-jarvis-unlock-runtime.sh", [], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+      OPENCLAW_PLISTBUDDY_BIN: path.join(fixture.binDir, "plistbuddy"),
+      OPENCLAW_SQLITE3_BIN: path.join(fixture.binDir, "sqlite3"),
+      OPENCLAW_ID_BIN: "id",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("unlock_wrapper_no_auto_lease=missing");
+    expect(result.stdout).toContain("unlock_wrapper_no_auto_lease_auto_lock=missing");
+    expect(result.stdout).toContain("skip session-level lease when requested");
   });
 
   it("rejects stale Jarvis runtime commits", () => {
