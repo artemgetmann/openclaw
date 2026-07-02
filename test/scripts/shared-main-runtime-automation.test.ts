@@ -8,6 +8,7 @@ const ROOT = process.cwd();
 const DEPLOY_SCRIPT = path.join(ROOT, "scripts", "deploy-shared-main-runtime.sh");
 const PR_FASTPATH_SCRIPT = path.join(ROOT, "scripts", "pr-merge-fastpath.sh");
 const PROVE_SCRIPT = path.join(ROOT, "scripts", "prove-main-telegram-runtime.sh");
+const SHIP_MAIN_GATEWAY_FIX_SCRIPT = path.join(ROOT, "scripts", "ship-main-gateway-fix.sh");
 
 function runBash(command: string, options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
   return execFileSync("bash", ["-lc", command], {
@@ -84,6 +85,40 @@ describe("scripts/pr-merge-fastpath.sh", () => {
 
     expect(script).toContain('"${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY"');
     expect(script).toContain('gh pr update-branch "${PR_NUMBER}"');
+  });
+});
+
+describe("scripts/ship-main-gateway-fix.sh worktree safety", () => {
+  it("delegates identical linked-worktree helpers to the sacred main clone", () => {
+    const temp = makeTempDir("ship-helper-reexec");
+    const mainRepo = path.join(temp, "main");
+    const worktreeRepo = path.join(temp, "worktree");
+    const mainScript = path.join(mainRepo, "scripts", "ship-main-gateway-fix.sh");
+    const worktreeScript = path.join(worktreeRepo, "scripts", "ship-main-gateway-fix.sh");
+
+    fs.mkdirSync(path.dirname(mainScript), { recursive: true });
+    fs.mkdirSync(path.dirname(worktreeScript), { recursive: true });
+    fs.copyFileSync(SHIP_MAIN_GATEWAY_FIX_SCRIPT, mainScript);
+    fs.copyFileSync(SHIP_MAIN_GATEWAY_FIX_SCRIPT, worktreeScript);
+    fs.chmodSync(mainScript, 0o755);
+    fs.chmodSync(worktreeScript, 0o755);
+
+    const output = runBash(
+      `OPENCLAW_MAIN_REPO=main bash ${JSON.stringify(path.relative(temp, worktreeScript))} --help 2>&1`,
+      { cwd: temp },
+    );
+
+    expect(output).toContain("delegating to sacred main helper");
+    expect(output).toContain(`cd ${mainRepo} && bash scripts/ship-main-gateway-fix.sh --help`);
+    expect(output).toContain("Usage: scripts/ship-main-gateway-fix.sh");
+  });
+
+  it("prints the exact safe command when a worktree-local helper is under development", () => {
+    const script = fs.readFileSync(SHIP_MAIN_GATEWAY_FIX_SCRIPT, "utf8");
+
+    expect(script).toContain("print_sacred_main_command");
+    expect(script).toContain("safe path after this helper lands");
+    expect(script).toContain("cd %q && bash scripts/ship-main-gateway-fix.sh");
   });
 });
 

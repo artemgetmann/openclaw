@@ -3,7 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
-MAIN_REPO="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
+MAIN_REPO_RAW="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
+if [[ -d "${MAIN_REPO_RAW}" ]]; then
+  # Normalize early so a relative OPENCLAW_MAIN_REPO cannot re-exec the same
+  # helper forever after the process switches from a worktree path to main.
+  MAIN_REPO="$(cd -- "${MAIN_REPO_RAW}" && pwd -P)"
+else
+  MAIN_REPO="${MAIN_REPO_RAW}"
+fi
 GH_BIN="${OPENCLAW_GH_BIN:-gh}"
 PR_NUMBER=""
 DRY_RUN=0
@@ -14,6 +21,44 @@ RUNTIME_SCOPE="openclaw-shared"
 
 log() {
   printf '[ship-main-gateway-fix] %s\n' "$*"
+}
+
+print_sacred_main_command() {
+  printf 'cd %q && bash scripts/ship-main-gateway-fix.sh' "${MAIN_REPO}"
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+maybe_reexec_from_sacred_main() {
+  local current_script="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
+  local canonical_script="${MAIN_REPO}/scripts/$(basename -- "${BASH_SOURCE[0]}")"
+
+  if [[ "${OPENCLAW_SHIP_MAIN_GATEWAY_FIX_NO_REEXEC:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${current_script}" == "${canonical_script}" ]]; then
+    return 0
+  fi
+  if [[ ! -x "${canonical_script}" ]]; then
+    log "sacred main helper is not executable; using current helper: ${current_script}" >&2
+    log "safe path expected after repair: $(print_sacred_main_command "$@")" >&2
+    return 0
+  fi
+
+  # Linked worktrees often carry byte-for-byte copies of this helper. Route those
+  # invocations to the already-checked-out sacred main clone so merge,
+  # fast-forward, and runtime proof cannot try to recreate/check out main inside
+  # another worktree.
+  if cmp -s "${current_script}" "${canonical_script}"; then
+    log "delegating to sacred main helper: $(print_sacred_main_command "$@")" >&2
+    exec bash "${canonical_script}" "$@"
+  fi
+
+  # During active helper development the worktree copy intentionally differs.
+  # Keep it in control, but print the post-merge safe path so operators do not
+  # cargo-cult the feature-worktree invocation for live shipping.
+  log "using worktree-local helper because it differs from sacred main: ${current_script}" >&2
+  log "safe path after this helper lands: $(print_sacred_main_command "$@")" >&2
 }
 
 usage() {
@@ -280,6 +325,7 @@ EOF
 }
 
 main() {
+  maybe_reexec_from_sacred_main "$@"
   parse_args "$@"
   require_tools
 
