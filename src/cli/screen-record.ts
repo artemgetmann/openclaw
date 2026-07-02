@@ -72,6 +72,17 @@ function parseOptionalInt(raw: unknown, label: string): number | undefined {
   return parsed;
 }
 
+function parseWindowId(raw: unknown): number | undefined {
+  const windowId = parseOptionalInt(raw, "--window-id");
+  if (windowId === undefined) {
+    return undefined;
+  }
+  if (windowId < 0 || windowId > 4_294_967_295) {
+    throw new Error("--window-id must be between 0 and 4294967295");
+  }
+  return windowId;
+}
+
 function trimmed(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   return text.length > 0 ? text : undefined;
@@ -83,7 +94,7 @@ export function buildScreenRecordParams(
 ): Record<string, unknown> {
   const appName = trimmed(opts.app);
   const bundleId = trimmed(opts.bundle);
-  const windowId = parseOptionalInt(opts.windowId, "--window-id");
+  const windowId = parseWindowId(opts.windowId);
   const display = parseOptionalInt(
     opts.display ?? opts.screen,
     opts.display ? "--display" : "--screen",

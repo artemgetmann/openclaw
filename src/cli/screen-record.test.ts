@@ -71,4 +71,16 @@ describe("screen record CLI params", () => {
       ),
     ).toThrow(/choose one recording target/i);
   });
+
+  it("rejects out-of-range window ids before gateway access", () => {
+    expect(() =>
+      buildScreenRecordParams(
+        { windowId: "-1", duration: "1s" },
+        {
+          requireTarget: true,
+          requireDisplayReason: true,
+        },
+      ),
+    ).toThrow(/--window-id must be between/i);
+  });
 });

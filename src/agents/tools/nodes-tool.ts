@@ -136,7 +136,7 @@ const NodesToolSchema = Type.Object({
   screenIndex: Type.Optional(Type.Number()),
   appName: Type.Optional(Type.String()),
   bundleId: Type.Optional(Type.String()),
-  windowId: Type.Optional(Type.Number()),
+  windowId: Type.Optional(Type.Number({ minimum: 0, maximum: 4_294_967_295 })),
   outPath: Type.Optional(Type.String()),
   // location_get
   maxAgeMs: Type.Optional(Type.Number()),
@@ -536,7 +536,6 @@ export function createNodesTool(options?: {
           }
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
             const durationMs = Math.min(
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
@@ -561,12 +560,21 @@ export function createNodesTool(options?: {
               typeof params.bundleId === "string" && params.bundleId.trim()
                 ? params.bundleId.trim()
                 : undefined;
-            const windowId =
-              typeof params.windowId === "number" && Number.isFinite(params.windowId)
-                ? params.windowId
-                : undefined;
+            let windowId: number | undefined;
+            if (params.windowId !== undefined) {
+              if (
+                typeof params.windowId !== "number" ||
+                !Number.isInteger(params.windowId) ||
+                params.windowId < 0 ||
+                params.windowId > 4_294_967_295
+              ) {
+                throw new Error("windowId must be an integer between 0 and 4294967295");
+              }
+              windowId = params.windowId;
+            }
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
+            const nodeId = await resolveNodeId(gatewayOpts, node);
             const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "screen.record",

@@ -8,7 +8,7 @@ public struct OpenClawScreenRecordParams: Codable, Sendable, Equatable {
     public var screenIndex: Int?
     public var appName: String?
     public var bundleId: String?
-    public var windowId: UInt32?
+    public var windowId: Int?
     public var durationMs: Int?
     public var fps: Double?
     public var format: String?
@@ -18,7 +18,7 @@ public struct OpenClawScreenRecordParams: Codable, Sendable, Equatable {
         screenIndex: Int? = nil,
         appName: String? = nil,
         bundleId: String? = nil,
-        windowId: UInt32? = nil,
+        windowId: Int? = nil,
         durationMs: Int? = nil,
         fps: Double? = nil,
         format: String? = nil,
