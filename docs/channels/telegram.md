@@ -827,17 +827,28 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
   </Accordion>
 
-  <Accordion title="Heartbeat approval receipts back to source topics">
-    Heartbeat approvals can be delivered to an approver DM while the original
-    work belongs to a Telegram topic. When a heartbeat run carries stored
-    Telegram source metadata and then sends a non-Telegram message action, Jarvis
-    posts a concise sent receipt back to that original Telegram source
-    topic/thread.
+  <Accordion title="Heartbeat topic-first follow-up">
+    For Telegram task topics, heartbeat treats the task topic as the workbench
+    and DM as a pager. When a heartbeat run carries trusted source-topic
+    metadata and needs user action, Jarvis prefers nudging in that original
+    topic/thread so the user can scroll up and reply naturally in context.
+
+    DM delivery remains a fallback for missing/unavailable source topics or
+    escalation cases. If DM is used, the run preserves source metadata so the DM
+    can point back to the source task instead of becoming the new task home.
+
+    Exact external-send approvals remain exact: stored send payloads keep their
+    channel, recipient, text, media, source, expiry, and risk details. After a
+    confirmed non-Telegram message action, Jarvis posts a concise sent receipt
+    back to the original Telegram source topic/thread when stored metadata proves
+    that source.
 
     Boundaries:
 
     - The receipt is runtime-routed from stored source metadata, not from model-written chat ids.
     - No source metadata means no group/topic receipt.
+    - Passive `HEARTBEAT_OK` / checkpoint behavior should not create source-topic noise.
+    - Natural-language follow-up is the default; hardcoded approval commands are shortcuts, not the whole UX.
     - Private supergroup topic links are included when `chatId` and `threadId` are available; otherwise the receipt keeps the source label and ids.
     - The external send is not retried if the source receipt fails, to avoid duplicate outbound messages.
 
