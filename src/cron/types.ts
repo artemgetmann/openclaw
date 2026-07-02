@@ -62,6 +62,11 @@ export type CronRunOutcome = {
   error?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
+  /**
+   * Internal lifecycle hint for wrapper jobs whose backing resource is gone or
+   * terminal. The run outcome is still recorded before the cron job is disabled.
+   */
+  stopJob?: boolean;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;

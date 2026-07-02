@@ -10,6 +10,7 @@ const MonitorActionPolicySchema = Type.Union([
 
 const MonitorStatusSchema = Type.Union([
   Type.Literal("active"),
+  Type.Literal("degraded"),
   Type.Literal("stopped"),
   Type.Literal("completed"),
   Type.Literal("expired"),
