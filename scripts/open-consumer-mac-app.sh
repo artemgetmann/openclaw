@@ -38,6 +38,60 @@ terminate_matching_app_binary() {
   /bin/kill "${pids[@]}" 2>/dev/null || true
 }
 
+terminate_matching_app_bundle_id() {
+  local bundle_id="$1"
+  local line=""
+  local pid=""
+  local command=""
+  local app_path=""
+  local info_plist=""
+  local candidate_bundle_id=""
+  local pids=()
+
+  # Stable TCC identity intentionally makes multiple isolated proof apps share
+  # one macOS bundle id so Screen Recording permission can be reused. In that
+  # mode, replacing only the exact app path is insufficient: an older debug
+  # Jarvis with the same bundle id can make the new app self-exit as a
+  # duplicate. Limit this scan to OpenClaw app binaries and the expected bundle
+  # id so --replace stays explicit and bounded.
+  while IFS= read -r line; do
+    [[ "$line" == *"/Contents/MacOS/OpenClaw"* ]] || continue
+
+    pid="$(printf '%s\n' "$line" | /usr/bin/awk '{ print $1 }')"
+    [[ -n "$pid" ]] || continue
+
+    command="${line#*"$pid"}"
+    command="${command#"${command%%[![:space:]]*}"}"
+    app_path="$(printf '%s\n' "$command" | /usr/bin/sed -n 's#^\(.*\.app\)/Contents/MacOS/OpenClaw.*#\1#p')"
+    [[ -n "$app_path" ]] || continue
+
+    info_plist="$app_path/Contents/Info.plist"
+    [[ -f "$info_plist" ]] || continue
+
+    candidate_bundle_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$info_plist" 2>/dev/null || true)"
+    [[ "$candidate_bundle_id" == "$bundle_id" ]] || continue
+    pids+=("$pid")
+  done < <(/bin/ps -axo pid=,command=)
+
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  /bin/kill "${pids[@]}" 2>/dev/null || true
+  /bin/sleep 1
+
+  local alive=()
+  for pid in "${pids[@]}"; do
+    if /bin/ps -p "$pid" >/dev/null 2>&1; then
+      alive+=("$pid")
+    fi
+  done
+
+  if [[ "${#alive[@]}" -gt 0 ]]; then
+    /bin/kill -9 "${alive[@]}" 2>/dev/null || true
+  fi
+}
+
 bootout_conflicting_gateway_label() {
   # This helper is advisory cleanup for stale launchd labels, not a required
   # gate. It delegates the default-gateway invariant to a shared guard so named
@@ -182,7 +236,11 @@ if [[ "$actual_name" != "$EXPECTED_NAME" || "$actual_bundle_id" != "$EXPECTED_BU
 fi
 
 if [[ "$REPLACE" == "1" ]]; then
-  terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
+  if [[ -n "$NORMALIZED_INSTANCE_ID" ]] && consumer_instance_stable_tcc_identity_enabled; then
+    terminate_matching_app_bundle_id "$EXPECTED_BUNDLE_ID"
+  else
+    terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
+  fi
 fi
 
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then

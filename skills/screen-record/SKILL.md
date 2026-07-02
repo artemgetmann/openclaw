@@ -36,6 +36,42 @@ Use full-display capture only when the proof genuinely crosses apps or windows:
 openclaw screen record --display 0 --reason "workflow switches between Chrome and Telegram" --duration 60s --out ".artifacts/<run>/review.mp4"
 ```
 
+## Consumer Mac Live Proof
+
+When proving the recorder through a local Jarvis macOS app, use a named consumer
+instance. Do not point the app at an isolated gateway with `launchctl setenv`
+alone; the consumer app bootstrap owns `OPENCLAW_STATE_DIR`,
+`OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GATEWAY_PORT`.
+
+Package and open the proof lane from the repo:
+
+```bash
+OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
+  ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
+  npx -y pnpm@10.23.0 exec bash scripts/package-consumer-mac-app-fast.sh --instance <id>
+
+OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
+  npx -y pnpm@10.23.0 exec bash scripts/open-consumer-mac-app.sh --instance <id> --replace --refresh-gateway
+```
+
+Use `OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1` only when the proof depends on an
+existing Screen Recording permission row. With `--replace`, the launcher also
+terminates other running Jarvis debug apps that share the stable bundle id so
+macOS duplicate-instance handling cannot make the proof app exit.
+
+Before recording, verify the native macOS node is connected and advertises
+`screen.record`:
+
+```bash
+OPENCLAW_CONSUMER_INSTANCE_ID=<id> \
+  npx -y pnpm@10.23.0 openclaw nodes status --json
+```
+
+If the macOS app asks to upgrade from operator to node, approve it with
+`openclaw devices list` and `openclaw devices approve <request-id>`. Do not use
+`openclaw nodes pending` for this case; device repair requests live in the
+device pairing queue.
+
 ## Artifact Rule
 
 Save recordings under a run-specific artifact directory. Keep the raw proof local

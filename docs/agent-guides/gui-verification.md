@@ -65,6 +65,31 @@ Do not send long runs of separate screenshot messages to the user. Prefer
 progress text while work is ongoing, then send or offer one compressed final
 review video depending on whether the user requested automatic video proof.
 
+For live Jarvis macOS proof, launch the app through a named consumer instance
+instead of relying on `launchctl setenv` to override runtime paths. The consumer
+app bootstraps its own config, state directory, and gateway port, so the
+instance scripts are the source of truth:
+
+```bash
+OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
+  ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
+  npx -y pnpm@10.23.0 exec bash scripts/package-consumer-mac-app-fast.sh --instance <id>
+
+OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
+  npx -y pnpm@10.23.0 exec bash scripts/open-consumer-mac-app.sh --instance <id> --replace --refresh-gateway
+```
+
+Use the stable TCC identity only when reusing an existing Screen Recording
+permission row is necessary. In that mode, `--replace` terminates other running
+Jarvis debug apps with the same stable bundle id before launching the proof
+instance, which avoids duplicate-instance exits during recording checks.
+
+Before running `openclaw screen record`, confirm the native macOS node is
+connected and advertises `screen.record`. If the app appears in the device
+pairing queue as a role-upgrade or repair request, approve it with
+`openclaw devices approve`; `openclaw nodes pending` is not the right queue for
+this path.
+
 If Computer Use is unavailable or fails to attach, use macOS screenshot capture
 as the fallback:
 

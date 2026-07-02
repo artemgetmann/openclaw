@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildScreenRecordParams, pickDefaultScreenRecordNode } from "./screen-record.js";
+import {
+  buildScreenRecordParams,
+  pickDefaultScreenRecordNode,
+  resolveDefaultScreenRecordNodeOrThrow,
+} from "./screen-record.js";
 
 describe("screen record CLI params", () => {
   it("requires an explicit target for the top-level command", () => {
@@ -111,5 +115,19 @@ describe("screen record CLI params", () => {
         },
       ]),
     ).toBeNull();
+  });
+
+  it("explains missing macOS Screen Recording permission when no default node can record", () => {
+    expect(() =>
+      resolveDefaultScreenRecordNodeOrThrow([
+        {
+          nodeId: "mac-1",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["system.run"],
+          permissions: { screenRecording: false },
+        },
+      ]),
+    ).toThrow(/Enable Screen Recording/i);
   });
 });

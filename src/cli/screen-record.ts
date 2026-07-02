@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
-import { resolveNodeFromNodeList } from "../shared/node-resolve.js";
 import { shortenHomePath } from "../utils.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import {
@@ -155,6 +154,30 @@ export function pickDefaultScreenRecordNode(nodes: NodeListNode[]): NodeListNode
   return null;
 }
 
+export function resolveDefaultScreenRecordNodeOrThrow(nodes: NodeListNode[]): NodeListNode {
+  const picked = pickDefaultScreenRecordNode(nodes);
+  if (picked) {
+    return picked;
+  }
+
+  const connectedMacs = nodes.filter(
+    (node) => node.connected !== false && isMacNodePlatform(node.platform),
+  );
+  const eligibleMacs = connectedMacs.filter(
+    (node) => !Array.isArray(node.commands) || node.commands.includes("screen.record"),
+  );
+  if (eligibleMacs.length > 1) {
+    throw new Error("multiple macOS screen recording nodes available; pass --node");
+  }
+  if (connectedMacs.length > 0) {
+    throw new Error(
+      "no macOS screen recording node available: connected macOS node does not advertise screen.record. Enable Screen Recording for Jarvis/OpenClaw in System Settings, relaunch the app, then retry.",
+    );
+  }
+
+  throw new Error("node required");
+}
+
 export async function resolveScreenRecordNodeId(opts: ScreenRecordCliOpts): Promise<string> {
   const query = trimmed(opts.node);
   if (query) {
@@ -162,10 +185,7 @@ export async function resolveScreenRecordNodeId(opts: ScreenRecordCliOpts): Prom
   }
   const result = await callGatewayCli("node.list", opts, {});
   const nodes = parseNodeList(result);
-  return resolveNodeFromNodeList(nodes, undefined, {
-    allowDefault: true,
-    pickDefaultNode: pickDefaultScreenRecordNode,
-  }).nodeId;
+  return resolveDefaultScreenRecordNodeOrThrow(nodes).nodeId;
 }
 
 export async function recordScreenFromNode(
