@@ -79,6 +79,16 @@ and more reliable default.
     message-ID and GUI proof bar for transient progress, durable media, final
     text, and additive TTS.
   - Release the lane when done: `bash scripts/telegram-live-runtime.sh release`.
+- Goal/monitor persistence proof:
+  - The isolated Telegram runtime disables cron by default to prevent stale jobs
+    from producing fake chat activity during ordinary smoke checks.
+  - For features that must prove scheduled monitor wakes or goal continuation,
+    restart the isolated lane with
+    `OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON=1 pnpm openclaw:local telegram runtime ensure`.
+  - Capture both the user-visible Telegram transcript and scheduler evidence
+    (`cron.list`, `cron.runs`, or logs showing `cron: timer armed` and a
+    delivered run). A manually forced `cron run` proves delivery semantics, not
+    unattended persistence.
 - User E2E operator path:
   - Start broad triage with `openclaw telegram-user inbox --json`
   - Use `openclaw telegram-user inbox --unread --json` for unread-only sweeps

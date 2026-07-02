@@ -1374,6 +1374,7 @@ const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
 const helperPath = process.env.HELPER_MODULE;
 const acpValidation = process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION ?? "";
 const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
+const enableCron = process.env.OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON === "1";
 const disableExternalCliAuthSync =
   process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "0";
 
@@ -1412,7 +1413,10 @@ const child = spawn(
         OPENCLAW_CONFIG_PATH: runtimeConfigPath,
         OPENCLAW_GATEWAY_PORT: runtimePort,
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
+        // Normal Telegram smoke lanes keep background jobs off so old cron
+        // state cannot create fake chat activity. Goal/monitor proof can opt
+        // into real scheduled wakes with OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON=1.
+        OPENCLAW_SKIP_CRON: enableCron ? "0" : "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_DISABLE_BONJOUR: "1",
         OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
