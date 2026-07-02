@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { loadWorkspaceSkillEntries } from "./skills.js";
+import { buildWorkspaceSkillsPrompt, loadWorkspaceSkillEntries } from "./skills.js";
 import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -146,6 +146,61 @@ metadata: { "openclaw": { "emoji": "✈️", "requires": { "bins": ["openclaw"] 
     expect(telegramUser).toBeDefined();
     expect(telegramUser?.skill.description).toContain("Telegram-as-me requests on this Mac");
     expect(telegramUser?.metadata?.emoji).toBe("✈️");
+  });
+
+  it("keeps mirrored bundled skills subject to bundled allowlists", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const managedSkillDir = path.join(managedDir, "telegram-user");
+
+    await writeSkill({
+      dir: path.join(bundledDir, "telegram-user"),
+      name: "telegram-user",
+      description: "Bundled Telegram user skill.",
+    });
+    await writeSkill({
+      dir: managedSkillDir,
+      name: "telegram-user",
+      description: "Mirrored bundled Telegram user skill.",
+    });
+    await fs.writeFile(
+      path.join(managedSkillDir, ".openclaw-skill.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          source: "openclaw-bundled",
+          bundledTreeHash: "hash",
+          updatedAt: new Date(0).toISOString(),
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf-8",
+    );
+
+    const rawEntries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: { skills: { allowBundled: ["__none__"] } },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+    const rawTelegramUser = rawEntries.find((entry) => entry.skill.name === "telegram-user");
+    expect(rawTelegramUser?.skill.source).toBe("openclaw-bundled");
+
+    const disabledPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      config: { skills: { allowBundled: ["__none__"] } },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+    expect(disabledPrompt).not.toContain("telegram-user");
+
+    const allowedEntries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: { skills: { allowBundled: ["telegram-user"] } },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+    const telegramUser = allowedEntries.find((entry) => entry.skill.name === "telegram-user");
+    expect(telegramUser?.skill.source).toBe("openclaw-bundled");
   });
 
   it("excludes diffs plugin skill when the plugin is disabled", async () => {

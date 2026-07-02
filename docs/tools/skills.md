@@ -29,7 +29,29 @@ filesystem root. During skills onboarding, OpenClaw creates that directory and
 symlinks the active OpenClaw managed root to it when the managed root is missing
 or empty. For the legacy CLI runtime that means `~/.openclaw/skills`; for the
 app-owned runtime that means
-`~/Library/Application Support/OpenClaw/.openclaw/skills`.
+`~/Library/Application Support/OpenClaw/.openclaw/skills` or the equivalent
+Jarvis state root when the packaged consumer app owns the runtime.
+
+Bundled skills remain package-owned product truth. Do not edit them in place to
+make personal customizations. If Codex, Claude Code, Jarvis, and OpenClaw should
+share a personal skill, keep the real folder in `~/.agents/skills` and point the
+tool-specific managed skills roots at that directory.
+
+Jarvis/OpenClaw also mirrors bundled skills into `~/.agents/skills` with a
+managed marker file so other local agents, including Codex, see the same
+official skills. Run `openclaw skills sync-shared` to refresh that mirror
+manually. Packaged Jarvis startup and skills onboarding run the same sync
+automatically. Clean mirrored skills are updated from the bundled copy; local
+edits are treated as overrides and are skipped instead of overwritten.
+
+When sync reports a local override, choose an owner instead of leaving drift
+ambiguous:
+
+- If the bundled Jarvis/OpenClaw copy should win, run
+  `openclaw skills sync-shared --force <skill-name>` for that named skill.
+- If the `~/.agents/skills` copy is better, port that change back into
+  `skills/<skill-name>` so the bundled product skill becomes the source of
+  truth, then run `openclaw skills sync-shared` again.
 
 Run `scripts/migrate-personal-skills-to-agents-root.sh` to copy existing skills
 from Codex, Claude Code, and OpenClaw roots into `~/.agents/skills` and set up

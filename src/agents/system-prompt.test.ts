@@ -180,6 +180,33 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("separates Telegram status updates from Telegram-as-me topic handoffs", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>telegram-chat-management</name>",
+        "    <description>Manage Telegram chats, topics, threads, handoffs, and send-as-me flows.</description>",
+        "    <location>/tmp/openclaw/skills/telegram-chat-management/SKILL.md</location>",
+        "  </skill>",
+        "  <skill>",
+        "    <name>telegram-user</name>",
+        "    <description>Use Telegram-as-me from the user's real account.</description>",
+        "    <location>/tmp/openclaw/skills/telegram-user/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+    });
+
+    expect(prompt).toContain("For Telegram chat/topic/thread handoffs");
+    expect(prompt).toContain("If the user says to message/update them");
+    expect(prompt).toContain("normal bot/status channel");
+    expect(prompt).toContain("post/send as me into a Telegram chat, topic, or thread");
+    expect(prompt).toContain("use `telegram-chat-management`");
+    expect(prompt).toContain("`telegram-user` Telegram-as-me flow");
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -275,6 +302,8 @@ describe("buildAgentSystemPrompt", () => {
       "For WhatsApp or Telegram-as-me jobs, route through the matching skill",
     );
     expect(prompt).toContain("`wacli` or `telegram-user`");
+    expect(prompt).toContain("For Telegram chat/topic/thread handoffs");
+    expect(prompt).toContain("use `telegram-chat-management`");
     expect(prompt).toContain(
       "keep those channel-specific procedures there instead of copying command playbooks into the prompt",
     );

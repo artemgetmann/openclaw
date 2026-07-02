@@ -24,6 +24,9 @@ Use it when the user means:
 - "download/transcribe a voice note from my real Telegram messages"
 - "wait for their reply to land in my Telegram account"
 - "connect or repair Telegram-as-me on this Mac"
+- "post this into that Telegram topic as me"
+- "make a Telegram topic and hand this prompt to Jarvis there"
+- "send this to the Telegram thread so the bot in that thread sees it"
 
 Do not use this skill for:
 
@@ -31,10 +34,25 @@ Do not use this skill for:
 - BotFather token creation or bot onboarding
 - generic "set up Telegram" requests when the user really means the bot channel
 - Telegram Desktop UI automation
+- updating the user about your own progress unless they asked for a real-account
+  Telegram send
 
 This skill is the Telegram analogue of the WhatsApp CLI surface: a narrow,
 deterministic command layer on top of the existing in-repo MTProto backend. It
 is not macOS UI automation and not a second Telegram runtime.
+
+Bot Channel vs Telegram-as-Me
+
+- If the user says "message me", "update me", "tell me in Telegram", or asks
+  for a progress/status note, default to the current assistant reply or the
+  normal Telegram bot/status channel. That is the bot talking to the user.
+- If the user says "send as me", "post into the topic/thread", "open a new
+  Telegram topic and hand this to Jarvis", or "make the bot in that Telegram
+  topic aware", use Telegram-as-me. That is the user's account talking inside
+  Telegram.
+- For multi-step topic creation plus handoff, read `telegram-chat-management`
+  first when it is available; this skill owns the actual `telegram-user`
+  commands.
 
 Automation Rule
 

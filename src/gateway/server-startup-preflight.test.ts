@@ -286,10 +286,15 @@ describe("runGatewayStartupConfigPreflight", () => {
       "openclaw.json",
     );
     const staleAllowBundled: string[] = CONSUMER_DEFAULT_BUNDLED_SKILLS.filter(
-      (skillName) => skillName !== "jarvis-gui-control",
+      (skillName) => skillName !== "jarvis-gui-control" && skillName !== "telegram-chat-management",
     );
     const repairedAllowBundled = [...staleAllowBundled];
     repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-gui-control");
+    repairedAllowBundled.splice(
+      repairedAllowBundled.indexOf("notion"),
+      0,
+      "telegram-chat-management",
+    );
     const staleConfig: OpenClawConfig = {
       skills: { allowBundled: staleAllowBundled },
     };
@@ -323,8 +328,60 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(repairedAllowBundled.indexOf("jarvis-gui-control")).toBe(
       repairedAllowBundled.indexOf("peekaboo") - 1,
     );
+    expect(repairedAllowBundled.indexOf("telegram-chat-management")).toBe(
+      repairedAllowBundled.indexOf("notion") - 1,
+    );
     expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill allowlist"));
     expect(result.config.skills?.allowBundled).toContain("jarvis-gui-control");
+    expect(result.config.skills?.allowBundled).toContain("telegram-chat-management");
+  });
+
+  it("syncs bundled skills to shared personal root for Jarvis consumer startup", async () => {
+    const home = makeTempDir();
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const config: OpenClawConfig = {
+      skills: { allowBundled: [...CONSUMER_DEFAULT_BUNDLED_SKILLS] },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(createSnapshot({ path: jarvisConfigPath, config }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+    const info = vi.fn<(message: string) => void>();
+    const warn = vi.fn<(message: string) => void>();
+    const syncBundledSkillsToSharedPersonalRootFn = vi.fn().mockResolvedValue({
+      targetDir: path.join(home, ".agents", "skills"),
+      entries: [
+        { name: "telegram-user", status: "copied" },
+        { name: "wacli", status: "current" },
+        { name: "local", status: "skipped-local" },
+        { name: "broken", status: "failed", message: "permission denied" },
+      ],
+    });
+
+    await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info, warn },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+      syncBundledSkillsToSharedPersonalRootFn,
+    });
+
+    expect(syncBundledSkillsToSharedPersonalRootFn).toHaveBeenCalledWith({
+      sharedSkillsDir: path.join(home, ".agents", "skills"),
+    });
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("synced bundled skills to shared personal root"),
+    );
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("local overrides skipped: 1"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("broken: permission denied"));
   });
 
   it("does not widen intentionally narrowed Jarvis consumer bundled skill allowlists", async () => {

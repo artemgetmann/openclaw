@@ -46,6 +46,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "mcporter",
         "nano-banana-pro",
         "telegram-user",
+        "telegram-chat-management",
         "nano-pdf",
       ]),
     );
@@ -133,6 +134,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       description: "Use for Jarvis macOS GUI-control tasks and GUI proof requests.",
       body: "# Jarvis GUI Control\n",
     });
+    await writeSkill({
+      dir: path.join(bundledDir, "telegram-chat-management"),
+      name: "telegram-chat-management",
+      description: "Manage Telegram chats, topics, threads, handoffs, and send-as-me flows.",
+      body: "# Telegram Chat Management\n",
+    });
 
     const next = apply({});
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
@@ -144,5 +151,6 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
     expect(prompt).toContain("Route monitor status questions");
     expect(prompt).toContain("Jarvis macOS GUI-control tasks");
+    expect(prompt).toContain("Manage Telegram chats, topics, threads");
   });
 });
