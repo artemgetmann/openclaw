@@ -920,6 +920,14 @@ export async function textToSpeechTelephony(params: {
   return buildTtsFailureResult(errors);
 }
 
+export function shouldSkipTtsForMediaDirectiveText(text: string): boolean {
+  // maybeApplyTtsToPayload intentionally avoids synthesizing text that contains
+  // media directive syntax. Those payloads are likely already carrying, or
+  // explaining, media routing instructions; callers should not report this
+  // intentional skip as a failed voice note.
+  return text.includes("MEDIA:");
+}
+
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -985,7 +993,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0) {
     return nextPayload;
   }
-  if (text.includes("MEDIA:")) {
+  if (shouldSkipTtsForMediaDirectiveText(text)) {
     return nextPayload;
   }
   if (ttsText.trim().length < 10) {
@@ -1105,4 +1113,5 @@ export const _test = {
   resolveOutputFormat,
   resolveEdgeOutputFormat,
   sanitizeUrlsForSpeech,
+  shouldSkipTtsForMediaDirectiveText,
 };
