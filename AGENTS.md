@@ -27,6 +27,7 @@
 - Read `docs/jarvis/VISION.md` before product, UX, launch, pricing, onboarding, or strategy work. Do not load it for unrelated engineering tasks.
 - For Jarvis launch docs, follow the docs operating system in `docs/jarvis/README.md`: short-lived mission trackers, max 3 Now items, max 5 open gates, and cold storage for non-blocking ideas.
 - Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now the sacred home clone `~/Programming_Projects/openclaw` on `main`; `~/Programming_Projects/openclaw-consumer` is legacy/emergency fallback only. The home clone is a pull-only runtime anchor. All implementation work happens in temporary worktrees created from the correct sacred home clone, and default task spawn should create that temp worktree immediately.
+- Before changing bundled skills, repo-local `.agents/skills`, or mirrored skills, read `docs/agent-guides/skill-updates.md` and patch the owning source instead of downstream mirrors.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
 - For a sendable Jarvis DMG or app update, follow the canonical release lane in `apps/macos/README.md`; keep this file as a pointer, not the release playbook.
@@ -65,6 +66,8 @@
   - `docs/agent-guides/docs-and-content.md`
 - Default local/browser/agent validation:
   - `docs/agent-guides/browser-agent-e2e.md`
+- Skill update ownership and mirror drift:
+  - `docs/agent-guides/skill-updates.md`
 - Telegram-specific live checks and worktree bot setup:
   - `docs/agent-guides/telegram-live.md`
 - Runtime ops, logs, timeout triage, and mac app behavior:

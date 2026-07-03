@@ -59,6 +59,10 @@ export function registerTelegramUserCli(program: Command) {
             "Create a forum topic and return its topic anchor for follow-up replies.",
           ],
           [
+            "openclaw telegram-user topic-delete --chat -1003783709877 --topic-anchor 15250 --json",
+            "Delete a temporary forum topic after bounded live proof cleanup.",
+          ],
+          [
             "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof --limit 5 --format compact",
             "Read matching recent DM messages in compact agent-friendly rows; add --json only when raw metadata is needed.",
           ],
@@ -178,6 +182,20 @@ export function registerTelegramUserCli(program: Command) {
     await runTelegramUserCommand(async () => {
       const { telegramUserTopicCreateCommand } = await import("../commands/telegram-user.js");
       await telegramUserTopicCreateCommand(opts, defaultRuntime);
+    });
+  });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("topic-delete")
+      .description("Delete a Telegram forum topic by anchor as the user account")
+      .requiredOption("--chat <target>", "Target forum chat username or id")
+      .option("--topic-anchor <id>", "Forum topic anchor returned by topic-create")
+      .option("--topic-id <id>", "Alias for --topic-anchor"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserTopicDeleteCommand } = await import("../commands/telegram-user.js");
+      await telegramUserTopicDeleteCommand(opts, defaultRuntime);
     });
   });
 

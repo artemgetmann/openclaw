@@ -13,6 +13,7 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserSend: vi.fn(),
   runTelegramUserStatus: vi.fn(),
   runTelegramUserTopicCreate: vi.fn(),
+  runTelegramUserTopicDelete: vi.fn(),
   sleep: vi.fn(async () => {}),
 }));
 
@@ -42,6 +43,7 @@ const {
   telegramUserSendCommand,
   telegramUserStatusCommand,
   telegramUserTopicCreateCommand,
+  telegramUserTopicDeleteCommand,
   telegramUserWaitCommand,
 } = await import("./telegram-user.js");
 
@@ -495,6 +497,40 @@ describe("telegram-user commands", () => {
       title: "voice proof",
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"topic_anchor": 15250'));
+  });
+
+  it("renders topic-delete JSON with bounded cleanup metadata", async () => {
+    backendMocks.runTelegramUserTopicDelete.mockResolvedValueOnce({
+      affected: {
+        offset: 0,
+        pts: 123,
+        pts_count: 1,
+      },
+      backend_meta: backendMeta,
+      chat_id: -1003783709877,
+      deleted: true,
+      topic_anchor: 15250,
+    });
+
+    await telegramUserTopicDeleteCommand(
+      { chat: "-1003783709877", json: true, topicAnchor: "15250" },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserTopicDelete).toHaveBeenCalledWith({
+      chat: "-1003783709877",
+      envFile: undefined,
+      session: undefined,
+      topicAnchor: 15250,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"topic_anchor": 15250'));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"deleted": true'));
+  });
+
+  it("rejects topic-delete without an explicit topic anchor", async () => {
+    await expect(
+      telegramUserTopicDeleteCommand({ chat: "-1003783709877" }, runtime),
+    ).rejects.toThrow(/requires --chat and --topic-anchor/i);
   });
 
   it("renders recent messages as a table", async () => {

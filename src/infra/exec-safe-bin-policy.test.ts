@@ -276,6 +276,20 @@ describe("exec safe bin policy product-owned cli defaults", () => {
       validateSafeBinArgv(
         [
           "telegram-user",
+          "topic-delete",
+          "--chat",
+          "-1003783709877",
+          "--topic-anchor",
+          "15250",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
           "inbox",
           "--contains",
           "proof",
