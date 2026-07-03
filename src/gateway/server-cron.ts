@@ -394,12 +394,6 @@ export function buildGatewayCronService(params: {
           stopJob: true,
         };
       }
-      const wakeMessage = buildMonitorWakeMessage({
-        monitor,
-        nowIso: new Date(nowMs).toISOString(),
-        wakeReason: `cron:${job.id}`,
-        watchDeliveryConfigured: Boolean(resolveMonitorRecordWatchDelivery(monitor)),
-      });
       const monitorExecution = resolveMonitorExecutionPlan({
         actionPolicy: monitor.actionPolicy,
         originSessionKey: monitor.originSessionKey,
@@ -407,6 +401,12 @@ export function buildGatewayCronService(params: {
         sourceTarget: monitor.sourceTarget,
         originDelivery: monitor.originDelivery,
         watchDelivery: resolveMonitorRecordWatchDelivery(monitor),
+      });
+      const wakeMessage = buildMonitorWakeMessage({
+        monitor,
+        nowIso: new Date(nowMs).toISOString(),
+        wakeReason: `cron:${job.id}`,
+        watchDeliveryConfigured: monitorExecution.watchDeliveryConfigured,
       });
       const result = await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,

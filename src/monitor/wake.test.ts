@@ -112,4 +112,39 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("Do not send approval questions");
     expect(message).toContain("return exactly NO_REPLY");
   });
+
+  it("guides telegram-user auto_send wakes to use the Telegram-as-me CLI directly", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-04-10T04:30:13.436Z",
+      wakeReason: "cron:test",
+      watchDeliveryConfigured: true,
+      monitor: {
+        monitorId: "monitor-telegram-user",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:direct:user-1",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        monitorSessionKey: "agent:main:monitor:monitor-telegram-user",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+        status: "active",
+        cronJobId: "cron-telegram-user",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain(
+      "Telegram-as-me watched-surface delivery is authorized and configured for chat 6783130823.",
+    );
+    expect(message).toContain("use the telegram-user skill/CLI");
+    expect(message).toContain("proposes something outside the user's stated constraints");
+    expect(message).toContain("do not ask the user unless you are considering accepting");
+    expect(message).toContain("After a successful Telegram-as-me send");
+    expect(message).toContain("Do not also send the same green-zone reply to the origin chat.");
+    expect(message).not.toContain(
+      "auto_send was requested, but no watched-surface delivery target is configured.",
+    );
+  });
 });

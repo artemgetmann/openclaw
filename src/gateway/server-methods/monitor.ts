@@ -4,6 +4,7 @@ import { getSessionGoal } from "../../config/sessions/goals.js";
 import { resolveStorePath as resolveSessionStorePath } from "../../config/sessions/paths.js";
 import type { CronJobCreate } from "../../cron/types.js";
 import {
+  resolveMonitorActionTarget,
   resolveMonitorOriginDelivery,
   resolveMonitorWatchDelivery,
 } from "../../monitor/delivery.js";
@@ -178,6 +179,11 @@ export const monitorHandlers: GatewayRequestHandlers = {
       sourceTarget: p.sourceTarget,
       explicitWatchDelivery: p.watchDelivery,
     });
+    const actionTarget = resolveMonitorActionTarget({
+      sourceType: p.sourceType,
+      sourceTarget: p.sourceTarget,
+      explicitWatchDelivery: watchDelivery,
+    });
     const monitorSessionKey = toAgentStoreSessionKey({
       agentId: p.agentId,
       requestKey: `monitor:${monitorId}`,
@@ -239,7 +245,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       expiryAt: p.expiryAt,
       actionPolicy: monitor.actionPolicy,
       goal: monitor.goal,
-      watchDeliveryConfigured: Boolean(watchDelivery),
+      watchDeliveryConfigured: Boolean(actionTarget ?? watchDelivery),
       originSessionKey: p.originSessionKey,
       originDelivery: monitor.originDelivery,
     });

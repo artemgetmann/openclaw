@@ -2,11 +2,10 @@ import type { CronDelivery, CronSchedule } from "../cron/types.js";
 
 export type MonitorStatus = "active" | "degraded" | "stopped" | "completed" | "expired";
 
-// `completed` is preserved for backward compatibility as a task-level hint
-// from the agent, but only `stopped` and `expired` should end the monitor
-// lifecycle in the generic monitor engine.
+// A completed monitor has satisfied its stop condition. It must stop waking
+// instead of burning future cron turns on a task that already has evidence.
 export function isTerminalMonitorStatus(status: MonitorStatus): boolean {
-  return status === "stopped" || status === "expired";
+  return status === "stopped" || status === "expired" || status === "completed";
 }
 
 export type MonitorActionPolicy = "notify_draft" | "notify_only" | "auto_send";

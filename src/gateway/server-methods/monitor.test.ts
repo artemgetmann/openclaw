@@ -695,6 +695,47 @@ describe("monitor gateway handlers", () => {
     expect(validateMonitorRecord(legacyRecord)).toBe(true);
   });
 
+  it("seeds telegram-user auto_send monitors as configured watched-surface tasks", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+
+    await monitorHandlers["monitor.create"]({
+      params: {
+        instructions: "Watch this Telegram-as-me chat and reply directly when in scope.",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823", accountId: "default" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-telegram-user-auto-send", method: "monitor.create" },
+      isWebchatConnect: () => false,
+    });
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    const monitor = call?.[1] as { watchDelivery?: unknown } | undefined;
+    expect(monitor?.watchDelivery).toBeUndefined();
+    expect(seedMonitorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823", accountId: "default" },
+        actionPolicy: "auto_send",
+        watchDeliveryConfigured: true,
+      }),
+    );
+  });
+
   it("rejects invalid monitor.create params", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
 
@@ -721,7 +762,7 @@ describe("monitor gateway handlers", () => {
     expect(call?.[2]?.message).toContain("invalid monitor.create params");
   });
 
-  it("does not disable cron when the agent marks a monitor completed", async () => {
+  it("disables cron when the agent marks a monitor completed", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
     const storeDir = path.dirname(cronStorePath);
     await fs.mkdir(storeDir, { recursive: true });
@@ -769,7 +810,7 @@ describe("monitor gateway handlers", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(cronUpdate).not.toHaveBeenCalled();
+    expect(cronUpdate).toHaveBeenCalledWith("cron-job-1", { enabled: false });
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expect((call?.[1] as { status?: string } | undefined)?.status).toBe("completed");

@@ -38,6 +38,22 @@ describe("resolveMonitorWatchDelivery", () => {
 });
 
 describe("resolveMonitorActionTarget", () => {
+  it("treats telegram-user chat metadata as a tool-mediated watched target", () => {
+    expect(
+      resolveMonitorActionTarget({
+        sourceType: "telegram-user",
+        sourceTarget: {
+          chat: "6783130823",
+          accountId: "default",
+        },
+      }),
+    ).toEqual({
+      kind: "telegram-user",
+      chat: "6783130823",
+      accountId: "default",
+    });
+  });
+
   it("captures the future Gmail reply contract while still failing closed on transport", () => {
     expect(
       resolveMonitorActionTarget({
@@ -223,6 +239,30 @@ describe("resolveMonitorExecutionPlan", () => {
         replyToMessageId: "msg-1",
         recipients: { to: ["friend@example.com"] },
       },
+      originDelivery: { mode: "announce", channel: "telegram", to: "user-1", accountId: undefined },
+      fallbackDelivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+        accountId: undefined,
+      },
+      deliveryPromptMode: "summary",
+      deliveryContract: "cron-owned",
+      watchDeliveryConfigured: true,
+      requireExplicitMessageTarget: false,
+    });
+  });
+
+  it("lets telegram-user auto_send monitors run as tool-mediated cron-owned wakes", () => {
+    expect(
+      resolveMonitorExecutionPlan({
+        actionPolicy: "auto_send",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823" },
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+      }),
+    ).toEqual({
+      actionTarget: { kind: "telegram-user", chat: "6783130823" },
       originDelivery: { mode: "announce", channel: "telegram", to: "user-1", accountId: undefined },
       fallbackDelivery: {
         mode: "announce",

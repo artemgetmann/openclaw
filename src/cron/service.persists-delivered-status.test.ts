@@ -196,6 +196,49 @@ describe("CronService persists delivered status", () => {
     }
   });
 
+  it("disables recurring monitor jobs when timed monitor wake requests stopJob", async () => {
+    const store = await makeStorePath();
+    let finishTimedRun!: () => void;
+    const timedRunFinished = new Promise<void>((resolve) => {
+      finishTimedRun = resolve;
+    });
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runMonitorJob: vi.fn(async () => ({
+        status: "skipped" as const,
+        summary: "monitor is terminal",
+        stopJob: true,
+      })),
+      onEvent: (evt) => {
+        if (evt.action === "finished" && evt.status === "skipped") {
+          finishTimedRun();
+        }
+      },
+    });
+
+    await cron.start();
+    try {
+      const job = await cron.add(buildMonitorWakeJob("monitor-stop-timer"));
+      vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
+      await vi.runOnlyPendingTimersAsync();
+      await timedRunFinished;
+
+      const jobs = await cron.list({ includeDisabled: true });
+      const updated = jobs.find((entry) => entry.id === job.id);
+
+      expect(updated?.enabled).toBe(false);
+      expect(updated?.state.lastRunStatus).toBe("skipped");
+      expect(updated?.state.nextRunAtMs).toBeUndefined();
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("delivered-false"),

@@ -6,6 +6,27 @@ import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveTelegramUserChat(params: {
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+}): string | undefined {
+  if (params.sourceType.trim().toLowerCase() !== "telegram-user") {
+    return undefined;
+  }
+  // Telegram-as-me uses the CLI against a real MTProto chat. It cannot be
+  // represented as a normal gateway channel/to delivery tuple.
+  return (
+    readOptionalString(params.sourceTarget.chat) ??
+    readOptionalString(params.sourceTarget.to) ??
+    readOptionalString(params.sourceTarget.target) ??
+    readOptionalString(params.sourceTarget.chatId)
+  );
+}
+
 function buildMonitorBootstrapPrompt(params: {
   instructions: string;
   sourceType: string;
@@ -19,6 +40,10 @@ function buildMonitorBootstrapPrompt(params: {
   originSessionKey: string;
   originDelivery?: CronDelivery;
 }) {
+  const telegramUserChat = resolveTelegramUserChat({
+    sourceType: params.sourceType,
+    sourceTarget: params.sourceTarget,
+  });
   // Seed the monitor session with the durable task contract once so later cron
   // wakes can stay tiny and resume the same conversation instead of
   // reconstructing monitor intent from scratch.
@@ -49,20 +74,32 @@ function buildMonitorBootstrapPrompt(params: {
     "Evaluate after each wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
     ...(params.actionPolicy === "auto_send"
-      ? params.watchDeliveryConfigured
+      ? telegramUserChat && params.watchDeliveryConfigured
         ? [
-            "Watched-surface delivery is authorized and configured for this monitor.",
-            "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
-            "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+            `Telegram-as-me watched-surface delivery is authorized and configured for chat ${telegramUserChat}.`,
+            "For green-zone follow-ups, use the telegram-user skill/CLI to read the fresh chat state and send directly to that Telegram chat.",
+            "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly in the Telegram chat; do not ask the user unless you are considering accepting the changed term.",
+            "Immediately before every Telegram-as-me send, re-read the target chat and stop if a newer inbound message changes the context.",
+            "After a successful Telegram-as-me send, update the monitor checkpoint/status and return exactly NO_REPLY.",
+            "Do not also send the same green-zone reply to the origin chat.",
             "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
-            "Do not send approval questions, private status, or monitor narration to the watched surface.",
-            "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
+            "Do not send approval questions, private status, or monitor narration to the watched Telegram-as-me chat.",
           ]
-        : [
-            "auto_send was requested, but no watched-surface delivery target is configured.",
-            "Do not attempt autonomous delivery on the watched source until a watched-surface delivery target is configured.",
-            "Report the missing delivery target through the origin chat instead.",
-          ]
+        : params.watchDeliveryConfigured
+          ? [
+              "Watched-surface delivery is authorized and configured for this monitor.",
+              "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
+              "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly on the watched surface; do not ask the user unless you are considering accepting the changed term.",
+              "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+              "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
+              "Do not send approval questions, private status, or monitor narration to the watched surface.",
+              "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
+            ]
+          : [
+              "auto_send was requested, but no watched-surface delivery target is configured.",
+              "Do not attempt autonomous delivery on the watched source until a watched-surface delivery target is configured.",
+              "Report the missing delivery target through the origin chat instead.",
+            ]
       : [
           "Do not treat the watched source as the default delivery destination.",
           "Write origin-chat updates like an assistant talking to the user: natural, concise, and ready to send.",

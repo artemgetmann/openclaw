@@ -498,6 +498,88 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("keeps telegram-user auto_send monitor wakes cron-owned with tool-mediated guidance", async () => {
+    const cfg = createCronConfig("server-cron-monitor-telegram-user-auto-send");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-telegram-user-auto-send",
+            agentId: "main",
+            originSessionKey: "agent:main:telegram:direct:user-1",
+            originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+            monitorSessionKey: "agent:main:monitor:monitor-telegram-user-auto-send",
+            sourceType: "telegram-user",
+            sourceTarget: { chat: "6783130823" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "auto_send",
+            status: "active",
+            cronJobId: "cron-monitor-telegram-user-auto-send",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake telegram user auto send",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-telegram-user-auto-send",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-telegram-user-auto-send" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:monitor:monitor-telegram-user-auto-send",
+          deliveryContract: "cron-owned",
+          deliveryPromptMode: "summary",
+          job: expect.objectContaining({
+            delivery: expect.objectContaining({
+              mode: "announce",
+              channel: "telegram",
+              to: "user-1",
+            }),
+          }),
+          message: expect.stringContaining("use the telegram-user skill/CLI"),
+        }),
+      );
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "do not ask the user unless you are considering accepting",
+          ),
+        }),
+      );
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.not.stringContaining(
+            "auto_send was requested, but no watched-surface delivery target is configured.",
+          ),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("preserves monitor changes made during a monitor wake", async () => {
     const cfg = createCronConfig("server-cron-monitor-preserve-updates");
     loadConfigMock.mockReturnValue(cfg);
@@ -754,7 +836,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("keeps waking monitors marked completed so fresh source changes can reactivate the task", async () => {
+  it("stops waking monitors already marked completed", async () => {
     const cfg = createCronConfig("server-cron-monitor-completed");
     loadConfigMock.mockReturnValue(cfg);
 
@@ -793,6 +875,7 @@ describe("buildGatewayCronService", () => {
       const job = await state.cron.add({
         name: "monitor wake completed",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(1).toISOString() },
         sessionTarget: "session:agent:main:monitor:monitor-completed",
         wakeMode: "next-heartbeat",
@@ -801,12 +884,9 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:monitor:monitor-completed",
-          message: expect.stringContaining("keep the monitor active and continue the task"),
-        }),
-      );
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      const jobs = await state.cron.list({ includeDisabled: true });
+      expect(jobs.find((entry) => entry.id === job.id)?.enabled).toBe(false);
     } finally {
       state.cron.stop();
     }
