@@ -161,4 +161,92 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBe(false);
   });
+
+  it("clears stale prompt tokens after a hard-reserve memory flush without compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-flush-hard-reserve-"));
+    tempDirs.push(tmp);
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003783709877:topic:17592";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 195_000,
+      totalTokensFresh: true,
+      inputTokens: 8_000,
+      outputTokens: 512,
+      cacheRead: 187_000,
+      contextTokens: 200_000,
+      compactionCount: 0,
+      memoryFlushCompactionCount: 0,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [], meta: {} });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloor: 20_000,
+          },
+        },
+      },
+    };
+    const followupRun = {
+      prompt: "continue the conversation",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: tmp,
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: path.join(tmp, "session.jsonl"),
+        workspaceDir: tmp,
+        config: cfg,
+        skillsSnapshot: {},
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        persistedPromptTokens: 195_000,
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const updatedEntry = await runMemoryFlushIfNeeded({
+      cfg,
+      followupRun,
+      promptForEstimate: "continue the conversation",
+      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      defaultModel: "openai-codex/gpt-5.5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(followupRun.run.persistedPromptTokens).toBeUndefined();
+    expect(updatedEntry?.compactionCount).toBe(0);
+    expect(updatedEntry?.memoryFlushCompactionCount).toBe(0);
+    expect(updatedEntry?.totalTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokensFresh).toBe(false);
+    expect(updatedEntry?.inputTokens).toBeUndefined();
+    expect(updatedEntry?.cacheRead).toBeUndefined();
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(0);
+    expect(stored[sessionKey].memoryFlushCompactionCount).toBe(0);
+    expect(stored[sessionKey].totalTokens).toBeUndefined();
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(stored[sessionKey].cacheRead).toBeUndefined();
+  });
 });

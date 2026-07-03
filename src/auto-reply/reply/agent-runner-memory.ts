@@ -536,6 +536,7 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
+    const shouldClearPromptTokenSnapshot = memoryCompactionCompleted || hardReserveBreached;
     let memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
@@ -569,6 +570,24 @@ export async function runMemoryFlushIfNeeded(params: {
         memoryFlushCompactionCount = nextCount;
       }
     }
+    if (!memoryCompactionCompleted && shouldClearPromptTokenSnapshot) {
+      // A hard-reserve memory flush can successfully preserve durable state
+      // without producing an in-session compaction event. In that case the old
+      // provider usage snapshot is still pre-flush pressure, not a reliable
+      // reason to block the real reply turn. Clear it so the embedded runner can
+      // estimate the current transcript and, if needed, run overflow compaction.
+      params.followupRun.run.persistedPromptTokens = undefined;
+      if (activeSessionEntry) {
+        activeSessionEntry.totalTokens = undefined;
+        activeSessionEntry.totalTokensFresh = false;
+        activeSessionEntry.inputTokens = undefined;
+        activeSessionEntry.outputTokens = undefined;
+        activeSessionEntry.cacheRead = undefined;
+        activeSessionEntry.cacheWrite = undefined;
+        activeSessionEntry.contextPressureNoticeAt = undefined;
+        activeSessionEntry.contextPressureNoticeCompactionCount = undefined;
+      }
+    }
     if (params.storePath && params.sessionKey) {
       try {
         const updatedEntry = await updateSessionStoreEntry({
@@ -578,7 +597,7 @@ export async function runMemoryFlushIfNeeded(params: {
             if (isCli) {
               clearCliSessionId(entry, params.followupRun.run.provider);
             }
-            if (memoryCompactionCompleted) {
+            if (shouldClearPromptTokenSnapshot) {
               entry.totalTokens = undefined;
               entry.totalTokensFresh = false;
               entry.inputTokens = undefined;
@@ -591,7 +610,7 @@ export async function runMemoryFlushIfNeeded(params: {
             return {
               memoryFlushAt: Date.now(),
               memoryFlushCompactionCount,
-              ...(memoryCompactionCompleted
+              ...(shouldClearPromptTokenSnapshot
                 ? {
                     totalTokens: undefined,
                     totalTokensFresh: false,
