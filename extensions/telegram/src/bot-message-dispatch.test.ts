@@ -169,6 +169,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   }
 
   function expectFinalPreviewReplacedWithDurableSend(messageId: number, text: string) {
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text })],
+      }),
+    );
     expect(guardedTelegramDeleteMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: 123,
@@ -178,10 +183,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         }),
       }),
     );
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text })],
-      }),
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      guardedTelegramDeleteMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
   }

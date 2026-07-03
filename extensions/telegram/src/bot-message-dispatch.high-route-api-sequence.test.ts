@@ -53,6 +53,13 @@ type TelegramApiCall =
       params: unknown;
     }
   | {
+      op: "sendRichMessage";
+      chatId: string | number;
+      text: string;
+      messageId: number;
+      params: unknown;
+    }
+  | {
       op: "editMessageText";
       chatId: string | number;
       messageId: number;
@@ -129,7 +136,7 @@ function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMes
   };
 }
 
-function createTelegramBotHarness(startMessageId = 7200) {
+function createTelegramBotHarness(startMessageId = 7200, options?: { richRaw?: boolean }) {
   const calls: TelegramApiCall[] = [];
   let nextMessageId = startMessageId;
   const sendMessage = vi.fn(
@@ -176,6 +183,22 @@ function createTelegramBotHarness(startMessageId = 7200) {
   });
   const sendVoice = vi.fn();
   const sendAudio = vi.fn();
+  const sendRichMessage = vi.fn(
+    async (params: {
+      chat_id: string | number;
+      rich_message?: { html?: string; markdown?: string };
+    }): Promise<{ message_id: number; chat: { id: string | number } }> => {
+      const messageId = nextMessageId++;
+      calls.push({
+        op: "sendRichMessage",
+        chatId: params.chat_id,
+        text: params.rich_message?.html ?? params.rich_message?.markdown ?? "",
+        messageId,
+        params,
+      });
+      return { message_id: messageId, chat: { id: params.chat_id } };
+    },
+  );
 
   const bot = {
     api: {
@@ -184,6 +207,7 @@ function createTelegramBotHarness(startMessageId = 7200) {
       deleteMessage,
       sendVoice,
       sendAudio,
+      ...(options?.richRaw ? { raw: { sendRichMessage } } : {}),
     },
   } as unknown as Bot;
 
@@ -220,6 +244,12 @@ function sendMessageCalls(calls: readonly TelegramApiCall[]) {
   });
 }
 
+function richMessageCalls(calls: readonly TelegramApiCall[]) {
+  return calls.filter((call): call is Extract<TelegramApiCall, { op: "sendRichMessage" }> => {
+    return call.op === "sendRichMessage";
+  });
+}
+
 describe("dispatchTelegramMessage high-route progress API sequence", () => {
   beforeEach(() => {
     getReplyFromConfig.mockReset();
@@ -229,6 +259,55 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     resolveStorePath.mockReset();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
+  });
+
+  it("sends the rich final before deleting a streamed answer preview", async () => {
+    const harness = createTelegramBotHarness(7100, { richRaw: true });
+    const partialAnswer = "Take a day off, but make it a structured soft day.";
+    const finalAnswer = `${partialAnswer}\n\n- light reset\n- short ocean walk\n- no laptop unless it feels genuinely nice`;
+
+    getReplyFromConfig.mockImplementation(async (_ctx, opts?: GetReplyOptions) => {
+      await opts?.onPartialReply?.({ text: partialAnswer });
+      return { text: finalAnswer };
+    });
+
+    await dispatchWithHarness({
+      bot: harness.bot,
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "rich-final-preview-order" },
+      }),
+    });
+
+    const previewSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(partialAnswer),
+    );
+    const richFinal = richMessageCalls(harness.calls).find((call) =>
+      call.text.includes("short ocean walk"),
+    );
+    const previewDelete = harness.calls.find(
+      (call): call is Extract<TelegramApiCall, { op: "deleteMessage" }> =>
+        call.op === "deleteMessage" && call.messageId === previewSend?.messageId,
+    );
+
+    expect(previewSend).toBeDefined();
+    expect(richFinal).toBeDefined();
+    expect(previewDelete).toBeDefined();
+    expect(harness.calls).toEqual([
+      expect.objectContaining({
+        op: "sendMessage",
+        messageId: previewSend!.messageId,
+        text: partialAnswer,
+      }),
+      expect.objectContaining({
+        op: "sendRichMessage",
+        messageId: richFinal!.messageId,
+        text: expect.stringContaining("short ocean walk"),
+      }),
+      expect.objectContaining({
+        op: "deleteMessage",
+        messageId: previewSend!.messageId,
+      }),
+    ]);
   });
 
   it("keeps generic block-streaming commentary transient before the final answer", async () => {
