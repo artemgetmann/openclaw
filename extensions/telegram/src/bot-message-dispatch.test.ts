@@ -183,8 +183,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         }),
       }),
     );
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      guardedTelegramDeleteMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(guardedTelegramDeleteMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
   }
