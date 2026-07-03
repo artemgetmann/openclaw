@@ -102,6 +102,18 @@ export type TelegramUserTopicCreateResult = {
   topic_title: string;
 };
 
+export type TelegramUserTopicDeleteResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  affected: {
+    offset: number;
+    pts: number;
+    pts_count: number;
+  };
+  chat_id: number | null;
+  deleted: boolean;
+  topic_anchor: number;
+};
+
 export type TelegramUserReadResult = {
   backend_meta?: TelegramUserBackendMeta;
   messages: TelegramUserMessage[];

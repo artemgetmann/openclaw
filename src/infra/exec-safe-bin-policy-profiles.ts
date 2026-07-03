@@ -338,6 +338,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "precheck"],
       ["telegram-user", "send"],
       ["telegram-user", "topic-create"],
+      ["telegram-user", "topic-delete"],
       ["telegram-user", "read"],
       ["telegram-user", "download"],
       ["telegram-user", "inbox"],

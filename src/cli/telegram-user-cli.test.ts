@@ -7,6 +7,7 @@ const telegramUserReadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicCreateCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserTopicDeleteCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/telegram-user.js", () => ({
   telegramUserDoctorCommand,
@@ -15,6 +16,7 @@ vi.mock("../commands/telegram-user.js", () => ({
   telegramUserDownloadCommand,
   telegramUserSendCommand,
   telegramUserTopicCreateCommand,
+  telegramUserTopicDeleteCommand,
 }));
 
 describe("telegram-user cli", () => {
@@ -51,6 +53,7 @@ describe("telegram-user cli", () => {
     expect(help).toContain("openclaw telegram-user doctor --json");
     expect(help).toContain("openclaw telegram-user send --chat @jarvis_tester_1_bot");
     expect(help).toContain("openclaw telegram-user send --chat -1003783709877 --topic-anchor");
+    expect(help).toContain("openclaw telegram-user topic-delete --chat -1003783709877");
     expect(help).toContain(
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
     );
@@ -197,6 +200,69 @@ describe("telegram-user cli", () => {
         json: true,
         session: "/tmp/userbot.session",
         title: "voice proof",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("registers topic-delete and forwards chat/topic anchor options", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    expect(telegramUser?.commands.map((command) => command.name())).toContain("topic-delete");
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "topic-delete",
+        "--chat",
+        "-1003783709877",
+        "--topic-anchor",
+        "15250",
+        "--env-file",
+        "/tmp/tg.env",
+        "--session",
+        "/tmp/userbot.session",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserTopicDeleteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        envFile: "/tmp/tg.env",
+        json: true,
+        session: "/tmp/userbot.session",
+        topicAnchor: "15250",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("accepts topic-delete --topic-id as an alias without --topic-anchor", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "topic-delete",
+        "--chat",
+        "-1003783709877",
+        "--topic-id",
+        "15250",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserTopicDeleteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        json: true,
+        topicId: "15250",
       }),
       expect.any(Object),
     );

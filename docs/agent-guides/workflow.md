@@ -76,16 +76,17 @@
 2. Use `oc-consumer-task` only for explicit emergency fallback/backport work.
 3. Let that wrapper fast-forward the correct sacred home clone, create the temp worktree, and drop you into it.
 4. Code inside that temp worktree only.
-5. Open or update a draft PR early.
-6. Validate in the temp worktree.
-7. Mark the PR ready when validation is complete.
-8. Give a next-step handoff before stopping, especially if the PR is still
+5. Before changing skills, read `docs/agent-guides/skill-updates.md` and patch the owning source instead of mirrored copies.
+6. Open or update a draft PR early.
+7. Validate in the temp worktree.
+8. Mark the PR ready when validation is complete.
+9. Give a next-step handoff before stopping, especially if the PR is still
    draft, waiting for review, waiting for CI, or not deployed to runtime yet.
-9. Merge if the task and policy allow it.
-10. If the merged change needs live runtime behavior, ship it from the sacred
+10. Merge if the task and policy allow it.
+11. If the merged change needs live runtime behavior, ship it from the sacred
     home clone and prove the runtime separately from PR merge state.
-11. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
-12. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
+12. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
+13. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
 
 ## Next-step handoff
 

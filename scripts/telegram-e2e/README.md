@@ -173,6 +173,11 @@ openclaw telegram-user send \
   --reply-to <topic_anchor> \
   --json
 
+openclaw telegram-user topic-delete \
+  --chat -1003783709877 \
+  --topic-anchor <topic_anchor> \
+  --json
+
 openclaw telegram-user read \
   --chat @jarvis_tester_1_bot \
   --contains proof \

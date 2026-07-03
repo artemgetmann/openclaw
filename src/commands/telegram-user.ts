@@ -11,6 +11,7 @@ import {
   runTelegramUserSend,
   runTelegramUserStatus,
   runTelegramUserTopicCreate,
+  runTelegramUserTopicDelete,
 } from "../telegram-user/backend.js";
 import type {
   TelegramUserAuthStatus,
@@ -27,6 +28,7 @@ import type {
   TelegramUserReadResult,
   TelegramUserSendResult,
   TelegramUserTopicCreateResult,
+  TelegramUserTopicDeleteResult,
   TelegramUserWaitParams,
   TelegramUserWaitResult,
 } from "../telegram-user/types.js";
@@ -93,10 +95,11 @@ function readRequiredNumberOpt(
   opts: Record<string, unknown>,
   key: string,
   flag: string,
+  context = "Telegram user send",
 ): number | undefined {
   const value = readNumberOpt(opts, key);
   if (value === undefined && hasProvidedOpt(opts, key)) {
-    throw new Error(`Telegram user send requires ${flag} to be a numeric message/topic id.`);
+    throw new Error(`${context} requires ${flag} to be a numeric message/topic id.`);
   }
   return value;
 }
@@ -519,6 +522,20 @@ function logTopicCreateText(runtime: RuntimeEnv, result: TelegramUserTopicCreate
   runtime.log(`topic_title=${JSON.stringify(result.topic_title)}`);
 }
 
+function logTopicDeleteText(runtime: RuntimeEnv, result: TelegramUserTopicDeleteResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  runtime.log(
+    ok(
+      `Telegram user topic-delete ok. topic_anchor=${result.topic_anchor} chat_id=${result.chat_id} deleted=${result.deleted}`,
+    ),
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+  runtime.log(
+    `affected_pts=${result.affected.pts} affected_pts_count=${result.affected.pts_count} affected_offset=${result.affected.offset}`,
+  );
+}
+
 function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
   runtime.log(
     `Telegram user read completed. messages=${result.messages.length} ${formatBackendMeta(result.backend_meta)}`,
@@ -829,6 +846,29 @@ export async function telegramUserTopicCreateCommand(
     return;
   }
   logTopicCreateText(runtime, result);
+}
+
+export async function telegramUserTopicDeleteCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  const topicAnchor =
+    readRequiredNumberOpt(opts, "topicAnchor", "--topic-anchor", "Telegram user topic-delete") ??
+    readRequiredNumberOpt(opts, "topicId", "--topic-id", "Telegram user topic-delete");
+  if (!chat || topicAnchor === undefined) {
+    throw new Error("Telegram user topic-delete requires --chat and --topic-anchor.");
+  }
+  const result = await runTelegramUserTopicDelete({
+    ...resolveBackendOptions(opts),
+    chat,
+    topicAnchor,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logTopicDeleteText(runtime, result);
 }
 
 export async function telegramUserReadCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
