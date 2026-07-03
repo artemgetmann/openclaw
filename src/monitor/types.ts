@@ -15,6 +15,47 @@ export type MonitorCheckpoint = Record<string, unknown>;
 
 export type MonitorSourceTarget = Record<string, unknown>;
 
+export type MonitorEventTriggerKind =
+  | "webhook"
+  | "local_listener"
+  | "process_exit"
+  | "browser_observer";
+
+export type MonitorTriggerMatch = {
+  sourceType?: string;
+  sourceTarget?: MonitorSourceTarget;
+  matchKeys?: string[];
+  eventTypes?: string[];
+};
+
+export type MonitorTrigger =
+  | {
+      kind: "schedule";
+      cadence?: CronSchedule;
+    }
+  | {
+      kind: MonitorEventTriggerKind;
+      match?: MonitorTriggerMatch;
+    }
+  | {
+      kind: "hybrid";
+      schedule?: { cadence?: CronSchedule };
+      event: {
+        kind: MonitorEventTriggerKind;
+        match?: MonitorTriggerMatch;
+      };
+    };
+
+export type MonitorEventEnvelope = {
+  triggerKind: MonitorEventTriggerKind;
+  sourceType: string;
+  sourceTarget: MonitorSourceTarget;
+  eventType?: string;
+  idempotencyKey?: string;
+  receivedAtMs?: number;
+  evidence?: MonitorSourceTarget;
+};
+
 export type MonitorRecord = {
   monitorId: string;
   agentId: string;
@@ -26,6 +67,7 @@ export type MonitorRecord = {
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
   cadence: CronSchedule;
+  trigger?: MonitorTrigger;
   expiryAt?: string;
   stopCondition?: string;
   actionPolicy: MonitorActionPolicy;
@@ -54,6 +96,7 @@ export type MonitorCreateInput = {
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
   cadence: CronSchedule;
+  trigger?: MonitorTrigger;
   expiryAt?: string;
   stopCondition?: string;
   actionPolicy?: MonitorActionPolicy;
@@ -69,6 +112,7 @@ export type MonitorUpdatePatch = Partial<
     | "watchDelivery"
     | "sourceTarget"
     | "cadence"
+    | "trigger"
     | "expiryAt"
     | "stopCondition"
     | "actionPolicy"
