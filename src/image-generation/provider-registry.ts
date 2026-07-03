@@ -1,5 +1,9 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildJarvisManagedOpenAIImageGenerationProvider,
+  isJarvisManagedOpenAIImageGenerationConfigured,
+} from "../consumer/openai-image-generation.js";
 import { resolvePluginImageGenerationProviders } from "../plugins/image-generation-providers.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
@@ -40,6 +44,13 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   }
   for (const provider of resolvePluginImageGenerationProviders({ config: cfg })) {
     register(provider);
+  }
+  if (isJarvisManagedOpenAIImageGenerationConfigured(cfg)) {
+    // Managed Jarvis users should spend against the backend-held provider key,
+    // not a customer-local OpenAI key. Register this after plugins so the
+    // familiar openai/gpt-image-* model refs keep working while the transport
+    // switches to the Jarvis backend.
+    register(buildJarvisManagedOpenAIImageGenerationProvider());
   }
 
   return { canonical, aliases };

@@ -37,6 +37,12 @@ The source can be public. The hosted environment cannot be.
     `freshness`, `mode`).
   - `gemini.image.generate` with `input.prompt` and optional
     `input.resolution` / `input.aspectRatio`.
+  - `openai.image.generate` with `input.prompt` and optional `input.model`,
+    `input.count`, and `input.size`. Text-to-image only; uploaded/reference
+    image edits are not supported by this managed utility.
+  - `openai.audio.transcribe` with `input.fileBase64` and optional
+    `input.model`, `input.mimeType`, `input.fileName`, `input.language`, and
+    `input.prompt`.
 
 ## Environment
 
@@ -48,7 +54,8 @@ The source can be public. The hosted environment cannot be.
   `data/jarvis-backend.sqlite3`. This is for development and tests only.
 - `JARVIS_TRIAL_DAYS` - defaults to `14`.
 - `JARVIS_OFFLINE_GRACE_DAYS` - defaults to `3`.
-- `OPENAI_API_KEY` - optional managed provider key.
+- `OPENAI_API_KEY` - enables `openai.image.generate` and
+  `openai.audio.transcribe`.
 - `ANTHROPIC_API_KEY` - optional managed provider key.
 - `FIRECRAWL_API_KEY` - enables `firecrawl.search` and `firecrawl.scrape`.
 - `GOOGLE_PLACES_API_KEY` - enables `google_places.search`.
