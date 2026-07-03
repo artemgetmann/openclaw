@@ -63,7 +63,6 @@ function createHarness(params?: {
           payload: ReplyPayload;
           infoKind: string;
         }) => {
-          await deletePreviewMessage(messageId);
           const delivered = await sendPayload(
             { ...payload, text },
             {
@@ -73,6 +72,9 @@ function createHarness(params?: {
               infoKind,
             },
           );
+          if (delivered) {
+            await deletePreviewMessage(messageId);
+          }
           return delivered ? "sent" : "skipped";
         },
       )
@@ -234,6 +236,9 @@ describe("createLaneTextDeliverer", () => {
         callsite: "test-final-preview-replacement",
         infoKind: "final",
       }),
+    );
+    expect(harness.sendPayload.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.deletePreviewMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(harness.editPreview).not.toHaveBeenCalled();
   });
