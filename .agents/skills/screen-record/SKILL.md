@@ -20,6 +20,9 @@ Portable fallback:
 
 - Prefer `openclaw screen record --app <App>` or `--bundle <bundle-id>` for
   target-aware recording.
+- For Jarvis macOS proof, use the canonical `screen-record-proof` debug fixture
+  from `../../../skills/screen-record/SKILL.md` so agents reuse the same macOS
+  Screen Recording permission row.
 - Use `--window-id <id>` when the exact CoreGraphics window id is known.
 - Use full-display recording only with an explicit reason.
 - Store recordings locally by default and send one final review video only when

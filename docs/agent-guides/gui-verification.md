@@ -65,24 +65,48 @@ Do not send long runs of separate screenshot messages to the user. Prefer
 progress text while work is ongoing, then send or offer one compressed final
 review video depending on whether the user requested automatic video proof.
 
-For live Jarvis macOS proof, launch the app through a named consumer instance
-instead of relying on `launchctl setenv` to override runtime paths. The consumer
-app bootstraps its own config, state directory, and gateway port, so the
-instance scripts are the source of truth:
+For routine live Jarvis macOS video proof, use the canonical stable debug
+fixture instead of `/Applications/Jarvis.app`:
+
+- instance: `screen-record-proof`
+- bundle id: `ai.openclaw.consumer.mac.debug`
+- app path: `dist/Jarvis (screen-record-proof).app`
+- required env: `OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1`
+
+This keeps the Screen Recording permission target stable across agent runs. Use
+the production `/Applications/Jarvis.app` only when the proof specifically needs
+installed-user behavior or release-package behavior.
+
+Launch the fixture through the named consumer instance instead of relying on
+`launchctl setenv` to override runtime paths. The consumer app bootstraps its
+own config, state directory, and gateway port, so the instance scripts are the
+source of truth:
 
 ```bash
 OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
   ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
-  npx -y pnpm@10.23.0 exec bash scripts/package-consumer-mac-app-fast.sh --instance <id>
+  npx -y pnpm@10.23.0 exec bash scripts/package-consumer-mac-app-fast.sh --instance screen-record-proof
 
 OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 \
-  npx -y pnpm@10.23.0 exec bash scripts/open-consumer-mac-app.sh --instance <id> --replace --refresh-gateway
+  npx -y pnpm@10.23.0 exec bash scripts/open-consumer-mac-app.sh --instance screen-record-proof --replace --refresh-gateway
 ```
 
-Use the stable TCC identity only when reusing an existing Screen Recording
-permission row is necessary. In that mode, `--replace` terminates other running
-Jarvis debug apps with the same stable bundle id before launching the proof
-instance, which avoids duplicate-instance exits during recording checks.
+Use the stable TCC identity for this fixture because reusing the existing Screen
+Recording permission row is the point. In that mode, `--replace` terminates
+other running Jarvis debug apps with the same stable bundle id before launching
+the proof instance, which avoids duplicate-instance exits during recording
+checks.
+
+If Screen Recording is missing, open the privacy pane and grant permission to
+the debug Jarvis app:
+
+```bash
+open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+```
+
+After granting permission, relaunch the fixture with `--replace
+--refresh-gateway`; macOS often requires a relaunch before the native node
+advertises `screen.record`.
 
 Before running `openclaw screen record`, confirm the native macOS node is
 connected and advertises `screen.record`. If the app appears in the device
