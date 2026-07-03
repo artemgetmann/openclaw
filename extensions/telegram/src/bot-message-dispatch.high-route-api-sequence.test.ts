@@ -261,7 +261,7 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
   });
 
-  it("sends the rich final before deleting a streamed answer preview", async () => {
+  it("deletes a streamed answer preview before sending the rich final", async () => {
     const harness = createTelegramBotHarness(7100, { richRaw: true });
     const partialAnswer = "Take a day off, but make it a structured soft day.";
     const finalAnswer = `${partialAnswer}\n\n- light reset\n- short ocean walk\n- no laptop unless it feels genuinely nice`;
@@ -299,13 +299,13 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
         text: partialAnswer,
       }),
       expect.objectContaining({
+        op: "deleteMessage",
+        messageId: previewSend!.messageId,
+      }),
+      expect.objectContaining({
         op: "sendRichMessage",
         messageId: richFinal!.messageId,
         text: expect.stringContaining("short ocean walk"),
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: previewSend!.messageId,
       }),
     ]);
   });
