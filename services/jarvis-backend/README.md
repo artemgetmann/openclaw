@@ -38,8 +38,9 @@ The source can be public. The hosted environment cannot be.
   - `gemini.image.generate` with `input.prompt` and optional
     `input.resolution` / `input.aspectRatio`.
   - `openai.image.generate` with `input.prompt` and optional `input.model`,
-    `input.count`, and `input.size`. Text-to-image only; uploaded/reference
-    image edits are not supported by this managed utility.
+    `input.count`, `input.size`, and `input.inputImages[]`; uses the OpenAI
+    generation or edit endpoint depending on whether reference images are
+    supplied.
   - `openai.audio.transcribe` with `input.fileBase64` and optional
     `input.model`, `input.mimeType`, `input.fileName`, `input.language`, and
     `input.prompt`.

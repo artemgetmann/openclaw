@@ -11,6 +11,7 @@ import {
 
 const DEFAULT_MODEL = "gpt-image-2";
 const DEFAULT_MIME_TYPE = "image/png";
+const MAX_INPUT_IMAGES = 5;
 const SUPPORTED_SIZES = [
   "1024x1024",
   "1536x1024",
@@ -48,6 +49,14 @@ function readGeneratedImages(payload: Record<string, unknown>): ImageGenerationR
   });
 }
 
+function buildManagedInputImages(req: ImageGenerationRequest): Array<Record<string, string>> {
+  return (req.inputImages ?? []).map((image, index) => ({
+    data: image.buffer.toString("base64"),
+    mimeType: image.mimeType?.trim() || DEFAULT_MIME_TYPE,
+    fileName: image.fileName?.trim() || `image-${index + 1}.png`,
+  }));
+}
+
 export function isJarvisManagedOpenAIImageGenerationConfigured(config?: OpenClawConfig): boolean {
   return Boolean(createJarvisManagedUtilityClient(config));
 }
@@ -67,10 +76,10 @@ export function buildJarvisManagedOpenAIImageGenerationProvider(): ImageGenerati
         supportsResolution: false,
       },
       edit: {
-        enabled: false,
-        maxCount: 1,
-        maxInputImages: 0,
-        supportsSize: false,
+        enabled: true,
+        maxCount: 4,
+        maxInputImages: MAX_INPUT_IMAGES,
+        supportsSize: true,
         supportsAspectRatio: false,
         supportsResolution: false,
       },
@@ -82,9 +91,6 @@ export function buildJarvisManagedOpenAIImageGenerationProvider(): ImageGenerati
       const prompt = req.prompt.trim();
       if (!prompt) {
         throw new Error("OpenAI managed image generation requires a prompt");
-      }
-      if ((req.inputImages?.length ?? 0) > 0) {
-        throw new Error("OpenAI managed image generation does not support reference-image edits.");
       }
 
       const managedClient = createJarvisManagedUtilityClient(req.cfg);
@@ -103,6 +109,10 @@ export function buildJarvisManagedOpenAIImageGenerationProvider(): ImageGenerati
       }
       if (req.size?.trim()) {
         input.size = req.size.trim();
+      }
+      const inputImages = buildManagedInputImages(req);
+      if (inputImages.length > 0) {
+        input.inputImages = inputImages;
       }
 
       const payload = unwrapManagedProviderPayload(

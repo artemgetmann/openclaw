@@ -125,9 +125,21 @@ describe("OpenAI managed image generation", () => {
     ).rejects.toThrow(/needs Jarvis managed services/);
   });
 
-  it("rejects reference-image edits before spending backend quota", async () => {
+  it("routes reference-image edits through the Jarvis backend", async () => {
     const fetchSpy = installMockFetch(async () => {
-      throw new Error("provider should not be called");
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          result: {
+            provider: "openai",
+            payload: {
+              model: "gpt-image-2",
+              images: [{ mimeType: "image/png", data: "ZWRpdGVkLWJ5dGVz" }],
+            },
+          },
+        }),
+        { status: 200 },
+      );
     });
     const cfg = {
       jarvis: {
@@ -139,15 +151,36 @@ describe("OpenAI managed image generation", () => {
       },
     } as const;
 
-    await expect(
-      buildJarvisManagedOpenAIImageGenerationProvider().generateImage({
-        cfg,
-        provider: "openai",
-        model: "gpt-image-2",
+    const result = await buildJarvisManagedOpenAIImageGenerationProvider().generateImage({
+      cfg,
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "edit this",
+      inputImages: [
+        {
+          buffer: Buffer.from("reference-image"),
+          mimeType: "image/png",
+          fileName: "reference.png",
+        },
+      ],
+    });
+
+    expect(result.images).toMatchObject([
+      { buffer: Buffer.from("edited-bytes"), mimeType: "image/png" },
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(parseJsonRequestBody(fetchSpy.mock.calls[0]?.[1])).toEqual({
+      input: {
         prompt: "edit this",
-        inputImages: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow(/does not support reference-image edits/);
-    expect(fetchSpy).not.toHaveBeenCalled();
+        model: "gpt-image-2",
+        inputImages: [
+          {
+            data: Buffer.from("reference-image").toString("base64"),
+            mimeType: "image/png",
+            fileName: "reference.png",
+          },
+        ],
+      },
+    });
   });
 });

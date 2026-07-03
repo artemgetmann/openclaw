@@ -1317,6 +1317,60 @@ def test_openai_image_generate_requires_provider_key(monkeypatch):
     assert response.json()["detail"] == "openai provider is not configured"
 
 
+def test_openai_image_generate_routes_reference_images_to_edit_endpoint(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.openai.com/v1/images/edits"
+        assert request.headers["authorization"] == "Bearer test-openai-provider-placeholder"
+        body = request.content
+        assert b'name="model"\r\n\r\ngpt-image-2' in body
+        assert b'name="prompt"\r\n\r\nedit this image' in body
+        assert b'name="n"\r\n\r\n1' in body
+        assert b'name="size"\r\n\r\n1024x1024' in body
+        assert b'name="image[]"; filename="reference.png"' in body
+        assert b"reference-image-bytes" in body
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"b64_json": "ZWRpdGVkLWltYWdl"}],
+                "debug": "test-openai-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/openai.image.generate",
+        json={
+            "input": {
+                "prompt": "edit this image",
+                "model": "gpt-image-2",
+                "inputImages": [
+                    {
+                        "data": "cmVmZXJlbmNlLWltYWdlLWJ5dGVz",
+                        "mimeType": "image/png",
+                        "fileName": "reference.png",
+                    }
+                ],
+            }
+        },
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["payload"] == {
+        "model": "gpt-image-2",
+        "images": [{"mimeType": "image/png", "data": "ZWRpdGVkLWltYWdl"}],
+    }
+    assert body["usage"]["units"] == 1
+    assert "test-openai-provider-placeholder" not in response.text
+
+
 def test_openai_image_generate_validates_before_provider_spend(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
@@ -1337,6 +1391,34 @@ def test_openai_image_generate_validates_before_provider_spend(monkeypatch):
     assert response.status_code == 400
     assert response.json()["detail"] == (
         "openai.image.generate input.count must be an integer between 1 and 4"
+    )
+
+
+def test_openai_image_generate_validates_reference_images_before_provider_spend(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected provider request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/openai.image.generate",
+        json={
+            "input": {
+                "prompt": "edit this image",
+                "inputImages": [{"data": "not-valid-base64", "mimeType": "image/png"}],
+            }
+        },
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "openai.image.generate input.inputImages[].data must be valid base64"
     )
 
 
