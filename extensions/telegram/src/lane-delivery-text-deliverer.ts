@@ -478,10 +478,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       return "fallback";
     }
-    if (context === "final" && payload && infoKind && params.replaceFinalPreviewWithPayload) {
+    const hasAlreadyVisibleAnswerPreview = laneName === "answer" && lane.hasStreamedMessage;
+    if (
+      context === "final" &&
+      payload &&
+      infoKind &&
+      params.replaceFinalPreviewWithPayload &&
+      !hasAlreadyVisibleAnswerPreview
+    ) {
       // Telegram rich messages are sent as new messages, not edited into an
-      // existing message. Let the runtime replace a transient preview before
-      // falling back to the legacy edit path.
+      // existing message. Only use replacement before a normal answer stream
+      // has become visible; once users have seen assistant answer text, that
+      // message is durable content and finalization must edit it in place.
       const replacement = await params.replaceFinalPreviewWithPayload({
         laneName,
         messageId: previewTargetAfterStop.previewMessageId,

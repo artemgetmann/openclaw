@@ -243,6 +243,32 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editPreview).not.toHaveBeenCalled();
   });
 
+  it("does not replace an already streamed answer preview", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Something warm and simple sounds right tonight.",
+      replaceFinalPreviewWithPayload: true,
+    });
+    const finalText =
+      "Something warm and simple sounds right tonight. I would drink peppermint tea if you want fresh, or warm milk if you want cozy.";
+
+    const result = await deliverFinalAnswer(harness, finalText);
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.replaceFinalPreviewWithPayload).not.toHaveBeenCalled();
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 999,
+        text: finalText,
+        context: "final",
+      }),
+    );
+  });
+
   it("primes stop-created previews with final text before editing", async () => {
     const harness = createHarness({ answerMessageIdAfterStop: 777 });
     harness.lanes.answer.lastPartialText = "no";
