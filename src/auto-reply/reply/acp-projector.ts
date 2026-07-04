@@ -677,6 +677,9 @@ export function createAcpReplyProjector(params: {
     if (!planText) {
       return;
     }
+    if (settings.deliveryMode === "live") {
+      await flush(true);
+    }
     await params.deliver(
       "tool",
       markAcpPlanProgressPayload({

@@ -439,6 +439,49 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
+  it("flushes live assistant text before plan progress", async () => {
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 10_000,
+          maxChunkChars: 512,
+        },
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "agent_message_chunk",
+      text: "Short live fragment without a boundary",
+    });
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        plan: [{ step: "Keep the user informed after visible text", status: "in_progress" }],
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "block",
+        text: "Short live fragment without a boundary",
+      },
+      {
+        kind: "tool",
+        text: "Plan updated\n- [~] Keep the user informed after visible text",
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
   it("does not suppress identical short text across terminal turn boundaries", async () => {
     const { deliveries, projector } = createProjectorHarness(
       createLiveCfgOverrides({

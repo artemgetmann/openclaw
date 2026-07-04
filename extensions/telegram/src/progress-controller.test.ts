@@ -167,6 +167,36 @@ describe("createTelegramProgressController", () => {
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
+  it("uses replace text as the new baseline for later appended progress", async () => {
+    const { api, controller, resolveFirstSend } = createProgressControllerHarness();
+
+    controller.update("Opening example.com");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    resolveFirstSend?.({ message_id: 77 });
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    controller.replace("Plan updated\n- [~] Run tests");
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        77,
+        "Plan updated\n- [~] Run tests",
+      ),
+    );
+
+    controller.update("Collecting logs");
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        77,
+        "Plan updated\n\n- [~] Run tests\n\nCollecting logs",
+      ),
+    );
+    expect(String(api.editMessageText.mock.lastCall?.[2] ?? "")).not.toContain(
+      "Opening example.com",
+    );
+  });
+
   it("caps cumulative progress by dropping oldest entries without leaking an omitted marker", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
