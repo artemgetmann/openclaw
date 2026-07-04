@@ -23,6 +23,7 @@ TIMING_REPORT="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-re
 SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-public-release-summary.env}"
 RUN_SIZE_REPORT=0
 PARALLEL_SAFE_LOCAL_ASSETS=0
+URGENT_SPARKLE_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -54,7 +55,12 @@ Options:
       Opt into the P2 safe overlap path. After app notarization is accepted and
       DMG notarization has a submitted receipt, create local Jarvis.zip/appcast
       before the separate resumable DMG polling step finishes.
-  --phase <auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only>
+  --urgent-sparkle
+      Explicit urgent update mode for existing Jarvis installations. Once the
+      app notarization is accepted and local Jarvis.zip/appcast exist, publish
+      and verify only the Sparkle update assets. This does not publish Jarvis.dmg
+      and must not be treated as a fresh-install/sendable DMG release.
+  --phase <auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only>
       Override automatic phase selection. Use this only when the state report is
       correct but operator intent is narrower than the automatic next phase.
   --size-report
@@ -232,6 +238,10 @@ while [[ $# -gt 0 ]]; do
       PARALLEL_SAFE_LOCAL_ASSETS=1
       shift
       ;;
+    --urgent-sparkle|--sparkle-update-only)
+      URGENT_SPARKLE_ONLY=1
+      shift
+      ;;
     --size-report)
       RUN_SIZE_REPORT=1
       shift
@@ -264,7 +274,7 @@ if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
 fi
 
 case "$FORCED_PHASE" in
-  auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only)
+  auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only)
     ;;
   *)
     echo "ERROR: unsupported --phase value for public-release wrapper: $FORCED_PHASE" >&2
@@ -279,13 +289,14 @@ if [[ "$FORCED_PHASE" == "auto" ]]; then
       "$PUBLISH_RELEASE_ASSETS" \
       "$VERIFY_PUBLIC_ASSETS" \
       "$APP_NAME" \
-      "$PARALLEL_SAFE_LOCAL_ASSETS"
+      "$PARALLEL_SAFE_LOCAL_ASSETS" \
+      "$URGENT_SPARKLE_ONLY"
   )"
 else
   SELECTED_PHASE="$FORCED_PHASE"
 fi
 
-if [[ "$FORCED_PHASE" == "auto" && "$SELECTED_PHASE" == "publish-assets-only" && -n "$GITHUB_RELEASE_TAG" ]]; then
+if [[ "$FORCED_PHASE" == "auto" && ( "$SELECTED_PHASE" == "publish-assets-only" || "$SELECTED_PHASE" == "publish-sparkle-assets-only" ) && -n "$GITHUB_RELEASE_TAG" ]]; then
   # Old successful local-asset runs could leave an appcast that points at
   # releases/latest/download/Jarvis.zip. That file exists, but it is not safe to
   # upload because Sparkle appcasts must sign an immutable tagged ZIP URL.
@@ -303,6 +314,18 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   exit 0
 fi
 
+if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
+  echo "Jarvis Sparkle update assets are ready, but no public action was requested."
+  echo "  selected_phase=$SELECTED_PHASE"
+  echo "  state_root=$STATE_ROOT"
+  echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
+  echo "  next_publish_command=bash scripts/jarvis-public-release.sh --urgent-sparkle --publish-release-assets --latest-release-tag"
+  echo "  appcast_upload_remains_last_for_sparkle=true"
+  echo "  fresh_install_sendable=false"
+  echo "  dmg_update_live=false"
+  exit 0
+fi
+
 CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")
 case "$SELECTED_PHASE" in
   full|post-app-build)
@@ -313,10 +336,10 @@ case "$SELECTED_PHASE" in
   create-local-release-assets-only)
     CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
     ;;
-  publish-assets-only)
+  publish-assets-only|publish-sparkle-assets-only)
     CMD+=(--publish-release-assets --github-release-tag "$GITHUB_RELEASE_TAG")
     ;;
-  verify-public-assets-only)
+  verify-public-assets-only|verify-sparkle-assets-only)
     if [[ -n "$GITHUB_RELEASE_TAG" ]]; then
       CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
     fi
@@ -331,9 +354,9 @@ if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-onl
     "The Sparkle appcast must sign an immutable tagged Jarvis.zip URL before any public upload."
 fi
 
-if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+if [[ "$DRY_RUN" != "1" && ( "$SELECTED_PHASE" == "verify-public-assets-only" || "$SELECTED_PHASE" == "verify-sparkle-assets-only" ) && -z "$GITHUB_RELEASE_TAG" ]]; then
   fail_before_execute 2 \
-    "ERROR: verify-public-assets-only requires --github-release-tag <latest-tag>." \
+    "ERROR: $SELECTED_PHASE requires --github-release-tag <latest-tag>." \
     "The public verifier must compare the appcast enclosure against the immutable tagged Jarvis.zip URL."
 fi
 
@@ -345,10 +368,17 @@ fi
 echo "Jarvis public release orchestration:"
 echo "  selected_phase=$SELECTED_PHASE"
 echo "  parallel_safe_local_assets=$PARALLEL_SAFE_LOCAL_ASSETS"
+echo "  urgent_sparkle_only=$URGENT_SPARKLE_ONLY"
 echo "  state_root=$STATE_ROOT"
 echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
 echo "  command=$COMMAND_TEXT"
-echo "  appcast_upload_remains_last=true"
+if [[ "$URGENT_SPARKLE_ONLY" == "1" || "$SELECTED_PHASE" == "publish-sparkle-assets-only" || "$SELECTED_PHASE" == "verify-sparkle-assets-only" ]]; then
+  echo "  appcast_upload_remains_last_for_sparkle=true"
+  echo "  fresh_install_sendable=false"
+  echo "  dmg_update_live=false"
+else
+  echo "  appcast_upload_remains_last=true"
+fi
 if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
   echo "  latest_release_tag=true"
   echo "  resolved_github_release_tag=$GITHUB_RELEASE_TAG"
@@ -356,7 +386,7 @@ fi
 if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
   echo "  required_before_execute=--github-release-tag <latest-tag>"
 fi
-if [[ "$DRY_RUN" == "1" && "$SELECTED_PHASE" == "verify-public-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
+if [[ "$DRY_RUN" == "1" && ( "$SELECTED_PHASE" == "verify-public-assets-only" || "$SELECTED_PHASE" == "verify-sparkle-assets-only" ) && -z "$GITHUB_RELEASE_TAG" ]]; then
   echo "  required_before_execute=--github-release-tag <latest-tag>"
 fi
 if [[ "$DRY_RUN" == "1" && "$PUBLISH_RELEASE_ASSETS" == "1" && -z "$GITHUB_RELEASE_TAG" ]]; then

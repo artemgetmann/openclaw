@@ -78,6 +78,7 @@ jarvis_release_next_phase() {
   local verify_public_requested="${3:-0}"
   local app_name="${4:-Jarvis}"
   local parallel_safe_local_assets="${5:-0}"
+  local urgent_sparkle_only="${6:-0}"
   local app_path="$root_dir/dist/${app_name}.app"
   local dmg_path="$root_dir/dist/${app_name}.dmg"
   local zip_path="$root_dir/dist/${app_name}.zip"
@@ -113,6 +114,26 @@ jarvis_release_next_phase() {
     else
       printf '%s\n' "submit-app-notarization"
     fi
+    return 0
+  fi
+
+  if [[ "$urgent_sparkle_only" == "1" ]]; then
+    if [[ ! -f "$zip_path" || ! -f "$appcast_path" ]]; then
+      printf '%s\n' "create-local-release-assets-only"
+      return 0
+    fi
+
+    if [[ "$verify_public_requested" == "1" ]]; then
+      printf '%s\n' "verify-sparkle-assets-only"
+      return 0
+    fi
+
+    if [[ "$publish_requested" == "1" ]]; then
+      printf '%s\n' "publish-sparkle-assets-only"
+      return 0
+    fi
+
+    printf '%s\n' "ready-sparkle-local-assets"
     return 0
   fi
 

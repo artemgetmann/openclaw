@@ -20,7 +20,7 @@ const MAX_ZIPINFO_BYTES = 16 * 1024 * 1024;
 
 function usage() {
   return [
-    "Usage: node scripts/verify-jarvis-release-assets.mjs --app-path <dist/Jarvis.app> --zip-path <dist/Jarvis.zip> [--dmg-url <url>] [--zip-url <url>] [--appcast-url <url>]",
+    "Usage: node scripts/verify-jarvis-release-assets.mjs [--sparkle-only] --app-path <dist/Jarvis.app> --zip-path <dist/Jarvis.zip> [--dmg-url <url>] [--zip-url <url>] [--appcast-url <url>]",
   ].join("\n");
 }
 
@@ -31,6 +31,7 @@ function parseArgs(argv) {
     dmgUrl: DEFAULT_DMG_URL,
     zipUrl: null,
     appcastUrl: DEFAULT_APPCAST_URL,
+    sparkleOnly: false,
   };
 
   const valueOptions = new Map([
@@ -43,6 +44,11 @@ function parseArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--sparkle-only") {
+      options.sparkleOnly = true;
+      continue;
+    }
+
     const key = valueOptions.get(arg);
     if (!key) {
       throw new Error(`unknown argument: ${arg}\n${usage()}`);
@@ -416,10 +422,12 @@ async function main(argv = process.argv.slice(2)) {
     `app_versions_ok bundle_version=${versions.bundleVersion} short_version=${versions.shortVersion}`,
   );
 
-  const dmgResponse = await verifyUrlOk("dmg", options.dmgUrl);
-  console.log(
-    `public_asset_ok kind=dmg status=200 content_length=${parseContentLength(dmgResponse.headers, "dmg") ?? "absent"}`,
-  );
+  if (!options.sparkleOnly) {
+    const dmgResponse = await verifyUrlOk("dmg", options.dmgUrl);
+    console.log(
+      `public_asset_ok kind=dmg status=200 content_length=${parseContentLength(dmgResponse.headers, "dmg") ?? "absent"}`,
+    );
+  }
 
   const zipResponse = await verifyUrlOk("zip", expectedZipUrl);
   const publicZipLength = parseContentLength(zipResponse.headers, "zip");
@@ -446,8 +454,17 @@ async function main(argv = process.argv.slice(2)) {
   console.log(
     `appcast_ok title=${appcastProof.title} sparkle_version=${appcastProof.appcastVersion} sparkle_short_version=${appcastProof.appcastShortVersion} enclosure_length=${appcastProof.enclosureLength} ed_signature_length=${appcastProof.edSignatureLength}`,
   );
-  console.log("release_sendable=true");
   console.log("sparkle_update_live=true");
+  if (options.sparkleOnly) {
+    console.log("release_sendable=false");
+    console.log("fresh_install_sendable=false");
+    console.log("dmg_update_live=false");
+    console.log("reason=Sparkle update live; DMG/fresh-install package was not verified");
+  } else {
+    console.log("release_sendable=true");
+    console.log("fresh_install_sendable=true");
+    console.log("dmg_update_live=true");
+  }
 }
 
 try {
