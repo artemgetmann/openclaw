@@ -39,11 +39,13 @@ import {
   getHookAgentPolicyError,
   getHookChannelError,
   type HookAgentDispatchPayload,
+  type HookMonitorEventPayload,
   type HooksConfigResolved,
   isHookAgentAllowed,
   normalizeAgentPayload,
   normalizeHookHeaders,
   resolveHookIdempotencyKey,
+  normalizeMonitorEventPayload,
   normalizeWakePayload,
   readJsonBody,
   normalizeHookDispatchSessionKey,
@@ -81,6 +83,9 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  dispatchMonitorEventHook: (
+    value: HookMonitorEventPayload,
+  ) => Promise<{ matched: number; wakes: unknown[] }>;
 };
 
 export type HookClientIpConfig = Readonly<{
@@ -90,7 +95,7 @@ export type HookClientIpConfig = Readonly<{
 
 type HookReplayEntry = {
   ts: number;
-  runId: string;
+  response: Record<string, unknown>;
 };
 
 type HookReplayScope = {
@@ -99,6 +104,21 @@ type HookReplayScope = {
   idempotencyKey?: string;
   dispatchScope: Record<string, unknown>;
 };
+
+function normalizeHookReplayScopeValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeHookReplayScopeValue(entry));
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted()
+        .map((key) => [key, normalizeHookReplayScopeValue(record[key])]),
+    );
+  }
+  return value;
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -375,7 +395,14 @@ export function createHooksRequestHandler(
     getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
+  const {
+    getHooksConfig,
+    logHooks,
+    dispatchAgentHook,
+    dispatchWakeHook,
+    dispatchMonitorEventHook,
+    getClientIpConfig,
+  } = opts;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
@@ -426,7 +453,7 @@ export function createHooksRequestHandler(
       .update(
         JSON.stringify({
           pathKey: params.pathKey,
-          dispatchScope: params.dispatchScope,
+          dispatchScope: normalizeHookReplayScopeValue(params.dispatchScope),
         }),
         "utf8",
       )
@@ -434,7 +461,10 @@ export function createHooksRequestHandler(
     return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
   };
 
-  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
+  const resolveCachedHookResponse = (
+    key: string | undefined,
+    now: number,
+  ): Record<string, unknown> | undefined => {
     if (!key) {
       return undefined;
     }
@@ -445,15 +475,19 @@ export function createHooksRequestHandler(
     }
     hookReplayCache.delete(key);
     hookReplayCache.set(key, cached);
-    return cached.runId;
+    return cached.response;
   };
 
-  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
+  const rememberHookResponse = (
+    key: string | undefined,
+    response: Record<string, unknown>,
+    now: number,
+  ) => {
     if (!key) {
       return;
     }
     hookReplayCache.delete(key);
-    hookReplayCache.set(key, { ts: now, runId });
+    hookReplayCache.set(key, { ts: now, response });
     pruneHookReplayCache(now);
   };
 
@@ -586,9 +620,9 @@ export function createHooksRequestHandler(
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
         },
       });
-      const cachedRunId = resolveCachedHookRunId(replayKey, now);
-      if (cachedRunId) {
-        sendJson(res, 200, { ok: true, runId: cachedRunId });
+      const cachedResponse = resolveCachedHookResponse(replayKey, now);
+      if (cachedResponse) {
+        sendJson(res, 200, { ok: true, ...cachedResponse, replayed: true });
         return true;
       }
       const normalizedDispatchSessionKey = normalizeHookDispatchSessionKey({
@@ -601,8 +635,45 @@ export function createHooksRequestHandler(
         sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
       });
-      rememberHookRunId(replayKey, runId, now);
+      rememberHookResponse(replayKey, { runId }, now);
       sendJson(res, 200, { ok: true, runId });
+      return true;
+    }
+
+    if (subPath === "monitor-event") {
+      const normalized = normalizeMonitorEventPayload(payload as Record<string, unknown>, {
+        idempotencyKey,
+        nowMs: now,
+      });
+      if (!normalized.ok) {
+        sendJson(res, 400, { ok: false, error: normalized.error });
+        return true;
+      }
+      const replayKey = buildHookReplayCacheKey({
+        pathKey: "monitor-event",
+        token,
+        idempotencyKey,
+        dispatchScope: {
+          triggerKind: normalized.value.triggerKind,
+          sourceType: normalized.value.sourceType,
+          sourceTarget: normalized.value.sourceTarget,
+          eventType: normalized.value.eventType ?? null,
+        },
+      });
+      const cachedResponse = resolveCachedHookResponse(replayKey, now);
+      if (cachedResponse) {
+        sendJson(res, 200, { ok: true, ...cachedResponse, replayed: true });
+        return true;
+      }
+
+      try {
+        const result = await dispatchMonitorEventHook(normalized.value);
+        rememberHookResponse(replayKey, result, now);
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        logHooks.warn(`hook monitor-event failed: ${String(err)}`);
+        sendJson(res, 503, { ok: false, error: "monitor event dispatch unavailable" });
+      }
       return true;
     }
 
@@ -674,9 +745,9 @@ export function createHooksRequestHandler(
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
             },
           });
-          const cachedRunId = resolveCachedHookRunId(replayKey, now);
-          if (cachedRunId) {
-            sendJson(res, 200, { ok: true, runId: cachedRunId });
+          const cachedResponse = resolveCachedHookResponse(replayKey, now);
+          if (cachedResponse) {
+            sendJson(res, 200, { ok: true, ...cachedResponse, replayed: true });
             return true;
           }
           const runId = dispatchAgentHook({
@@ -694,7 +765,7 @@ export function createHooksRequestHandler(
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
           });
-          rememberHookRunId(replayKey, runId, now);
+          rememberHookResponse(replayKey, { runId }, now);
           sendJson(res, 200, { ok: true, runId });
           return true;
         }
