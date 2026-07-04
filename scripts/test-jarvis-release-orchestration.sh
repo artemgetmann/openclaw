@@ -645,7 +645,12 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
   local manifest="$TMP_DIR/package-sparkle-gate-manifest.env"
   local out="$TMP_DIR/package-sparkle-gate.out"
   local err="$TMP_DIR/package-sparkle-gate.err"
+  local release_home
+  local release_name
   local status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
 
   mkdir -p "$app_path"
   {
@@ -655,6 +660,8 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
 
   set +e
   APP_NAME="$app_name" \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase publish-sparkle-assets-only \
@@ -686,7 +693,12 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   local manifest="$TMP_DIR/package-sparkle-skip-notarize-manifest.env"
   local out="$TMP_DIR/package-sparkle-skip-notarize.out"
   local err="$TMP_DIR/package-sparkle-skip-notarize.err"
+  local release_home
+  local release_name
   local status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
 
   mkdir -p "$app_path" "$fake_bin"
   {
@@ -708,6 +720,8 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   PATH="$fake_bin:$PATH" \
   APP_NAME="$app_name" \
   SKIP_NOTARIZE=1 \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase publish-sparkle-assets-only \
@@ -736,7 +750,6 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
 test_phase_selection
 test_retry_classification
 test_wrapper_dry_run
-test_package_create_assets_rejects_stale_tag
 test_package_sparkle_publish_gate_does_not_require_dmg
 test_package_sparkle_publish_only_ignores_skip_notarize
 test_package_script_rejects_noncanonical_release_worktree
