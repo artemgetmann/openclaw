@@ -358,6 +358,34 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
+  it("renders Markdown task-list plan lines with the correct state", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "plan",
+      text: "- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "- [x] Inspect files",
+          "- [~] Render checklist",
+          "- [ ] Run tests",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
   it("allows config to hide plan-tag progress when explicitly disabled", async () => {
     const { deliveries, projector } = createProjectorHarness({
       acp: {

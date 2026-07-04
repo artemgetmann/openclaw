@@ -24,6 +24,7 @@ const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_ca
 const INTERNAL_TOOL_SUMMARY_LINE_RE =
   /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 const PLAN_STEP_STATUS_RE = /\s*\((pending|in_progress|completed)\)\s*$/iu;
+const PLAN_TASK_MARKER_RE = /^\[(x|X|~| )\]\s+/u;
 
 type PlanStepStatus = "pending" | "in_progress" | "completed";
 
@@ -93,6 +94,19 @@ function normalizePlanStatus(value: unknown): PlanStepStatus | undefined {
   return undefined;
 }
 
+function normalizePlanTaskMarkerStatus(value: string | undefined): PlanStepStatus | undefined {
+  if (value === "x" || value === "X") {
+    return "completed";
+  }
+  if (value === "~") {
+    return "in_progress";
+  }
+  if (value === " ") {
+    return "pending";
+  }
+  return undefined;
+}
+
 function readPlanStep(
   value: unknown,
   options: { allowPlainString?: boolean } = {},
@@ -101,17 +115,24 @@ function readPlanStep(
     const trimmed = value.trim();
     const isChecklistLine = /^[-*]\s+/.test(trimmed);
     const withoutBullet = trimmed.replace(/^[-*]\s+/, "");
+    const taskMarkerMatch = PLAN_TASK_MARKER_RE.exec(withoutBullet);
     const statusMatch = PLAN_STEP_STATUS_RE.exec(withoutBullet);
-    if (!options.allowPlainString && !isChecklistLine && !statusMatch) {
+    const taskMarkerStatus = normalizePlanTaskMarkerStatus(taskMarkerMatch?.[1]);
+    if (!options.allowPlainString && !isChecklistLine && !statusMatch && !taskMarkerStatus) {
       return undefined;
     }
-    const step = withoutBullet.replace(PLAN_STEP_STATUS_RE, "").trim();
+    const step = withoutBullet
+      .replace(PLAN_TASK_MARKER_RE, "")
+      .replace(PLAN_STEP_STATUS_RE, "")
+      .trim();
     if (!step) {
       return undefined;
     }
     return {
       step,
-      ...(statusMatch?.[1] ? { status: normalizePlanStatus(statusMatch[1]) } : {}),
+      ...((taskMarkerStatus ?? statusMatch?.[1])
+        ? { status: taskMarkerStatus ?? normalizePlanStatus(statusMatch?.[1]) }
+        : {}),
     };
   }
 

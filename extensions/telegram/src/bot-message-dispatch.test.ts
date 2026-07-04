@@ -401,6 +401,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           text: "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
           channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
         });
+        await replyOptions?.onToolResult?.({
+          text: "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
         await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -409,9 +413,15 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(progressStream.update).toHaveBeenCalledWith(
-      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
+    expect(progressStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
     );
+    expect(progressStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
+    );
+    expect(progressStream.update).toHaveBeenCalledTimes(2);
     expect(progressStream.clear).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({

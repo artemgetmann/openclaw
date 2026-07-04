@@ -195,6 +195,20 @@ function hasOpenClawSourcePreviewMarker(payload: ReplyPayload): boolean {
   );
 }
 
+function resolveOpenClawProgressKind(payload: ReplyPayload): string | undefined {
+  const openclaw =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.openclaw
+      : undefined;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return undefined;
+  }
+  const progressKind = (openclaw as { progressKind?: unknown }).progressKind;
+  return typeof progressKind === "string" ? progressKind : undefined;
+}
+
 function isFinalTtsSupplementPayload(payload: ReplyPayload): boolean {
   const openclaw =
     payload.channelData &&
@@ -1410,7 +1424,10 @@ export const dispatchTelegramMessage = async ({
     );
     return controller;
   };
-  const updateAnswerProgressFromBlock = async (text: string | undefined) => {
+  const updateAnswerProgressFromBlock = async (
+    text: string | undefined,
+    options: { replace?: boolean } = {},
+  ) => {
     if (!text) {
       return false;
     }
@@ -1443,7 +1460,11 @@ export const dispatchTelegramMessage = async ({
       previewTransport: progressPreviewTransport,
       callsite: "update-answer-progress-from-block",
     });
-    controller.update(progressText);
+    if (options.replace) {
+      controller.replace(progressText);
+    } else {
+      controller.update(progressText);
+    }
     return true;
   };
   const renderTextWithToolProgress = (text: string) => {
@@ -1765,7 +1786,9 @@ export const dispatchTelegramMessage = async ({
       // Same-chat message-tool progress is model-authored working state. Render
       // it through the mutable progress controller so it never becomes durable
       // Telegram text and never reaches TTS as a tool result.
-      await updateAnswerProgressFromBlock(payload.text);
+      await updateAnswerProgressFromBlock(payload.text, {
+        replace: resolveOpenClawProgressKind(payload) === "plan",
+      });
       return;
     }
 
