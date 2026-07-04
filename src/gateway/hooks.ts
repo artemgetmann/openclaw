@@ -5,6 +5,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import type { MonitorEventEnvelope, MonitorEventTriggerKind } from "../monitor/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
@@ -13,12 +14,19 @@ import { resolveAllowedAgentIds } from "./hooks-policy.js";
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
+const monitorEventTriggerKinds = new Set<MonitorEventTriggerKind>([
+  "webhook",
+  "local_listener",
+  "process_exit",
+  "browser_observer",
+]);
 
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
   maxBodyBytes: number;
   mappings: HookMappingResolved[];
+  gmailAccount?: string;
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
 };
@@ -82,6 +90,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     token,
     maxBodyBytes,
     mappings,
+    gmailAccount: normalizeOptionalHookString(cfg.hooks?.gmail?.account),
     agentPolicy: {
       defaultAgentId,
       knownAgentIds,
@@ -218,6 +227,8 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   allowUnsafeExternalContent?: boolean;
 };
 
+export type HookMonitorEventPayload = MonitorEventEnvelope;
+
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId | "last";
@@ -262,6 +273,166 @@ export function resolveHookIdempotencyKey(params: {
     resolveOptionalHookIdempotencyKey(params.headers?.["idempotency-key"]) ||
     resolveOptionalHookIdempotencyKey(params.headers?.["x-openclaw-idempotency-key"]) ||
     resolveOptionalHookIdempotencyKey(params.payload.idempotencyKey)
+  );
+}
+
+function isPlainHookObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeOptionalHookString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function normalizeMonitorEventPayload(
+  payload: Record<string, unknown>,
+  options?: { idempotencyKey?: string; nowMs?: number },
+): { ok: true; value: HookMonitorEventPayload } | { ok: false; error: string } {
+  const triggerKind =
+    typeof payload.triggerKind === "string"
+      ? (payload.triggerKind.trim() as MonitorEventTriggerKind)
+      : "";
+  if (!monitorEventTriggerKinds.has(triggerKind as MonitorEventTriggerKind)) {
+    return {
+      ok: false,
+      error: "triggerKind must be webhook|local_listener|process_exit|browser_observer",
+    };
+  }
+
+  const sourceType = normalizeOptionalHookString(payload.sourceType);
+  if (!sourceType) {
+    return { ok: false, error: "sourceType required" };
+  }
+
+  if (!isPlainHookObject(payload.sourceTarget)) {
+    return { ok: false, error: "sourceTarget object required" };
+  }
+
+  if (payload.evidence !== undefined && !isPlainHookObject(payload.evidence)) {
+    return { ok: false, error: "evidence must be an object when provided" };
+  }
+
+  const receivedAtMsRaw = payload.receivedAtMs;
+  if (
+    receivedAtMsRaw !== undefined &&
+    !(
+      typeof receivedAtMsRaw === "number" &&
+      Number.isInteger(receivedAtMsRaw) &&
+      receivedAtMsRaw >= 0
+    )
+  ) {
+    return { ok: false, error: "receivedAtMs must be a non-negative integer when provided" };
+  }
+  const receivedAtMs =
+    typeof receivedAtMsRaw === "number" ? receivedAtMsRaw : (options?.nowMs ?? Date.now());
+  const idempotencyKey =
+    resolveOptionalHookIdempotencyKey(payload.idempotencyKey) ?? options?.idempotencyKey;
+  const eventType = normalizeOptionalHookString(payload.eventType);
+
+  return {
+    ok: true,
+    value: {
+      triggerKind: triggerKind as MonitorEventTriggerKind,
+      sourceType,
+      sourceTarget: payload.sourceTarget,
+      ...(eventType ? { eventType } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      receivedAtMs,
+      ...(payload.evidence ? { evidence: payload.evidence } : {}),
+    },
+  };
+}
+
+function firstPlainObject(raw: unknown): Record<string, unknown> | undefined {
+  if (Array.isArray(raw)) {
+    const first = raw.find(isPlainHookObject);
+    return first;
+  }
+  return isPlainHookObject(raw) ? raw : undefined;
+}
+
+function normalizeGmailString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim();
+  return value ? value : undefined;
+}
+
+function addGmailEvidenceString(
+  evidence: Record<string, unknown>,
+  key: string,
+  raw: unknown,
+): void {
+  const value = normalizeGmailString(raw);
+  if (value) {
+    evidence[key] = value;
+  }
+}
+
+export function normalizeGmailMonitorEventPayload(
+  payload: Record<string, unknown>,
+  options?: { idempotencyKey?: string; nowMs?: number; configuredAccount?: string },
+): { ok: true; value: HookMonitorEventPayload } | { ok: false; error: string } {
+  const message =
+    firstPlainObject(payload.messages) ?? firstPlainObject(payload.message) ?? payload;
+  const account =
+    normalizeGmailString(payload.account) ??
+    normalizeGmailString(payload.emailAddress) ??
+    normalizeGmailString(message.account) ??
+    normalizeGmailString(message.emailAddress) ??
+    normalizeGmailString(options?.configuredAccount);
+  if (!account) {
+    return { ok: false, error: "gmail account required" };
+  }
+
+  const threadId = normalizeGmailString(message.threadId) ?? normalizeGmailString(payload.threadId);
+  if (!threadId) {
+    return { ok: false, error: "gmail message threadId required" };
+  }
+
+  const messageId =
+    normalizeGmailString(message.id) ??
+    normalizeGmailString(message.messageId) ??
+    normalizeGmailString(payload.messageId);
+  const historyId =
+    normalizeGmailString(message.historyId) ?? normalizeGmailString(payload.historyId);
+  const eventType = normalizeGmailString(payload.eventType) ?? "message.created";
+  const derivedIdempotencyKey =
+    options?.idempotencyKey ??
+    (messageId
+      ? `gmail:${account}:${threadId}:${messageId}`
+      : historyId
+        ? `gmail:${account}:${threadId}:history:${historyId}`
+        : undefined);
+
+  const evidence: Record<string, unknown> = {};
+  addGmailEvidenceString(evidence, "messageId", messageId);
+  addGmailEvidenceString(evidence, "historyId", historyId);
+  addGmailEvidenceString(evidence, "from", message.from);
+  addGmailEvidenceString(evidence, "subject", message.subject);
+  addGmailEvidenceString(evidence, "snippet", message.snippet);
+  addGmailEvidenceString(evidence, "body", message.body);
+
+  // The adapter emits the same normalized event envelope as /hooks/monitor-event.
+  // Provider content stays in evidence; sourceTarget is only stable routing keys.
+  return normalizeMonitorEventPayload(
+    {
+      triggerKind: "webhook",
+      sourceType: "gmail",
+      sourceTarget: { account, threadId },
+      eventType,
+      ...(derivedIdempotencyKey ? { idempotencyKey: derivedIdempotencyKey } : {}),
+      ...(Object.keys(evidence).length > 0 ? { evidence } : {}),
+    },
+    {
+      idempotencyKey: derivedIdempotencyKey,
+      nowMs: options?.nowMs,
+    },
   );
 }
 

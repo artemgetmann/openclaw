@@ -2,13 +2,14 @@ import crypto from "node:crypto";
 import { loadConfig } from "../../config/config.js";
 import { getSessionGoal } from "../../config/sessions/goals.js";
 import { resolveStorePath as resolveSessionStorePath } from "../../config/sessions/paths.js";
+import type { CronService } from "../../cron/service.js";
 import type { CronJobCreate } from "../../cron/types.js";
 import {
   resolveMonitorActionTarget,
   resolveMonitorOriginDelivery,
   resolveMonitorWatchDelivery,
 } from "../../monitor/delivery.js";
-import { routeMonitorEvent } from "../../monitor/event-router.js";
+import { routeMonitorEvent, type MonitorEventRoute } from "../../monitor/event-router.js";
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   createMonitorRecord,
@@ -66,6 +67,33 @@ async function resolveMonitorGoalSnapshot(params: {
     id: snapshot.goal.id,
     objective: snapshot.goal.objective,
   };
+}
+
+export type MonitorEventDispatchResult = {
+  matched: number;
+  wakes: Array<
+    MonitorEventRoute & {
+      enqueue: Awaited<ReturnType<CronService["enqueueRun"]>>;
+    }
+  >;
+};
+
+export async function dispatchMonitorEventToCron(params: {
+  cronStorePath: string;
+  cron: Pick<CronService, "enqueueRun">;
+  event: MonitorEventEnvelope;
+}): Promise<MonitorEventDispatchResult> {
+  const store = await loadMonitorStore(resolveStorePath(params.cronStorePath));
+  const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event });
+  const wakes: MonitorEventDispatchResult["wakes"] = [];
+  for (const route of routes) {
+    // The router only decides that this event belongs to the monitor. The
+    // existing cron job remains the execution owner so origin delivery and
+    // the durable monitor session stay exactly where the monitor was created.
+    const enqueue = await params.cron.enqueueRun(route.cronJobId, "force");
+    wakes.push({ ...route, enqueue });
+  }
+  return { matched: wakes.length, wakes };
 }
 
 export const monitorHandlers: GatewayRequestHandlers = {
@@ -265,18 +293,13 @@ export const monitorHandlers: GatewayRequestHandlers = {
     }
 
     const event = params as MonitorEventEnvelope;
-    const store = await loadMonitorStore(resolveStorePath(context.cronStorePath));
-    const routes = routeMonitorEvent({ monitors: store.monitors, event });
-    const wakes = [];
-    for (const route of routes) {
-      // The router only decides that this event belongs to the monitor. The
-      // existing cron job remains the execution owner so origin delivery and
-      // the durable monitor session stay exactly where the monitor was created.
-      const enqueue = await context.cron.enqueueRun(route.cronJobId, "force");
-      wakes.push({ ...route, enqueue });
-    }
+    const result = await dispatchMonitorEventToCron({
+      cronStorePath: context.cronStorePath,
+      cron: context.cron,
+      event,
+    });
 
-    respond(true, { matched: wakes.length, wakes }, undefined);
+    respond(true, result, undefined);
   },
   "monitor.update": async ({ params, respond, context }) => {
     if (!validateMonitorUpdateParams(params)) {

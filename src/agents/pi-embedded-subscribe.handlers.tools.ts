@@ -28,6 +28,11 @@ import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { isSourcePreviewMessageToolResult } from "./tools/message-tool.js";
+import {
+  UPDATE_PLAN_TOOL_NAME,
+  formatUpdatePlanText,
+  readUpdatePlanDetails,
+} from "./tools/update-plan-tool.js";
 
 type ToolStartRecord = {
   startTime: number;
@@ -592,6 +597,13 @@ export async function handleToolExecutionEnd(
     !isToolError && toolName === "message"
       ? isSourcePreviewMessageToolResult(sanitizedResult)
       : undefined;
+  const planProgressMessage =
+    !isToolError && toolName === UPDATE_PLAN_TOOL_NAME
+      ? (() => {
+          const details = readUpdatePlanDetails(sanitizedResult);
+          return details ? formatUpdatePlanText(details) : undefined;
+        })()
+      : undefined;
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
 
   // Commit messaging tool text on success, discard on error.
@@ -684,7 +696,24 @@ export async function handleToolExecutionEnd(
     error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
   });
 
-  if (sourcePreviewMessage && ctx.params.onToolResult) {
+  if (planProgressMessage && ctx.params.onToolResult) {
+    try {
+      await ctx.params.onToolResult({
+        text: planProgressMessage,
+        channelData: {
+          openclaw: {
+            // update_plan is a progress contract, not final assistant output.
+            // Route it through the same transient Telegram lane as ACP plan
+            // events so users see the checklist without raw tool JSON.
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      });
+    } catch {
+      // ignore delivery failures
+    }
+  } else if (sourcePreviewMessage && ctx.params.onToolResult) {
     try {
       await ctx.params.onToolResult({
         text: sourcePreviewMessage,

@@ -24,6 +24,7 @@ export type GmailHookOverrides = {
   pushToken?: string;
   hookToken?: string;
   hookUrl?: string;
+  monitorEvents?: boolean;
   includeBody?: boolean;
   maxBytes?: number;
   renewEveryMinutes?: number;
@@ -43,6 +44,7 @@ export type GmailHookRuntimeConfig = {
   pushToken: string;
   hookToken: string;
   hookUrl: string;
+  monitorEvents: boolean;
   includeBody: boolean;
   maxBytes: number;
   renewEveryMinutes: number;
@@ -97,6 +99,15 @@ export function buildDefaultHookUrl(
   return joinUrl(baseUrl, `${basePath}/gmail`);
 }
 
+export function buildDefaultMonitorEventHookUrl(
+  hooksPath?: string,
+  port: number = DEFAULT_GATEWAY_PORT,
+): string {
+  const basePath = normalizeHooksPath(hooksPath);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  return joinUrl(baseUrl, `${basePath}/gmail-monitor-event`);
+}
+
 export function resolveGmailHookRuntimeConfig(
   cfg: OpenClawConfig,
   overrides: GmailHookOverrides,
@@ -125,10 +136,13 @@ export function resolveGmailHookRuntimeConfig(
     return { ok: false, error: "gmail push token required" };
   }
 
+  const monitorEvents = overrides.monitorEvents ?? gmail?.monitorEvents ?? false;
   const hookUrl =
     overrides.hookUrl ??
     gmail?.hookUrl ??
-    buildDefaultHookUrl(hooks?.path, resolveGatewayPort(cfg));
+    (monitorEvents
+      ? buildDefaultMonitorEventHookUrl(hooks?.path, resolveGatewayPort(cfg))
+      : buildDefaultHookUrl(hooks?.path, resolveGatewayPort(cfg)));
 
   const includeBody = overrides.includeBody ?? gmail?.includeBody ?? true;
 
@@ -188,6 +202,7 @@ export function resolveGmailHookRuntimeConfig(
       pushToken,
       hookToken,
       hookUrl,
+      monitorEvents,
       includeBody,
       maxBytes,
       renewEveryMinutes,

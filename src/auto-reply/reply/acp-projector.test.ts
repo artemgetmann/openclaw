@@ -3,7 +3,7 @@ import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
-type Delivery = { kind: string; text?: string };
+type Delivery = { kind: string; text?: string; channelData?: Record<string, unknown> };
 
 function createProjectorHarness(
   cfgOverrides?: Parameters<typeof createCfg>[0],
@@ -14,7 +14,17 @@ function createProjectorHarness(
     cfg: createCfg(cfgOverrides),
     shouldSendToolSummaries: projectorOverrides?.shouldSendToolSummaries ?? true,
     deliver: async (kind, payload) => {
-      deliveries.push({ kind, text: payload.text });
+      const openclaw =
+        payload.channelData?.openclaw &&
+        typeof payload.channelData.openclaw === "object" &&
+        !Array.isArray(payload.channelData.openclaw)
+          ? (payload.channelData.openclaw as Record<string, unknown>)
+          : {};
+      deliveries.push({
+        kind,
+        text: payload.text,
+        ...(openclaw.progressKind === "plan" ? { channelData: payload.channelData } : {}),
+      });
       return true;
     },
   });
@@ -226,6 +236,247 @@ describe("createAcpReplyProjector", () => {
         payload: {
           text: "Checking example.com.",
           channelData: { openclaw: { sourcePreview: true } },
+        },
+      },
+    ]);
+  });
+
+  it("renders structured plan-tag updates as transient checklist progress", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        explanation: "Tightened scope after inspecting the files.",
+        plan: [
+          { step: "Inspect Telegram progress path", status: "completed" },
+          { step: "Render checklist updates", status: "in_progress" },
+          { step: "Run focused tests", status: "pending" },
+        ],
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "Tightened scope after inspecting the files.",
+          "- [x] Inspect Telegram progress path",
+          "- [~] Render checklist updates",
+          "- [ ] Run focused tests",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("renders update_plan tool-result details without treating the raw JSON as a step", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "plan",
+      text: JSON.stringify({
+        content: [],
+        details: {
+          status: "updated",
+          explanation: "Keeping the user-facing checklist current.",
+          plan: [
+            { step: "Register update_plan", status: "completed" },
+            { step: "Verify Telegram rendering", status: "in_progress" },
+          ],
+        },
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "Keeping the user-facing checklist current.",
+          "- [x] Register update_plan",
+          "- [~] Verify Telegram rendering",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("ignores unrelated JSON plan-tag payloads", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        content: [],
+        details: { status: "noop" },
+      }),
+    });
+
+    expect(deliveries).toEqual([]);
+  });
+
+  it("renders plain plan lines without leaking raw status names", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "plan",
+      text: "- Read handoff (completed)\n- Patch projector (in_progress)\n- Verify behavior (pending)",
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "- [x] Read handoff",
+          "- [~] Patch projector",
+          "- [ ] Verify behavior",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("renders Markdown task-list plan lines with the correct state", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "plan",
+      text: "- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "- [x] Inspect files",
+          "- [~] Render checklist",
+          "- [ ] Run tests",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("allows config to hide plan-tag progress when explicitly disabled", async () => {
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          tagVisibility: {
+            plan: false,
+          },
+        },
+      },
+    });
+
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        plan: [{ step: "Hidden step", status: "in_progress" }],
+      }),
+    });
+
+    expect(deliveries).toEqual([]);
+  });
+
+  it("does not flush final-only assistant text when plan progress arrives", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "agent_message_chunk",
+      text: "This answer is still buffered.",
+    });
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        plan: [{ step: "Keep working without leaking the final answer", status: "in_progress" }],
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: "Plan updated\n- [~] Keep working without leaking the final answer",
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("flushes live assistant text before plan progress", async () => {
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 10_000,
+          maxChunkChars: 512,
+        },
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "agent_message_chunk",
+      text: "Short live fragment without a boundary",
+    });
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        plan: [{ step: "Keep the user informed after visible text", status: "in_progress" }],
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "block",
+        text: "Short live fragment without a boundary",
+      },
+      {
+        kind: "tool",
+        text: "Plan updated\n- [~] Keep the user informed after visible text",
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
         },
       },
     ]);

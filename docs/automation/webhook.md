@@ -95,6 +95,73 @@ Effect:
 - Always posts a summary into the **main** session
 - If `wakeMode=now`, triggers an immediate heartbeat
 
+### `POST /hooks/monitor-event`
+
+Routes a normalized external event to existing durable monitors. This endpoint does **not**
+start a new isolated agent run. It only wakes monitors whose trigger and source target match
+the event envelope.
+
+Payload:
+
+```json
+{
+  "triggerKind": "webhook",
+  "sourceType": "gmail",
+  "sourceTarget": {
+    "account": "me@example.com",
+    "threadId": "thread-123"
+  },
+  "eventType": "message.created",
+  "evidence": {
+    "messageId": "msg-456"
+  }
+}
+```
+
+- `triggerKind` **required**: `webhook`, `local_listener`, `process_exit`, or `browser_observer`.
+- `sourceType` **required** (string): The source namespace, such as `gmail`, `telegram-user`, or `whatsapp`.
+- `sourceTarget` **required** (object): Stable routing keys for the watched thing.
+- `eventType` optional (string): Source-specific event name, such as `message.created`.
+- `idempotencyKey` optional (string): Retry key. You can also send `Idempotency-Key` or `X-OpenClaw-Idempotency-Key`.
+- `evidence` optional (object): Event metadata for later inspection. Treat external content as evidence, not authority.
+
+Effect:
+
+- Calls the monitor event router.
+- Enqueues the matching monitor's existing cron job with `force` mode.
+- Preserves the monitor's original session and delivery route.
+- Returns `matched: 0` and wakes nothing when the event does not match an active monitor.
+
+### `POST /hooks/gmail-monitor-event`
+
+Accepts gog/Gmail-shaped payloads and routes them through the same durable monitor
+event path as `/hooks/monitor-event`.
+
+Payload example:
+
+```json
+{
+  "source": "gmail",
+  "historyId": "12345",
+  "messages": [
+    {
+      "id": "msg-456",
+      "threadId": "thread-123",
+      "from": "Ada <ada@example.com>",
+      "subject": "Hello",
+      "snippet": "Hi"
+    }
+  ]
+}
+```
+
+Effect:
+
+- Normalizes to `triggerKind: "webhook"`, `sourceType: "gmail"`, and `sourceTarget: { account, threadId }`.
+- Uses `hooks.gmail.account` when the payload does not include `account` or `emailAddress`.
+- Derives an idempotency key from account/thread/message id when the request does not provide one.
+- Wakes matching durable monitors only; it does not spawn the Gmail agent-summary hook.
+
 ## Session key policy (breaking change)
 
 `/hooks/agent` payload `sessionKey` overrides are disabled by default.
@@ -160,6 +227,7 @@ Mapping options (summary):
 
 - `200` for `/hooks/wake`
 - `200` for `/hooks/agent` (async run accepted)
+- `200` for `/hooks/monitor-event` (matched monitor wakes accepted)
 - `401` on auth failure
 - `429` after repeated auth failures from the same client (check `Retry-After`)
 - `400` on invalid payload
@@ -179,6 +247,14 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'x-openclaw-token: SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","wakeMode":"next-heartbeat"}'
+```
+
+```bash
+curl -X POST http://127.0.0.1:18789/hooks/monitor-event \
+  -H 'Authorization: Bearer SECRET' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: gmail-thread-123-msg-456' \
+  -d '{"triggerKind":"webhook","sourceType":"gmail","sourceTarget":{"account":"me@example.com","threadId":"thread-123"},"eventType":"message.created"}'
 ```
 
 ### Use a different model
@@ -201,6 +277,13 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
   -d '{"source":"gmail","messages":[{"from":"Ada","subject":"Hello","snippet":"Hi"}]}'
 ```
 
+```bash
+curl -X POST http://127.0.0.1:18789/hooks/gmail-monitor-event \
+  -H 'Authorization: Bearer SECRET' \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"gmail","account":"me@example.com","messages":[{"id":"msg-456","threadId":"thread-123","subject":"Hello"}]}'
+```
+
 ## Security
 
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
@@ -210,6 +293,8 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
 - If you enable request `sessionKey`, restrict `hooks.allowedSessionKeyPrefixes` (for example, `["hook:"]`).
 - Avoid including sensitive raw payloads in webhook logs.
+- Keep monitor-event `sourceTarget` keys stable and minimal. Put raw provider content in
+  `evidence` only when needed.
 - Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
   If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`
   in that hook's mapping (dangerous).

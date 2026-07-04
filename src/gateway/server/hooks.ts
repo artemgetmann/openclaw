@@ -7,12 +7,14 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { MonitorEventEnvelope } from "../../monitor/types.js";
 import {
   normalizeHookDispatchSessionKey,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
 } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
+import type { MonitorEventDispatchResult } from "../server-methods/monitor.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -30,8 +32,17 @@ export function createGatewayHooksRequestHandler(params: {
   bindHost: string;
   port: number;
   logHooks: SubsystemLogger;
+  dispatchMonitorEventHook: (event: MonitorEventEnvelope) => Promise<MonitorEventDispatchResult>;
 }) {
-  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
+  const {
+    deps,
+    getHooksConfig,
+    getClientIpConfig,
+    bindHost,
+    port,
+    logHooks,
+    dispatchMonitorEventHook,
+  } = params;
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
@@ -119,5 +130,6 @@ export function createGatewayHooksRequestHandler(params: {
     getClientIpConfig,
     dispatchAgentHook,
     dispatchWakeHook,
+    dispatchMonitorEventHook,
   });
 }

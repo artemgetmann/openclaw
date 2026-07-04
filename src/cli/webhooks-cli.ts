@@ -41,6 +41,7 @@ export function registerWebhooksCli(program: Command) {
     .option("--subscription <name>", "Pub/Sub subscription name", DEFAULT_GMAIL_SUBSCRIPTION)
     .option("--label <label>", "Gmail label to watch", DEFAULT_GMAIL_LABEL)
     .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--monitor-events", "Route Gmail pushes to durable monitor events")
     .option("--hook-token <token>", "OpenClaw hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
     .option("--bind <host>", "gog watch serve bind host", DEFAULT_GMAIL_SERVE_BIND)
@@ -79,6 +80,7 @@ export function registerWebhooksCli(program: Command) {
     .option("--subscription <name>", "Pub/Sub subscription name")
     .option("--label <label>", "Gmail label to watch")
     .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--monitor-events", "Route Gmail pushes to durable monitor events")
     .option("--hook-token <token>", "OpenClaw hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
     .option("--bind <host>", "gog watch serve bind host")
@@ -134,6 +136,7 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     subscription: stringOption(raw.subscription),
     label: stringOption(raw.label),
     hookUrl: stringOption(raw.hookUrl),
+    monitorEvents: booleanOption(raw.monitorEvents),
     hookToken: stringOption(raw.hookToken),
     pushToken: stringOption(raw.pushToken),
     bind: stringOption(raw.bind),
@@ -156,6 +159,7 @@ function gmailOptionsFromCommon(
     subscription: common.subscription,
     label: common.label,
     hookUrl: common.hookUrl,
+    monitorEvents: common.monitorEvents,
     hookToken: common.hookToken,
     pushToken: common.pushToken,
     bind: common.bind,

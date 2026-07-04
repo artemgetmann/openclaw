@@ -167,6 +167,76 @@ describe("createTelegramProgressController", () => {
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
+  it("uses replace text as the new baseline for later appended progress", async () => {
+    const { api, controller, resolveFirstSend } = createProgressControllerHarness();
+
+    controller.update("Opening example.com");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    resolveFirstSend?.({ message_id: 77 });
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    controller.replace("Plan updated\n- [~] Run tests");
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        77,
+        "Plan updated\n\n- [~] Run tests",
+      ),
+    );
+
+    controller.update("Collecting logs");
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        77,
+        "Plan updated\n\n- [~] Run tests\n\nCollecting logs",
+      ),
+    );
+    expect(String(api.editMessageText.mock.lastCall?.[2] ?? "")).not.toContain(
+      "Opening example.com",
+    );
+  });
+
+  it("caps replacement snapshots before sending preview updates", async () => {
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const controller = createTelegramProgressController({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 80,
+      minInitialChars: 1,
+      renderText: (text) => ({ text }),
+    });
+
+    controller.update("Initial progress that should be replaced.");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    controller.replace(
+      [
+        "Plan updated",
+        "- [x] First very long checklist row that should not survive replacement truncation.",
+        "- [~] Latest replacement row must remain visible even after capping.",
+      ].join("\n"),
+    );
+    await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalled());
+
+    const replacementText = String(api.editMessageText.mock.lastCall?.[2] ?? "");
+    expect(replacementText.length).toBeLessThanOrEqual(80);
+    expect(replacementText).toContain("Latest replacement row");
+    expect(replacementText).not.toContain("Initial progress");
+
+    controller.update("After replacement");
+    await vi.waitFor(() =>
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        77,
+        expect.stringContaining("After replacement"),
+      ),
+    );
+  });
+
   it("caps cumulative progress by dropping oldest entries without leaking an omitted marker", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),

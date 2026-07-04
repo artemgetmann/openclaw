@@ -50,6 +50,8 @@ export type HooksGmailConfig = {
   subscription?: string;
   pushToken?: string;
   hookUrl?: string;
+  /** Send gog Gmail payloads to the monitor-event adapter instead of the agent-summary hook. */
+  monitorEvents?: boolean;
   includeBody?: boolean;
   maxBytes?: number;
   renewEveryMinutes?: number;

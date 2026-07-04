@@ -187,6 +187,7 @@ export function createHooksHandler(
     | {
         dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
         dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
+        dispatchMonitorEventHook?: HooksHandlerDeps["dispatchMonitorEventHook"];
         bindHost?: string;
         getClientIpConfig?: HooksHandlerDeps["getClientIpConfig"];
       },
@@ -205,6 +206,8 @@ export function createHooksHandler(
     getClientIpConfig: options.getClientIpConfig,
     dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
     dispatchAgentHook: options.dispatchAgentHook ?? (() => "run-1"),
+    dispatchMonitorEventHook:
+      options.dispatchMonitorEventHook ?? (async () => ({ matched: 0, wakes: [] })),
   });
 }
 
