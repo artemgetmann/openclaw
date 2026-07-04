@@ -218,6 +218,8 @@ Default Commands
   `openclaw telegram-user topic-create --chat -1003783709877 --title "strategy follow-up" --json`
 - Send into a forum topic:
   `openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "seed prompt" --json`
+- Delete a temporary forum topic:
+  `openclaw telegram-user topic-delete --chat -1003783709877 --topic-anchor 12345 --json`
 - Wait for a reply:
   `openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 12345 --sender-id 67890 --json`
 - Logout / clear local session:
@@ -240,6 +242,9 @@ Behavior Notes
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
 - `topic-create` returns `topic_anchor`. Use that value as `--topic-anchor`
   (or `--reply-to`) when sending into the newly created Telegram forum topic.
+- `topic-delete` deletes a forum topic by explicit `topic_anchor`. Use it only
+  for temporary test topics you created or topics the user explicitly asks you
+  to remove.
 - Do not promise broad media/history search features beyond the explicit
   read/download/transcribe path the CLI supports.
 

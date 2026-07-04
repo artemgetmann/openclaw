@@ -55,6 +55,24 @@ Use the repo-local CLI first:
 
 Use lower-level scripts only when the CLI path is missing the required feature.
 
+## Temporary Forum Topics
+
+When a live proof creates a Telegram forum topic, record the returned
+`topic_anchor` and every message id created during the proof. Cleanup must be
+bounded to that topic anchor and the proof's exact message ids only. Do not run
+broad history deletion to remove a topic.
+
+For temporary test topics, prefer:
+
+```bash
+openclaw telegram-user topic-delete --chat <forum-chat> --topic-anchor <topic_anchor> --json
+```
+
+Use exact message deletion only as a fallback when topic deletion fails or the
+local checkout does not yet expose `topic-delete`. If falling back, report the
+remaining topic anchor plainly so a follow-up can remove it. Do not claim cleanup
+is complete when an empty test topic remains.
+
 ## Validation rule for /model and similar UX
 
 Do not treat text-command success as callback success.

@@ -220,6 +220,8 @@ class FakeTopicClient:
 
   async def __call__(self, request):
     self.requests.append(request)
+    if hasattr(request, "top_msg_id"):
+      return SimpleNamespace(offset = 0, pts = 123, pts_count = 1)
     action = type("MessageActionTopicCreate", (), {})()
     message = SimpleNamespace(
       action = action,
@@ -244,8 +246,17 @@ class FakeCreateForumTopicRequest:
     self.title = title
 
 
+class FakeDeleteTopicHistoryRequest:
+  def __init__(self, *, peer, top_msg_id: int) -> None:
+    self.peer = peer
+    self.top_msg_id = top_msg_id
+
+
 class FakeTelethonFunctions:
-  messages = SimpleNamespace(CreateForumTopicRequest = FakeCreateForumTopicRequest)
+  messages = SimpleNamespace(
+    CreateForumTopicRequest = FakeCreateForumTopicRequest,
+    DeleteTopicHistoryRequest = FakeDeleteTopicHistoryRequest,
+  )
 
 
 def build_fake_dialog(
@@ -702,6 +713,39 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(emitted["topic_anchor"], 777)
     self.assertEqual(emitted["topic_title"], "voice proof")
 
+  async def test_run_topic_delete_uses_topic_anchor_for_bounded_cleanup(self) -> None:
+    fake_client = FakeTopicClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_topic_delete(
+          argparse.Namespace(
+            chat = "-1003783709877",
+            session = str(session_path),
+            topic_anchor = 777,
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(fake_client.requests[0].top_msg_id, 777)
+    self.assertEqual(emitted["chat_id"], -1003783709877)
+    self.assertTrue(emitted["deleted"])
+    self.assertEqual(emitted["topic_anchor"], 777)
+    self.assertEqual(emitted["affected"]["pts_count"], 1)
+
 
 class TelethonCliSyncTests(unittest.TestCase):
   def test_build_dialog_payload_accepts_datetime_mute_until(self) -> None:
@@ -737,7 +781,7 @@ class TelethonCliSyncTests(unittest.TestCase):
     with self.assertRaises(SystemExit):
       parser.parse_args(["login", "--phone", "+15551234567", "--password", "secret"])
 
-  def test_build_parser_accepts_topic_create_and_media_send_flags(self) -> None:
+  def test_build_parser_accepts_topic_and_media_send_flags(self) -> None:
     parser = telethon_cli.build_parser()
 
     topic_args = parser.parse_args([
@@ -749,6 +793,16 @@ class TelethonCliSyncTests(unittest.TestCase):
     ])
     self.assertEqual(topic_args.command, "topic-create")
     self.assertEqual(topic_args.title, "voice proof")
+
+    topic_delete_args = parser.parse_args([
+      "topic-delete",
+      "--chat",
+      "-1003783709877",
+      "--topic-anchor",
+      "777",
+    ])
+    self.assertEqual(topic_delete_args.command, "topic-delete")
+    self.assertEqual(topic_delete_args.topic_anchor, 777)
 
     send_args = parser.parse_args([
       "send",

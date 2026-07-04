@@ -22,6 +22,34 @@ motion, timing, or feel matters.
 
 ## Default
 
+### Desktop-Unlocked Preflight
+
+Before any video proof, take a still screenshot and confirm the desktop is
+actually visible. A locked Mac can produce black screenshots or black video even
+when recording commands appear to succeed.
+
+```bash
+mkdir -p ".artifacts/<run>"
+screencapture -x ".artifacts/<run>/preflight-screen.png"
+```
+
+Inspect the image before starting video. If the screenshot is black, blank, only
+shows the lock screen, or does not show the target app/window, stop. Do not
+record a video and call it proof.
+
+When the screen appears locked or black:
+
+- Use the `macos-remote-unlock` skill.
+- Do not run unlock or GUI lease commands without explicit approval from the
+  user in the current conversation.
+- After unlock/lease proof reports `locked=false`, take a new preflight
+  screenshot and inspect it again before recording.
+
+If Screen Recording permission is missing, fix permission first, relaunch the
+target/proof app, then repeat this still-screenshot preflight.
+
+### Recording Target
+
 Record the target app or window, not the whole display:
 
 ```bash
@@ -117,7 +145,9 @@ target profile, URL/page title, and any trace or tool errors beside the video.
 
 If `openclaw screen record` cannot target the app/window, use full-display
 recording only with a written reason. If native recording is blocked or black,
-fall back to a screenshot loop as diagnostic evidence and report the capture gap.
+first treat that as a likely locked-screen, wrong-display, or TCC failure and
+rerun the desktop-unlocked preflight. Fall back to a screenshot loop only as
+diagnostic evidence, and report the capture gap plainly.
 
 Peekaboo can still be useful for still screenshots, UI maps, diagnostics, or a
 fallback capture path. Do not present Peekaboo-only artifacts as proof that the

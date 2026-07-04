@@ -359,6 +359,27 @@ def build_topic_create_payload(
   }
 
 
+def build_topic_delete_payload(
+  *,
+  chat_raw: str,
+  result,
+  topic_anchor: int,
+) -> dict[str, object | None]:
+  resolved_chat = resolve_chat(chat_raw)
+  # DeleteTopicHistoryRequest returns an AffectedHistory object. Keep only the
+  # stable counters that help prove Telegram accepted the bounded cleanup.
+  return {
+    "affected": {
+      "offset": int(getattr(result, "offset", 0) or 0),
+      "pts": int(getattr(result, "pts", 0) or 0),
+      "pts_count": int(getattr(result, "pts_count", 0) or 0),
+    },
+    "chat_id": resolved_chat if isinstance(resolved_chat, int) else None,
+    "deleted": True,
+    "topic_anchor": topic_anchor,
+  }
+
+
 def extract_created_topic_message(updates):
   # Forum topic creation arrives as an Updates container with a service message.
   # Match the structural Telegram action class so localized text never affects
@@ -551,6 +572,10 @@ def build_parser() -> argparse.ArgumentParser:
   topic_create = subparsers.add_parser("topic-create", help = "Create a forum topic")
   topic_create.add_argument("--chat", required = True, help = "Target forum chat username or id")
   topic_create.add_argument("--title", required = True, help = "Forum topic title")
+
+  topic_delete = subparsers.add_parser("topic-delete", help = "Delete a forum topic by anchor")
+  topic_delete.add_argument("--chat", required = True, help = "Target forum chat username or id")
+  topic_delete.add_argument("--topic-anchor", type = int, required = True, help = "Forum topic anchor returned by topic-create")
 
   read = subparsers.add_parser("read", help = "Read recent messages and metadata")
   read.add_argument("--chat", required = True, help = "Target chat username or id")
@@ -870,6 +895,33 @@ async def run_topic_create(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_topic_delete(args: argparse.Namespace) -> int:
+  if functions is None:
+    return fail("E_TELETHON_IMPORT", "Telethon forum topic functions are unavailable.")
+  session_path = resolve_session_path(args.session)
+  topic_anchor = int(args.topic_anchor or 0)
+  if topic_anchor <= 0:
+    return fail("E_USAGE", "Telegram topic-delete requires --topic-anchor.")
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      result = await client(
+        functions.messages.DeleteTopicHistoryRequest(
+          peer = resolve_chat(args.chat),
+          top_msg_id = topic_anchor,
+        )
+      )
+      return emit(
+        build_topic_delete_payload(
+          chat_raw = args.chat,
+          result = result,
+          topic_anchor = topic_anchor,
+        )
+      )
+    finally:
+      await client.disconnect()
+
+
 async def run_read(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
@@ -998,6 +1050,8 @@ async def run() -> int:
       return await run_send(args)
     if args.command == "topic-create":
       return await run_topic_create(args)
+    if args.command == "topic-delete":
+      return await run_topic_delete(args)
     if args.command == "read":
       return await run_read(args)
     if args.command == "download":

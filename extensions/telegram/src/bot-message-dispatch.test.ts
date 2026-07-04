@@ -168,13 +168,14 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   }
 
-  function expectFinalPreviewReplacedWithDurableSend(messageId: number, text: string) {
-    expect(deliverReplies).toHaveBeenCalledWith(
+  function expectFinalPreviewEditedInPlace(messageId: number, text: string) {
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, messageId, text, expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text })],
       }),
     );
-    expect(guardedTelegramDeleteMessage).toHaveBeenCalledWith(
+    expect(guardedTelegramDeleteMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: 123,
         messageId,
@@ -183,10 +184,6 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         }),
       }),
     );
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      guardedTelegramDeleteMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
   }
 
   function allowDeterministicPreviewDeletes() {
@@ -363,7 +360,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
       answerStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expectFinalPreviewReplacedWithDurableSend(
+    expectFinalPreviewEditedInPlace(
       9011,
       "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
     );
@@ -433,7 +430,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "Once upon a time, the answer began streaming.",
     );
     expect(answerStream.clear).not.toHaveBeenCalled();
-    expectFinalPreviewReplacedWithDurableSend(
+    expectFinalPreviewEditedInPlace(
       9101,
       "Once upon a time, the answer began streaming and stayed in the same bubble.",
     );
@@ -483,7 +480,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(answerStream.update).toHaveBeenCalledWith("The durable story starts here.");
     expect(answerStream.clear).not.toHaveBeenCalled();
-    expectFinalPreviewReplacedWithDurableSend(
+    expectFinalPreviewEditedInPlace(
       9201,
       "The durable story starts here. It continues as a block snapshot.",
     );
@@ -594,7 +591,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(finalAnswerStream.update).toHaveBeenCalledWith(
       "The branch is clean enough to patch safely.",
     );
-    expectFinalPreviewReplacedWithDurableSend(9403, "The branch is clean enough to patch safely.");
+    expectFinalPreviewEditedInPlace(9403, "The branch is clean enough to patch safely.");
     expect(speculativeAnswerStream.clear).toHaveBeenCalledTimes(1);
   });
 

@@ -261,10 +261,10 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
   });
 
-  it("sends the rich final before deleting a streamed answer preview", async () => {
+  it("finalizes a streamed answer by editing the same message instead of rich replacement", async () => {
     const harness = createTelegramBotHarness(7100, { richRaw: true });
-    const partialAnswer = "Take a day off, but make it a structured soft day.";
-    const finalAnswer = `${partialAnswer}\n\n- light reset\n- short ocean walk\n- no laptop unless it feels genuinely nice`;
+    const partialAnswer = "Something warm and simple sounds right tonight.";
+    const finalAnswer = `${partialAnswer} I would drink peppermint tea if you want fresh, or warm milk if you want cozy.`;
 
     getReplyFromConfig.mockImplementation(async (_ctx, opts?: GetReplyOptions) => {
       await opts?.onPartialReply?.({ text: partialAnswer });
@@ -273,25 +273,33 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
 
     await dispatchWithHarness({
       bot: harness.bot,
+      cfg: { channels: { telegram: { accounts: { default: { botToken: "123:test" } } } } },
       context: createContext({
-        ctxPayload: { CommandAuthorized: true, SessionKey: "rich-final-preview-order" },
+        ctxPayload: {
+          Body: "What should I drink tonight?",
+          BodyForAgent: "What should I drink tonight?",
+          CommandAuthorized: true,
+          SessionKey: "durable-answer-stream",
+        },
       }),
     });
 
     const previewSend = sendMessageCalls(harness.calls).find((call) =>
       call.text.includes(partialAnswer),
     );
-    const richFinal = richMessageCalls(harness.calls).find((call) =>
-      call.text.includes("short ocean walk"),
+    const finalEdit = harness.calls.find(
+      (call): call is Extract<TelegramApiCall, { op: "editMessageText" }> =>
+        call.op === "editMessageText" && call.messageId === previewSend?.messageId,
     );
-    const previewDelete = harness.calls.find(
+    const previewDelete = harness.calls.some(
       (call): call is Extract<TelegramApiCall, { op: "deleteMessage" }> =>
         call.op === "deleteMessage" && call.messageId === previewSend?.messageId,
     );
 
     expect(previewSend).toBeDefined();
-    expect(richFinal).toBeDefined();
-    expect(previewDelete).toBeDefined();
+    expect(finalEdit).toBeDefined();
+    expect(previewDelete).toBe(false);
+    expect(richMessageCalls(harness.calls)).toHaveLength(0);
     expect(harness.calls).toEqual([
       expect.objectContaining({
         op: "sendMessage",
@@ -299,13 +307,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
         text: partialAnswer,
       }),
       expect.objectContaining({
-        op: "sendRichMessage",
-        messageId: richFinal!.messageId,
-        text: expect.stringContaining("short ocean walk"),
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
+        op: "editMessageText",
         messageId: previewSend!.messageId,
+        text: finalAnswer,
       }),
     ]);
   });

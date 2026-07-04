@@ -19,6 +19,7 @@ import type {
   TelegramUserReadResult,
   TelegramUserSendResult,
   TelegramUserTopicCreateResult,
+  TelegramUserTopicDeleteResult,
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -519,6 +520,25 @@ export async function runTelegramUserTopicCreate(
 ): Promise<TelegramUserTopicCreateResult> {
   const args = ["topic-create", "--chat", params.chat, "--title", params.title];
   return runBackendCommand<TelegramUserTopicCreateResult>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserTopicDelete(
+  params: {
+    chat: string;
+    topicAnchor: number;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserTopicDeleteResult> {
+  const args = [
+    "topic-delete",
+    "--chat",
+    params.chat,
+    "--topic-anchor",
+    String(params.topicAnchor),
+  ];
+  return runBackendCommand<TelegramUserTopicDeleteResult>({
     ...params,
     args,
   });
