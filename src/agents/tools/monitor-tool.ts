@@ -77,7 +77,7 @@ Key behavior:
 
 For monitor creation:
 - instructions should capture the actual monitoring task in plain language.
-- if there is an active goal, monitor.create will bind it automatically; pass goal only when carrying an explicit snapshot.
+- if there is an active goal, monitor.create will bind it automatically and use supported event adapters as wake triggers; pass goal only when carrying an explicit snapshot.
 - sourceType/sourceTarget identify what is being checked.
 - cadence is the cron schedule object for repeated wakes.
 - default actionPolicy is notify_draft.

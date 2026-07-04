@@ -60,6 +60,31 @@ function targetContainsExpected(
   return true;
 }
 
+function hasStringPath(record: Record<string, unknown>, path: string): boolean {
+  const value = readPath(record, path);
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function triggerSourceTargetIsAuthoritative(params: {
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+}): boolean {
+  // A trigger sourceTarget can be a coarse prefilter or a canonical route key.
+  // For Gmail, account + thread is the durable conversation boundary; account
+  // or thread alone still needs the stored monitor sourceTarget fallback.
+  if (normalizeString(params.sourceType) === "gmail") {
+    const hasAccount =
+      hasStringPath(params.sourceTarget, "account") ||
+      hasStringPath(params.sourceTarget, "accountId") ||
+      hasStringPath(params.sourceTarget, "emailAddress");
+    const hasThread =
+      hasStringPath(params.sourceTarget, "threadId") ||
+      hasStringPath(params.sourceTarget, "gmailThreadId");
+    return hasAccount && hasThread;
+  }
+  return false;
+}
+
 function selectedTargetKeysMatch(params: {
   monitor: MonitorRecord;
   event: MonitorEventEnvelope;
@@ -123,8 +148,19 @@ function monitorTriggerMatches(monitor: MonitorRecord, event: MonitorEventEnvelo
   if (!eventTypeMatches(event, match?.eventTypes)) {
     return false;
   }
-  if (match?.sourceTarget && !targetContainsExpected(event.sourceTarget, match.sourceTarget)) {
-    return false;
+  if (match?.sourceTarget) {
+    if (!targetContainsExpected(event.sourceTarget, match.sourceTarget)) {
+      return false;
+    }
+    if (
+      !match.matchKeys?.length &&
+      triggerSourceTargetIsAuthoritative({
+        sourceType: expectedSourceType,
+        sourceTarget: match.sourceTarget,
+      })
+    ) {
+      return true;
+    }
   }
   if (match?.matchKeys?.length) {
     return selectedTargetKeysMatch({ monitor, event, matchKeys: match.matchKeys });
