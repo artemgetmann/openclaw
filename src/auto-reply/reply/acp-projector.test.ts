@@ -328,6 +328,36 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([]);
   });
 
+  it("does not flush final-only assistant text when plan progress arrives", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "agent_message_chunk",
+      text: "This answer is still buffered.",
+    });
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        plan: [{ step: "Keep working without leaking the final answer", status: "in_progress" }],
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: "Plan updated\n- [~] Keep working without leaking the final answer",
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
   it("does not suppress identical short text across terminal turn boundaries", async () => {
     const { deliveries, projector } = createProjectorHarness(
       createLiveCfgOverrides({

@@ -643,7 +643,6 @@ export function createAcpReplyProjector(params: {
     if (!planText) {
       return;
     }
-    await flush(true);
     await params.deliver(
       "tool",
       markAcpPlanProgressPayload({
