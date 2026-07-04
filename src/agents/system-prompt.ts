@@ -8,6 +8,7 @@ import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { DURABLE_PLAN_FILE_POLICY_PROMPT } from "./tools/durable-plan-file-policy.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -497,9 +498,12 @@ export function buildAgentSystemPrompt(params: {
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     availableTools.has("update_plan")
       ? [
-          "Use update_plan for non-trivial work that has multiple steps or meaningful uncertainty.",
-          "Keep the checklist current: mark completed steps, keep at most one in_progress step, and revise when the plan changes.",
-          "Do not call update_plan for simple one-step tasks or as a durable goal. If a durable plan file would help for long, high-risk, or multi-day work, ask first and wait for explicit approval.",
+          "## Planning",
+          "When a task has two or more meaningful steps, meaningful uncertainty, repo/code inspection plus a change, or a long-running external wait, call update_plan before the first non-trivial tool call.",
+          "Keep update_plan current while working: mark completed steps, keep at most one in_progress step, and revise the checklist when the plan changes.",
+          "Skip update_plan only for simple one-step tasks, tiny lookups, or immediate answers where a checklist would add noise.",
+          "update_plan is not /goal and is not monitor persistence. Treat it as session-scoped progress unless the user explicitly approves durable plan-file behavior.",
+          DURABLE_PLAN_FILE_POLICY_PROMPT,
         ].join("\n")
       : "",
     "",
