@@ -1876,65 +1876,6 @@ export const dispatchTelegramMessage = async ({
         callsite: "lane-delivery-edit-preview",
       });
     },
-    replaceFinalPreviewWithPayload: async ({
-      laneName,
-      messageId,
-      text,
-      payload,
-      infoKind,
-      previewButtons,
-    }) => {
-      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-      if (
-        laneName !== "answer" ||
-        hasMedia ||
-        payload.isError ||
-        (previewButtons?.length ?? 0) > 0
-      ) {
-        return "fallback";
-      }
-      try {
-        // Rich messages are send-only in Telegram Bot API 10.1. The mutable
-        // answer preview is therefore a transient placeholder, not the final
-        // message. Delete it before sending the durable rich final so the final
-        // message never appears and then disappears/reappears in the chat UI.
-        const cleanup = await deleteLanePreviewMessage(messageId, {
-          laneName,
-          callsite: "lane-final-rich-replacement-delete-preview",
-          reason: "lane_final_rich_replacement_preview_cleanup",
-        });
-        if (!cleanup.deleted) {
-          logVerbose(
-            `telegram: ${laneName} rich replacement preview cleanup was suppressed; falling back to edit`,
-          );
-          return "fallback";
-        }
-      } catch (err) {
-        // If cleanup fails, keep using the existing mutable preview and let the
-        // legacy edit path finalize it. Sending a rich final anyway would leave
-        // two answer-looking messages in the topic.
-        logVerbose(
-          `telegram: ${laneName} rich replacement preview cleanup failed before final send; falling back to edit (${String(err)})`,
-        );
-        return "fallback";
-      }
-      const delivered = await sendPayload(applyTextToPayload(payload, text), {
-        reason: classifyPayloadDurableSendReason(payload, "final"),
-        callsite: "lane-final-rich-replacement-send",
-        laneName,
-        infoKind,
-      });
-      if (!delivered) {
-        // The formatted and plain-text send paths both failed. The preview has
-        // already been removed, so there is nothing useful to edit; surface the
-        // miss as skipped instead of attempting to mutate a deleted message.
-        logVerbose(
-          `telegram: ${laneName} rich replacement final send failed after preview cleanup`,
-        );
-        return "skipped";
-      }
-      return "sent";
-    },
     deletePreviewMessage: async (messageId) => {
       await deleteLanePreviewMessage(messageId);
     },

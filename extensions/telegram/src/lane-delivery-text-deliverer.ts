@@ -88,14 +88,6 @@ type CreateLaneTextDelivererParams = {
     context: "final" | "update";
     previewButtons?: TelegramInlineButtons;
   }) => Promise<void>;
-  replaceFinalPreviewWithPayload?: (params: {
-    laneName: LaneName;
-    messageId: number;
-    text: string;
-    payload: ReplyPayload;
-    infoKind: string;
-    previewButtons?: TelegramInlineButtons;
-  }) => Promise<"sent" | "skipped" | "fallback">;
   deletePreviewMessage: (messageId: number) => Promise<void>;
   log: (message: string) => void;
   markDelivered: () => void;
@@ -478,30 +470,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       return "fallback";
     }
-    const hasAlreadyVisibleAnswerPreview = laneName === "answer" && lane.hasStreamedMessage;
-    if (
-      context === "final" &&
-      payload &&
-      infoKind &&
-      params.replaceFinalPreviewWithPayload &&
-      !hasAlreadyVisibleAnswerPreview
-    ) {
-      // Telegram rich messages are sent as new messages, not edited into an
-      // existing message. Only use replacement before a normal answer stream
-      // has become visible; once users have seen assistant answer text, that
-      // message is durable content and finalization must edit it in place.
-      const replacement = await params.replaceFinalPreviewWithPayload({
-        laneName,
-        messageId: previewTargetAfterStop.previewMessageId,
-        text,
-        payload,
-        infoKind,
-        previewButtons,
-      });
-      if (replacement !== "fallback") {
-        return replacement;
-      }
-    }
     const activePreviewMessageId = lane.stream?.messageId();
     return finalizePreview(
       previewTargetAfterStop.previewMessageId,
@@ -628,10 +596,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             return archivedResultAfterFlush;
           }
         }
-        if (
-          canMaterializeDraftFinal(lane, previewButtons) &&
-          !params.replaceFinalPreviewWithPayload
-        ) {
+        if (canMaterializeDraftFinal(lane, previewButtons)) {
           const materialized = await tryMaterializeDraftPreviewForFinal({
             lane,
             laneName,

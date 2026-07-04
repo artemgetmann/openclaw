@@ -1835,6 +1835,74 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("keeps structured Telegram final text intact when persisted TTS is on", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {
+      ttsAuto: "always",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:ubud-night-plan",
+      BodyForAgent: "Help me decide what to do before going to Ubud tonight",
+    });
+    const finalText = [
+      "Before Ubud tonight, keep the plan simple.",
+      "",
+      "Do this first:",
+      "- Eat something light near home",
+      "- Bring water for the ride",
+      "- Keep the food plan optional",
+      "",
+      "Then:",
+      "1. Leave before traffic gets annoying.",
+      "2. Only snack there if needed.",
+    ].join("\n");
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: finalText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        ttsAuto: "always",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
+      }),
+    );
+  });
+
   it("sends a lightweight Telegram status when block-streamed final TTS was expected but no media is produced", async () => {
     setNoAbort();
     ttsMocks.state.autoMode = "always";

@@ -177,11 +177,38 @@ describe("markdownToTelegramHtml", () => {
       { tableMode: "block" },
     );
 
+    expect(richHtml).toContain("<p>Here:</p>");
     expect(richHtml).toContain("<table bordered striped>");
     expect(richHtml).not.toContain("<thead>");
     expect(richHtml).not.toContain("<tbody>");
     expect(richHtml).toContain("<tr><th>Name</th><th>Score</th></tr>");
     expect(richHtml).toContain("<td>Ada</td><td><b>9</b></td>");
+  });
+
+  it("renders rich-message prose, bullet lists, numbered lists, and blank lines as blocks", () => {
+    const richHtml = markdownToTelegramRichHtml(
+      [
+        "Quick read: go before you get hungry.",
+        "",
+        "What I used:",
+        "- Checked nearby food options",
+        "- Compared travel risk with social energy",
+        "- Kept the plan simple",
+        "",
+        "Best plan:",
+        "1. Eat light near home.",
+        "2. Leave for Ubud with water.",
+        "3. Only snack there if needed.",
+      ].join("\n"),
+      { tableMode: "block" },
+    );
+
+    expect(richHtml).toContain("<p>Quick read: go before you get hungry.</p>");
+    expect(richHtml).toContain("<p>What I used:</p><ul>");
+    expect(richHtml).toContain("<li>Checked nearby food options</li>");
+    expect(richHtml).toContain("<p>Best plan:</p><ol>");
+    expect(richHtml).toContain("<li>Eat light near home.</li>");
+    expect(richHtml).not.toContain("What I used:\n\n•");
   });
 
   it("keeps a plain-text fallback for rich-message table chunks", () => {
@@ -194,6 +221,18 @@ describe("markdownToTelegramHtml", () => {
 
     expect(chunk?.text).toContain("<table bordered striped>");
     expect(chunk?.plainText).toBe("Name | Score\nAda | 9");
+  });
+
+  it("keeps list markers readable in rich-message plain-text fallback", () => {
+    const [chunk] = splitTelegramRichMessageTextChunks({
+      text: "Plan:\n\n- Eat first\n- Bring water\n\nThen:\n\n1. Leave early\n2. Snack only if needed",
+      textLimit: 4000,
+      textMode: "markdown",
+      tableMode: "block",
+    });
+
+    expect(chunk?.plainText).toContain("• Eat first\n• Bring water");
+    expect(chunk?.plainText).toContain("1. Leave early\n2. Snack only if needed");
   });
 
   it("does not render fenced code pipes as native rich-message tables", () => {

@@ -794,6 +794,50 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("sends structured final-style text to rich messages with block tags", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn();
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+    const replyText = [
+      "Before Ubud tonight, keep the plan simple.",
+      "",
+      "Do this first:",
+      "- Eat something light near home",
+      "- Bring water for the ride",
+      "- Keep the Ubud food plan optional",
+      "",
+      "Then:",
+      "1. Leave before traffic gets annoying.",
+      "2. Skip a second coffee if you feel wired.",
+    ].join("\n");
+
+    await deliverWith({
+      replies: [{ text: replyText }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: "123",
+        rich_message: expect.objectContaining({
+          html: expect.stringContaining(
+            "<p>Do this first:</p><ul><li>Eat something light near home</li>",
+          ),
+        }),
+      }),
+    );
+    const richHtml = sendRichMessage.mock.calls[0]?.[0]?.rich_message?.html as string;
+    expect(richHtml).toContain("<ol><li>Leave before traffic gets annoying.</li>");
+    expect(richHtml).not.toContain("Do this first:\n\n•");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("honors richMessages false and uses legacy text delivery", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
