@@ -284,9 +284,14 @@ The historical public release acceleration spec is archived at
 implemented release wrapper, package script, and printed receipt checks are the
 current source of truth.
 
-The script generates `dist/jarvis-appcast.xml`, uploads exactly the Jarvis
-assets, verifies the public `releases/latest/download` URLs, parses the public
-appcast, and only declares the package sendable after Sparkle is live.
+The script generates `dist/jarvis-appcast.xml`, uploads exactly the requested
+Jarvis assets, verifies the public `releases/latest/download` URLs, and parses
+the public appcast. Keep the two public truths separate:
+
+- `sparkle_update_live=true` means existing Jarvis users can update through
+  Sparkle from the public appcast and `Jarvis.zip`.
+- `release_sendable=true` means the full public package is live, including the
+  notarized `Jarvis.dmg` fresh-install/sendable installer.
 
 #### Local Proof
 
@@ -334,9 +339,35 @@ bash scripts/jarvis-public-release.sh \
   --latest-release-tag
 ```
 
-#### Publish Gate
+#### Publish Gates
 
-Publishing is never implicit. Publish only after app and DMG notarization are
+Publishing is never implicit. Use the narrow gate that matches the truth you
+need to make public.
+
+For an urgent existing-user update, publish only after app notarization is
+accepted and existing `dist/Jarvis.app`, `dist/Jarvis.zip`, and
+`dist/jarvis-appcast.xml` are present. This uploads only `Jarvis.zip` and
+`jarvis-appcast.xml`; it does not upload `Jarvis.dmg` and must not be described
+as a fresh-install/sendable release:
+
+```bash
+bash scripts/preflight-consumer-mac-release.sh
+bash scripts/jarvis-public-release.sh \
+  --urgent-sparkle \
+  --publish-release-assets \
+  --latest-release-tag
+```
+
+Required successful urgent-update ending:
+
+```text
+sparkle_update_live=true
+release_sendable=false
+fresh_install_sendable=false
+dmg_update_live=false
+```
+
+For a full sendable release, publish only after app and DMG notarization are
 accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
 `dist/jarvis-appcast.xml` are present:
 
@@ -459,9 +490,9 @@ the shared gateway runtime. It requires `JARVIS_APP_NOTARY_STATUS=Accepted` in
 accepted DMG notarization so the ZIP/appcast can be prepared while DMG
 notarization is still pending.
 
-Publish only from existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
-`dist/jarvis-appcast.xml` after the manifest records accepted app and DMG
-notarization:
+Publish the full sendable package only from existing `dist/Jarvis.dmg`,
+`dist/Jarvis.zip`, and `dist/jarvis-appcast.xml` after the manifest records
+accepted app and DMG notarization:
 
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
@@ -475,6 +506,25 @@ Verify only against the public GitHub release URLs without uploading:
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase verify-public-assets-only \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Publish an urgent Sparkle-only update from existing `dist/Jarvis.zip` and
+`dist/jarvis-appcast.xml` after the manifest records accepted app notarization:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase publish-sparkle-assets-only \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+Verify only the public Sparkle update URLs without uploading or checking the
+DMG:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase verify-sparkle-assets-only \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
@@ -508,7 +558,7 @@ Cache and retry rules:
   Apple notarization, Sparkle appcast signing, GitHub upload, and public URL
   verification.
 
-Required successful ending:
+Required successful full-release ending:
 
 ```text
 release_sendable=true

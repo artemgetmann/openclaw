@@ -52,6 +52,15 @@ write_receipt() {
   } >"$path"
 }
 
+write_fake_tagged_appcast() {
+  local root="$1"
+  local tag="$2"
+  mkdir -p "$root/dist"
+  printf '<rss><channel><item><enclosure url="https://github.com/artemgetmann/openclaw/releases/download/%s/Jarvis.zip"/></item></channel></rss>\n' \
+    "$tag" \
+    >"$root/dist/jarvis-appcast.xml"
+}
+
 make_state_root() {
   local name="$1"
   local root="$TMP_DIR/$name"
@@ -129,6 +138,20 @@ test_phase_selection() {
   mkdir -p "$root/dist/Jarvis.app"
   write_manifest_status "$root" "Accepted" ""
   assert_eq "accepted app selects submit dmg" "$(jarvis_release_next_phase "$root" 0 0)" "submit-dmg-notarization"
+
+  root="$(make_state_root urgent-sparkle-assets-missing)"
+  mkdir -p "$root/dist/Jarvis.app"
+  write_manifest_status "$root" "Accepted" ""
+  assert_eq "urgent sparkle missing assets selects local assets" "$(jarvis_release_next_phase "$root" 0 0 "Jarvis" 0 1)" "create-local-release-assets-only"
+
+  root="$(make_state_root urgent-sparkle-assets-ready)"
+  mkdir -p "$root/dist/Jarvis.app"
+  : >"$root/dist/Jarvis.zip"
+  : >"$root/dist/jarvis-appcast.xml"
+  write_manifest_status "$root" "Accepted" ""
+  assert_eq "urgent sparkle assets without public action stops" "$(jarvis_release_next_phase "$root" 0 0 "Jarvis" 0 1)" "ready-sparkle-local-assets"
+  assert_eq "urgent sparkle assets with publish selects sparkle publish" "$(jarvis_release_next_phase "$root" 1 0 "Jarvis" 0 1)" "publish-sparkle-assets-only"
+  assert_eq "urgent sparkle assets with public verify selects sparkle verify" "$(jarvis_release_next_phase "$root" 0 1 "Jarvis" 0 1)" "verify-sparkle-assets-only"
 
   root="$(make_state_root dmg-submitted)"
   mkdir -p "$root/dist/Jarvis.app"
@@ -215,6 +238,10 @@ test_wrapper_dry_run() {
   local latest_publish_out="$TMP_DIR/wrapper-latest-publish-assets.out"
   local latest_verify_root="$TMP_DIR/wrapper-latest-verify-assets"
   local latest_verify_out="$TMP_DIR/wrapper-latest-verify-assets.out"
+  local urgent_root="$TMP_DIR/wrapper-urgent-sparkle"
+  local urgent_out="$TMP_DIR/wrapper-urgent-sparkle.out"
+  local urgent_ready_root="$TMP_DIR/wrapper-urgent-sparkle-ready"
+  local urgent_ready_out="$TMP_DIR/wrapper-urgent-sparkle-ready.out"
   local latest_fake_bin="$TMP_DIR/fake-latest-gh"
   local latest_retry_fake_bin="$TMP_DIR/fake-latest-retry-gh"
   local latest_retry_out="$TMP_DIR/wrapper-latest-retry.out"
@@ -286,6 +313,26 @@ test_wrapper_dry_run() {
     fail "wrapper p2 dry run did not return to dmg polling after local assets existed"
   fi
   pass "wrapper p2 resumes dmg polling after local assets"
+
+  mkdir -p "$urgent_ready_root/dist/Jarvis.app"
+  : >"$urgent_ready_root/dist/Jarvis.zip"
+  write_fake_tagged_appcast "$urgent_ready_root" v-current
+  write_manifest_status "$urgent_ready_root" "Accepted" ""
+
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$urgent_ready_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --urgent-sparkle \
+      >"$urgent_ready_out"
+  if ! grep -q 'selected_phase=ready-sparkle-local-assets' "$urgent_ready_out"; then
+    cat "$urgent_ready_out" >&2
+    fail "wrapper urgent sparkle dry run did not stop at ready-sparkle-local-assets without publish intent"
+  fi
+  if ! grep -q 'fresh_install_sendable=false' "$urgent_ready_out"; then
+    cat "$urgent_ready_out" >&2
+    fail "wrapper urgent sparkle ready output did not keep fresh-install truth false"
+  fi
+  pass "wrapper urgent sparkle ready dry run keeps public action explicit"
 
   mkdir -p "$asset_root/dist/Jarvis.app"
   : >"$asset_root/dist/Jarvis.dmg"
@@ -388,6 +435,33 @@ test_wrapper_dry_run() {
     >"$latest_publish_root/dist/jarvis-appcast.xml"
   write_manifest_status "$latest_publish_root" "Accepted" "Accepted"
   write_fake_latest_release_gh "$latest_fake_bin" success v-current
+
+  mkdir -p "$urgent_root/dist/Jarvis.app"
+  : >"$urgent_root/dist/Jarvis.zip"
+  write_fake_tagged_appcast "$urgent_root" v-current
+  write_manifest_status "$urgent_root" "Accepted" ""
+
+  PATH="$latest_fake_bin:$PATH" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$urgent_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --dry-run \
+      --urgent-sparkle \
+      --publish-release-assets \
+      --latest-release-tag \
+      >"$urgent_out"
+  if ! grep -q 'selected_phase=publish-sparkle-assets-only' "$urgent_out"; then
+    cat "$urgent_out" >&2
+    fail "wrapper urgent sparkle publish dry run selected wrong phase"
+  fi
+  if grep -q -- '--phase publish-assets-only' "$urgent_out"; then
+    cat "$urgent_out" >&2
+    fail "wrapper urgent sparkle publish dry run selected the full DMG publish phase"
+  fi
+  if ! grep -q 'dmg_update_live=false' "$urgent_out"; then
+    cat "$urgent_out" >&2
+    fail "wrapper urgent sparkle publish dry run did not keep DMG truth false"
+  fi
+  pass "wrapper urgent sparkle publish dry run resolves sparkle-only phase"
 
   PATH="$latest_fake_bin:$PATH" \
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$latest_publish_root" \
@@ -577,7 +651,103 @@ test_package_create_assets_rejects_stale_tag() {
   pass "package local appcast assets reject stale tag"
 }
 
+test_package_sparkle_publish_gate_does_not_require_dmg() {
+  local app_name="JarvisSparkleGateTest-$$"
+  local app_path="$ROOT_DIR/dist/${app_name}.app"
+  local manifest="$TMP_DIR/package-sparkle-gate-manifest.env"
+  local out="$TMP_DIR/package-sparkle-gate.out"
+  local err="$TMP_DIR/package-sparkle-gate.err"
+  local status
+
+  mkdir -p "$app_path"
+  {
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
+    printf 'JARVIS_DMG_NOTARY_STATUS=%q\n' ""
+  } >"$manifest"
+
+  set +e
+  APP_NAME="$app_name" \
+  OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
+    bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase publish-sparkle-assets-only \
+      --github-release-tag v-current \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  rm -rf "$app_path"
+
+  if [[ "$status" -eq 0 ]]; then
+    cat "$out" >&2
+    fail "package publish-sparkle-assets-only should require explicit publish intent"
+  fi
+  if grep -q 'DMG notarization' "$err"; then
+    cat "$err" >&2
+    fail "package sparkle-only publish gate should not require accepted DMG notarization"
+  fi
+  if ! grep -q -- '--phase publish-sparkle-assets-only requires --publish-release-assets' "$err"; then
+    cat "$err" >&2
+    fail "package sparkle-only publish gate did not stop on explicit publish intent"
+  fi
+  pass "package sparkle-only publish gate does not require dmg notarization"
+}
+
+test_package_sparkle_publish_only_ignores_skip_notarize() {
+  local app_name="JarvisSparkleSkipNotarizeTest-$$"
+  local app_path="$ROOT_DIR/dist/${app_name}.app"
+  local fake_bin="$TMP_DIR/fake-bin-sparkle-skip"
+  local manifest="$TMP_DIR/package-sparkle-skip-notarize-manifest.env"
+  local out="$TMP_DIR/package-sparkle-skip-notarize.out"
+  local err="$TMP_DIR/package-sparkle-skip-notarize.err"
+  local status
+
+  mkdir -p "$app_path" "$fake_bin"
+  {
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
+  } >"$manifest"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [[ "$1" == "auth" && "$2" == "status" ]]; then exit 0; fi\n'
+    printf 'if [[ "$1" == "release" && "$2" == "view" ]]; then\n'
+    printf '  printf '"'"'{"tagName":"v-current","url":"https://github.com/artemgetmann/openclaw/releases/tag/v-current"}\\n'"'"'\n'
+    printf '  exit 0\n'
+    printf 'fi\n'
+    printf 'echo "unexpected gh invocation: $*" >&2\n'
+    printf 'exit 99\n'
+  } >"$fake_bin/gh"
+  chmod +x "$fake_bin/gh"
+
+  set +e
+  PATH="$fake_bin:$PATH" \
+  APP_NAME="$app_name" \
+  SKIP_NOTARIZE=1 \
+  OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
+    bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase publish-sparkle-assets-only \
+      --publish-release-assets \
+      --github-release-tag v-current \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  rm -rf "$app_path"
+
+  if [[ "$status" -eq 0 ]]; then
+    cat "$out" >&2
+    fail "package publish-sparkle-assets-only should still require local Sparkle assets"
+  fi
+  if grep -q -- '--publish-release-assets requires notarization' "$err"; then
+    cat "$err" >&2
+    fail "package sparkle-only publish should not be blocked by SKIP_NOTARIZE"
+  fi
+  if ! grep -q 'consumer app bundle not found' "$err"; then
+    cat "$err" >&2
+    fail "package sparkle-only publish did not reach the resume artifact gates"
+  fi
+  pass "package sparkle-only publish ignores skip notarize"
+}
+
 test_phase_selection
 test_retry_classification
 test_wrapper_dry_run
 test_package_create_assets_rejects_stale_tag
+test_package_sparkle_publish_gate_does_not_require_dmg
+test_package_sparkle_publish_only_ignores_skip_notarize
