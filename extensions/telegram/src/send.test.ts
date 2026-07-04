@@ -550,10 +550,7 @@ describe("sendMessageTelegram", () => {
     const api = {
       raw: { sendRichMessage },
       sendMessage,
-    } as unknown as {
-      raw: { sendRichMessage: typeof sendRichMessage };
-      sendMessage: typeof sendMessage;
-    };
+    } as unknown as Partial<Bot["api"]>;
 
     await sendMessageTelegram("123", "Monitor wake text", {
       token: "tok",
