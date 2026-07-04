@@ -604,32 +604,20 @@ test_wrapper_dry_run() {
   pass "wrapper latest tag reports empty tag"
 }
 
-test_package_create_assets_rejects_stale_tag() {
+test_package_script_rejects_noncanonical_release_worktree() {
   local app_name="JarvisTagGuardTest-$$"
   local app_path="$ROOT_DIR/dist/${app_name}.app"
-  local fake_bin="$TMP_DIR/fake-bin"
   local manifest="$TMP_DIR/package-tag-guard-manifest.env"
   local out="$TMP_DIR/package-tag-guard.out"
   local err="$TMP_DIR/package-tag-guard.err"
   local status
 
-  mkdir -p "$app_path" "$fake_bin"
+  mkdir -p "$app_path"
   {
     printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
   } >"$manifest"
-  {
-    printf '#!/usr/bin/env bash\n'
-    printf 'if [[ "$1" == "release" && "$2" == "view" ]]; then\n'
-    printf '  printf '"'"'{"tagName":"v-current","url":"https://github.com/artemgetmann/openclaw/releases/tag/v-current"}\\n'"'"'\n'
-    printf '  exit 0\n'
-    printf 'fi\n'
-    printf 'echo "unexpected gh invocation: $*" >&2\n'
-    printf 'exit 99\n'
-  } >"$fake_bin/gh"
-  chmod +x "$fake_bin/gh"
 
   set +e
-  PATH="$fake_bin:$PATH" \
   APP_NAME="$app_name" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
@@ -642,13 +630,13 @@ test_package_create_assets_rejects_stale_tag() {
 
   if [[ "$status" -eq 0 ]]; then
     cat "$out" >&2
-    fail "package create-local-release-assets-only should reject stale github release tag"
+    fail "package script should reject noncanonical release worktree"
   fi
-  if ! grep -q -- '--github-release-tag must match the latest release' "$err"; then
+  if ! grep -q -- 'Jarvis public release packaging must run from the blessed warmed release worktree' "$err"; then
     cat "$err" >&2
-    fail "package stale tag failure did not mention latest release requirement"
+    fail "package noncanonical worktree failure did not mention blessed release worktree"
   fi
-  pass "package local appcast assets reject stale tag"
+  pass "package script rejects noncanonical release worktree"
 }
 
 test_package_sparkle_publish_gate_does_not_require_dmg() {
@@ -657,7 +645,12 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
   local manifest="$TMP_DIR/package-sparkle-gate-manifest.env"
   local out="$TMP_DIR/package-sparkle-gate.out"
   local err="$TMP_DIR/package-sparkle-gate.err"
+  local release_home
+  local release_name
   local status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
 
   mkdir -p "$app_path"
   {
@@ -667,6 +660,8 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
 
   set +e
   APP_NAME="$app_name" \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase publish-sparkle-assets-only \
@@ -698,7 +693,12 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   local manifest="$TMP_DIR/package-sparkle-skip-notarize-manifest.env"
   local out="$TMP_DIR/package-sparkle-skip-notarize.out"
   local err="$TMP_DIR/package-sparkle-skip-notarize.err"
+  local release_home
+  local release_name
   local status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
 
   mkdir -p "$app_path" "$fake_bin"
   {
@@ -720,6 +720,8 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   PATH="$fake_bin:$PATH" \
   APP_NAME="$app_name" \
   SKIP_NOTARIZE=1 \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase publish-sparkle-assets-only \
@@ -748,6 +750,6 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
 test_phase_selection
 test_retry_classification
 test_wrapper_dry_run
-test_package_create_assets_rejects_stale_tag
 test_package_sparkle_publish_gate_does_not_require_dmg
 test_package_sparkle_publish_only_ignores_skip_notarize
+test_package_script_rejects_noncanonical_release_worktree
