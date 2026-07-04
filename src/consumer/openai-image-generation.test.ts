@@ -44,6 +44,7 @@ describe("OpenAI managed image generation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     global.fetch = priorFetch;
     vi.restoreAllMocks();
   });
@@ -182,5 +183,52 @@ describe("OpenAI managed image generation", () => {
         ],
       },
     });
+  });
+
+  it("keeps managed image requests alive past the default backend timeout", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    installMockFetch(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal as AbortSignal | undefined;
+          signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    const cfg = {
+      jarvis: {
+        backend: {
+          baseUrl: "https://jarvis.example",
+          accessToken: "backend-token",
+          timeoutMs: 10_000,
+        },
+        managedServices: { mode: "managed" },
+      },
+    } as const;
+
+    const result = buildJarvisManagedOpenAIImageGenerationProvider().generateImage({
+      cfg,
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "edit this",
+      inputImages: [
+        {
+          buffer: Buffer.from("reference-image"),
+          mimeType: "image/png",
+          fileName: "reference.png",
+        },
+      ],
+    });
+    const caughtResult = result.catch((err: unknown) => err);
+
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(110_000);
+    const err = await caughtResult;
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("aborted");
+    expect(signal?.aborted).toBe(true);
   });
 });
