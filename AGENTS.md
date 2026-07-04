@@ -22,9 +22,6 @@
 ## Always-on rules
 
 - In chat replies, use repo-root-relative file references only.
-- Before sending or claiming user-facing screenshot, video, or other media proof,
-  inspect the generated artifact locally. If you did not inspect it, say so
-  plainly instead of implying the artifact proves the result.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
 - Read `docs/consumer/project-status.md` before high-level product, launch, pricing, reliability, scaling, or architecture decisions. If that card is stale, its numbers are not decision-grade until refreshed.
 - Read `docs/jarvis/VISION.md` before product, UX, launch, pricing, onboarding, or strategy work. Do not load it for unrelated engineering tasks.
