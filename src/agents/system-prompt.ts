@@ -292,6 +292,8 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    update_plan:
+      "Track a short session checklist for non-trivial multi-step work; keep exactly one current step in_progress and skip for one-step tasks",
     image_generate:
       "Generate new images or edit reference images with the configured image-generation model",
     image: "Analyze an image with the configured image model",
@@ -321,6 +323,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "update_plan",
     "image_generate",
     "image",
   ];
@@ -492,6 +495,13 @@ export function buildAgentSystemPrompt(params: {
         ]
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+    availableTools.has("update_plan")
+      ? [
+          "Use update_plan for non-trivial work that has multiple steps or meaningful uncertainty.",
+          "Keep the checklist current: mark completed steps, keep at most one in_progress step, and revise when the plan changes.",
+          "Do not call update_plan for simple one-step tasks or as a durable goal. If a durable plan file would help for long, high-risk, or multi-day work, ask first and wait for explicit approval.",
+        ].join("\n")
+      : "",
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
