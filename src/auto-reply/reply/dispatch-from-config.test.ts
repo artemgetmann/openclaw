@@ -2475,9 +2475,9 @@ describe("dispatchReplyFromConfig", () => {
       "2. Decide after.",
     ].join("\n");
     const spokenSummary =
-      "Here is the clean pick: Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.";
+      "Here is the clean pick: Full table is in Telegram. Key rows: Place: Warung Local, Why: light food, short ride; Place: Fancy Spot, Why: more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.";
     const captionSummary =
-      "Here is the clean pick: Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. - Go simple....";
+      "Here is the clean pick: Full table is in Telegram. Key rows: Place: Warung Local, Why: light food, short ride; Place: Fancy Spot, Why: more effort, less upsi...";
     const replyResolver = async () => ({ text: finalText }) satisfies ReplyPayload;
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });

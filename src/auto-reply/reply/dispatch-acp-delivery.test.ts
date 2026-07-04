@@ -293,7 +293,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       ["| Item | Color | Score |", "| --- | --- | ---: |", "| Apple | red | 9 |"].join("\n"),
     );
 
-    expect(preview).toBe("Full table is in Telegram. Key rows: Apple: color red, score 9.");
+    expect(preview).toBe("Full table is in Telegram. Key rows: Item: Apple, Color: red, Score: 9.");
     expect(preview).not.toContain("|");
   });
 
@@ -316,7 +316,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
 
     expect(spokenPreview).toBe(
-      "Here is the clean pick: Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.",
+      "Here is the clean pick: Full table is in Telegram. Key rows: Place: Warung Local, Why: light food, short ride; Place: Fancy Spot, Why: more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.",
     );
     expect(spokenPreview).not.toContain("|");
     expect(spokenPreview).not.toContain("`");

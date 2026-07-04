@@ -131,23 +131,18 @@ function normalizeTableVoiceCell(cell: string): string | undefined {
 }
 
 function summarizeTableRow(table: MarkdownTableBlock, row: readonly string[]): string | undefined {
-  const label = normalizeTableVoiceCell(row[0] ?? "");
-  if (!label) {
-    return undefined;
-  }
   const details = row
-    .slice(1)
     .map((cell, offset) => {
       const value = normalizeTableVoiceCell(cell);
       if (!value) {
         return undefined;
       }
-      const header = normalizeTableVoiceCell(table.headers[offset + 1] ?? "");
-      return header ? `${header.toLowerCase()} ${value}` : value;
+      const header = normalizeTableVoiceCell(table.headers[offset] ?? "");
+      return header ? `${header}: ${value}` : value;
     })
     .filter((part): part is string => Boolean(part));
 
-  return details.length > 0 ? `${label}: ${details.join(", ")}` : label;
+  return details.length > 0 ? details.join(", ") : undefined;
 }
 
 function summarizeTable(table: MarkdownTableBlock): string {
