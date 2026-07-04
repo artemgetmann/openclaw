@@ -47,6 +47,12 @@ Use the lowest layer that proves the behavior under test.
    - Telegram is useful for final user-visible confidence, but it is a poor
      first debugger for general agent behavior because bot ownership, message
      delivery, chat history, and runtime routing can all create false failures.
+5. GUI-control proof:
+   - Use when visible app state is the behavior under test.
+   - Follow `docs/agent-guides/gui-control-live-smoke.md` and use
+     `openclaw gui-control --runtime open-computer-use`.
+   - Do not acquire `~/.codex/bin/cua-guard` for Jarvis GUI Control. That guard
+     is only for Codex-native Computer Use, not the OpenClaw product CLI path.
 
 When validating unmerged code, every runtime proof above must use an isolated
 profile, config, state directory, and non-default gateway port. Do not point the

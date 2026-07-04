@@ -193,20 +193,23 @@ message history. Examples:
 - Did the user see two separate progress bubbles before final?
 - Did Telegram visually put voice before final?
 
-If using Computer Use, follow the guard from `AGENTS.md`:
+Use Jarvis GUI Control for app navigation or visible-state checks:
 
 ```bash
-~/.codex/bin/cua-guard acquire "<task>"
+pnpm openclaw:local gui-control observe \
+  --runtime open-computer-use \
+  --app Telegram \
+  --json
 ```
 
-Release it when done:
+Do not acquire `~/.codex/bin/cua-guard` for Jarvis GUI Control. That guard is
+only for the Codex-native Computer Use tool/plugin, not for the OpenClaw
+`gui-control --runtime open-computer-use` product path.
 
-```bash
-~/.codex/bin/cua-guard release
-```
-
-If Computer Use reports `ScreenCaptureKit -3811` or `Transport closed`, stop
-and report that GUI proof is blocked. Do not improvise from broken GUI state.
+If Jarvis GUI Control reports `ScreenCaptureKit -3811`, `Transport closed`,
+`cgWindowNotFound`, or a stale/ambiguous element ref, stop and report the GUI
+proof blocker. Do not route around it with raw coordinates, AppleScript/JXA, or
+Codex-native Computer Use unless the user explicitly changes the proof path.
 
 ## Cleanup
 
