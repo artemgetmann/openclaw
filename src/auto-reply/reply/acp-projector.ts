@@ -23,6 +23,19 @@ const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "don
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 const INTERNAL_TOOL_SUMMARY_LINE_RE =
   /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
+const PLAN_STEP_STATUS_RE = /\s*\((pending|in_progress|completed)\)\s*$/iu;
+
+type PlanStepStatus = "pending" | "in_progress" | "completed";
+
+type PlanStep = {
+  step: string;
+  status?: PlanStepStatus;
+};
+
+type PlanProgress = {
+  explanation?: string;
+  steps: PlanStep[];
+};
 
 export type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
@@ -63,6 +76,119 @@ function normalizeToolStatus(status: string | undefined): string | undefined {
   }
   const normalized = status.trim().toLowerCase();
   return normalized || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizePlanStatus(value: unknown): PlanStepStatus | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "pending" || normalized === "in_progress" || normalized === "completed") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function readPlanStep(value: unknown): PlanStep | undefined {
+  if (typeof value === "string") {
+    const withoutBullet = value.trim().replace(/^[-*]\s+/, "");
+    const statusMatch = PLAN_STEP_STATUS_RE.exec(withoutBullet);
+    const step = withoutBullet.replace(PLAN_STEP_STATUS_RE, "").trim();
+    if (!step) {
+      return undefined;
+    }
+    return {
+      step,
+      ...(statusMatch?.[1] ? { status: normalizePlanStatus(statusMatch[1]) } : {}),
+    };
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const step = typeof value.step === "string" ? value.step.trim() : "";
+  if (!step) {
+    return undefined;
+  }
+  const status = normalizePlanStatus(value.status);
+  return {
+    step,
+    ...(status ? { status } : {}),
+  };
+}
+
+function readPlanProgressFromJson(value: unknown): PlanProgress | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const rawSteps = Array.isArray(value.plan)
+    ? value.plan
+    : Array.isArray(value.steps)
+      ? value.steps
+      : [];
+  const steps = rawSteps.flatMap((entry) => {
+    const step = readPlanStep(entry);
+    return step ? [step] : [];
+  });
+  const explanation = typeof value.explanation === "string" ? value.explanation.trim() : undefined;
+  if (!explanation && steps.length === 0) {
+    return undefined;
+  }
+  return { ...(explanation ? { explanation } : {}), steps };
+}
+
+function parsePlanProgressText(text: string): PlanProgress | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const progress = readPlanProgressFromJson(parsed);
+    if (progress) {
+      return progress;
+    }
+  } catch {
+    // Plan adapters may send plain checklist text. Fall through to line parsing.
+  }
+
+  const steps = trimmed.split(/\r?\n/).flatMap((line) => {
+    const step = readPlanStep(line);
+    return step ? [step] : [];
+  });
+  return steps.length > 0 ? { steps } : undefined;
+}
+
+function renderPlanProgressText(text: string): string | undefined {
+  const progress = parsePlanProgressText(text);
+  if (!progress) {
+    return undefined;
+  }
+  const lines = ["Plan updated"];
+  if (progress.explanation) {
+    lines.push(progress.explanation);
+  }
+  for (const entry of progress.steps) {
+    const marker =
+      entry.status === "completed" ? "[x]" : entry.status === "in_progress" ? "[~]" : "[ ]";
+    // Telegram users need the state, not the provider/tool schema. Keep this
+    // as a plain checklist so internal statuses like "in_progress" never leak.
+    lines.push(`- ${marker} ${entry.step}`);
+  }
+  return lines.join("\n");
+}
+
+function shouldRenderPlanProgress(settings: {
+  tagVisibility: Partial<Record<AcpSessionUpdateTag, boolean>>;
+}): boolean {
+  // Plans are progress UX, not normal hidden session metadata. Show them unless
+  // config explicitly opts the plan tag out.
+  return settings.tagVisibility.plan !== false;
 }
 
 function resolveHiddenBoundarySeparatorText(mode: AcpHiddenBoundarySeparator): string {
@@ -217,6 +343,32 @@ function markAcpSourcePreviewPayload(payload: ReplyPayload): ReplyPayload {
       openclaw: {
         ...openclaw,
         sourcePreview: true,
+      },
+    },
+  };
+}
+
+function markAcpPlanProgressPayload(payload: ReplyPayload): ReplyPayload {
+  const marked = markAcpSourcePreviewPayload(payload);
+  const channelData =
+    marked.channelData &&
+    typeof marked.channelData === "object" &&
+    !Array.isArray(marked.channelData)
+      ? marked.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+  return {
+    ...marked,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        progressKind: "plan",
       },
     },
   };
@@ -481,7 +633,35 @@ export function createAcpReplyProjector(params: {
     );
   };
 
+  const emitPlanProgress = async (
+    event: Extract<AcpRuntimeEvent, { type: "status" | "text_delta" | "tool_call" }>,
+  ) => {
+    if (!shouldRenderPlanProgress(settings)) {
+      return;
+    }
+    const planText = renderPlanProgressText(event.text);
+    if (!planText) {
+      return;
+    }
+    await flush(true);
+    await params.deliver(
+      "tool",
+      markAcpPlanProgressPayload({
+        text: truncateText(planText, settings.maxSessionUpdateChars),
+      }),
+      { tag: "plan" },
+    );
+  };
+
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
+    if (
+      (event.type === "status" || event.type === "text_delta" || event.type === "tool_call") &&
+      event.tag === "plan"
+    ) {
+      await emitPlanProgress(event);
+      return;
+    }
+
     if (event.type === "text_delta") {
       if (event.stream && event.stream !== "output") {
         return;

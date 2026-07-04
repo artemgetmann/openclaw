@@ -3,7 +3,7 @@ import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
-type Delivery = { kind: string; text?: string };
+type Delivery = { kind: string; text?: string; channelData?: Record<string, unknown> };
 
 function createProjectorHarness(
   cfgOverrides?: Parameters<typeof createCfg>[0],
@@ -14,7 +14,17 @@ function createProjectorHarness(
     cfg: createCfg(cfgOverrides),
     shouldSendToolSummaries: projectorOverrides?.shouldSendToolSummaries ?? true,
     deliver: async (kind, payload) => {
-      deliveries.push({ kind, text: payload.text });
+      const openclaw =
+        payload.channelData?.openclaw &&
+        typeof payload.channelData.openclaw === "object" &&
+        !Array.isArray(payload.channelData.openclaw)
+          ? (payload.channelData.openclaw as Record<string, unknown>)
+          : {};
+      deliveries.push({
+        kind,
+        text: payload.text,
+        ...(openclaw.progressKind === "plan" ? { channelData: payload.channelData } : {}),
+      });
       return true;
     },
   });
@@ -229,6 +239,93 @@ describe("createAcpReplyProjector", () => {
         },
       },
     ]);
+  });
+
+  it("renders structured plan-tag updates as transient checklist progress", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        explanation: "Tightened scope after inspecting the files.",
+        plan: [
+          { step: "Inspect Telegram progress path", status: "completed" },
+          { step: "Render checklist updates", status: "in_progress" },
+          { step: "Run focused tests", status: "pending" },
+        ],
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "Tightened scope after inspecting the files.",
+          "- [x] Inspect Telegram progress path",
+          "- [~] Render checklist updates",
+          "- [ ] Run focused tests",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("renders plain plan lines without leaking raw status names", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      tag: "plan",
+      text: "- Read handoff (completed)\n- Patch projector (in_progress)\n- Verify behavior (pending)",
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "- [x] Read handoff",
+          "- [~] Patch projector",
+          "- [ ] Verify behavior",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("allows config to hide plan-tag progress when explicitly disabled", async () => {
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          tagVisibility: {
+            plan: false,
+          },
+        },
+      },
+    });
+
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        plan: [{ step: "Hidden step", status: "in_progress" }],
+      }),
+    });
+
+    expect(deliveries).toEqual([]);
   });
 
   it("does not suppress identical short text across terminal turn boundaries", async () => {

@@ -392,6 +392,34 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("routes plan sourcePreview tool text through transient progress", async () => {
+    const progressStream = createDraftStream(9004);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
+    );
+    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Done." })],
+      }),
+    );
+  });
+
   it("streams assistant partials through the durable answer lane instead of transient progress", async () => {
     const answerStream = createDraftStream(9101);
     createTelegramDraftStream.mockImplementation((params) => {
