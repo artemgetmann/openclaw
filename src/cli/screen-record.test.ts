@@ -122,6 +122,119 @@ describe("screen record CLI params", () => {
     ).toBeNull();
   });
 
+  it("prefers the installed permitted Jarvis node over the stable proof fixture", () => {
+    expect(
+      pickDefaultScreenRecordNode([
+        {
+          nodeId: "screen-record-proof-node",
+          displayName: "Jarvis screen-record-proof",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["screen.record"],
+          permissions: { screenRecording: true },
+          bundleIdentifier: "ai.openclaw.consumer.mac.debug",
+          bundlePath:
+            "/Users/user/Programming_Projects/openclaw/dist/Jarvis (screen-record-proof).app",
+          connectedAtMs: 2_000,
+        },
+        {
+          nodeId: "installed-jarvis-node",
+          displayName: "Jarvis",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["screen.record"],
+          permissions: { screenRecording: true },
+          bundleIdentifier: "ai.jarvis.mac",
+          bundlePath: "/Applications/Jarvis.app",
+          connectedAtMs: 1_000,
+        },
+      ]),
+    )?.toMatchObject({ nodeId: "installed-jarvis-node" });
+  });
+
+  it("prefers a permitted proof fixture over an installed Jarvis node without Screen Recording", () => {
+    expect(
+      pickDefaultScreenRecordNode([
+        {
+          nodeId: "installed-jarvis-node",
+          displayName: "Jarvis",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["screen.record"],
+          permissions: { screenRecording: false },
+          bundleIdentifier: "ai.jarvis.mac",
+          bundlePath: "/Applications/Jarvis.app",
+        },
+        {
+          nodeId: "screen-record-proof-node",
+          displayName: "Jarvis screen-record-proof",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["screen.record"],
+          permissions: { screenRecording: true },
+          bundleIdentifier: "ai.openclaw.consumer.mac.debug",
+          bundlePath:
+            "/Users/user/Programming_Projects/openclaw/dist/Jarvis (screen-record-proof).app",
+        },
+      ]),
+    )?.toMatchObject({ nodeId: "screen-record-proof-node" });
+  });
+
+  it("uses the freshest connection when otherwise equivalent proof nodes are connected", () => {
+    expect(
+      pickDefaultScreenRecordNode([
+        {
+          nodeId: "screen-record-proof-old",
+          displayName: "Jarvis screen-record-proof",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["screen.record"],
+          permissions: { screenRecording: true },
+          bundleIdentifier: "ai.openclaw.consumer.mac.debug",
+          connectedAtMs: 1_000,
+        },
+        {
+          nodeId: "screen-record-proof-new",
+          displayName: "Jarvis screen-record-proof",
+          platform: "macOS 26.5.1",
+          connected: true,
+          commands: ["screen.record"],
+          permissions: { screenRecording: true },
+          bundleIdentifier: "ai.openclaw.consumer.mac.debug",
+          connectedAtMs: 2_000,
+        },
+      ]),
+    )?.toMatchObject({ nodeId: "screen-record-proof-new" });
+  });
+
+  it("keeps ambiguous matching macOS recorder nodes explicit", () => {
+    const nodes = [
+      {
+        nodeId: "mac-a",
+        displayName: "Jarvis A",
+        platform: "macOS 26.5.1",
+        connected: true,
+        commands: ["screen.record"],
+        permissions: { screenRecording: true },
+      },
+      {
+        nodeId: "mac-b",
+        displayName: "Jarvis B",
+        platform: "macOS 26.5.1",
+        connected: true,
+        commands: ["screen.record"],
+        permissions: { screenRecording: true },
+      },
+    ];
+
+    expect(pickDefaultScreenRecordNode(nodes)).toBeNull();
+    const message = formatNoScreenRecordNodeMessage(nodes);
+    expect(message).toContain("multiple macOS screen recording nodes available");
+    expect(message).toContain("id mac-a");
+    expect(message).toContain("id mac-b");
+    expect(message).toContain("screenRecording=yes");
+  });
+
   it("explains missing macOS Screen Recording permission when no default node can record", () => {
     expect(() =>
       resolveDefaultScreenRecordNodeOrThrow([

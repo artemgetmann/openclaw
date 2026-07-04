@@ -187,12 +187,86 @@ function isMacNodePlatform(platform: string | undefined): boolean {
   return normalized === "darwin" || normalized.startsWith("macos") || normalized.startsWith("mac ");
 }
 
+function isScreenRecordCapable(node: NodeListNode): boolean {
+  return !Array.isArray(node.commands) || node.commands.includes("screen.record");
+}
+
+function screenRecordingPermissionGranted(node: NodeListNode): boolean {
+  return node.permissions?.screenRecording === true;
+}
+
+function screenRecordNodePreferenceScore(node: NodeListNode): number {
+  const bundleId = node.bundleIdentifier?.trim().toLowerCase() ?? "";
+  const bundlePath = node.bundlePath?.trim().toLowerCase() ?? "";
+  const executablePath = node.executablePath?.trim().toLowerCase() ?? "";
+  let score = 0;
+
+  // Prefer the installed Jarvis identity when it is already connected and permitted:
+  // it reuses the user's real TCC permission instead of waking the proof fixture.
+  if (screenRecordingPermissionGranted(node)) {
+    score += 1_000;
+  }
+  if (bundleId === "ai.jarvis.mac") {
+    score += 500;
+  } else if (bundleId === "ai.openclaw.consumer.mac") {
+    score += 350;
+  } else if (bundleId === "ai.openclaw.consumer.mac.debug") {
+    score += 200;
+  } else if (bundleId.startsWith("ai.openclaw.consumer.mac.debug.")) {
+    score += 100;
+  }
+  if (bundlePath === "/applications/jarvis.app") {
+    score += 150;
+  } else if (bundlePath.includes("screen-record-proof")) {
+    score += 50;
+  }
+  if (executablePath.includes("/applications/jarvis.app/")) {
+    score += 50;
+  }
+  return score;
+}
+
+function connectedAtMs(node: NodeListNode): number {
+  return typeof node.connectedAtMs === "number" && Number.isFinite(node.connectedAtMs)
+    ? node.connectedAtMs
+    : 0;
+}
+
+function compareScreenRecordNodes(a: NodeListNode, b: NodeListNode): number {
+  const scoreDelta = screenRecordNodePreferenceScore(b) - screenRecordNodePreferenceScore(a);
+  if (scoreDelta !== 0) {
+    return scoreDelta;
+  }
+  const aConnected = connectedAtMs(a);
+  const bConnected = connectedAtMs(b);
+  if (aConnected !== bConnected) {
+    return bConnected - aConnected;
+  }
+  return a.nodeId.localeCompare(b.nodeId);
+}
+
+function isStrictlyPreferredScreenRecordNode(candidate: NodeListNode, runnerUp: NodeListNode) {
+  const candidateScore = screenRecordNodePreferenceScore(candidate);
+  const runnerUpScore = screenRecordNodePreferenceScore(runnerUp);
+  if (candidateScore !== runnerUpScore) {
+    return candidateScore > runnerUpScore;
+  }
+  const candidateConnectedAt = connectedAtMs(candidate);
+  const runnerUpConnectedAt = connectedAtMs(runnerUp);
+  return candidateConnectedAt > 0 && candidateConnectedAt > runnerUpConnectedAt;
+}
+
 function describeMacScreenPermissionTarget(node: NodeListNode): string {
   const parts = [
+    node.nodeId ? `id ${node.nodeId}` : undefined,
+    node.displayName ? `name ${node.displayName}` : undefined,
     node.bundleIdentifier ? `bundle ${node.bundleIdentifier}` : undefined,
     node.bundlePath ? `app ${node.bundlePath}` : undefined,
     node.executablePath && node.executablePath !== node.bundlePath
       ? `executable ${node.executablePath}`
+      : undefined,
+    node.permissions?.screenRecording !== undefined
+      ? `screenRecording=${node.permissions.screenRecording ? "yes" : "no"}`
       : undefined,
   ].filter((value): value is string => Boolean(value));
   return parts.length > 0 ? parts.join(", ") : node.displayName || node.nodeId;
@@ -203,11 +277,19 @@ export function pickDefaultScreenRecordNode(nodes: NodeListNode[]): NodeListNode
     if (node.connected === false) {
       return false;
     }
-    return !Array.isArray(node.commands) || node.commands.includes("screen.record");
+    return isScreenRecordCapable(node);
   });
   const localMacs = capable.filter((node) => isMacNodePlatform(node.platform));
   if (localMacs.length === 1) {
     return localMacs[0] ?? null;
+  }
+  if (localMacs.length > 1) {
+    const ranked = localMacs.toSorted(compareScreenRecordNodes);
+    const first = ranked[0];
+    const second = ranked[1];
+    if (first && second && isStrictlyPreferredScreenRecordNode(first, second)) {
+      return first;
+    }
   }
   return null;
 }
@@ -216,12 +298,12 @@ export function formatNoScreenRecordNodeMessage(nodes: NodeListNode[]): string {
   const connectedMacs = nodes.filter(
     (node) => node.connected !== false && isMacNodePlatform(node.platform),
   );
-  const eligibleMacs = connectedMacs.filter(
-    (node) => !Array.isArray(node.commands) || node.commands.includes("screen.record"),
-  );
+  const eligibleMacs = connectedMacs.filter((node) => isScreenRecordCapable(node));
   if (eligibleMacs.length > 1) {
     return [
-      "multiple macOS screen recording nodes available; pass --node",
+      `multiple macOS screen recording nodes available; pass --node. Candidates: ${eligibleMacs
+        .map(describeMacScreenPermissionTarget)
+        .join("; ")}`,
       formatOperatorCommands(),
     ].join("\n\n");
   }
