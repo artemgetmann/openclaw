@@ -123,14 +123,49 @@ device pairing queue.
 
 ## Artifact Rule
 
-Save recordings under a run-specific artifact directory. Keep the raw proof local
-by default. Send one compressed review video only when the user asks, when the
-task explicitly requires video proof, or when the result would otherwise be hard
-to verify.
+Save recordings under a run-specific artifact directory. User-facing proof is
+MP4/video by default. Keep the raw proof local by default. Send one compressed
+review video only when the user asks, when the task explicitly requires video
+proof, or when the result would otherwise be hard to verify.
+
+Inspect the final video locally before calling it proof. A created file is only
+a capture artifact until you verify it is readable, nonblank, and shows the
+target flow. Contact sheets, extracted frames, stills, and thumbnails are
+internal/local inspection artifacts unless the user explicitly asks to receive
+them.
+
+GIF is not the default proof format. Send a GIF only when the user explicitly
+asks for one, or when a channel/tool cannot accept video and you state that
+technical reason clearly.
 
 Do not send repeated screenshot messages for long browser or GUI work. Use
 progress text while work is ongoing, then offer the final review video when the
 recording exists and the user did not explicitly request automatic delivery.
+
+## Local Inspection
+
+Use terminal inspection before user-facing delivery. The minimum check is:
+
+```bash
+ffprobe -v error \
+  -show_entries format=duration,size \
+  -show_entries stream=codec_name,width,height,avg_frame_rate \
+  -of json ".artifacts/<run>/review.mp4"
+
+ffmpeg -hide_banner -nostats \
+  -i ".artifacts/<run>/review.mp4" \
+  -vf blackdetect=d=0.2:pix_th=0.10 \
+  -an -f null -
+
+ffmpeg -y -hide_banner -nostats \
+  -i ".artifacts/<run>/review.mp4" \
+  -vf "fps=1,scale=360:-1,tile=5x1" \
+  -frames:v 1 ".artifacts/<run>/review-contact.png"
+```
+
+Confirm the metadata matches the intended capture, blackdetect reports no black
+intervals, and the contact sheet is readable. The contact sheet is for local
+inspection only unless the user explicitly asks for frames or screenshots.
 
 ## Pair With Structured Proof
 
