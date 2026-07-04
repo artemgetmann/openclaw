@@ -348,6 +348,9 @@ describe("buildAgentSystemPrompt", () => {
       "For macOS GUI-operation or GUI-proof requests, prefer the `jarvis-gui-control` skill",
     );
     expect(prompt).toContain("use the `screen-record` skill and `openclaw screen record`");
+    expect(prompt).toContain(
+      "Before sending or claiming any user-facing screenshot, screen recording, or other media proof",
+    );
     expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
     expect(prompt).toContain("media transcribe --file <path> --json");
     expect(prompt).toContain(
