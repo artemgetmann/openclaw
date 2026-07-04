@@ -5,6 +5,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import type { MonitorEventEnvelope, MonitorEventTriggerKind } from "../monitor/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
@@ -13,6 +14,12 @@ import { resolveAllowedAgentIds } from "./hooks-policy.js";
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
+const monitorEventTriggerKinds = new Set<MonitorEventTriggerKind>([
+  "webhook",
+  "local_listener",
+  "process_exit",
+  "browser_observer",
+]);
 
 export type HooksConfigResolved = {
   basePath: string;
@@ -218,6 +225,8 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   allowUnsafeExternalContent?: boolean;
 };
 
+export type HookMonitorEventPayload = MonitorEventEnvelope;
+
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId | "last";
@@ -263,6 +272,77 @@ export function resolveHookIdempotencyKey(params: {
     resolveOptionalHookIdempotencyKey(params.headers?.["x-openclaw-idempotency-key"]) ||
     resolveOptionalHookIdempotencyKey(params.payload.idempotencyKey)
   );
+}
+
+function isPlainHookObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeOptionalHookString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function normalizeMonitorEventPayload(
+  payload: Record<string, unknown>,
+  options?: { idempotencyKey?: string; nowMs?: number },
+): { ok: true; value: HookMonitorEventPayload } | { ok: false; error: string } {
+  const triggerKind =
+    typeof payload.triggerKind === "string"
+      ? (payload.triggerKind.trim() as MonitorEventTriggerKind)
+      : "";
+  if (!monitorEventTriggerKinds.has(triggerKind as MonitorEventTriggerKind)) {
+    return {
+      ok: false,
+      error: "triggerKind must be webhook|local_listener|process_exit|browser_observer",
+    };
+  }
+
+  const sourceType = normalizeOptionalHookString(payload.sourceType);
+  if (!sourceType) {
+    return { ok: false, error: "sourceType required" };
+  }
+
+  if (!isPlainHookObject(payload.sourceTarget)) {
+    return { ok: false, error: "sourceTarget object required" };
+  }
+
+  if (payload.evidence !== undefined && !isPlainHookObject(payload.evidence)) {
+    return { ok: false, error: "evidence must be an object when provided" };
+  }
+
+  const receivedAtMsRaw = payload.receivedAtMs;
+  if (
+    receivedAtMsRaw !== undefined &&
+    !(
+      typeof receivedAtMsRaw === "number" &&
+      Number.isInteger(receivedAtMsRaw) &&
+      receivedAtMsRaw >= 0
+    )
+  ) {
+    return { ok: false, error: "receivedAtMs must be a non-negative integer when provided" };
+  }
+  const receivedAtMs =
+    typeof receivedAtMsRaw === "number" ? receivedAtMsRaw : (options?.nowMs ?? Date.now());
+  const idempotencyKey =
+    resolveOptionalHookIdempotencyKey(payload.idempotencyKey) ?? options?.idempotencyKey;
+  const eventType = normalizeOptionalHookString(payload.eventType);
+
+  return {
+    ok: true,
+    value: {
+      triggerKind: triggerKind as MonitorEventTriggerKind,
+      sourceType,
+      sourceTarget: payload.sourceTarget,
+      ...(eventType ? { eventType } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      receivedAtMs,
+      ...(payload.evidence ? { evidence: payload.evidence } : {}),
+    },
+  };
 }
 
 export function resolveHookTargetAgentId(

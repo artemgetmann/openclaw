@@ -15,6 +15,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import type { CronService } from "../cron/service.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
@@ -80,6 +81,7 @@ import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { dispatchMonitorEventToCron } from "./server-methods/monitor.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -542,6 +544,8 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
   });
+  let cron: CronService | undefined;
+  let cronStorePath: string | undefined;
   const {
     canvasHost,
     releasePluginRouteRegistry,
@@ -584,6 +588,16 @@ export async function startGatewayServer(
             gatewayTls,
             hooksConfig: () => hooksConfig,
             getHookClientIpConfig: () => hookClientIpConfig,
+            dispatchMonitorEventHook: async (event) => {
+              if (!cron || !cronStorePath) {
+                throw new Error("cron runtime not ready");
+              }
+              return await dispatchMonitorEventToCron({
+                cronStorePath,
+                cron,
+                event,
+              });
+            },
             pluginRegistry,
             deps,
             canvasRuntime,
@@ -623,7 +637,10 @@ export async function startGatewayServer(
     deps,
     broadcast,
   });
-  let { cron, storePath: cronStorePath } = cronState;
+  cron = cronState.cron;
+  cronStorePath = cronState.storePath;
+  const activeCron = cron;
+  const activeCronStorePath = cronStorePath;
 
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
@@ -800,8 +817,8 @@ export async function startGatewayServer(
 
   const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {
     deps,
-    cron,
-    cronStorePath,
+    cron: activeCron,
+    cronStorePath: activeCronStorePath,
     execApprovalManager,
     loadGatewayModelCatalog,
     getHealthCache,

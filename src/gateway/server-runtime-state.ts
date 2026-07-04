@@ -4,6 +4,7 @@ import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { MonitorEventEnvelope } from "../monitor/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -33,6 +34,7 @@ import {
   createGatewayHttpServer,
   type HookClientIpConfig,
 } from "./server-http.js";
+import type { MonitorEventDispatchResult } from "./server-methods/monitor.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -63,6 +65,7 @@ export async function createGatewayRuntimeState(params: {
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
+  dispatchMonitorEventHook: (event: MonitorEventEnvelope) => Promise<MonitorEventDispatchResult>;
   pluginRegistry: PluginRegistry;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
@@ -130,6 +133,7 @@ export async function createGatewayRuntimeState(params: {
       bindHost: params.bindHost,
       port: params.port,
       logHooks: params.logHooks,
+      dispatchMonitorEventHook: params.dispatchMonitorEventHook,
     });
 
     const handlePluginRequest = createGatewayPluginRequestHandler({
