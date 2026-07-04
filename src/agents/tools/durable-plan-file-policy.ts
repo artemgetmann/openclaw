@@ -56,14 +56,22 @@ function isPathInside(parent: string, candidate: string): boolean {
 
 function isTempPlanPath(candidate: string): boolean {
   const resolved = path.resolve(candidate);
-  // os.tmpdir() is not always /tmp on macOS, so check both the platform temp
-  // root and literal /tmp. The product rule specifically calls out /tmp.
-  return (
-    resolved === path.resolve(os.tmpdir()) ||
-    isPathInside(os.tmpdir(), resolved) ||
-    resolved === path.resolve("/tmp") ||
-    isPathInside("/tmp", resolved)
-  );
+  // os.tmpdir() is not always /tmp on macOS, and /tmp itself is commonly a
+  // symlink to /private/tmp. Check the common aliases explicitly so durable
+  // product state cannot hide under a temp root via a symlink spelling.
+  const tempRoots = [
+    os.tmpdir(),
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "/var/folders",
+    "/private/var/folders",
+  ];
+  return tempRoots.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    return resolved === resolvedRoot || isPathInside(resolvedRoot, resolved);
+  });
 }
 
 function assertDurablePlanStateDirAllowed(stateDir: string): void {

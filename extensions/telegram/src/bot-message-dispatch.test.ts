@@ -415,11 +415,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(progressStream.update).toHaveBeenNthCalledWith(
       1,
-      "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
     );
     expect(progressStream.update).toHaveBeenNthCalledWith(
       2,
-      "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
+      "Plan updated\n\n- [x] Inspect files\n\n- [x] Render checklist\n\n- [~] Run tests",
     );
     expect(progressStream.update).toHaveBeenCalledTimes(2);
     expect(progressStream.clear).toHaveBeenCalledTimes(1);

@@ -70,6 +70,36 @@ describe("durable plan file policy", () => {
     ).toThrow(/must not be stored in \/tmp/);
   });
 
+  it("rejects product plan state under macOS /private/tmp aliases", () => {
+    expect(() =>
+      resolveDurablePlanFilePath(
+        {
+          agentId: "main",
+          sessionId: "session-1",
+        },
+        {
+          env: { OPENCLAW_STATE_DIR: "/private/tmp/openclaw-plans" } as NodeJS.ProcessEnv,
+        },
+      ),
+    ).toThrow(/must not be stored in \/tmp/);
+  });
+
+  it("rejects product plan state under macOS /private/var/folders temp aliases", () => {
+    expect(() =>
+      resolveDurablePlanFilePath(
+        {
+          agentId: "main",
+          sessionId: "session-1",
+        },
+        {
+          env: {
+            OPENCLAW_STATE_DIR: "/private/var/folders/example/openclaw-plans",
+          } as NodeJS.ProcessEnv,
+        },
+      ),
+    ).toThrow(/must not be stored in \/tmp/);
+  });
+
   it("rejects product plan state when the state dir is the platform temp dir itself", () => {
     expect(() =>
       resolveDurablePlanFilePath(
