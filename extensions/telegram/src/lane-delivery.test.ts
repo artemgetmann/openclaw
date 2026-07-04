@@ -17,7 +17,6 @@ function createHarness(params?: {
   answerStream?: DraftLaneState["stream"];
   answerHasStreamedMessage?: boolean;
   answerLastPartialText?: string;
-  replaceFinalPreviewWithPayload?: boolean;
 }) {
   const answer =
     params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId });
@@ -48,37 +47,6 @@ function createHarness(params?: {
   });
   const editPreview = vi.fn().mockResolvedValue(undefined);
   const deletePreviewMessage = vi.fn().mockResolvedValue(undefined);
-  const replaceFinalPreviewWithPayload = params?.replaceFinalPreviewWithPayload
-    ? vi.fn(
-        async ({
-          laneName,
-          messageId,
-          text,
-          payload,
-          infoKind,
-        }: {
-          laneName: LaneName;
-          messageId: number;
-          text: string;
-          payload: ReplyPayload;
-          infoKind: string;
-        }) => {
-          const delivered = await sendPayload(
-            { ...payload, text },
-            {
-              reason: laneName === "answer" ? "final" : "unknown",
-              callsite: "test-final-preview-replacement",
-              laneName,
-              infoKind,
-            },
-          );
-          if (delivered) {
-            await deletePreviewMessage(messageId);
-          }
-          return delivered ? "sent" : "skipped";
-        },
-      )
-    : undefined;
   const log = vi.fn();
   const markDelivered = vi.fn();
   const activePreviewLifecycleByLane = { answer: "transient", reasoning: "transient" } as const;
@@ -100,7 +68,6 @@ function createHarness(params?: {
     flushDraftLane,
     stopDraftLane,
     editPreview,
-    replaceFinalPreviewWithPayload,
     deletePreviewMessage,
     log,
     markDelivered,
@@ -117,7 +84,6 @@ function createHarness(params?: {
     flushDraftLane,
     stopDraftLane,
     editPreview,
-    replaceFinalPreviewWithPayload,
     deletePreviewMessage,
     log,
     markDelivered,
@@ -211,36 +177,22 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
   });
 
-  it("replaces text-only final previews with a durable send when configured", async () => {
-    const harness = createHarness({
-      answerMessageId: 999,
-      replaceFinalPreviewWithPayload: true,
-    });
+  it("finalizes text-only final previews by editing the existing message", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
-    expect(result).toBe("sent");
-    expect(harness.replaceFinalPreviewWithPayload).toHaveBeenCalledWith(
+    expect(result).toBe("preview-finalized");
+    expect(harness.editPreview).toHaveBeenCalledWith(
       expect.objectContaining({
         laneName: "answer",
         messageId: 999,
         text: HELLO_FINAL,
-        payload: expect.objectContaining({ text: HELLO_FINAL }),
-        infoKind: "final",
+        context: "final",
       }),
     );
-    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(999);
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: HELLO_FINAL }),
-      expect.objectContaining({
-        callsite: "test-final-preview-replacement",
-        infoKind: "final",
-      }),
-    );
-    expect(harness.sendPayload.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.deletePreviewMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("does not replace an already streamed answer preview", async () => {
@@ -248,7 +200,6 @@ describe("createLaneTextDeliverer", () => {
       answerMessageId: 999,
       answerHasStreamedMessage: true,
       answerLastPartialText: "Something warm and simple sounds right tonight.",
-      replaceFinalPreviewWithPayload: true,
     });
     const finalText =
       "Something warm and simple sounds right tonight. I would drink peppermint tea if you want fresh, or warm milk if you want cozy.";
@@ -256,7 +207,6 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, finalText);
 
     expect(result).toBe("preview-finalized");
-    expect(harness.replaceFinalPreviewWithPayload).not.toHaveBeenCalled();
     expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.editPreview).toHaveBeenCalledWith(

@@ -337,10 +337,14 @@ const TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
 const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi;
 const TELEGRAM_HTML_ANCHOR_PATTERN =
   /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi;
+const TELEGRAM_HTML_ORDERED_LIST_PATTERN = /<ol\b([^>]*)>([\s\S]*?)<\/ol\s*>/gi;
+const TELEGRAM_HTML_UNORDERED_LIST_PATTERN = /<ul\b[^>]*>([\s\S]*?)<\/ul\s*>/gi;
+const TELEGRAM_HTML_LIST_ITEM_PATTERN = /<li\b([^>]*)>([\s\S]*?)<\/li\s*>/gi;
 const TELEGRAM_HTML_BREAK_PATTERN = /<br\s*\/?>/gi;
 const TELEGRAM_HTML_TAG_PATTERN = /<[^>]*>/g;
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#x[0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
 const TELEGRAM_RICH_TABLE_COLUMN_LIMIT = 20;
+const TELEGRAM_RICH_BLOCK_HTML_PATTERN = /<(pre|table|blockquote)\b[\s\S]*?<\/\1>/gi;
 
 type TelegramRichTextMode = "markdown" | "html";
 
@@ -474,9 +478,53 @@ function decodeTelegramHtmlEntities(text: string): string {
 }
 
 function stripTelegramHtmlForPlainText(html: string): string {
-  return decodeTelegramHtmlEntities(
-    html.replace(TELEGRAM_HTML_BREAK_PATTERN, "\n").replace(TELEGRAM_HTML_TAG_PATTERN, ""),
-  );
+  const blockAwareHtml = html
+    .replace(TELEGRAM_HTML_BREAK_PATTERN, "\n")
+    .replace(/<\/p\s*>/gi, "\n\n")
+    .replace(/<li\b[^>]*>/gi, "• ")
+    .replace(/<\/li\s*>/gi, "\n")
+    .replace(/<\/(?:ul|ol)\s*>/gi, "\n")
+    .replace(/<\/h[1-6]\s*>/gi, "\n\n")
+    .replace(/<hr\s*\/?>/gi, "\n---\n");
+  return decodeTelegramHtmlEntities(blockAwareHtml.replace(TELEGRAM_HTML_TAG_PATTERN, ""));
+}
+
+function readIntegerHtmlAttr(attrs: string, name: "start" | "value"): number | undefined {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(?:"(\\d+)"|'(\\d+)'|(\\d+))`, "i");
+  const match = pattern.exec(attrs);
+  const rawValue = match?.[1] ?? match?.[2] ?? match?.[3];
+  if (!rawValue) {
+    return undefined;
+  }
+  const value = Number.parseInt(rawValue, 10);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function renderTelegramHtmlListFallback(params: {
+  bodyHtml: string;
+  ordered: boolean;
+  start?: number;
+}): string {
+  const lines: string[] = [];
+  let nextValue = params.start ?? 1;
+  TELEGRAM_HTML_LIST_ITEM_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TELEGRAM_HTML_LIST_ITEM_PATTERN.exec(params.bodyHtml)) !== null) {
+    const attrs = match[1] ?? "";
+    const itemHtml = match[2] ?? "";
+    const value = params.ordered ? (readIntegerHtmlAttr(attrs, "value") ?? nextValue) : undefined;
+    const label = params.ordered ? `${value}. ` : "• ";
+    const itemText = stripTelegramHtmlForPlainText(itemHtml)
+      .replace(/\n{2,}/g, "\n")
+      .trim();
+    if (itemText) {
+      lines.push(`${label}${itemText}`);
+    }
+    if (params.ordered && value !== undefined) {
+      nextValue = value + 1;
+    }
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
 
 function parseTelegramRichHtmlTableRows(tableHtml: string): string[][] {
@@ -528,7 +576,24 @@ export function telegramHtmlToPlainTextFallback(html: string): string {
       return `${label} (${href})`;
     },
   );
-  return stripTelegramHtmlForPlainText(withPlainLinks).trim();
+  const withPlainOrderedLists = withPlainLinks.replace(
+    TELEGRAM_HTML_ORDERED_LIST_PATTERN,
+    (_match, attrs: string, bodyHtml: string) =>
+      renderTelegramHtmlListFallback({
+        bodyHtml,
+        ordered: true,
+        start: readIntegerHtmlAttr(attrs, "start"),
+      }),
+  );
+  const withPlainLists = withPlainOrderedLists.replace(
+    TELEGRAM_HTML_UNORDERED_LIST_PATTERN,
+    (_match, bodyHtml: string) =>
+      renderTelegramHtmlListFallback({
+        bodyHtml,
+        ordered: false,
+      }),
+  );
+  return stripTelegramHtmlForPlainText(withPlainLists).trim();
 }
 
 function renderTelegramRichTableFallback(table: MarkdownTableBlock): string {
@@ -599,6 +664,103 @@ function renderTelegramRichMarkdownDocument(markdown: string): string {
   return wrapFileReferencesInHtml(html).trim();
 }
 
+function renderTelegramRichTextSegment(textHtml: string): string {
+  const blocks: string[] = [];
+  const normalized = textHtml.replace(/\r\n?/g, "\n");
+
+  const flushParagraph = (lines: string[]) => {
+    if (lines.length > 0) {
+      blocks.push(`<p>${lines.join("<br>")}</p>`);
+      lines.length = 0;
+    }
+  };
+
+  for (const rawPart of normalized.split(/\n{2,}/)) {
+    const lines = rawPart
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const paragraphLines: string[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      const bulletMatch = /^•\s+(.+)$/.exec(line);
+      if (bulletMatch) {
+        flushParagraph(paragraphLines);
+        const items: string[] = [];
+        while (index < lines.length) {
+          const itemMatch = /^•\s+(.+)$/.exec(lines[index] ?? "");
+          if (!itemMatch) {
+            index -= 1;
+            break;
+          }
+          items.push(`<li>${itemMatch[1]}</li>`);
+          index += 1;
+        }
+        blocks.push(`<ul>${items.join("")}</ul>`);
+        continue;
+      }
+
+      const orderedMatch = /^(\d+)\.\s+(.+)$/.exec(line);
+      if (orderedMatch) {
+        flushParagraph(paragraphLines);
+        const firstValue = Number.parseInt(orderedMatch[1], 10);
+        const items: string[] = [];
+        let expectedValue = firstValue;
+        while (index < lines.length) {
+          const itemMatch = /^(\d+)\.\s+(.+)$/.exec(lines[index] ?? "");
+          if (!itemMatch) {
+            index -= 1;
+            break;
+          }
+          const value = Number.parseInt(itemMatch[1], 10);
+          const valueAttr = value === expectedValue ? "" : ` value="${value}"`;
+          items.push(`<li${valueAttr}>${itemMatch[2]}</li>`);
+          expectedValue = value + 1;
+          index += 1;
+        }
+        const startAttr = firstValue > 1 ? ` start="${firstValue}"` : "";
+        blocks.push(`<ol${startAttr}>${items.join("")}</ol>`);
+        continue;
+      }
+
+      paragraphLines.push(line);
+    }
+    flushParagraph(paragraphLines);
+  }
+
+  return blocks.join("");
+}
+
+function normalizeTelegramRichBlockHtml(blockHtml: string): string {
+  if (!/^<blockquote\b/i.test(blockHtml)) {
+    return blockHtml;
+  }
+  // Rich-message blockquotes use HTML block semantics, so literal newlines in
+  // the old parse-mode body need explicit line-break tags to stay visible.
+  return blockHtml.replace(/\n/g, "<br>");
+}
+
+function renderTelegramRichBlockHtmlFromFlatHtml(html: string): string {
+  const rendered: string[] = [];
+  let cursor = 0;
+  TELEGRAM_RICH_BLOCK_HTML_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TELEGRAM_RICH_BLOCK_HTML_PATTERN.exec(html)) !== null) {
+    const segment = html.slice(cursor, match.index);
+    const renderedSegment = renderTelegramRichTextSegment(segment);
+    if (renderedSegment) {
+      rendered.push(renderedSegment);
+    }
+    rendered.push(normalizeTelegramRichBlockHtml(match[0]));
+    cursor = match.index + match[0].length;
+  }
+  const tail = renderTelegramRichTextSegment(html.slice(cursor));
+  if (tail) {
+    rendered.push(tail);
+  }
+  return rendered.join("").trim();
+}
+
 export function sanitizeTelegramRichHtml(html: string): string {
   return html.trim();
 }
@@ -607,10 +769,11 @@ export function markdownToTelegramRichHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode } = {},
 ): string {
-  if (options.tableMode !== "block") {
-    return sanitizeTelegramRichHtml(markdownToTelegramHtml(markdown, options));
-  }
-  return sanitizeTelegramRichHtml(renderTelegramRichMarkdownDocument(markdown ?? ""));
+  const flatHtml =
+    options.tableMode === "block"
+      ? renderTelegramRichMarkdownDocument(markdown ?? "")
+      : markdownToTelegramHtml(markdown, options);
+  return sanitizeTelegramRichHtml(renderTelegramRichBlockHtmlFromFlatHtml(flatHtml));
 }
 
 export function splitTelegramRichMessageTextChunks(params: {
