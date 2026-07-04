@@ -5,6 +5,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isJarvisManagedOpenAIImageGenerationConfigured } from "../../consumer/openai-image-generation.js";
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -133,6 +134,10 @@ export function resolveImageGenerationModelConfigForTool(params: {
     return { primary: DEFAULT_OPENAI_IMAGE_MODEL };
   }
 
+  if (isJarvisManagedOpenAIImageGenerationConfigured(params.cfg)) {
+    return { primary: DEFAULT_OPENAI_IMAGE_MODEL };
+  }
+
   return null;
 }
 
@@ -207,7 +212,10 @@ function resolveLoadedImageMimeType(media: { contentType?: string; mimeType?: st
   return media.contentType?.trim() || media.mimeType?.trim() || "image/png";
 }
 
-function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
+function getImageGenerationProviderAuthEnvVars(providerId: string, cfg?: OpenClawConfig): string[] {
+  if (providerId === "openai" && isJarvisManagedOpenAIImageGenerationConfigured(cfg)) {
+    return [];
+  }
   return [...(PROVIDER_ENV_VARS[providerId] ?? [])];
 }
 
@@ -409,7 +417,10 @@ export function createImageGenerateTool(options?: {
           ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
           models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
           configured: isProviderConfigured(provider, effectiveCfg, options?.agentDir),
-          authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
+          managed:
+            provider.id === "openai" &&
+            isJarvisManagedOpenAIImageGenerationConfigured(effectiveCfg),
+          authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id, effectiveCfg),
           capabilities: provider.capabilities,
         }));
         const lines = providers.flatMap((provider) => {
@@ -427,6 +438,7 @@ export function createImageGenerateTool(options?: {
             `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
             `  models: ${provider.models.join(", ") || "unknown"}`,
             `  configured: ${provider.configured ? "yes" : "no"}`,
+            ...(provider.managed ? ["  auth: Jarvis managed backend"] : []),
             ...(provider.authEnvVars.length > 0
               ? [`  auth: set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`]
               : []),

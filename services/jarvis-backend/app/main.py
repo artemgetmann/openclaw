@@ -29,6 +29,9 @@ BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_LLM_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context"
 GEMINI_GENERATE_CONTENT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_IMAGE_GENERATION_MODEL = "gemini-3-pro-image-preview"
+OPENAI_IMAGE_GENERATION_URL = "https://api.openai.com/v1/images/generations"
+OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits"
+OPENAI_IMAGE_GENERATION_MODEL = "gpt-image-2"
 OPENAI_AUDIO_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 TELEGRAM_BOT_API_BASE_URL = "https://api.telegram.org"
@@ -39,7 +42,19 @@ MANAGED_SCRAPE_PREFLIGHT_HEADER_LIMIT = 64_000
 TELEGRAM_MANAGED_BOT_TIMEOUT_SECONDS = 20.0
 TELEGRAM_MANAGED_SETUP_TTL_MINUTES = 15
 MAX_GEMINI_IMAGE_PROMPT_CHARS = 4000
+MAX_OPENAI_IMAGE_PROMPT_CHARS = 4000
+MAX_OPENAI_IMAGE_INPUT_BYTES = 50 * 1024 * 1024
+MAX_OPENAI_IMAGE_INPUTS = 5
 MAX_OPENAI_AUDIO_BASE64_CHARS = 28_000_000
+SUPPORTED_OPENAI_IMAGE_SIZES = {
+    "1024x1024",
+    "1536x1024",
+    "1024x1536",
+    "2048x2048",
+    "2048x1152",
+    "3840x2160",
+    "2160x3840",
+}
 SUPPORTED_GEMINI_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
 SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
     "1:1",
@@ -525,6 +540,8 @@ async def managed_utility(
         return await _brave_search(request.input, settings)
     if utility == "gemini.image.generate":
         return await _gemini_image_generate(request.input, settings)
+    if utility == "openai.image.generate":
+        return await _openai_image_generate(request.input, settings)
     if utility == "openai.audio.transcribe":
         return await _openai_audio_transcribe(request.input, settings)
 
@@ -1451,6 +1468,251 @@ def _optional_openai_audio_model(input_payload: dict[str, Any]) -> str:
     return model or OPENAI_AUDIO_TRANSCRIPTION_MODEL
 
 
+def _optional_openai_image_model(input_payload: dict[str, Any]) -> str:
+    """Keep managed image spend on the single model the app advertises today."""
+
+    model = _optional_string(input_payload, "model")
+    if model and model != OPENAI_IMAGE_GENERATION_MODEL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"openai.image.generate input.model must be {OPENAI_IMAGE_GENERATION_MODEL}",
+        )
+    return model or OPENAI_IMAGE_GENERATION_MODEL
+
+
+def _reject_unsupported_openai_image_inputs(input_payload: dict[str, Any]) -> None:
+    """Keep the managed edit contract small and explicit."""
+
+    unsupported_fields = ("image", "images", "imageBase64", "inputImage")
+    for field_name in unsupported_fields:
+        if field_name in input_payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"openai.image.generate input.{field_name} is not supported",
+            )
+
+
+def _openai_image_input_filename(index: int, mime_type: str, raw_name: Any) -> str:
+    """Give multipart image uploads stable names without trusting caller paths."""
+
+    if isinstance(raw_name, str) and raw_name.strip():
+        name = Path(raw_name).name.strip()
+        if name:
+            return name[:128]
+    if mime_type == "image/jpeg":
+        return f"image-{index}.jpg"
+    if mime_type == "image/webp":
+        return f"image-{index}.webp"
+    return f"image-{index}.png"
+
+
+def _decode_openai_image_input_data(raw_data: str, utility: str) -> bytes:
+    """Accept plain base64 or a data URL from the app, then enforce OpenAI's limit."""
+
+    data = raw_data.strip()
+    if data.startswith("data:"):
+        try:
+            _, data = data.split(",", 1)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{utility} input.inputImages[].data must be valid base64",
+            ) from None
+    try:
+        decoded = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.inputImages[].data must be valid base64",
+        ) from None
+    if len(decoded) > MAX_OPENAI_IMAGE_INPUT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"{utility} input.inputImages[].data is too large",
+        )
+    return decoded
+
+
+def _optional_openai_image_inputs(
+    input_payload: dict[str, Any],
+    utility: str,
+) -> list[tuple[str, bytes, str]]:
+    """Validate reference images before opening the provider spend path."""
+
+    raw_images = input_payload.get("inputImages")
+    if raw_images is None:
+        return []
+    if not isinstance(raw_images, list) or len(raw_images) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.inputImages must be a non-empty array",
+        )
+    if len(raw_images) > MAX_OPENAI_IMAGE_INPUTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.inputImages supports at most {MAX_OPENAI_IMAGE_INPUTS} images",
+        )
+
+    files: list[tuple[str, bytes, str]] = []
+    for index, raw_image in enumerate(raw_images, start=1):
+        if not isinstance(raw_image, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{utility} input.inputImages[] must be an object",
+            )
+        raw_data = raw_image.get("data")
+        if not isinstance(raw_data, str) or not raw_data.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{utility} input.inputImages[].data is required",
+            )
+        mime_type = raw_image.get("mimeType")
+        normalized_mime_type = (
+            mime_type.strip().lower()
+            if isinstance(mime_type, str) and mime_type.strip()
+            else "image/png"
+        )
+        if normalized_mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{utility} input.inputImages[].mimeType must be image/png, image/jpeg, or image/webp",
+            )
+        files.append(
+            (
+                _openai_image_input_filename(index, normalized_mime_type, raw_image.get("fileName")),
+                _decode_openai_image_input_data(raw_data, utility),
+                normalized_mime_type,
+            )
+        )
+    return files
+
+
+def _openai_image_generation_request(input_payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the managed OpenAI image payload before any provider call."""
+
+    utility = "openai.image.generate"
+    _reject_unsupported_openai_image_inputs(input_payload)
+    prompt = _required_input_string(input_payload, "prompt", utility)
+    if len(prompt) > MAX_OPENAI_IMAGE_PROMPT_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "openai.image.generate input.prompt must be "
+                f"{MAX_OPENAI_IMAGE_PROMPT_CHARS} characters or fewer"
+            ),
+        )
+
+    payload: dict[str, Any] = {
+        "model": _optional_openai_image_model(input_payload),
+        "prompt": prompt,
+        "n": _optional_count_or_limit(input_payload, default=1, maximum=4, utility=utility),
+        "size": _optional_choice(
+            input_payload,
+            "size",
+            utility,
+            SUPPORTED_OPENAI_IMAGE_SIZES,
+            default="1024x1024",
+        ),
+    }
+    return payload
+
+
+def _openai_image_edit_request(
+    input_payload: dict[str, Any],
+) -> tuple[dict[str, str], list[tuple[str, bytes, str]]]:
+    """Validate the managed OpenAI edit payload before any provider call."""
+
+    utility = "openai.image.generate"
+    payload = _openai_image_generation_request(input_payload)
+    image_files = _optional_openai_image_inputs(input_payload, utility)
+    return {key: str(value) for key, value in payload.items()}, image_files
+
+
+async def _openai_image_generate(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Generate or edit images through OpenAI with the backend-held key."""
+
+    api_key = _require_provider_key("openai", settings.openai_api_key)
+    request_payload, image_files = _openai_image_edit_request(input_payload)
+    if image_files:
+        provider_payload = await _post_openai_image_edit(
+            api_key=api_key,
+            form_payload=request_payload,
+            image_files=image_files,
+            settings=settings,
+        )
+    else:
+        provider_payload = await _post_provider_json(
+            provider="openai",
+            url=OPENAI_IMAGE_GENERATION_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_payload={
+                "model": request_payload["model"],
+                "prompt": request_payload["prompt"],
+                "n": int(request_payload["n"]),
+                "size": request_payload["size"],
+            },
+            settings=settings,
+        )
+    return _managed_provider_response(
+        "openai",
+        _extract_openai_image_generation_payload(
+            provider_payload=provider_payload,
+            model=request_payload["model"],
+        ),
+    )
+
+
+async def _post_openai_image_edit(
+    *,
+    api_key: str,
+    form_payload: dict[str, str],
+    image_files: list[tuple[str, bytes, str]],
+    settings: Settings,
+) -> dict[str, Any]:
+    """POST OpenAI image edits as multipart files while keeping keys server-side."""
+
+    files = [
+        ("image[]", (file_name, image_bytes, mime_type))
+        for file_name, image_bytes, mime_type in image_files
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                OPENAI_IMAGE_EDIT_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                data=form_payload,
+                files=files,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="openai request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="openai request failed",
+        ) from exc
+
+    provider_payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(provider_payload, settings, extra_secrets=[api_key])
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": "openai",
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+    if isinstance(sanitized_payload, dict):
+        return sanitized_payload
+    return {"value": sanitized_payload}
+
+
 def _openai_audio_filename(input_payload: dict[str, Any], mime_type: str | None) -> str:
     """Give OpenAI a stable filename without trusting caller-supplied paths."""
 
@@ -1554,12 +1816,17 @@ def _optional_count_or_limit(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{utility} input.count and input.limit cannot both be set",
         )
-    return _optional_limit(
-        {"limit": raw_count},
-        default=default,
-        maximum=maximum,
-        utility=utility,
-    )
+    if (
+        isinstance(raw_count, bool)
+        or not isinstance(raw_count, int)
+        or raw_count < 1
+        or raw_count > maximum
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.count must be an integer between 1 and {maximum}",
+        )
+    return raw_count
 
 
 def _gemini_image_generation_request(
@@ -1647,6 +1914,50 @@ def _extract_gemini_image_generation_payload(
     return payload
 
 
+def _extract_openai_image_generation_payload(
+    *,
+    provider_payload: dict[str, Any],
+    model: str,
+) -> dict[str, Any]:
+    """Normalize OpenAI Images API base64 entries into the managed contract."""
+
+    images: list[dict[str, str]] = []
+    raw_images = provider_payload.get("data")
+    if isinstance(raw_images, list):
+        for image in raw_images:
+            if not isinstance(image, dict):
+                continue
+            data = image.get("b64_json")
+            if not isinstance(data, str) or not data.strip():
+                continue
+            entry = {
+                "mimeType": "image/png",
+                "data": data,
+            }
+            revised_prompt = image.get("revised_prompt")
+            if isinstance(revised_prompt, str) and revised_prompt.strip():
+                entry["revisedPrompt"] = revised_prompt.strip()
+            images.append(entry)
+
+    if not images:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="openai returned no generated image",
+        )
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "images": images,
+    }
+    created = provider_payload.get("created")
+    if isinstance(created, int) and not isinstance(created, bool):
+        payload["created"] = created
+    usage = provider_payload.get("usage")
+    if isinstance(usage, dict):
+        payload["usage"] = usage
+    return payload
+
+
 def _managed_provider_response(
     provider: str,
     provider_payload: dict[str, Any],
@@ -1669,6 +1980,9 @@ def _provider_units(provider_payload: dict[str, Any]) -> int:
     credits_used = provider_payload.get("creditsUsed")
     if isinstance(credits_used, int) and not isinstance(credits_used, bool) and credits_used >= 0:
         return credits_used
+    images = provider_payload.get("images")
+    if isinstance(images, list) and len(images) > 0:
+        return len(images)
     return 1
 
 
