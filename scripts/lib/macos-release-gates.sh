@@ -23,11 +23,11 @@ openclaw_macos_release_head() {
 }
 
 openclaw_jarvis_release_worktree_name() {
-  printf '%s\n' "jarvis-release-current"
+  printf '%s\n' "${OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME:-jarvis-release-current}"
 }
 
 openclaw_jarvis_release_home_clone() {
-  printf '%s\n' "/Users/user/Programming_Projects/openclaw"
+  printf '%s\n' "${OPENCLAW_MAIN_HOME_CLONE:-/Users/user/Programming_Projects/openclaw}"
 }
 
 openclaw_jarvis_release_worktree_path() {

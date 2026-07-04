@@ -66,6 +66,10 @@ test_release_worktree_guard() {
   git -C "$release_repo" checkout -qb "$release_branch"
   run_expect "release-worktree-guard-valid" pass \
     openclaw_require_jarvis_release_worktree "$release_repo" "$release_repo" "$release_branch"
+  run_expect "release-worktree-guard-env-home-valid" pass \
+    env OPENCLAW_MAIN_HOME_CLONE="$home" \
+      bash -c 'source "$1"; openclaw_require_jarvis_release_worktree "$2"' \
+      _ "$ROOT_DIR/scripts/lib/macos-release-gates.sh" "$release_repo"
 
   make_git_release_repo "$random_repo"
   git -C "$random_repo" checkout -qb "$release_branch"
@@ -75,6 +79,16 @@ test_release_worktree_guard() {
   git -C "$release_repo" checkout -qb "codex/not-the-release-lane"
   run_expect "release-worktree-guard-wrong-branch" fail \
     openclaw_require_jarvis_release_worktree "$release_repo" "$release_repo" "$release_branch"
+
+  local custom_name="jarvis-release-custom"
+  local custom_branch="codex/${custom_name}"
+  local custom_repo="$home/.worktrees/$custom_name"
+  make_git_release_repo "$custom_repo"
+  git -C "$custom_repo" checkout -qb "$custom_branch"
+  run_expect "release-worktree-guard-env-name-valid" pass \
+    env OPENCLAW_MAIN_HOME_CLONE="$home" OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$custom_name" \
+      bash -c 'source "$1"; openclaw_require_jarvis_release_worktree "$2"' \
+      _ "$ROOT_DIR/scripts/lib/macos-release-gates.sh" "$custom_repo"
 }
 
 make_app() {
