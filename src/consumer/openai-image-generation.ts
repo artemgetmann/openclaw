@@ -12,6 +12,7 @@ import {
 const DEFAULT_MODEL = "gpt-image-2";
 const DEFAULT_MIME_TYPE = "image/png";
 const MAX_INPUT_IMAGES = 5;
+const OPENAI_IMAGE_GENERATION_TIMEOUT_MS = 120_000;
 const SUPPORTED_SIZES = [
   "1024x1024",
   "1536x1024",
@@ -119,6 +120,10 @@ export function buildJarvisManagedOpenAIImageGenerationProvider(): ImageGenerati
         await managedClient.callManagedUtility({
           utility: "openai.image.generate",
           input,
+          // Image edits can legitimately run much longer than license checks,
+          // search, or scrape utilities. Keep this scoped so a slow image job
+          // does not force every managed backend call to wait two minutes.
+          timeoutMs: OPENAI_IMAGE_GENERATION_TIMEOUT_MS,
         }),
         "openai",
       );

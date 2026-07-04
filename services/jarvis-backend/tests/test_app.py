@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
-from app.main import app, get_settings, telegram_managed_setup_sessions
+from app.main import (
+    OPENAI_IMAGE_TIMEOUT_SECONDS,
+    app,
+    get_settings,
+    telegram_managed_setup_sessions,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -28,16 +33,21 @@ def reset_settings() -> None:
     get_settings.cache_clear()
 
 
-def install_mock_async_client(monkeypatch, handler) -> None:
+def install_mock_async_client(monkeypatch, handler) -> list[dict[str, object]]:
     """Route provider HTTP through httpx MockTransport so tests never hit the network."""
 
     real_async_client = httpx.AsyncClient
     transport = httpx.MockTransport(handler)
+    calls: list[dict[str, object]] = []
 
     def make_client(*args, **kwargs):
+        # Record constructor args before injecting MockTransport so tests can
+        # assert production timeout choices without depending on real network IO.
+        calls.append({"args": args, "kwargs": dict(kwargs)})
         return real_async_client(*args, transport=transport, **kwargs)
 
     monkeypatch.setattr("app.main.httpx.AsyncClient", make_client)
+    return calls
 
 
 def backend_token_headers(token: str = "server-token") -> dict[str, str]:
@@ -1260,7 +1270,7 @@ def test_openai_image_generate_calls_provider_and_redacts_key(monkeypatch):
             },
         )
 
-    install_mock_async_client(monkeypatch, handler)
+    async_client_calls = install_mock_async_client(monkeypatch, handler)
 
     response = TestClient(app).post(
         "/v1/managed/utilities/openai.image.generate",
@@ -1294,6 +1304,7 @@ def test_openai_image_generate_calls_provider_and_redacts_key(monkeypatch):
     }
     assert body["usage"]["units"] == 2
     assert "test-openai-provider-placeholder" not in response.text
+    assert async_client_calls[0]["kwargs"]["timeout"] == OPENAI_IMAGE_TIMEOUT_SECONDS
 
 
 def test_openai_image_generate_requires_provider_key(monkeypatch):
@@ -1341,7 +1352,7 @@ def test_openai_image_generate_routes_reference_images_to_edit_endpoint(monkeypa
             },
         )
 
-    install_mock_async_client(monkeypatch, handler)
+    async_client_calls = install_mock_async_client(monkeypatch, handler)
 
     response = TestClient(app).post(
         "/v1/managed/utilities/openai.image.generate",
@@ -1369,6 +1380,7 @@ def test_openai_image_generate_routes_reference_images_to_edit_endpoint(monkeypa
     }
     assert body["usage"]["units"] == 1
     assert "test-openai-provider-placeholder" not in response.text
+    assert async_client_calls[0]["kwargs"]["timeout"] == OPENAI_IMAGE_TIMEOUT_SECONDS
 
 
 def test_openai_image_generate_validates_before_provider_spend(monkeypatch):

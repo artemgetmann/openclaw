@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createJarvisBackendClient } from "./jarvis-backend-client.js";
 
 describe("createJarvisBackendClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("is inert when Jarvis config is absent", async () => {
     const fetchResponse = vi.fn();
     const client = createJarvisBackendClient({}, { fetchResponse });
@@ -201,6 +205,42 @@ describe("createJarvisBackendClient", () => {
       result: { text: "short" },
       usage: undefined,
     });
+  });
+
+  it("honors a managed utility request-specific timeout", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetchResponse = vi.fn(
+      (params) =>
+        new Promise<never>((_resolve, reject) => {
+          signal = params.init.signal as AbortSignal;
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    const client = createJarvisBackendClient(
+      {
+        jarvis: {
+          backend: { baseUrl: "https://jarvis.example", timeoutMs: 10_000 },
+          managedServices: { mode: "managed" },
+        },
+      },
+      { fetchResponse },
+    );
+
+    const result = client.callManagedUtility({
+      utility: "openai.image.generate",
+      timeoutMs: 120_000,
+    });
+    const caughtResult = result.catch((err: unknown) => err);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(110_000);
+    const err = await caughtResult;
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("aborted");
+    expect(signal?.aborted).toBe(true);
   });
 
   it("preserves sanitized managed utility backend details on HTTP failures", async () => {

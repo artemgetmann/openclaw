@@ -36,6 +36,9 @@ OPENAI_AUDIO_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions
 OPENAI_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 TELEGRAM_BOT_API_BASE_URL = "https://api.telegram.org"
 MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
+# OpenAI image operations commonly run longer than search/scrape/audio utility
+# calls. Keep the generic timeout tight, but do not abort image edits mid-flight.
+OPENAI_IMAGE_TIMEOUT_SECONDS = 120.0
 MANAGED_SCRAPE_PREFLIGHT_TIMEOUT_SECONDS = 5.0
 MANAGED_SCRAPE_MAX_REDIRECTS = 5
 MANAGED_SCRAPE_PREFLIGHT_HEADER_LIMIT = 64_000
@@ -982,11 +985,12 @@ async def _post_provider_json(
     headers: dict[str, str],
     json_payload: dict[str, Any],
     settings: Settings,
+    timeout_seconds: float = MANAGED_UTILITY_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """POST provider JSON while converting network failures into clean API errors."""
 
     try:
-        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(url, headers=headers, json=json_payload)
     except httpx.TimeoutException as exc:
         raise HTTPException(
@@ -1655,6 +1659,7 @@ async def _openai_image_generate(
                 "size": request_payload["size"],
             },
             settings=settings,
+            timeout_seconds=OPENAI_IMAGE_TIMEOUT_SECONDS,
         )
     return _managed_provider_response(
         "openai",
@@ -1679,7 +1684,7 @@ async def _post_openai_image_edit(
         for file_name, image_bytes, mime_type in image_files
     ]
     try:
-        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=OPENAI_IMAGE_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 OPENAI_IMAGE_EDIT_URL,
                 headers={"Authorization": f"Bearer {api_key}"},

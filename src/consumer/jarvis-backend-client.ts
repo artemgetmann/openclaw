@@ -67,6 +67,7 @@ export type JarvisManagedUtilityRequest = {
   input?: unknown;
   appVersion?: string;
   deviceId?: string;
+  timeoutMs?: number;
 };
 
 type JarvisBackendClientDeps = {
@@ -111,6 +112,13 @@ function resolveSecretInputString(
 
 function buildUrl(baseUrl: string, path: string): string {
   return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function resolveRequestTimeoutMs(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
 }
 
 function readStringField(payload: Record<string, unknown>, field: string): string | undefined {
@@ -340,7 +348,8 @@ export function createJarvisBackendClient(
         throw new Error("Jarvis managed utility id is invalid");
       }
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const requestTimeoutMs = resolveRequestTimeoutMs(params.timeoutMs, timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         return await fetchResponse({
           url: buildUrl(baseUrl, `/v1/managed/utilities/${encodeURIComponent(utility)}`),
