@@ -691,8 +691,63 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
   pass "package sparkle-only publish gate does not require dmg notarization"
 }
 
+test_package_sparkle_publish_only_ignores_skip_notarize() {
+  local app_name="JarvisSparkleSkipNotarizeTest-$$"
+  local app_path="$ROOT_DIR/dist/${app_name}.app"
+  local fake_bin="$TMP_DIR/fake-bin-sparkle-skip"
+  local manifest="$TMP_DIR/package-sparkle-skip-notarize-manifest.env"
+  local out="$TMP_DIR/package-sparkle-skip-notarize.out"
+  local err="$TMP_DIR/package-sparkle-skip-notarize.err"
+  local status
+
+  mkdir -p "$app_path" "$fake_bin"
+  {
+    printf 'JARVIS_APP_NOTARY_STATUS=%q\n' "Accepted"
+  } >"$manifest"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [[ "$1" == "auth" && "$2" == "status" ]]; then exit 0; fi\n'
+    printf 'if [[ "$1" == "release" && "$2" == "view" ]]; then\n'
+    printf '  printf '"'"'{"tagName":"v-current","url":"https://github.com/artemgetmann/openclaw/releases/tag/v-current"}\\n'"'"'\n'
+    printf '  exit 0\n'
+    printf 'fi\n'
+    printf 'echo "unexpected gh invocation: $*" >&2\n'
+    printf 'exit 99\n'
+  } >"$fake_bin/gh"
+  chmod +x "$fake_bin/gh"
+
+  set +e
+  PATH="$fake_bin:$PATH" \
+  APP_NAME="$app_name" \
+  SKIP_NOTARIZE=1 \
+  OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
+    bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase publish-sparkle-assets-only \
+      --publish-release-assets \
+      --github-release-tag v-current \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  rm -rf "$app_path"
+
+  if [[ "$status" -eq 0 ]]; then
+    cat "$out" >&2
+    fail "package publish-sparkle-assets-only should still require local Sparkle assets"
+  fi
+  if grep -q -- '--publish-release-assets requires notarization' "$err"; then
+    cat "$err" >&2
+    fail "package sparkle-only publish should not be blocked by SKIP_NOTARIZE"
+  fi
+  if ! grep -q 'consumer app bundle not found' "$err"; then
+    cat "$err" >&2
+    fail "package sparkle-only publish did not reach the resume artifact gates"
+  fi
+  pass "package sparkle-only publish ignores skip notarize"
+}
+
 test_phase_selection
 test_retry_classification
 test_wrapper_dry_run
 test_package_create_assets_rejects_stale_tag
 test_package_sparkle_publish_gate_does_not_require_dmg
+test_package_sparkle_publish_only_ignores_skip_notarize

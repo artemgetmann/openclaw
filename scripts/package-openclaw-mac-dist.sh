@@ -298,7 +298,7 @@ require_release_publish_prereqs() {
     return 0
   fi
 
-  if [[ "$NOTARIZE" != "1" && "$PACKAGE_PHASE" != "publish-assets-only" ]]; then
+  if [[ "$NOTARIZE" != "1" && "$PACKAGE_PHASE" != "publish-assets-only" && "$PACKAGE_PHASE" != "publish-sparkle-assets-only" ]]; then
     echo "ERROR: --publish-release-assets requires notarization." >&2
     echo "SKIP_NOTARIZE=1 is local smoke/dev packaging and must not publish." >&2
     exit 1
