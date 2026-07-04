@@ -4,12 +4,14 @@ import { loadConfig } from "../../config/config.js";
 import {
   createSessionGoal,
   getSessionGoal,
+  type SessionGoalSnapshot,
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronStorePath } from "../../cron/store.js";
 import { loadMonitorStore, resolveMonitorStorePath } from "../../monitor/store.js";
+import type { MonitorActionPolicy, MonitorRecord, MonitorStatus } from "../../monitor/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, ToolInputError, jsonResult, readStringParam } from "./common.js";
@@ -26,7 +28,23 @@ type GoalSessionScope = {
   expectedGoalId?: string;
 };
 
+type GoalWaitingMonitor = {
+  monitorId: string;
+  status: Extract<MonitorStatus, "active" | "degraded">;
+  name?: string;
+  sourceType: string;
+  actionPolicy: MonitorActionPolicy;
+  lastWakeStatus?: MonitorStatus;
+  updatedAtMs: number;
+  expiryAt?: string;
+};
+
+type GoalSnapshotWithWaitingMonitors = SessionGoalSnapshot & {
+  waitingOnMonitors?: GoalWaitingMonitor[];
+};
+
 const GOAL_TOOL_STATUSES = ["complete", "blocked"] as const;
+const WAITING_MONITOR_STATUSES = new Set<MonitorStatus>(["active", "degraded"]);
 
 const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
@@ -92,6 +110,45 @@ async function resolveGoalSessionScope(
   return (await resolveMonitorOriginGoalSessionScope(options, current)) ?? current;
 }
 
+function toGoalWaitingMonitor(monitor: MonitorRecord): GoalWaitingMonitor {
+  return {
+    monitorId: monitor.monitorId,
+    status: monitor.status as Extract<MonitorStatus, "active" | "degraded">,
+    ...(monitor.name ? { name: monitor.name } : {}),
+    sourceType: monitor.sourceType,
+    actionPolicy: monitor.actionPolicy,
+    ...(monitor.lastWakeStatus ? { lastWakeStatus: monitor.lastWakeStatus } : {}),
+    updatedAtMs: monitor.updatedAtMs,
+    ...(monitor.expiryAt ? { expiryAt: monitor.expiryAt } : {}),
+  };
+}
+
+async function resolveGoalWaitingMonitors(
+  options: GoalToolOptions,
+  scope: GoalSessionScope,
+  snapshot: SessionGoalSnapshot,
+): Promise<GoalWaitingMonitor[]> {
+  if (snapshot.status !== "found" || !snapshot.goal) {
+    return [];
+  }
+
+  const cfg = resolveConfig(options);
+  const monitorStorePath = resolveMonitorStorePath({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
+  const store = await loadMonitorStore(monitorStorePath);
+  // `get_goal` is the user-facing contract surface, so expose only the waits
+  // bound to this exact goal and origin chat. Monitor internals stay in monitor tools.
+  return store.monitors
+    .filter(
+      (monitor) =>
+        monitor.goal?.id === snapshot.goal?.id &&
+        monitor.originSessionKey === scope.sessionKey &&
+        WAITING_MONITOR_STATUSES.has(monitor.status),
+    )
+    .map(toGoalWaitingMonitor);
+}
+
 export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Get Goal",
@@ -104,7 +161,12 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
         ...scope,
         persist: false,
       });
-      return jsonResult(snapshot);
+      const waitingOnMonitors = await resolveGoalWaitingMonitors(options, scope, snapshot);
+      const details: GoalSnapshotWithWaitingMonitors = {
+        ...snapshot,
+        ...(waitingOnMonitors.length ? { waitingOnMonitors } : {}),
+      };
+      return jsonResult(details);
     },
   };
 }
