@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
+  buildDefaultMonitorEventHookUrl,
   buildTopicPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
@@ -59,6 +60,12 @@ describe("gmail hook config", () => {
     );
   });
 
+  it("builds default monitor-event hook url", () => {
+    expect(buildDefaultMonitorEventHookUrl("/hooks", DEFAULT_GATEWAY_PORT)).toBe(
+      `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail-monitor-event`,
+    );
+  });
+
   it("parses topic path", () => {
     const topic = buildTopicPath("proj", "topic");
     expect(parseTopicPath(topic)).toEqual({
@@ -75,7 +82,32 @@ describe("gmail hook config", () => {
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
+      expect(result.value.monitorEvents).toBe(false);
       expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
+    }
+  });
+
+  it("uses the monitor-event adapter URL when enabled", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "openclaw@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            pushToken: "push-token",
+            monitorEvents: true,
+          },
+        },
+      },
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.monitorEvents).toBe(true);
+      expect(result.value.hookUrl).toBe(
+        `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail-monitor-event`,
+      );
     }
   });
 

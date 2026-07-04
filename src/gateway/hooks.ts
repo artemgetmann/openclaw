@@ -26,6 +26,7 @@ export type HooksConfigResolved = {
   token: string;
   maxBodyBytes: number;
   mappings: HookMappingResolved[];
+  gmailAccount?: string;
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
 };
@@ -89,6 +90,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     token,
     maxBodyBytes,
     mappings,
+    gmailAccount: normalizeOptionalHookString(cfg.hooks?.gmail?.account),
     agentPolicy: {
       defaultAgentId,
       knownAgentIds,
@@ -343,6 +345,95 @@ export function normalizeMonitorEventPayload(
       ...(payload.evidence ? { evidence: payload.evidence } : {}),
     },
   };
+}
+
+function firstPlainObject(raw: unknown): Record<string, unknown> | undefined {
+  if (Array.isArray(raw)) {
+    const first = raw.find(isPlainHookObject);
+    return first;
+  }
+  return isPlainHookObject(raw) ? raw : undefined;
+}
+
+function normalizeGmailString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim();
+  return value ? value : undefined;
+}
+
+function addGmailEvidenceString(
+  evidence: Record<string, unknown>,
+  key: string,
+  raw: unknown,
+): void {
+  const value = normalizeGmailString(raw);
+  if (value) {
+    evidence[key] = value;
+  }
+}
+
+export function normalizeGmailMonitorEventPayload(
+  payload: Record<string, unknown>,
+  options?: { idempotencyKey?: string; nowMs?: number; configuredAccount?: string },
+): { ok: true; value: HookMonitorEventPayload } | { ok: false; error: string } {
+  const message =
+    firstPlainObject(payload.messages) ?? firstPlainObject(payload.message) ?? payload;
+  const account =
+    normalizeGmailString(payload.account) ??
+    normalizeGmailString(payload.emailAddress) ??
+    normalizeGmailString(message.account) ??
+    normalizeGmailString(message.emailAddress) ??
+    normalizeGmailString(options?.configuredAccount);
+  if (!account) {
+    return { ok: false, error: "gmail account required" };
+  }
+
+  const threadId = normalizeGmailString(message.threadId) ?? normalizeGmailString(payload.threadId);
+  if (!threadId) {
+    return { ok: false, error: "gmail message threadId required" };
+  }
+
+  const messageId =
+    normalizeGmailString(message.id) ??
+    normalizeGmailString(message.messageId) ??
+    normalizeGmailString(payload.messageId);
+  const historyId =
+    normalizeGmailString(message.historyId) ?? normalizeGmailString(payload.historyId);
+  const eventType = normalizeGmailString(payload.eventType) ?? "message.created";
+  const derivedIdempotencyKey =
+    options?.idempotencyKey ??
+    (messageId
+      ? `gmail:${account}:${threadId}:${messageId}`
+      : historyId
+        ? `gmail:${account}:${threadId}:history:${historyId}`
+        : undefined);
+
+  const evidence: Record<string, unknown> = {};
+  addGmailEvidenceString(evidence, "messageId", messageId);
+  addGmailEvidenceString(evidence, "historyId", historyId);
+  addGmailEvidenceString(evidence, "from", message.from);
+  addGmailEvidenceString(evidence, "subject", message.subject);
+  addGmailEvidenceString(evidence, "snippet", message.snippet);
+  addGmailEvidenceString(evidence, "body", message.body);
+
+  // The adapter emits the same normalized event envelope as /hooks/monitor-event.
+  // Provider content stays in evidence; sourceTarget is only stable routing keys.
+  return normalizeMonitorEventPayload(
+    {
+      triggerKind: "webhook",
+      sourceType: "gmail",
+      sourceTarget: { account, threadId },
+      eventType,
+      ...(derivedIdempotencyKey ? { idempotencyKey: derivedIdempotencyKey } : {}),
+      ...(Object.keys(evidence).length > 0 ? { evidence } : {}),
+    },
+    {
+      idempotencyKey: derivedIdempotencyKey,
+      nowMs: options?.nowMs,
+    },
+  );
 }
 
 export function resolveHookTargetAgentId(

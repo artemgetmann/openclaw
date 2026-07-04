@@ -126,6 +126,7 @@ export const HooksGmailSchema = z
     subscription: z.string().optional(),
     pushToken: z.string().optional().register(sensitive),
     hookUrl: z.string().optional(),
+    monitorEvents: z.boolean().optional(),
     includeBody: z.boolean().optional(),
     maxBytes: z.number().int().positive().optional(),
     renewEveryMinutes: z.number().int().positive().optional(),

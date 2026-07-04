@@ -45,6 +45,7 @@ import {
   normalizeAgentPayload,
   normalizeHookHeaders,
   resolveHookIdempotencyKey,
+  normalizeGmailMonitorEventPayload,
   normalizeMonitorEventPayload,
   normalizeWakePayload,
   readJsonBody,
@@ -673,6 +674,45 @@ export function createHooksRequestHandler(
       } catch (err) {
         logHooks.warn(`hook monitor-event failed: ${String(err)}`);
         sendJson(res, 503, { ok: false, error: "monitor event dispatch unavailable" });
+      }
+      return true;
+    }
+
+    if (subPath === "gmail-monitor-event") {
+      const normalized = normalizeGmailMonitorEventPayload(payload as Record<string, unknown>, {
+        idempotencyKey,
+        nowMs: now,
+        configuredAccount: hooksConfig.gmailAccount,
+      });
+      if (!normalized.ok) {
+        sendJson(res, 400, { ok: false, error: normalized.error });
+        return true;
+      }
+      const replayIdempotencyKey = normalized.value.idempotencyKey ?? idempotencyKey;
+      const replayKey = buildHookReplayCacheKey({
+        pathKey: "gmail-monitor-event",
+        token,
+        idempotencyKey: replayIdempotencyKey,
+        dispatchScope: {
+          triggerKind: normalized.value.triggerKind,
+          sourceType: normalized.value.sourceType,
+          sourceTarget: normalized.value.sourceTarget,
+          eventType: normalized.value.eventType ?? null,
+        },
+      });
+      const cachedResponse = resolveCachedHookResponse(replayKey, now);
+      if (cachedResponse) {
+        sendJson(res, 200, { ok: true, ...cachedResponse, replayed: true });
+        return true;
+      }
+
+      try {
+        const result = await dispatchMonitorEventHook(normalized.value);
+        rememberHookResponse(replayKey, result, now);
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        logHooks.warn(`hook gmail-monitor-event failed: ${String(err)}`);
+        sendJson(res, 503, { ok: false, error: "gmail monitor event dispatch unavailable" });
       }
       return true;
     }

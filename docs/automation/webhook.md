@@ -132,6 +132,36 @@ Effect:
 - Preserves the monitor's original session and delivery route.
 - Returns `matched: 0` and wakes nothing when the event does not match an active monitor.
 
+### `POST /hooks/gmail-monitor-event`
+
+Accepts gog/Gmail-shaped payloads and routes them through the same durable monitor
+event path as `/hooks/monitor-event`.
+
+Payload example:
+
+```json
+{
+  "source": "gmail",
+  "historyId": "12345",
+  "messages": [
+    {
+      "id": "msg-456",
+      "threadId": "thread-123",
+      "from": "Ada <ada@example.com>",
+      "subject": "Hello",
+      "snippet": "Hi"
+    }
+  ]
+}
+```
+
+Effect:
+
+- Normalizes to `triggerKind: "webhook"`, `sourceType: "gmail"`, and `sourceTarget: { account, threadId }`.
+- Uses `hooks.gmail.account` when the payload does not include `account` or `emailAddress`.
+- Derives an idempotency key from account/thread/message id when the request does not provide one.
+- Wakes matching durable monitors only; it does not spawn the Gmail agent-summary hook.
+
 ## Session key policy (breaking change)
 
 `/hooks/agent` payload `sessionKey` overrides are disabled by default.
@@ -245,6 +275,13 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"source":"gmail","messages":[{"from":"Ada","subject":"Hello","snippet":"Hi"}]}'
+```
+
+```bash
+curl -X POST http://127.0.0.1:18789/hooks/gmail-monitor-event \
+  -H 'Authorization: Bearer SECRET' \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"gmail","account":"me@example.com","messages":[{"id":"msg-456","threadId":"thread-123","subject":"Hello"}]}'
 ```
 
 ## Security
