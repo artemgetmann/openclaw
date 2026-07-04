@@ -199,6 +199,42 @@ Notes:
 
 Recommended: `openclaw webhooks gmail run` wraps the same flow and auto-renews the watch.
 
+### Route Gmail pushes to durable monitors
+
+Use monitor-event mode when the Gmail push should wake an existing durable monitor
+instead of starting a new isolated Gmail summary run:
+
+```bash
+openclaw webhooks gmail run --monitor-events
+```
+
+Setup can store the same behavior:
+
+```bash
+openclaw webhooks gmail setup \
+  --account openclaw@gmail.com \
+  --monitor-events
+```
+
+This points gog at `/hooks/gmail-monitor-event`. OpenClaw converts provider-shaped
+Gmail payloads like `messages[0].threadId` into the normalized monitor event envelope:
+
+```json
+{
+  "triggerKind": "webhook",
+  "sourceType": "gmail",
+  "sourceTarget": {
+    "account": "openclaw@gmail.com",
+    "threadId": "thread-123"
+  },
+  "eventType": "message.created"
+}
+```
+
+Only monitors whose Gmail trigger matches those stable routing keys wake. Email text,
+subject, sender, and snippets are carried as event evidence only; the monitor wake should
+inspect fresh source state before acting.
+
 ## Expose the handler (advanced, unsupported)
 
 If you need a non-Tailscale tunnel, wire it manually and use the public URL in the push

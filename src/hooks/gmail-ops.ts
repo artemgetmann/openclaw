@@ -23,6 +23,7 @@ import {
 } from "./gmail-setup-utils.js";
 import {
   buildDefaultHookUrl,
+  buildDefaultMonitorEventHookUrl,
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   buildTopicPath,
@@ -51,6 +52,7 @@ type GmailCommonOptions = {
   hookToken?: string;
   pushToken?: string;
   hookUrl?: string;
+  monitorEvents?: boolean;
   bind?: string;
   port?: number;
   path?: string;
@@ -111,10 +113,13 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const subscription = opts.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
   const label = opts.label ?? DEFAULT_GMAIL_LABEL;
+  const monitorEvents = opts.monitorEvents ?? baseConfig.hooks?.gmail?.monitorEvents ?? false;
   const hookUrl =
     opts.hookUrl ??
     baseConfig.hooks?.gmail?.hookUrl ??
-    buildDefaultHookUrl(hooksPath, resolveGatewayPort(baseConfig));
+    (monitorEvents
+      ? buildDefaultMonitorEventHookUrl(hooksPath, resolveGatewayPort(baseConfig))
+      : buildDefaultHookUrl(hooksPath, resolveGatewayPort(baseConfig)));
 
   const serveBind = opts.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePort = opts.port ?? DEFAULT_GMAIL_SERVE_PORT;
@@ -213,6 +218,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
         subscription,
         pushToken,
         hookUrl,
+        monitorEvents,
         includeBody,
         maxBytes,
         renewEveryMinutes,
@@ -280,6 +286,7 @@ export async function runGmailService(opts: GmailRunOptions) {
     hookToken: opts.hookToken,
     pushToken: opts.pushToken,
     hookUrl: opts.hookUrl,
+    monitorEvents: opts.monitorEvents,
     serveBind: opts.bind,
     servePort: opts.port,
     servePath: opts.path,
