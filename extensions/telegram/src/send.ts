@@ -44,6 +44,7 @@ import {
 } from "./reply-parameters.js";
 import {
   buildTelegramRichMessage,
+  getTelegramRichEditRawApi,
   getTelegramRichRawApi,
   toTelegramRichMessageContextParams,
 } from "./rich-message.js";
@@ -1309,6 +1310,10 @@ type TelegramEditOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Prefer Telegram Bot API rich_message edits when supported. */
+  richMessages?: boolean;
+  /** Markdown table mode for both rich edits and legacy fallback rendering. */
+  tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
   /** Controls whether link previews are shown in the edited message. */
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
@@ -1407,11 +1412,14 @@ export async function editMessageTelegram(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "telegram",
-    accountId: account.accountId,
-  });
+  const tableMode =
+    opts.tableMode ??
+    resolveMarkdownTableMode({
+      cfg,
+      channel: "telegram",
+      accountId: account.accountId,
+      supportsBlockTables: true,
+    });
   const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
 
   // Reply markup semantics:
@@ -1440,6 +1448,47 @@ export async function editMessageTelegram(
   }
 
   try {
+    const richEditApi =
+      opts.richMessages === false || account.config.richMessages === false
+        ? null
+        : getTelegramRichEditRawApi(api);
+    if (richEditApi) {
+      try {
+        const richMessage = buildTelegramRichMessage(
+          { text, textMode },
+          {
+            tableMode,
+            skipEntityDetection: opts.linkPreview === false,
+          },
+        );
+        await requestWithEditShouldLog(
+          () =>
+            richEditApi.editMessageText({
+              chat_id: chatId,
+              message_id: messageId,
+              rich_message: richMessage,
+              ...(opts.linkPreview === false
+                ? { link_preview_options: { is_disabled: true } }
+                : {}),
+              ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
+            }),
+          "editMessage.richMessage",
+          (err) => !isTelegramMessageNotModifiedError(err),
+        );
+        logVerbose(`[telegram] Edited rich message ${messageId} in chat ${chatId}`);
+        return { ok: true, messageId: String(messageId), chatId };
+      } catch (err) {
+        if (isTelegramMessageNotModifiedError(err)) {
+          logVerbose(`[telegram] Edited rich message ${messageId} in chat ${chatId} (unchanged)`);
+          return { ok: true, messageId: String(messageId), chatId };
+        }
+        logVerbose(
+          `telegram rich-message edit failed, retrying legacy editMessageText: ${formatErrorMessage(
+            err,
+          )}`,
+        );
+      }
+    }
     await withTelegramHtmlParseFallback({
       label: "editMessage",
       verbose: opts.verbose,

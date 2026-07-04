@@ -54,8 +54,32 @@ type TelegramRichRawApi = {
   sendRichMessage: (params: TelegramSendRichMessageParams) => Promise<Message>;
 };
 
+export type TelegramSendRichMessageDraftParams = {
+  chat_id: number;
+  message_thread_id?: number;
+  draft_id: number;
+  rich_message: TelegramInputRichMessage;
+};
+
+export type TelegramEditRichMessageTextParams = {
+  chat_id?: number | string;
+  message_id?: number;
+  inline_message_id?: string;
+  rich_message: TelegramInputRichMessage;
+  link_preview_options?: { is_disabled?: boolean };
+  reply_markup?: TelegramRichMessageReplyMarkup;
+};
+
+type TelegramRichDraftRawApi = {
+  sendRichMessageDraft: (params: TelegramSendRichMessageDraftParams) => Promise<boolean>;
+};
+
+type TelegramRichEditRawApi = {
+  editMessageText: (params: TelegramEditRichMessageTextParams) => Promise<Message | true>;
+};
+
 type TelegramApiWithRichRaw = Bot["api"] & {
-  raw?: Partial<TelegramRichRawApi>;
+  raw?: Partial<TelegramRichRawApi & TelegramRichDraftRawApi & TelegramRichEditRawApi>;
 };
 
 export function getTelegramRichRawApi(api: Bot["api"]): TelegramRichRawApi | null {
@@ -64,6 +88,22 @@ export function getTelegramRichRawApi(api: Bot["api"]): TelegramRichRawApi | nul
     return null;
   }
   return { sendRichMessage };
+}
+
+export function getTelegramRichDraftRawApi(api: Bot["api"]): TelegramRichDraftRawApi | null {
+  const sendRichMessageDraft = (api as TelegramApiWithRichRaw).raw?.sendRichMessageDraft;
+  if (typeof sendRichMessageDraft !== "function") {
+    return null;
+  }
+  return { sendRichMessageDraft };
+}
+
+export function getTelegramRichEditRawApi(api: Bot["api"]): TelegramRichEditRawApi | null {
+  const editMessageText = (api as TelegramApiWithRichRaw).raw?.editMessageText;
+  if (typeof editMessageText !== "function") {
+    return null;
+  }
+  return { editMessageText };
 }
 
 function finiteInteger(value: unknown): number | undefined {

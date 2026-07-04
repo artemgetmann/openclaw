@@ -69,7 +69,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
-import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
+import { buildFinalTtsCaptionPreview, buildFinalTtsSpokenPreview } from "./tts-caption-preview.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -805,8 +805,12 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldPreserveControlCommandMarker && !isTelegramTtsControlCommand) {
         return payload;
       }
+      const ttsInputPayload =
+        kind === "final" && typeof payload.text === "string"
+          ? { ...payload, text: buildFinalTtsSpokenPreview(payload.text) ?? payload.text }
+          : payload;
       const ttsPayload = await maybeApplyTtsToPayload({
-        payload,
+        payload: ttsInputPayload,
         cfg,
         channel: ttsChannel,
         kind,

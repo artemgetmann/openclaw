@@ -108,6 +108,60 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
   });
 
+  it("edits existing stream preview messages with rich_message when the raw API supports it", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: { editMessageText: ReturnType<typeof vi.fn> };
+    };
+    api.raw = { editMessageText: vi.fn().mockResolvedValue({ message_id: 17 }) };
+    const stream = createDraftStream(api, {
+      thread: { id: 99, scope: "forum" },
+      renderText: (text) => ({
+        text,
+        richMessage: { html: text },
+      }),
+    });
+
+    stream.update("Hello");
+    await expectInitialForumSend(api);
+    await (api.sendMessage.mock.results[0]?.value as Promise<unknown>);
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: { html: "Hello again" },
+    });
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to legacy HTML edits when rich_message edit fails", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: { editMessageText: ReturnType<typeof vi.fn> };
+    };
+    api.raw = { editMessageText: vi.fn().mockRejectedValue(new Error("rich edit unavailable")) };
+    const stream = createDraftStream(api, {
+      renderText: (text) => ({
+        text: `<b>${text}</b>`,
+        parseMode: "HTML",
+        richMessage: { html: `<p><b>${text}</b></p>` },
+      }),
+    });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    await (api.sendMessage.mock.results[0]?.value as Promise<unknown>);
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<b>Hello again</b>", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("waits for in-flight updates before final flush edit", async () => {
     let resolveSend: ((value: { message_id: number }) => void) | undefined;
     const firstSend = new Promise<{ message_id: number }>((resolve) => {
@@ -139,7 +193,13 @@ describe("createTelegramDraftStream", () => {
 
   it("uses sendMessageDraft for dm threads and does not create a preview message", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      renderText: (text) => ({
+        text,
+        richMessage: { html: text },
+      }),
+    });
 
     stream.update("Hello");
     await vi.waitFor(() =>
@@ -155,6 +215,36 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessageDraft).toHaveBeenLastCalledWith(123, expect.any(Number), "", {
       message_thread_id: 42,
     });
+  });
+
+  it("uses sendRichMessageDraft for rich dm draft previews when supported", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: { sendRichMessageDraft: ReturnType<typeof vi.fn> };
+    };
+    api.raw = { sendRichMessageDraft: vi.fn().mockResolvedValue(true) };
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      renderText: (text) => ({
+        text,
+        richMessage: { html: text },
+      }),
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
+      chat_id: 123,
+      draft_id: 1,
+      message_thread_id: 42,
+      rich_message: { html: "Hello" },
+    });
+    expect(api.sendMessageDraft).not.toHaveBeenCalledWith(
+      123,
+      1,
+      "Hello",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
   });
 
   it("clears abandoned native draft previews without deleting messages", async () => {

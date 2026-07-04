@@ -2118,6 +2118,48 @@ describe("editMessageTelegram", () => {
     }
   });
 
+  it("prefers rich_message edits for markdown tables and keeps legacy edit fallback available", async () => {
+    const richEdit = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    (botApi as Record<string, unknown>).raw = { editMessageText: richEdit };
+
+    await editMessageTelegram("123", 1, "| Item | Score |\n| --- | ---: |\n| Ada | 9 |", {
+      token: "tok",
+      cfg: {},
+    });
+
+    expect(richEdit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: "123",
+        message_id: 1,
+        rich_message: expect.objectContaining({
+          html: expect.stringContaining("<table bordered striped>"),
+        }),
+      }),
+    );
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    delete (botApi as Record<string, unknown>).raw;
+  });
+
+  it("falls back to legacy HTML edits when rich_message edit fails", async () => {
+    const richEdit = vi.fn().mockRejectedValue(new Error("rich edit unavailable"));
+    (botApi as Record<string, unknown>).raw = { editMessageText: richEdit };
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "| Item | Score |\n| --- | ---: |\n| Ada | 9 |", {
+      token: "tok",
+      cfg: {},
+    });
+
+    expect(richEdit).toHaveBeenCalled();
+    expect(botApi.editMessageText).toHaveBeenCalledWith(
+      "123",
+      1,
+      expect.stringContaining("<pre><code>"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    delete (botApi as Record<string, unknown>).raw;
+  });
+
   it("treats 'message is not modified' as success", async () => {
     botApi.editMessageText.mockRejectedValueOnce(
       new Error(

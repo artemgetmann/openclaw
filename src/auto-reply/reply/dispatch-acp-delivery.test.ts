@@ -288,12 +288,15 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(preview?.endsWith("...")).toBe(true);
   });
 
-  it("omits final TTS caption previews for markdown table answers", () => {
+  it("summarizes markdown table answers for final TTS captions", () => {
     const preview = buildFinalTtsCaptionPreview(
       ["| Item | Color | Score |", "| --- | --- | ---: |", "| Apple | red | 9 |"].join("\n"),
     );
 
-    expect(preview).toBeUndefined();
+    expect(preview).toBe(
+      "I rendered the full table in Telegram. First row: Item: Apple; Color: red; Score: 9.",
+    );
+    expect(preview).not.toContain("|");
   });
 
   it("keeps synthesized final TTS media-only outside Telegram", async () => {

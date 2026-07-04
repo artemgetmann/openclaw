@@ -820,6 +820,67 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("finalizes streamed structured answers by editing the same preview with rich-message support", async () => {
+    const answerStream = createDraftStream(9101);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const finalText = [
+      "Use the boring option tonight.",
+      "",
+      "| Place | Why |",
+      "| --- | --- |",
+      "| Warung Local | light food, short ride |",
+      "| Fancy Spot | more effort, less upside |",
+      "",
+      "Bring:",
+      "- Water",
+      "- A light jacket",
+      "",
+      "Then:",
+      "1. Eat first.",
+      "2. Decide on dessert after.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: finalText });
+        await dispatcherOptions.deliver(
+          {
+            text: finalText,
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9101" });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    const renderText = createTelegramDraftStream.mock.calls[0]?.[0]?.renderText;
+    expect(renderText).toBeTypeOf("function");
+    expect(renderText(finalText)).toEqual(
+      expect.objectContaining({
+        parseMode: "HTML",
+        richMessage: expect.objectContaining({
+          html: expect.stringContaining("<table bordered striped>"),
+        }),
+      }),
+    );
+    expect(answerStream.update).toHaveBeenCalledWith(finalText);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9101,
+      finalText,
+      expect.objectContaining({
+        richMessages: undefined,
+        tableMode: "block",
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(guardedTelegramDeleteMessage).not.toHaveBeenCalled();
+  });
+
   it("suppresses raw tool traces when preview streaming is on", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
