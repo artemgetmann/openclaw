@@ -108,9 +108,12 @@ bash scripts/relaunch-consumer-mac-ui-smoke.sh --clean
 ```
 
 For user-facing OpenClaw handoff builds, use the main product distribution
-wrapper:
+wrapper from the blessed release lane:
 
 ```bash
+cd /Users/user/Programming_Projects/openclaw
+bash scripts/jarvis-release-worktree.sh
+cd /Users/user/Programming_Projects/openclaw/.worktrees/jarvis-release-current
 SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh
 ```
 
@@ -260,19 +263,24 @@ bash scripts/jarvis-release-worktree.sh
 
 Use `.worktrees/jarvis-release-current` for the macOS release/update/package,
 appcast, and notarization work. Do not create an ad-hoc cold worktree for this
-lane; repeated cold bootstraps are slow and make retry evidence noisy.
+lane; repeated cold bootstraps are slow and make retry evidence noisy. The
+release package scripts now enforce this path and branch before doing package,
+notary, publish, or verify work.
 Follow the launcher's printed next steps, then run the release commands from the
 release lane.
 
-Normal app-building release phases require macOS prewarm proof. If the release
-lane is cold, the release path should fail fast and suggest:
+Normal app-building release phases require the blessed release worktree plus
+macOS prewarm proof. If the lane is missing or stale, refresh it through the
+launcher:
 
 ```bash
-bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+cd /Users/user/Programming_Projects/openclaw
+bash scripts/jarvis-release-worktree.sh
 ```
 
-`ALLOW_COLD_RELEASE_LANE=1` is the emergency override. If you use it, document
-that the macOS prewarm proof was skipped.
+`ALLOW_COLD_RELEASE_LANE=1` is only an emergency override for the macOS prewarm
+proof inside the blessed release worktree. It does not allow public Jarvis
+packaging from random worktrees.
 
 For a real update to existing installations, bump `APP_VERSION` and/or
 `APP_BUILD` before packaging. Sparkle updates only when the new

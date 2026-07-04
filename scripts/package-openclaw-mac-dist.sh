@@ -111,6 +111,7 @@ Env:
                       Emergency-only bypass for the macOS prewarm proof gate.
                       Normal app-building phases must first run:
                       bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+                      This does not bypass the blessed release-worktree guard.
   ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1
                       Emergency-only bypass when the built CFBundleVersion is
                       not newer than /Applications/Jarvis.app
@@ -1115,6 +1116,8 @@ case "$PACKAGE_PHASE" in
     exit 1
     ;;
 esac
+
+openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 
 if [[ "$PACKAGE_PHASE" == "local-proof" ]]; then
   SKIP_NOTARIZE=1

@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
+source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 
 PACKAGE_SCRIPT="$ROOT_DIR/scripts/package-openclaw-mac-dist.sh"
 STATE_ROOT="${OPENCLAW_JARVIS_RELEASE_STATE_ROOT:-$ROOT_DIR}"
@@ -397,6 +398,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "dry_run=true"
   exit 0
 fi
+
+openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 
 ensure_timing_report
 started_at="$(iso_now)"

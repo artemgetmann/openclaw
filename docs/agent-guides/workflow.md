@@ -120,16 +120,19 @@ ready, and exactly what should happen next.
 - That lane is the persistent prewarmed Jarvis release worktree at
   `.worktrees/jarvis-release-current`. Use it for macOS release/update/package,
   appcast, and notarization work instead of creating ad-hoc cold worktrees.
-- Normal app-building release phases require macOS prewarm proof. A cold lane is
-  expected to fail fast with this recovery command:
+- Public Jarvis package scripts fail unless they run from that blessed release
+  worktree path and its `codex/jarvis-release-current` branch. A warmed random
+  temp worktree is still the wrong release surface.
+- Normal app-building release phases also require macOS prewarm proof. A
+  missing or stale lane should be refreshed through the launcher:
 
   ```bash
-  bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+  cd /Users/user/Programming_Projects/openclaw
+  bash scripts/jarvis-release-worktree.sh
   ```
 
-- `ALLOW_COLD_RELEASE_LANE=1` is an emergency override only. Use it when release
-  urgency beats warm-lane proof, and call out the skipped prewarm proof in the
-  handoff.
+- `ALLOW_COLD_RELEASE_LANE=1` is an emergency override for the prewarm proof
+  only. It does not allow public Jarvis packaging from any other worktree.
 - Use `bash scripts/preflight-consumer-mac-release.sh` for the read-only
   consumer macOS release credential check before a notarized Jarvis lane.
 - The default notarization path is App Store Connect API-key auth:

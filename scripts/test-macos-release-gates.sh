@@ -55,6 +55,28 @@ make_git_release_repo() {
   )
 }
 
+test_release_worktree_guard() {
+  local home="$TMP_DIR/home"
+  local release_name="jarvis-release-current"
+  local release_branch="codex/${release_name}"
+  local release_repo="$home/.worktrees/$release_name"
+  local random_repo="$TMP_DIR/random-release-repo"
+
+  make_git_release_repo "$release_repo"
+  git -C "$release_repo" checkout -qb "$release_branch"
+  run_expect "release-worktree-guard-valid" pass \
+    openclaw_require_jarvis_release_worktree "$release_repo" "$release_repo" "$release_branch"
+
+  make_git_release_repo "$random_repo"
+  git -C "$random_repo" checkout -qb "$release_branch"
+  run_expect "release-worktree-guard-wrong-path" fail \
+    openclaw_require_jarvis_release_worktree "$random_repo" "$release_repo" "$release_branch"
+
+  git -C "$release_repo" checkout -qb "codex/not-the-release-lane"
+  run_expect "release-worktree-guard-wrong-branch" fail \
+    openclaw_require_jarvis_release_worktree "$release_repo" "$release_repo" "$release_branch"
+}
+
 make_app() {
   local app_path="$1"
   local build="$2"
@@ -113,4 +135,5 @@ test_sparkle_build_predicate() {
 }
 
 test_prewarm_proof_validation
+test_release_worktree_guard
 test_sparkle_build_predicate
