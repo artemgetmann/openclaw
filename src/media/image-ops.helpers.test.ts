@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   buildImageResizeSideGrid,
   IMAGE_REDUCE_QUALITY_STEPS,
   optimizeImageToPng,
+  prefersSips,
 } from "./image-ops.js";
 
 describe("buildImageResizeSideGrid", () => {
@@ -18,6 +20,32 @@ describe("buildImageResizeSideGrid", () => {
 describe("IMAGE_REDUCE_QUALITY_STEPS", () => {
   it("keeps expected quality ladder", () => {
     expect([...IMAGE_REDUCE_QUALITY_STEPS]).toEqual([85, 75, 65, 55, 45, 35]);
+  });
+});
+
+describe("prefersSips", () => {
+  it("uses sips for packaged Jarvis paths even when the launch env is missing", () => {
+    const result = withEnv(
+      {
+        OPENCLAW_IMAGE_BACKEND: undefined,
+        OPENCLAW_HOME: "/Users/nataliiagetman/Library/Application Support/Jarvis",
+      },
+      () => prefersSips(),
+    );
+
+    expect(result).toBe(process.platform === "darwin");
+  });
+
+  it("keeps sharp as an explicit opt-in override", () => {
+    const result = withEnv(
+      {
+        OPENCLAW_IMAGE_BACKEND: " sharp ",
+        OPENCLAW_HOME: "/Users/nataliiagetman/Library/Application Support/Jarvis",
+      },
+      () => prefersSips(),
+    );
+
+    expect(result).toBe(false);
   });
 });
 

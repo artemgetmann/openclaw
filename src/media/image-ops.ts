@@ -23,11 +23,39 @@ function isBun(): boolean {
   return typeof (process.versions as { bun?: unknown }).bun === "string";
 }
 
-function prefersSips(): boolean {
-  return (
-    process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
-    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
-  );
+function includesJarvisAppSupportPath(value: string | undefined): boolean {
+  return Boolean(value?.includes("/Library/Application Support/Jarvis"));
+}
+
+function isJarvisMacRuntime(): boolean {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  if (process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP === "1") {
+    return true;
+  }
+  return [
+    process.env.OPENCLAW_HOME,
+    process.env.OPENCLAW_STATE_DIR,
+    process.env.OPENCLAW_CONFIG_PATH,
+    process.cwd(),
+    process.execPath,
+    ...process.argv,
+  ].some(includesJarvisAppSupportPath);
+}
+
+export function prefersSips(): boolean {
+  const explicitBackend = process.env.OPENCLAW_IMAGE_BACKEND?.trim().toLowerCase();
+  if (explicitBackend === "sharp") {
+    return false;
+  }
+  if (explicitBackend === "sips") {
+    return true;
+  }
+  // Packaged Jarvis must not depend on a loadable sharp native module. The
+  // LaunchAgent normally injects OPENCLAW_IMAGE_BACKEND=sips, but older or
+  // stale services can miss that env and still run from Jarvis app-support.
+  return process.platform === "darwin" && (isBun() || isJarvisMacRuntime());
 }
 
 function errorWithCause(message: string, cause: unknown): Error {
