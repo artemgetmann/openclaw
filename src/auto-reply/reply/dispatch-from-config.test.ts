@@ -2475,9 +2475,9 @@ describe("dispatchReplyFromConfig", () => {
       "2. Decide after.",
     ].join("\n");
     const spokenSummary =
-      "Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. Here is the clean pick: - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.";
+      "Here is the clean pick: Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.";
     const captionSummary =
-      "Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. Here is the clean pick: - Go simple....";
+      "Here is the clean pick: Full table is in Telegram. Key rows: Warung Local: why light food, short ride; Fancy Spot: why more effort, less upside. - Go simple....";
     const replyResolver = async () => ({ text: finalText }) satisfies ReplyPayload;
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -2516,6 +2516,12 @@ describe("dispatchReplyFromConfig", () => {
       ?.text;
     expect(voiceCaption).toBeTruthy();
     expect(voiceCaption).not.toContain("|");
+    expect(spokenSummary.indexOf("Here is the clean pick")).toBeLessThan(
+      spokenSummary.indexOf("Full table is in Telegram"),
+    );
+    expect(spokenSummary.indexOf("Full table is in Telegram")).toBeLessThan(
+      spokenSummary.indexOf("- Go simple"),
+    );
     expect(voiceCaption).toContain("Warung Local");
     expect(voiceCaption).toContain("Fancy Spot");
   });

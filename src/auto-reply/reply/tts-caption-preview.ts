@@ -1,5 +1,5 @@
 const FINAL_TTS_CAPTION_PREVIEW_MAX_CHARS = 160;
-const FINAL_TTS_SPOKEN_PREVIEW_MAX_CHARS = 360;
+const FINAL_TTS_SPOKEN_PREVIEW_MAX_CHARS = 1000;
 const FINAL_TTS_TABLE_SUMMARY_MAX_ROWS = 3;
 
 type MarkdownTableBlock = {
@@ -66,23 +66,6 @@ function stripFencedCode(text: string): { text: string; removed: boolean } {
     },
   );
   return { text: withoutCode, removed };
-}
-
-function stripMarkdownTables(text: string, tables: readonly MarkdownTableBlock[]): string {
-  if (tables.length === 0) {
-    return text;
-  }
-  const tableLineIndexes = new Set<number>();
-  for (const table of tables) {
-    for (const lineIndex of table.lineIndexes) {
-      tableLineIndexes.add(lineIndex);
-    }
-  }
-  return text
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .filter((_line, index) => !tableLineIndexes.has(index))
-    .join("\n");
 }
 
 function removeDominantPathLines(text: string): string {
@@ -167,19 +150,14 @@ function summarizeTableRow(table: MarkdownTableBlock, row: readonly string[]): s
   return details.length > 0 ? `${label}: ${details.join(", ")}` : label;
 }
 
-function summarizeTables(tables: readonly MarkdownTableBlock[]): string {
+function summarizeTable(table: MarkdownTableBlock): string {
   const rowSummaries: string[] = [];
-  for (const table of tables) {
-    // The voice path should acknowledge the table itself, not only nearby prose.
-    // Use the first useful rows because they usually carry the actual choices.
-    for (const row of table.rows) {
-      const summary = summarizeTableRow(table, row);
-      if (summary) {
-        rowSummaries.push(summary);
-      }
-      if (rowSummaries.length >= FINAL_TTS_TABLE_SUMMARY_MAX_ROWS) {
-        break;
-      }
+  // The voice path should acknowledge the table itself, not only nearby prose.
+  // Use the first useful rows because they usually carry the actual choices.
+  for (const row of table.rows) {
+    const summary = summarizeTableRow(table, row);
+    if (summary) {
+      rowSummaries.push(summary);
     }
     if (rowSummaries.length >= FINAL_TTS_TABLE_SUMMARY_MAX_ROWS) {
       break;
@@ -190,6 +168,57 @@ function summarizeTables(tables: readonly MarkdownTableBlock[]): string {
     return "Full table is in Telegram.";
   }
   return `Full table is in Telegram. Key rows: ${rowSummaries.join("; ")}.`;
+}
+
+function buildOrderPreservingSummary(
+  text: string,
+  tables: readonly MarkdownTableBlock[],
+): string | undefined {
+  if (tables.length === 0) {
+    return sanitizeForVoice(text);
+  }
+
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const tableLineIndexes = new Set<number>();
+  const tableStarts = new Map<number, MarkdownTableBlock>();
+  for (const table of tables) {
+    const indexes = [...table.lineIndexes].toSorted((a, b) => a - b);
+    const startIndex = indexes[0];
+    if (startIndex !== undefined) {
+      tableStarts.set(startIndex, table);
+    }
+    for (const lineIndex of indexes) {
+      tableLineIndexes.add(lineIndex);
+    }
+  }
+
+  const parts: string[] = [];
+  let proseLines: string[] = [];
+  const flushProse = () => {
+    const prose = sanitizeForVoice(proseLines.join("\n"));
+    proseLines = [];
+    if (prose) {
+      parts.push(prose);
+    }
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const table = tableStarts.get(index);
+    if (table) {
+      // Preserve answer order: the table summary replaces the table exactly
+      // where the user would have read it in the visible Telegram answer.
+      flushProse();
+      parts.push(summarizeTable(table));
+      continue;
+    }
+    if (tableLineIndexes.has(index)) {
+      continue;
+    }
+    proseLines.push(lines[index] ?? "");
+  }
+  flushProse();
+
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 function buildFinalTtsSummary(
@@ -203,15 +232,9 @@ function buildFinalTtsSummary(
 
   const withoutCode = stripFencedCode(normalizedInput);
   const tables = findMarkdownTableBlocks(withoutCode.text);
-  const prose = stripMarkdownTables(withoutCode.text, tables);
-  if (tables.length > 0) {
-    const tableSummary = summarizeTables(tables);
-    const prosePreview = capPreview(prose, maxChars);
-    return capPreview([tableSummary, prosePreview].filter(Boolean).join(" "), maxChars);
-  }
-  const prosePreview = capPreview(prose, maxChars);
-  if (prosePreview) {
-    return prosePreview;
+  const summary = buildOrderPreservingSummary(withoutCode.text, tables);
+  if (summary) {
+    return capPreview(summary, maxChars);
   }
   if (withoutCode.removed) {
     return "I drafted the code in Telegram.";
