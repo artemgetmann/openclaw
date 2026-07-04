@@ -16,6 +16,7 @@ import {
   applyNonInteractiveSkillsConfig,
   buildConsumerBundledSkillAllowlist,
   CONSUMER_DEFAULT_BUNDLED_SKILLS,
+  repairConsumerDefaultBundledSkillAllowlist,
 } from "./skills-config.js";
 
 const runtime = {
@@ -41,6 +42,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "consumer-setup",
         "timezone-preference-updater",
         "checkpoint",
+        "goal-mode",
         "monitor-router",
         "jarvis-gui-control",
         "screen-record",
@@ -113,6 +115,48 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(CONSUMER_DEFAULT_BUNDLED_SKILLS).not.toContain("workspace-only");
   });
 
+  it("repairs legacy generated consumer allowlists with newly bundled defaults", () => {
+    const legacyGeneratedAllowlist = [
+      "consumer-setup",
+      "timezone-preference-updater",
+      "apple-notes",
+      "apple-reminders",
+      "peekaboo",
+      "summarize",
+      "weather",
+      "wacli",
+      "mcporter",
+      "nano-banana-pro",
+      "telegram-user",
+    ];
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: legacyGeneratedAllowlist },
+    });
+
+    expect(repaired.changes).toEqual([
+      expect.stringContaining("skills.allowBundled += checkpoint,goal-mode"),
+    ]);
+    expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-gui-control")).toBe(
+      (repaired.config.skills?.allowBundled?.indexOf("peekaboo") ?? 0) - 1,
+    );
+    expect(repaired.config.skills?.allowBundled?.indexOf("telegram-user")).toBeGreaterThan(
+      repaired.config.skills?.allowBundled?.indexOf("nano-banana-pro") ?? -1,
+    );
+    expect(repaired.config.skills?.allowBundled).toEqual(
+      expect.arrayContaining(["checkpoint", "goal-mode", "monitor-router", "jarvis-gui-control"]),
+    );
+  });
+
+  it("does not repair custom bundled skill allowlists", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["custom-skill", "checkpoint"] },
+    });
+
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill", "checkpoint"]);
+  });
+
   it("exposes checkpoint and monitor-router to fresh consumer skill prompts without a model call", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-consumer-skills-"));
     const bundledDir = path.join(workspaceDir, ".bundled");
@@ -122,6 +166,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       name: "checkpoint",
       description: "Save or resume a local chat checkpoint.",
       body: "# Checkpoint\n",
+    });
+    await writeSkill({
+      dir: path.join(bundledDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Use when Jarvis should offer or run a durable goal.",
+      body: "# Goal Mode\n",
     });
     await writeSkill({
       dir: path.join(bundledDir, "monitor-router"),
@@ -150,6 +200,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     });
 
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
+    expect(prompt).toContain("offer or run a durable goal");
     expect(prompt).toContain("Route monitor status questions");
     expect(prompt).toContain("Jarvis macOS GUI-control tasks");
     expect(prompt).toContain("Manage Telegram chats, topics, threads");

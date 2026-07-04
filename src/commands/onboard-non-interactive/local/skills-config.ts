@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../../runtime.js";
 export {
   buildConsumerBundledSkillAllowlist,
   CONSUMER_DEFAULT_BUNDLED_SKILLS,
+  repairConsumerDefaultBundledSkillAllowlist,
 } from "../../../agents/consumer-default-bundled-skills.js";
 import { ensureSharedPersonalSkillsManagedRoot } from "../../onboard-shared-skills-root.js";
 import type { OnboardOptions } from "../../onboard-types.js";

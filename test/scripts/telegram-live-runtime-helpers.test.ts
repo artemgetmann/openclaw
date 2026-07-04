@@ -145,6 +145,49 @@ describe("summarizeTelegramTesterTokenPool", () => {
     expect(config.tools).toEqual(baseConfig.tools);
   });
 
+  it("adds goal-mode to generated-looking tester skill allowlists", () => {
+    const baseConfig = {
+      skills: {
+        allowBundled: [
+          "consumer-setup",
+          "timezone-preference-updater",
+          "peekaboo",
+          "telegram-user",
+        ],
+      },
+    };
+
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.skills.allowBundled).toEqual([
+      "consumer-setup",
+      "timezone-preference-updater",
+      "peekaboo",
+      "telegram-user",
+      "goal-mode",
+    ]);
+  });
+
+  it("does not widen intentionally narrowed tester skill allowlists", () => {
+    const baseConfig = {
+      skills: {
+        allowBundled: ["peekaboo"],
+      },
+    };
+
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.skills.allowBundled).toEqual(["peekaboo"]);
+  });
+
   it("reports tester runtime parity as machine-readable booleans", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-parity-report-"));
     const baseConfigPath = path.join(root, "base.json");

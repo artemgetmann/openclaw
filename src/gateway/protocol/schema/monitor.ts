@@ -84,6 +84,14 @@ const MonitorEventEnvelopeSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const MonitorGoalSnapshotSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    objective: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const MonitorRecordSchema = Type.Object(
   {
     monitorId: NonEmptyString,
@@ -100,6 +108,7 @@ export const MonitorRecordSchema = Type.Object(
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: MonitorActionPolicySchema,
+    goal: Type.Optional(MonitorGoalSnapshotSchema),
     status: MonitorStatusSchema,
     lastCheckpoint: Type.Optional(LooseObjectSchema),
     cronJobId: NonEmptyString,
@@ -133,6 +142,7 @@ export const MonitorCreateParamsSchema = Type.Object(
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(MonitorActionPolicySchema),
+    goal: Type.Optional(MonitorGoalSnapshotSchema),
     lastCheckpoint: Type.Optional(LooseObjectSchema),
   },
   { additionalProperties: false },
@@ -152,6 +162,7 @@ export const MonitorUpdateParamsSchema = Type.Object(
         expiryAt: Type.Optional(Type.String()),
         stopCondition: Type.Optional(Type.String()),
         actionPolicy: Type.Optional(MonitorActionPolicySchema),
+        goal: Type.Optional(MonitorGoalSnapshotSchema),
         status: Type.Optional(MonitorStatusSchema),
         lastCheckpoint: Type.Optional(LooseObjectSchema),
         lastWakeAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -1775,6 +1775,30 @@ export function extractTelegramBotTokensFromConfig(config, opts = {}) {
   return normalizeTokenList(tokens);
 }
 
+function repairTelegramLiveTesterBundledSkills(config) {
+  const skills = config.skills && typeof config.skills === "object" ? config.skills : {};
+  const allowBundled = Array.isArray(skills.allowBundled) ? [...skills.allowBundled] : null;
+  if (!allowBundled || allowBundled.includes("__none__") || allowBundled.includes("goal-mode")) {
+    return;
+  }
+
+  // Tester lanes inherit consumer configs but do not always run consumer startup
+  // repair. Only patch generated-looking default lists; tiny/custom allowlists
+  // should stay operator-owned.
+  const looksLikeConsumerDefault =
+    allowBundled.length >= 3 &&
+    allowBundled.includes("consumer-setup") &&
+    allowBundled.includes("telegram-user");
+  if (!looksLikeConsumerDefault) {
+    return;
+  }
+
+  config.skills = {
+    ...skills,
+    allowBundled: [...allowBundled, "goal-mode"],
+  };
+}
+
 export function buildTelegramLiveRuntimeConfig(params) {
   const assignedToken = String(params?.assignedToken ?? "").trim();
   const runtimePort = Number.parseInt(String(params?.runtimePort ?? ""), 10);
@@ -1810,6 +1834,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
 
   const config = baseConfig;
   scrubOpenAiSecretsFromTesterRuntimeConfig(config);
+  repairTelegramLiveTesterBundledSkills(config);
   const gateway = config.gateway && typeof config.gateway === "object" ? config.gateway : {};
   const gatewayAuth = gateway.auth && typeof gateway.auth === "object" ? gateway.auth : {};
   const effectiveGatewayAuthToken =

@@ -314,7 +314,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendTelegram).toHaveBeenCalledWith(
       "123",
       "BTW\nQuestion: what is 17 * 19?\n\n323",
-      expect.objectContaining({ verbose: false, textMode: "html" }),
+      expect.objectContaining({ verbose: false, textMode: "html", richMessages: false }),
     );
   });
 
@@ -333,7 +333,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendTelegram).toHaveBeenCalledWith(
       "123",
       "<b>hello</b>",
-      expect.objectContaining({ textMode: "html" }),
+      expect.objectContaining({ textMode: "html", richMessages: false }),
     );
   });
 
@@ -1005,6 +1005,66 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
       expect.objectContaining({ channelId: "matrix" }),
     );
+  });
+
+  it("preserves normalized telegram payload text when channelData routes through sendPayload", async () => {
+    const visibleText = "Monitor complete: the cron wake delivered the final answer.";
+    const sendPayload = vi
+      .fn()
+      .mockResolvedValue({ channel: "telegram", messageId: "tg-1", chatId: "123" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              // Telegram adapters can decorate a plain text reply with channelData
+              // so rich/button delivery uses sendPayload. The visible text must
+              // survive that normalization; otherwise Telegram receives an empty shell.
+              normalizePayload: ({ payload }) => ({
+                ...payload,
+                channelData: {
+                  telegram: {
+                    parseMode: "HTML",
+                    replyMarkup: { inline_keyboard: [] },
+                  },
+                },
+              }),
+              sendPayload,
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: { channels: { telegram: { botToken: "tok-1" } } },
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: visibleText }],
+    });
+
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: visibleText,
+        payload: expect.objectContaining({
+          text: visibleText,
+          channelData: expect.objectContaining({
+            telegram: expect.objectContaining({ parseMode: "HTML" }),
+          }),
+        }),
+      }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(results).toEqual([{ channel: "telegram", messageId: "tg-1", chatId: "123" }]);
   });
 
   it("preserves channelData-only payloads with empty text for non-WhatsApp sendPayload channels", async () => {

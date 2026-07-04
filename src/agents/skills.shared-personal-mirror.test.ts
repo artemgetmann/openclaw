@@ -63,6 +63,112 @@ describe("syncBundledSkillsToSharedPersonalRoot", () => {
     ).resolves.toContain('"source": "openclaw-bundled"');
   });
 
+  it("does not mirror Jarvis-only goal mode into the shared personal skills root", async () => {
+    const root = await tempDir();
+    const bundledSkillsDir = path.join(root, "bundled");
+    const sharedSkillsDir = path.join(root, "shared");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Jarvis goal mode",
+      body: "# Goal Mode\n",
+    });
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "telegram-user"),
+      name: "telegram-user",
+      description: "Telegram as me",
+      body: "# Telegram User\n",
+    });
+
+    const result = await syncBundledSkillsToSharedPersonalRoot({
+      bundledSkillsDir,
+      sharedSkillsDir,
+    });
+
+    expect(result.entries.map((entry) => [entry.name, entry.status])).toEqual([
+      ["telegram-user", "copied"],
+    ]);
+    await expect(fs.stat(path.join(sharedSkillsDir, "goal-mode"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readSkillBody(path.join(sharedSkillsDir, "telegram-user"))).resolves.toContain(
+      "# Telegram User",
+    );
+  });
+
+  it("removes clean managed mirrors for Jarvis-only goal mode", async () => {
+    const root = await tempDir();
+    const bundledSkillsDir = path.join(root, "bundled");
+    const sharedSkillsDir = path.join(root, "shared");
+    const sharedGoalDir = path.join(sharedSkillsDir, "goal-mode");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Jarvis goal mode",
+      body: "# Goal Mode\n",
+    });
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "telegram-user"),
+      name: "telegram-user",
+      description: "Telegram as me",
+      body: "# Telegram User\n",
+    });
+    await fs.cp(path.join(bundledSkillsDir, "goal-mode"), sharedGoalDir, { recursive: true });
+    const hash = hashSharedSkillDirectory(sharedGoalDir);
+    await fs.writeFile(
+      path.join(sharedGoalDir, ".openclaw-skill.json"),
+      JSON.stringify({
+        version: 1,
+        source: "openclaw-bundled",
+        bundledTreeHash: hash,
+        updatedAt: "now",
+      }),
+      "utf8",
+    );
+
+    const result = await syncBundledSkillsToSharedPersonalRoot({
+      bundledSkillsDir,
+      sharedSkillsDir,
+    });
+
+    expect(result.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "goal-mode", status: "removed" }),
+        expect.objectContaining({ name: "telegram-user", status: "copied" }),
+      ]),
+    );
+    await expect(fs.stat(sharedGoalDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not remove local user-owned goal mode skills", async () => {
+    const root = await tempDir();
+    const bundledSkillsDir = path.join(root, "bundled");
+    const sharedSkillsDir = path.join(root, "shared");
+    const sharedGoalDir = path.join(sharedSkillsDir, "goal-mode");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Jarvis goal mode",
+      body: "# Bundled Goal Mode\n",
+    });
+    await writeSkill({
+      dir: sharedGoalDir,
+      name: "goal-mode",
+      description: "Local goal mode",
+      body: "# Local Goal Mode\n",
+    });
+
+    const result = await syncBundledSkillsToSharedPersonalRoot({
+      bundledSkillsDir,
+      sharedSkillsDir,
+    });
+
+    expect(result.entries).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "goal-mode" })]),
+    );
+    await expect(readSkillBody(sharedGoalDir)).resolves.toContain("# Local Goal Mode");
+  });
+
   it("updates clean managed mirrors when the bundled skill changes", async () => {
     const root = await tempDir();
     const bundledSkillsDir = path.join(root, "bundled");

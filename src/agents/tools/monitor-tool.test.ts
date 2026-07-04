@@ -52,11 +52,38 @@ describe("monitor tool", () => {
       expect.objectContaining({
         originSessionKey: "agent:main:telegram:direct:19098680",
         originDelivery: expect.objectContaining({
+          mode: "announce",
           channel: "telegram",
           to: "19098680",
         }),
         actionPolicy: "notify_draft",
         sourceType: "gmail",
+      }),
+    );
+  });
+
+  it("adds announce mode to explicit bare origin delivery", async () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    await tool.execute?.("call-explicit-bare", {
+      action: "create",
+      instructions: "Monitor replies and report back.",
+      originDelivery: { channel: "telegram", to: "19098680", accountId: "default" },
+      sourceType: "synthetic",
+      sourceTarget: { source: "proof" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "monitor.create",
+      expect.any(Object),
+      expect.objectContaining({
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "19098680",
+          accountId: "default",
+        },
       }),
     );
   });
@@ -70,8 +97,33 @@ describe("monitor tool", () => {
       "if multiple active monitors could match, ask a short clarification",
     );
     expect(tool.description).toContain("include the actual draft text");
+    expect(tool.description).toContain("use actionPolicy=auto_send");
+    expect(tool.description).toContain("green-zone replies go to that watched surface");
+    expect(tool.description).toContain("approval questions must go back to the origin chat");
     expect(tool.description).toContain("only reporting status");
     expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
+    expect(tool.description).toContain("if there is an active goal");
+  });
+
+  it("passes explicit goal snapshots through monitor.create", async () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    await tool.execute?.("call-goal", {
+      action: "create",
+      instructions: "Watch the dinner thread until time and place are agreed.",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+15551234567" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      goal: { id: "goal-1", objective: "Organize dinner between 7 and 8." },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "monitor.create",
+      expect.any(Object),
+      expect.objectContaining({
+        goal: { id: "goal-1", objective: "Organize dinner between 7 and 8." },
+      }),
+    );
   });
 
   it("omits originDelivery when the origin session has no announce target", async () => {
