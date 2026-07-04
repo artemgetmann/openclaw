@@ -11,6 +11,9 @@ describe("appendCronDeliveryInstruction", () => {
 
     expect(message).toContain("Return only the exact reply content to deliver automatically.");
     expect(message).toContain("Write it like a direct reply, not a monitor note.");
+    expect(message).toContain(
+      "If the task needs user input or approval, use the message tool to ask on the configured origin route from the monitor instructions, then return exactly NO_REPLY.",
+    );
     expect(message).toContain("If no message should be sent, return exactly NO_REPLY.");
   });
 

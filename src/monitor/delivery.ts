@@ -25,7 +25,16 @@ export type MonitorEmailReplyActionTarget = {
   };
 };
 
-export type MonitorActionTarget = MonitorMessageActionTarget | MonitorEmailReplyActionTarget;
+export type MonitorTelegramUserActionTarget = {
+  kind: "telegram-user";
+  chat: string;
+  accountId?: string;
+};
+
+export type MonitorActionTarget =
+  | MonitorMessageActionTarget
+  | MonitorEmailReplyActionTarget
+  | MonitorTelegramUserActionTarget;
 
 export type MonitorExecutionPlan = {
   actionTarget?: MonitorActionTarget;
@@ -50,6 +59,7 @@ function readSourceTargetTo(sourceTarget: MonitorSourceTarget): string | undefin
   return (
     readOptionalString(sourceTarget.to) ??
     readOptionalString(sourceTarget.target) ??
+    readOptionalString(sourceTarget.chat) ??
     readOptionalString(sourceTarget.chatId) ??
     readOptionalString(sourceTarget.chatJid)
   );
@@ -115,6 +125,31 @@ function resolveMonitorEmailReplyActionTarget(params: {
   };
 }
 
+function isTelegramUserSource(sourceType: string): boolean {
+  return sourceType.trim().toLowerCase() === "telegram-user";
+}
+
+function resolveMonitorTelegramUserActionTarget(params: {
+  sourceType: string;
+  sourceTarget: MonitorSourceTarget;
+}): MonitorTelegramUserActionTarget | undefined {
+  if (!isTelegramUserSource(params.sourceType)) {
+    return undefined;
+  }
+  // Telegram-as-me is not a gateway message channel. The durable target is the
+  // MTProto chat id/handle that the telegram-user CLI can read and send to.
+  const chat = readSourceTargetTo(params.sourceTarget);
+  if (!chat) {
+    return undefined;
+  }
+  const accountId = readOptionalString(params.sourceTarget.accountId);
+  return {
+    kind: "telegram-user",
+    chat,
+    ...(accountId ? { accountId } : {}),
+  };
+}
+
 export function resolveMonitorWatchDelivery(params: {
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
@@ -152,6 +187,10 @@ export function resolveMonitorActionTarget(params: {
   sourceTarget: MonitorSourceTarget;
   explicitWatchDelivery?: CronDelivery;
 }): MonitorActionTarget | undefined {
+  const telegramUserTarget = resolveMonitorTelegramUserActionTarget(params);
+  if (telegramUserTarget) {
+    return telegramUserTarget;
+  }
   const watchDelivery = resolveMonitorWatchDelivery(params);
   if (watchDelivery?.channel && watchDelivery.to) {
     return {
@@ -327,6 +366,18 @@ export function resolveMonitorExecutionPlan(params: {
       deliveryContract: "shared",
       watchDeliveryConfigured,
       messageToolTarget: actionTarget,
+      requireExplicitMessageTarget: false,
+    };
+  }
+
+  if (params.actionPolicy === "auto_send" && actionTarget?.kind === "telegram-user") {
+    return {
+      actionTarget,
+      originDelivery,
+      fallbackDelivery: originDelivery,
+      deliveryPromptMode: "summary",
+      deliveryContract: "cron-owned",
+      watchDeliveryConfigured,
       requireExplicitMessageTarget: false,
     };
   }

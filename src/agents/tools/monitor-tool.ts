@@ -11,6 +11,24 @@ const MONITOR_ACTIONS = ["list", "get", "create", "update", "stop"] as const;
 const MONITOR_ACTION_POLICIES = ["notify_draft", "notify_only", "auto_send"] as const;
 const MONITOR_STATUSES = ["active", "degraded", "stopped", "completed", "expired"] as const;
 
+function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined) {
+  if (!delivery) {
+    return undefined;
+  }
+  if (typeof delivery.mode === "string") {
+    return delivery;
+  }
+  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
+  const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
+  if (!channel || !to) {
+    return delivery;
+  }
+  return {
+    ...delivery,
+    mode: "announce",
+  };
+}
+
 const MonitorToolSchema = Type.Object(
   {
     action: stringEnum(MONITOR_ACTIONS),
@@ -29,6 +47,12 @@ const MonitorToolSchema = Type.Object(
     actionPolicy: Type.Optional(stringEnum(MONITOR_ACTION_POLICIES)),
     watchDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
     patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    goal: Type.Optional(
+      Type.Object({
+        id: Type.String(),
+        objective: Type.String(),
+      }),
+    ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
     checkpoint: Type.Optional(Type.Object({}, { additionalProperties: true })),
     originSessionKey: Type.Optional(Type.String()),
@@ -53,9 +77,12 @@ Key behavior:
 
 For monitor creation:
 - instructions should capture the actual monitoring task in plain language.
+- if there is an active goal, monitor.create will bind it automatically; pass goal only when carrying an explicit snapshot.
 - sourceType/sourceTarget identify what is being checked.
 - cadence is the cron schedule object for repeated wakes.
 - default actionPolicy is notify_draft.
+- use actionPolicy=auto_send only when the user authorized Jarvis to act on the watched surface and a watched-surface delivery target is available.
+- for auto_send, provide watchDelivery when sourceTarget alone does not resolve to the external conversation; green-zone replies go to that watched surface, while approval questions must go back to the origin chat.
 - default report route is the origin chat from the current session.
 
 For monitor-related user replies/status:
@@ -98,9 +125,9 @@ For monitor-related user replies/status:
             displayKey: agentSessionKey,
           });
           const originDelivery =
-            (params.originDelivery as Record<string, unknown> | undefined) ??
-            resolvedOriginDelivery ??
-            undefined;
+            normalizeAnnounceDelivery(
+              params.originDelivery as Record<string, unknown> | undefined,
+            ) ?? normalizeAnnounceDelivery(resolvedOriginDelivery ?? undefined);
           const sourceTarget = params.sourceTarget;
           const cadence = params.cadence;
           if (!sourceTarget || typeof sourceTarget !== "object" || Array.isArray(sourceTarget)) {
@@ -130,6 +157,10 @@ For monitor-related user replies/status:
               actionPolicy:
                 readStringParam(params, "actionPolicy") ??
                 ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
+              goal:
+                params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
+                  ? params.goal
+                  : undefined,
               watchDelivery:
                 params.watchDelivery &&
                 typeof params.watchDelivery === "object" &&

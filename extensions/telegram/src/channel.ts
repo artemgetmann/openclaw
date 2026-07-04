@@ -120,6 +120,10 @@ function buildTelegramSendOptions(params: {
 }): TelegramSendOptions {
   return {
     verbose: false,
+    // Direct outbound sends power tools, monitors, and cron wake notices. Keep
+    // them on legacy text transport so operator/userbot transcripts always
+    // contain visible text instead of raw rich-message shells.
+    richMessages: false,
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),

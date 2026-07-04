@@ -212,6 +212,31 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
+function hasVisibleDirectDeliveryContent(payload: ReplyPayload): boolean {
+  const text = payload.text?.trim();
+  if (text) {
+    return true;
+  }
+  if (payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0) {
+    return true;
+  }
+  return (payload.interactive?.blocks?.length ?? 0) > 0;
+}
+
+function resolveDirectCronDeliveryPayloads(params: {
+  deliveryPayloads: ReplyPayload[];
+  synthesizedText?: string;
+}): ReplyPayload[] {
+  if (params.deliveryPayloads.some((payload) => hasVisibleDirectDeliveryContent(payload))) {
+    return params.deliveryPayloads;
+  }
+  const synthesizedText = params.synthesizedText?.trim();
+  if (synthesizedText) {
+    return [{ text: synthesizedText }];
+  }
+  return params.deliveryPayloads;
+}
+
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
@@ -317,7 +342,7 @@ export async function dispatchCronDelivery(
     try {
       const payloadsForDelivery =
         deliveryPayloads.length > 0
-          ? deliveryPayloads
+          ? resolveDirectCronDeliveryPayloads({ deliveryPayloads, synthesizedText })
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];

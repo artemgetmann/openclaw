@@ -1,0 +1,108 @@
+---
+name: goal-mode
+description: "Use when Jarvis should offer or run a durable goal for multi-step tasks, follow-ups, waiting, negotiation, completion tracking, or monitor-backed continuation until done."
+---
+
+# Goal Mode
+
+Use this when the user asks for work that should continue across follow-ups,
+waiting, negotiation, or multiple external turns.
+
+## Core Model
+
+- Goal: the user-facing mission or outcome Jarvis is pursuing.
+- Monitor: the durable wake/follow-up mechanism when the task waits on another
+  person or system.
+- Evaluator: the stop check after each turn or monitor wake.
+- Scoped autonomy: Jarvis acts inside approved boundaries and escalates when the
+  next step changes those boundaries.
+
+## Offer Flow
+
+When a task needs follow-up, waiting, negotiation, completion tracking, or
+multiple external turns, offer goal mode in natural language first:
+
+> This sounds like a goal. Want me to keep pushing until it's done?
+
+Treat replies like "yes", "set it as a goal", "keep going until it's done", and
+similar approvals as permission to call `create_goal` with the concrete
+objective.
+
+Treat replies like "just do this once", "not now", and similar refusals as no
+goal.
+
+Do not make slash commands the primary user experience. `/goal` is a recovery
+and control surface.
+
+## Monitors
+
+When a goal requires waiting on another person or system, create or reuse a
+durable monitor instead of inventing a scheduler.
+
+Default monitor behavior should be notify/draft unless the user clearly
+authorized autonomous sending.
+
+Use `actionPolicy: "auto_send"` only when both are true:
+
+- the user authorized Jarvis to act on the external surface, for example "text
+  Alex and handle it", "drive this until success", "follow up until they
+  refund me", or "book it under $15"
+- the monitor has a real watched-surface delivery target through `watchDelivery`
+  or a source target that resolves to a message target
+
+For `auto_send` monitors, green-zone replies go directly to the watched surface.
+Do not bring normal in-scope negotiation back to the user as a draft.
+
+For `notify_draft` monitors, report to the origin chat and include any draft
+text there. Use this when the user asks to watch, draft, report, or explicitly
+says not to send.
+
+For `notify_only` monitors, report status without drafting a send.
+
+## Scoped Autonomy
+
+Green zone: proceed without asking when the next action is clearly inside the
+user's goal and constraints. If another person proposes something outside the
+user's stated constraints, pushing back and restating the allowed options is
+still green-zone work; do that directly instead of asking the user.
+
+Yellow zone: ask when accepting the other party's terms would change the user's
+constraints, including time, cost, recipient, privacy, commitment, sensitive
+information, or important ambiguity. Do not ask merely because the other party
+made an out-of-scope proposal that you can reject while preserving the user's
+constraints.
+
+Red zone: refuse or require explicit confirmation for destructive, illegal,
+payment-sensitive, or out-of-scope actions.
+
+Do not ask before every normal follow-up inside the approved goal. That defeats
+the product.
+
+Examples:
+
+- Restaurant: if the user says "organize dinner with Alex, only 8 or 9, ask
+  before anything paid", then push back on 7:30/7:45 automatically and ask the
+  user only for another day/time, paid reservation, deposit, sensitive info, or
+  a real ambiguity.
+- Refund: if the user says "get me a refund", follow up with support
+  autonomously on normal status questions and ask before accepting store credit,
+  changing the desired resolution, or sharing sensitive info.
+- Purchase: if the user says "buy under $15", purchase only inside that clear
+  constraint; otherwise ask before purchase/payment.
+
+## Evaluator
+
+After each goal turn or monitor wake, classify the state:
+
+- done
+- keep going
+- blocked
+- needs user input
+- needs approval
+
+Call `update_goal(status="complete")` only with evidence that the outcome was
+achieved, for example refund confirmed or received, restaurant time/place
+agreed, purchase placed, or support case resolved.
+
+Call `update_goal(status="blocked")` only when progress needs user input or an
+external-state change. Ordinary difficulty is not a blocker.

@@ -300,6 +300,28 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "goal",
+      nativeName: "goal",
+      description: "Set, inspect, pause, resume, complete, block, or clear this session goal.",
+      textAlias: "/goal",
+      category: "session",
+      args: [
+        {
+          name: "action",
+          description: "status | start | pause | resume | complete | block | clear",
+          type: "string",
+          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+        },
+        {
+          name: "value",
+          description: "Objective or note",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
       description: "List, kill, log, spawn, or steer subagent runs for this session.",

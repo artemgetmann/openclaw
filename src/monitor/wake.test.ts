@@ -16,6 +16,7 @@ describe("buildMonitorWakeMessage", () => {
         cadence: { kind: "every", everyMs: 300_000 },
         stopCondition: "Stop when the thread is resolved.",
         actionPolicy: "notify_draft",
+        goal: { id: "goal-1", objective: "Get the refund confirmed." },
         status: "completed",
         lastCheckpoint: {
           resolved: true,
@@ -36,6 +37,8 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("Write the update like an assistant talking to the user");
     expect(message).toContain("include the actual draft text");
     expect(message).toContain("only needs a status update");
+    expect(message).toContain("goalObjective: Get the refund confirmed.");
+    expect(message).toContain("Evaluate after this wake");
   });
 
   it("preserves the reopened-conversation regression contract for WhatsApp-like checkpoints", () => {
@@ -78,6 +81,7 @@ describe("buildMonitorWakeMessage", () => {
         monitorId: "monitor-3",
         agentId: "main",
         originSessionKey: "agent:main:main",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
         monitorSessionKey: "agent:main:monitor:monitor-3",
         sourceType: "whatsapp",
         sourceTarget: { target: "74333133234289@lid" },
@@ -94,11 +98,53 @@ describe("buildMonitorWakeMessage", () => {
       "Watched-surface delivery is authorized and configured for this wake.",
     );
     expect(message).toContain(
-      "Reply only with the exact content that should be sent to the watched surface.",
+      'originDelivery: {"mode":"announce","channel":"telegram","to":"user-1"}',
     );
     expect(message).toContain(
-      "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply'.",
+      "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
     );
+    expect(message).toContain(
+      "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+    );
+    expect(message).toContain(
+      "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
+    );
+    expect(message).toContain("Do not send approval questions");
     expect(message).toContain("return exactly NO_REPLY");
+  });
+
+  it("guides telegram-user auto_send wakes to use the Telegram-as-me CLI directly", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-04-10T04:30:13.436Z",
+      wakeReason: "cron:test",
+      watchDeliveryConfigured: true,
+      monitor: {
+        monitorId: "monitor-telegram-user",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:direct:user-1",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        monitorSessionKey: "agent:main:monitor:monitor-telegram-user",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+        status: "active",
+        cronJobId: "cron-telegram-user",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain(
+      "Telegram-as-me watched-surface delivery is authorized and configured for chat 6783130823.",
+    );
+    expect(message).toContain("use the telegram-user skill/CLI");
+    expect(message).toContain("proposes something outside the user's stated constraints");
+    expect(message).toContain("do not ask the user unless you are considering accepting");
+    expect(message).toContain("After a successful Telegram-as-me send");
+    expect(message).toContain("Do not also send the same green-zone reply to the origin chat.");
+    expect(message).not.toContain(
+      "auto_send was requested, but no watched-surface delivery target is configured.",
+    );
   });
 });

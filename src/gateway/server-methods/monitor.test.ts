@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSessionGoal, updateSessionStore } from "../../config/sessions.js";
+import { loadMonitorStore, resolveMonitorStorePath } from "../../monitor/store.js";
 import { ErrorCodes, validateMonitorRecord } from "../protocol/index.js";
 
-const { seedMonitorSessionMock } = vi.hoisted(() => ({
+const { configState, seedMonitorSessionMock } = vi.hoisted(() => ({
+  configState: { sessionStorePath: "" },
   seedMonitorSessionMock: vi.fn(async () => undefined),
 }));
 
@@ -19,7 +22,9 @@ vi.mock("../../config/config.js", async () => {
     ...actual,
     loadConfig: vi.fn(() => ({
       session: {
-        store: path.join(os.tmpdir(), `monitor-handler-session-${Date.now()}.json`),
+        store:
+          configState.sessionStorePath ||
+          path.join(os.tmpdir(), `monitor-handler-session-${Date.now()}.json`),
         mainKey: "main",
       },
     })),
@@ -85,6 +90,10 @@ async function invokeMonitorCreate(
 
 describe("monitor gateway handlers", () => {
   beforeEach(() => {
+    configState.sessionStorePath = path.join(
+      os.tmpdir(),
+      `monitor-handler-session-${Date.now()}-${Math.random()}.json`,
+    );
     seedMonitorSessionMock.mockClear();
   });
 
@@ -100,6 +109,7 @@ describe("monitor gateway handlers", () => {
         sourceType: "gmail",
         sourceTarget: { account: "me@example.com", threadId: "thread-1" },
         cadence: { kind: "every", everyMs: 300_000 },
+        goal: { id: "goal-1", objective: "Get the refund confirmed." },
       },
       respond: respond as never,
       context: {
@@ -125,6 +135,7 @@ describe("monitor gateway handlers", () => {
           sourceType: string;
           cronJobId: string;
           trigger?: { kind: string; cadence?: unknown };
+          goal?: { id: string; objective: string };
         }
       | undefined;
     expect(monitor).toMatchObject({
@@ -137,6 +148,7 @@ describe("monitor gateway handlers", () => {
         kind: "schedule",
         cadence: { kind: "every", everyMs: 300_000 },
       },
+      goal: { id: "goal-1", objective: "Get the refund confirmed." },
     });
     expect(cronAdd).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -156,7 +168,13 @@ describe("monitor gateway handlers", () => {
       expect.objectContaining({
         sessionKey: monitor?.monitorSessionKey,
         originSessionKey: "agent:main:telegram:direct:user-1",
+        originDelivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        }),
         instructions: "Monitor Empower replies and draft the next response.",
+        goal: { id: "goal-1", objective: "Get the refund confirmed." },
       }),
     );
     expect(cronUpdate).not.toHaveBeenCalled();
@@ -201,6 +219,90 @@ describe("monitor gateway handlers", () => {
     expect(secondMonitor).toEqual(firstMonitor);
     expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
     expect(seedMonitorSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-binds the active origin goal when monitor.create omits goal", async () => {
+    const invokeContext = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:direct:user-goal";
+    await updateSessionStore(configState.sessionStorePath, (store) => {
+      store[originSessionKey] = { sessionId: "origin-session", updatedAt: 1 };
+    });
+    const goal = await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Get the refund confirmed.",
+    });
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Watch the refund thread.",
+        agentId: "main",
+        name: "Refund watch",
+        originSessionKey,
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "refund-thread" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      "req-goal-autobind",
+    );
+
+    const monitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { goal?: { id: string; objective: string } }
+      | undefined;
+    expect(monitor?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(seedMonitorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goal: { id: goal.id, objective: goal.objective },
+        originSessionKey,
+      }),
+    );
+  });
+
+  it("reconciles an existing active monitor with the current origin goal", async () => {
+    const invokeContext = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:direct:user-reuse";
+    const baseParams = {
+      instructions: "Watch the refund thread.",
+      agentId: "main",
+      name: "Refund watch",
+      originSessionKey,
+      sourceType: "gmail",
+      sourceTarget: { account: "me@example.com", threadId: "refund-thread" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    };
+    await updateSessionStore(configState.sessionStorePath, (store) => {
+      store[originSessionKey] = { sessionId: "origin-session", updatedAt: 1 };
+    });
+
+    await invokeMonitorCreate(invokeContext, baseParams, "req-reuse-before-goal");
+    const firstMonitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { monitorId: string; goal?: unknown }
+      | undefined;
+    expect(firstMonitor?.goal).toBeUndefined();
+
+    const goal = await createSessionGoal({
+      sessionKey: originSessionKey,
+      storePath: configState.sessionStorePath,
+      objective: "Get the refund confirmed.",
+    });
+    await invokeMonitorCreate(invokeContext, baseParams, "req-reuse-after-goal");
+
+    const secondMonitor = invokeContext.respond.mock.calls[1]?.[1] as
+      | { monitorId: string; goal?: { id: string; objective: string } }
+      | undefined;
+    expect(secondMonitor?.monitorId).toBe(firstMonitor?.monitorId);
+    expect(secondMonitor?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
+    expect(seedMonitorSessionMock).toHaveBeenCalledTimes(1);
+
+    const monitorStore = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(monitorStore.monitors[0]?.goal).toEqual({
+      id: goal.id,
+      objective: goal.objective,
+    });
   });
 
   it("creates a new monitor when the action policy differs", async () => {
@@ -400,6 +502,7 @@ describe("monitor gateway handlers", () => {
         instructions: "Watch this WhatsApp thread and reply directly when needed.",
         agentId: "main",
         originSessionKey: "agent:main:main",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
         sourceType: "whatsapp",
         sourceTarget: { target: "74333133234289@lid", accountId: "default" },
         cadence: { kind: "every", everyMs: 300_000 },
@@ -427,6 +530,13 @@ describe("monitor gateway handlers", () => {
       to: "74333133234289@lid",
       accountId: "default",
     });
+    expect(seedMonitorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionPolicy: "auto_send",
+        watchDeliveryConfigured: true,
+        originDelivery: expect.anything(),
+      }),
+    );
   });
 
   it("routes matching webhook events to an existing durable monitor session", async () => {
@@ -585,6 +695,47 @@ describe("monitor gateway handlers", () => {
     expect(validateMonitorRecord(legacyRecord)).toBe(true);
   });
 
+  it("seeds telegram-user auto_send monitors as configured watched-surface tasks", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+
+    await monitorHandlers["monitor.create"]({
+      params: {
+        instructions: "Watch this Telegram-as-me chat and reply directly when in scope.",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823", accountId: "default" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-telegram-user-auto-send", method: "monitor.create" },
+      isWebchatConnect: () => false,
+    });
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    const monitor = call?.[1] as { watchDelivery?: unknown } | undefined;
+    expect(monitor?.watchDelivery).toBeUndefined();
+    expect(seedMonitorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823", accountId: "default" },
+        actionPolicy: "auto_send",
+        watchDeliveryConfigured: true,
+      }),
+    );
+  });
+
   it("rejects invalid monitor.create params", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
 
@@ -611,7 +762,7 @@ describe("monitor gateway handlers", () => {
     expect(call?.[2]?.message).toContain("invalid monitor.create params");
   });
 
-  it("does not disable cron when the agent marks a monitor completed", async () => {
+  it("disables cron when the agent marks a monitor completed", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
     const storeDir = path.dirname(cronStorePath);
     await fs.mkdir(storeDir, { recursive: true });
@@ -659,7 +810,7 @@ describe("monitor gateway handlers", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(cronUpdate).not.toHaveBeenCalled();
+    expect(cronUpdate).toHaveBeenCalledWith("cron-job-1", { enabled: false });
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expect((call?.[1] as { status?: string } | undefined)?.status).toBe("completed");

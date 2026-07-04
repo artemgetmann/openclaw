@@ -48,8 +48,16 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    stopJob?: boolean;
     startedAt: number;
     endedAt: number;
+  };
+
+type CronCoreRunResult = CronRunOutcome &
+  CronRunTelemetry & {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+    stopJob?: boolean;
   };
 
 type StartupCatchupCandidate = {
@@ -589,6 +597,14 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     return;
   }
 
+  // Monitor wakes can discover that their backing goal/monitor is terminal.
+  // Timed executions run against a detached job snapshot, so the stop signal
+  // must be replayed onto the persisted store job before nextRunAtMs is
+  // computed.
+  if (result.stopJob) {
+    job.enabled = false;
+  }
+
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
@@ -1109,9 +1125,7 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
-): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
-> {
+): Promise<CronCoreRunResult> {
   const resolveAbortError = () => ({
     status: "error" as const,
     error: timeoutErrorMessage(),
@@ -1243,6 +1257,8 @@ export async function executeJobCore(
       error: res.error,
       stopJob: res.stopJob,
       summary: res.summary,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
       sessionId: res.sessionId,
       sessionKey: res.sessionKey,
       model: res.model,
@@ -1303,13 +1319,15 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
-    stopJob?: boolean;
-  } & CronRunOutcome &
-    CronRunTelemetry;
+  } & CronCoreRunResult;
   try {
     coreResult = await executeJobCore(state, job);
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
+  }
+
+  if (coreResult.stopJob) {
+    job.enabled = false;
   }
 
   const endedAt = state.deps.nowMs();
