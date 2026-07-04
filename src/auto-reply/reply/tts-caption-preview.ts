@@ -1,4 +1,6 @@
 const FINAL_TTS_CAPTION_PREVIEW_MAX_CHARS = 160;
+const FINAL_TTS_SPOKEN_PREVIEW_MAX_CHARS = 360;
+const FINAL_TTS_TABLE_SUMMARY_MAX_ROWS = 3;
 
 type MarkdownTableBlock = {
   headers: string[];
@@ -124,39 +126,76 @@ function sanitizeForVoice(text: string): string {
     .trim();
 }
 
-function capPreview(text: string): string | undefined {
+function capPreview(
+  text: string,
+  maxChars = FINAL_TTS_CAPTION_PREVIEW_MAX_CHARS,
+): string | undefined {
   const normalized = sanitizeForVoice(text);
   if (!normalized) {
     return undefined;
   }
-  if (normalized.length <= FINAL_TTS_CAPTION_PREVIEW_MAX_CHARS) {
+  if (normalized.length <= maxChars) {
     return normalized;
   }
-  return `${normalized.slice(0, FINAL_TTS_CAPTION_PREVIEW_MAX_CHARS - 3).trimEnd()}...`;
+  return `${normalized.slice(0, maxChars - 3).trimEnd()}...`;
 }
 
-function summarizeFirstTable(table: MarkdownTableBlock): string {
-  const firstRow = table.rows.find((row) => row.some((cell) => cell.trim().length > 0));
-  if (!firstRow) {
-    return "I rendered the table in Telegram.";
+function normalizeTableVoiceCell(cell: string): string | undefined {
+  const normalized = sanitizeForVoice(cell)
+    .replace(/[.;:,]+$/g, "")
+    .trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function summarizeTableRow(table: MarkdownTableBlock, row: readonly string[]): string | undefined {
+  const label = normalizeTableVoiceCell(row[0] ?? "");
+  if (!label) {
+    return undefined;
   }
-  const pairs = firstRow
-    .map((cell, index) => {
-      const header = table.headers[index]?.trim();
-      const value = cell.trim();
+  const details = row
+    .slice(1)
+    .map((cell, offset) => {
+      const value = normalizeTableVoiceCell(cell);
       if (!value) {
         return undefined;
       }
-      return header ? `${header}: ${value}` : value;
+      const header = normalizeTableVoiceCell(table.headers[offset + 1] ?? "");
+      return header ? `${header.toLowerCase()} ${value}` : value;
     })
     .filter((part): part is string => Boolean(part));
-  if (pairs.length === 0) {
-    return "I rendered the table in Telegram.";
-  }
-  return `I rendered the full table in Telegram. First row: ${pairs.join("; ")}.`;
+
+  return details.length > 0 ? `${label}: ${details.join(", ")}` : label;
 }
 
-function buildFinalTtsSummary(text: string): string | undefined {
+function summarizeTables(tables: readonly MarkdownTableBlock[]): string {
+  const rowSummaries: string[] = [];
+  for (const table of tables) {
+    // The voice path should acknowledge the table itself, not only nearby prose.
+    // Use the first useful rows because they usually carry the actual choices.
+    for (const row of table.rows) {
+      const summary = summarizeTableRow(table, row);
+      if (summary) {
+        rowSummaries.push(summary);
+      }
+      if (rowSummaries.length >= FINAL_TTS_TABLE_SUMMARY_MAX_ROWS) {
+        break;
+      }
+    }
+    if (rowSummaries.length >= FINAL_TTS_TABLE_SUMMARY_MAX_ROWS) {
+      break;
+    }
+  }
+
+  if (rowSummaries.length === 0) {
+    return "Full table is in Telegram.";
+  }
+  return `Full table is in Telegram. Key rows: ${rowSummaries.join("; ")}.`;
+}
+
+function buildFinalTtsSummary(
+  text: string,
+  maxChars = FINAL_TTS_CAPTION_PREVIEW_MAX_CHARS,
+): string | undefined {
   const normalizedInput = text.replace(/\r\n?/g, "\n").trim();
   if (!normalizedInput) {
     return undefined;
@@ -165,17 +204,19 @@ function buildFinalTtsSummary(text: string): string | undefined {
   const withoutCode = stripFencedCode(normalizedInput);
   const tables = findMarkdownTableBlocks(withoutCode.text);
   const prose = stripMarkdownTables(withoutCode.text, tables);
-  const prosePreview = capPreview(prose);
+  if (tables.length > 0) {
+    const tableSummary = summarizeTables(tables);
+    const prosePreview = capPreview(prose, maxChars);
+    return capPreview([tableSummary, prosePreview].filter(Boolean).join(" "), maxChars);
+  }
+  const prosePreview = capPreview(prose, maxChars);
   if (prosePreview) {
     return prosePreview;
-  }
-  if (tables.length > 0) {
-    return capPreview(summarizeFirstTable(tables[0]));
   }
   if (withoutCode.removed) {
     return "I drafted the code in Telegram.";
   }
-  return capPreview(normalizedInput);
+  return capPreview(normalizedInput, maxChars);
 }
 
 export function buildFinalTtsSpokenPreview(text: string): string | undefined {
@@ -188,7 +229,7 @@ export function buildFinalTtsSpokenPreview(text: string): string | undefined {
   if (!withoutCode.removed && tables.length === 0 && !hasDominantPathContent(normalizedInput)) {
     return normalizedInput;
   }
-  return buildFinalTtsSummary(normalizedInput);
+  return buildFinalTtsSummary(normalizedInput, FINAL_TTS_SPOKEN_PREVIEW_MAX_CHARS);
 }
 
 export function buildFinalTtsCaptionPreview(text: string): string | undefined {

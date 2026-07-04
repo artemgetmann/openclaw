@@ -293,9 +293,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       ["| Item | Color | Score |", "| --- | --- | ---: |", "| Apple | red | 9 |"].join("\n"),
     );
 
-    expect(preview).toBe(
-      "I rendered the full table in Telegram. First row: Item: Apple; Color: red; Score: 9.",
-    );
+    expect(preview).toBe("Full table is in Telegram. Key rows: Apple: color red, score 9.");
     expect(preview).not.toContain("|");
   });
 
