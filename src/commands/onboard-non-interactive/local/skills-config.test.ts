@@ -44,6 +44,8 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "checkpoint",
         "goal-mode",
         "monitor-router",
+        "media-editor",
+        "video-frames",
         "jarvis-gui-control",
         "screen-record",
         "mcporter",

@@ -91,6 +91,7 @@ const CONSUMER_SKILL_DISPLAY_NAMES: Record<string, string> = {
   himalaya: "Email",
   "elevenlabs-creative": "ElevenLabs Creative",
   "media-editor": "Audio & Video Editing",
+  "video-frames": "Video Frames",
   mcporter: "MCP Connector Manager",
   "nano-banana-pro": "Image Generation",
   "nano-pdf": "PDF Editing",

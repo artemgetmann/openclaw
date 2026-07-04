@@ -144,7 +144,14 @@ recording exists and the user did not explicitly request automatic delivery.
 
 ## Local Inspection
 
-Use terminal inspection before user-facing delivery. The minimum check is:
+Use the `media-editor` skill's proof-inspection recipe before user-facing
+delivery: verify metadata with `ffprobe`, check for black intervals with
+`ffmpeg` `blackdetect`, and inspect a local contact sheet. Confirm the metadata
+matches the intended capture, no unexplained black intervals appear, and the
+contact sheet is readable.
+
+If `media-editor` is not available because this install has a custom bundled
+skill allowlist, run the minimum inspection inline:
 
 ```bash
 ffprobe -v error \
@@ -162,10 +169,6 @@ ffmpeg -y -hide_banner -nostats \
   -vf "fps=1,scale=360:-1,tile=5x1" \
   -frames:v 1 ".artifacts/<run>/review-contact.png"
 ```
-
-Confirm the metadata matches the intended capture, blackdetect reports no black
-intervals, and the contact sheet is readable. The contact sheet is for local
-inspection only unless the user explicitly asks for frames or screenshots.
 
 ## Pair With Structured Proof
 
