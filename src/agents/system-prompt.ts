@@ -8,6 +8,7 @@ import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { DURABLE_PLAN_FILE_POLICY_PROMPT } from "./tools/durable-plan-file-policy.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -319,6 +320,8 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    update_plan:
+      "Track a short session checklist for non-trivial multi-step work; keep exactly one current step in_progress and skip for one-step tasks",
     image_generate:
       "Generate new images or edit reference images with the configured image-generation model",
     image: "Analyze an image with the configured image model",
@@ -351,6 +354,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "update_plan",
     "image_generate",
     "image",
   ];
@@ -522,6 +526,16 @@ export function buildAgentSystemPrompt(params: {
         ]
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+    availableTools.has("update_plan")
+      ? [
+          "## Planning",
+          "When a task has two or more meaningful steps, meaningful uncertainty, repo/code inspection plus a change, or a long-running external wait, call update_plan before the first non-trivial tool call.",
+          "Keep update_plan current while working: mark completed steps, keep at most one in_progress step, and revise the checklist when the plan changes.",
+          "Skip update_plan only for simple one-step tasks, tiny lookups, or immediate answers where a checklist would add noise.",
+          "update_plan is not /goal and is not monitor persistence. Treat it as session-scoped progress unless the user explicitly approves durable plan-file behavior.",
+          DURABLE_PLAN_FILE_POLICY_PROMPT,
+        ].join("\n")
+      : "",
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",

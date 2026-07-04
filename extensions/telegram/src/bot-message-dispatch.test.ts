@@ -392,6 +392,88 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("routes plan sourcePreview tool text through transient progress", async () => {
+    const progressStream = createDraftStream(9004);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await replyOptions?.onToolResult?.({
+          text: "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(progressStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
+    );
+    expect(progressStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Plan updated\n\n- [x] Inspect files\n\n- [x] Render checklist\n\n- [~] Run tests",
+    );
+    expect(progressStream.update).toHaveBeenCalledTimes(2);
+    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Done." })],
+      }),
+    );
+  });
+
+  it("keeps final answer partials out of the plan progress bubble", async () => {
+    const progressStream = createDraftStream(9005);
+    const answerStream = createDraftStream(9105);
+    const finalText =
+      "- Checked local-file evidence for update_plan registration.\n" +
+      "- Temp-file cleanup was verified.\n" +
+      "- Remaining risk is low.";
+    createTelegramDraftStream
+      .mockImplementationOnce(() => progressStream)
+      .mockImplementationOnce(() => answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: "Plan updated\n- [~] Inspect files\n- [ ] Write temp report\n- [ ] Summarize",
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await replyOptions?.onPartialReply?.({
+          text: "- Checked local-file evidence for update_plan registration.",
+        });
+        await replyOptions?.onPartialReply?.({ text: finalText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9105" });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    allowDeterministicPreviewDeletes();
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Write temp report\n\n- [ ] Summarize",
+    );
+    expect(progressStream.update).not.toHaveBeenCalledWith(finalText);
+    expect(answerStream.update).toHaveBeenCalledWith(finalText);
+    expect(progressStream.clear).toHaveBeenCalled();
+    expectFinalPreviewEditedInPlace(9105, finalText);
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "" })],
+      }),
+    );
+  });
+
   it("streams assistant partials through the durable answer lane instead of transient progress", async () => {
     const answerStream = createDraftStream(9101);
     createTelegramDraftStream.mockImplementation((params) => {

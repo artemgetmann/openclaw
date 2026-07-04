@@ -179,9 +179,19 @@ export function createTelegramProgressController(params: {
       if (!progressText) {
         return;
       }
+      // Replacement snapshots, such as plan checklists, become the new progress
+      // baseline. Later append-style updates must not resurrect pre-snapshot
+      // history from progressEntries.
+      progressEntries.length = 0;
+      progressEntryKeys.clear();
+      appendProgressEntries(progressText);
+      const replacementProgressText = renderProgressHistory();
+      if (!replacementProgressText) {
+        return;
+      }
       hasProgress = true;
-      lastRenderedProgressText = progressText;
-      stream.update(progressText);
+      lastRenderedProgressText = replacementProgressText;
+      stream.update(replacementProgressText);
     },
     clear: async (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => {
       if (cleared) {

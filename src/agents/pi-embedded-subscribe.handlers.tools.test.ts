@@ -331,6 +331,59 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   });
 });
 
+describe("handleToolExecutionEnd update_plan progress", () => {
+  it("emits successful plan results as transient source-preview progress", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.shouldEmitToolResult = () => false;
+    ctx.shouldEmitToolOutput = () => false;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "update_plan",
+      toolCallId: "tool-plan",
+      args: {
+        plan: [{ step: "Wire normal tool delivery", status: "in_progress" }],
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "update_plan",
+      toolCallId: "tool-plan",
+      isError: false,
+      result: {
+        content: [],
+        details: {
+          status: "updated",
+          explanation: "Showing progress outside ACP plan events.",
+          plan: [
+            { step: "Wire normal tool delivery", status: "completed" },
+            { step: "Re-run focused tests", status: "in_progress" },
+          ],
+        },
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: [
+        "Plan updated",
+        "Showing progress outside ACP plan events.",
+        "- [x] Wire normal tool delivery",
+        "- [~] Re-run focused tests",
+      ].join("\n"),
+      channelData: {
+        openclaw: {
+          progressKind: "plan",
+          sourcePreview: true,
+        },
+      },
+    });
+  });
+});
+
 describe("messaging tool media URL tracking", () => {
   it("emits intercepted same-source message sends as tool progress payloads", async () => {
     const { ctx } = createTestContext();
