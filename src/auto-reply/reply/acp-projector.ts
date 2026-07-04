@@ -93,10 +93,18 @@ function normalizePlanStatus(value: unknown): PlanStepStatus | undefined {
   return undefined;
 }
 
-function readPlanStep(value: unknown): PlanStep | undefined {
+function readPlanStep(
+  value: unknown,
+  options: { allowPlainString?: boolean } = {},
+): PlanStep | undefined {
   if (typeof value === "string") {
-    const withoutBullet = value.trim().replace(/^[-*]\s+/, "");
+    const trimmed = value.trim();
+    const isChecklistLine = /^[-*]\s+/.test(trimmed);
+    const withoutBullet = trimmed.replace(/^[-*]\s+/, "");
     const statusMatch = PLAN_STEP_STATUS_RE.exec(withoutBullet);
+    if (!options.allowPlainString && !isChecklistLine && !statusMatch) {
+      return undefined;
+    }
     const step = withoutBullet.replace(PLAN_STEP_STATUS_RE, "").trim();
     if (!step) {
       return undefined;
@@ -125,13 +133,17 @@ function readPlanProgressFromJson(value: unknown): PlanProgress | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
+  const detailsProgress = readPlanProgressFromJson(value.details);
+  if (detailsProgress) {
+    return detailsProgress;
+  }
   const rawSteps = Array.isArray(value.plan)
     ? value.plan
     : Array.isArray(value.steps)
       ? value.steps
       : [];
   const steps = rawSteps.flatMap((entry) => {
-    const step = readPlanStep(entry);
+    const step = readPlanStep(entry, { allowPlainString: true });
     return step ? [step] : [];
   });
   const explanation = typeof value.explanation === "string" ? value.explanation.trim() : undefined;
@@ -153,6 +165,7 @@ function parsePlanProgressText(text: string): PlanProgress | undefined {
     if (progress) {
       return progress;
     }
+    return undefined;
   } catch {
     // Plan adapters may send plain checklist text. Fall through to line parsing.
   }

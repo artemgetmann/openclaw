@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createUpdatePlanTool } from "./update-plan-tool.js";
+import {
+  createUpdatePlanTool,
+  formatUpdatePlanText,
+  readUpdatePlanDetails,
+} from "./update-plan-tool.js";
 
 async function runUpdatePlan(args: Record<string, unknown>) {
   const tool = createUpdatePlanTool();
@@ -52,5 +56,36 @@ describe("update_plan tool", () => {
         ],
       }),
     ).rejects.toThrow("plan can contain at most one in_progress step");
+  });
+
+  it("formats wrapped tool-result details for progress delivery", () => {
+    const details = readUpdatePlanDetails({
+      content: [],
+      details: {
+        status: "updated",
+        explanation: "Working through the safe path.",
+        plan: [
+          { step: "Patch handler", status: "completed" },
+          { step: "Run tests", status: "in_progress" },
+        ],
+      },
+    });
+
+    expect(details).toEqual({
+      status: "updated",
+      explanation: "Working through the safe path.",
+      plan: [
+        { step: "Patch handler", status: "completed" },
+        { step: "Run tests", status: "in_progress" },
+      ],
+    });
+    expect(details ? formatUpdatePlanText(details) : undefined).toBe(
+      [
+        "Plan updated",
+        "Working through the safe path.",
+        "- [x] Patch handler",
+        "- [~] Run tests",
+      ].join("\n"),
+    );
   });
 });

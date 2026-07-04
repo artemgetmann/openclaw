@@ -277,6 +277,59 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
+  it("renders update_plan tool-result details without treating the raw JSON as a step", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "plan",
+      text: JSON.stringify({
+        content: [],
+        details: {
+          status: "updated",
+          explanation: "Keeping the user-facing checklist current.",
+          plan: [
+            { step: "Register update_plan", status: "completed" },
+            { step: "Verify Telegram rendering", status: "in_progress" },
+          ],
+        },
+      }),
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: [
+          "Plan updated",
+          "Keeping the user-facing checklist current.",
+          "- [x] Register update_plan",
+          "- [~] Verify Telegram rendering",
+        ].join("\n"),
+        channelData: {
+          openclaw: {
+            progressKind: "plan",
+            sourcePreview: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("ignores unrelated JSON plan-tag payloads", async () => {
+    const { deliveries, projector } = createProjectorHarness();
+
+    await projector.onEvent({
+      type: "status",
+      tag: "plan",
+      text: JSON.stringify({
+        content: [],
+        details: { status: "noop" },
+      }),
+    });
+
+    expect(deliveries).toEqual([]);
+  });
+
   it("renders plain plan lines without leaking raw status names", async () => {
     const { deliveries, projector } = createProjectorHarness();
 

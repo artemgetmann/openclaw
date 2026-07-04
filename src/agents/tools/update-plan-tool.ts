@@ -97,6 +97,62 @@ export function formatUpdatePlanDetails(params: {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readUpdatePlanStep(value: unknown): UpdatePlanStep | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const step = typeof value.step === "string" ? value.step.trim() : "";
+  const status = typeof value.status === "string" ? value.status.trim() : "";
+  if (!step || !isPlanStepStatus(status)) {
+    return undefined;
+  }
+  return { step, status };
+}
+
+export function readUpdatePlanDetails(value: unknown): UpdatePlanDetails | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const details = readUpdatePlanDetails(value.details);
+  if (details) {
+    return details;
+  }
+  const status = typeof value.status === "string" ? value.status.trim() : "";
+  if (status !== "updated" || !Array.isArray(value.plan)) {
+    return undefined;
+  }
+  const plan = value.plan.flatMap((entry) => {
+    const step = readUpdatePlanStep(entry);
+    return step ? [step] : [];
+  });
+  if (plan.length === 0) {
+    return undefined;
+  }
+  const explanation = typeof value.explanation === "string" ? value.explanation.trim() : "";
+  return {
+    status: "updated",
+    ...(explanation ? { explanation } : {}),
+    plan,
+  };
+}
+
+export function formatUpdatePlanText(details: UpdatePlanDetails): string {
+  const lines = ["Plan updated"];
+  if (details.explanation) {
+    lines.push(details.explanation);
+  }
+  for (const entry of details.plan) {
+    const marker =
+      entry.status === "completed" ? "[x]" : entry.status === "in_progress" ? "[~]" : "[ ]";
+    lines.push(`- ${marker} ${entry.step}`);
+  }
+  return lines.join("\n");
+}
+
 /** Creates the session-scoped planning tool. It only returns structured state; it never writes files. */
 export function createUpdatePlanTool(): AnyAgentTool {
   return {
