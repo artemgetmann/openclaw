@@ -7,6 +7,7 @@ import { resolveBundledSkillsDir } from "./bundled-dir.js";
 
 const SHARED_SKILL_MARKER_FILENAME = ".openclaw-skill.json";
 const SHARED_SKILL_MANAGED_SOURCE = "openclaw-bundled";
+const JARVIS_ONLY_SHARED_MIRROR_EXCLUDE_SKILLS = new Set(["goal-mode"]);
 
 type SharedSkillMarker = {
   version: 1;
@@ -159,6 +160,13 @@ function listSkillNames(rootDir: string): string[] {
   }
 }
 
+function shouldMirrorBundledSkillToSharedPersonalRoot(name: string): boolean {
+  // Goal mode is Jarvis runtime policy. Mirroring it into ~/.agents/skills makes
+  // Codex and other local agents discover Jarvis-specific goal instructions even
+  // though they have their own goal mechanics.
+  return !JARVIS_ONLY_SHARED_MIRROR_EXCLUDE_SKILLS.has(name);
+}
+
 async function copySkillMirror(params: {
   name: string;
   sourceDir: string;
@@ -233,6 +241,10 @@ export async function syncBundledSkillsToSharedPersonalRoot(
 
   const sourceSkillNames = listSkillNames(sourceDir);
   const sourceSkillSet = new Set(sourceSkillNames);
+  const mirroredSourceSkillNames = sourceSkillNames.filter((name) =>
+    shouldMirrorBundledSkillToSharedPersonalRoot(name),
+  );
+  const mirroredSourceSkillSet = new Set(mirroredSourceSkillNames);
   for (const name of forceSkillNames) {
     if (!sourceSkillSet.has(name)) {
       entries.push({
@@ -244,7 +256,7 @@ export async function syncBundledSkillsToSharedPersonalRoot(
     }
   }
 
-  for (const name of sourceSkillNames) {
+  for (const name of mirroredSourceSkillNames) {
     const sourceSkillDir = path.join(sourceDir, name);
     const targetSkillDir = path.join(targetDir, name);
     const bundledTreeHash = hashSharedSkillDirectory(sourceSkillDir);
@@ -434,7 +446,7 @@ export async function syncBundledSkillsToSharedPersonalRoot(
 
   if (params.pruneRemoved ?? true) {
     for (const name of listSkillNames(targetDir)) {
-      if (sourceSkillSet.has(name)) {
+      if (mirroredSourceSkillSet.has(name)) {
         continue;
       }
       const targetSkillDir = path.join(targetDir, name);
