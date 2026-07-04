@@ -655,6 +655,7 @@ export async function sendMessageTelegram(
   type TelegramTextChunk = {
     plainText: string;
     htmlText?: string;
+    richHtmlText?: string;
   };
 
   const sendTelegramTextChunk = async (
@@ -704,7 +705,7 @@ export async function sendMessageTelegram(
               ...(opts.silent === true ? { disable_notification: true } : {}),
             };
             const richMessage = buildTelegramRichMessage(
-              { text: htmlText, textMode: "html" },
+              { text: chunk.richHtmlText ?? htmlText, textMode: "html" },
               {
                 tableMode,
                 skipEntityDetection: linkPreviewEnabled === false,
@@ -993,21 +994,25 @@ export async function sendMessageTelegram(
   if (textMode === "html") {
     textResult = await sendChunkedText(text, "text send");
   } else {
+    const legacyHtmlChunks = splitTelegramHtmlChunks(renderHtmlText(text), 4000);
     const richChunks = splitTelegramRichMessageTextChunks({
       text,
       textLimit: 4000,
       textMode: "markdown",
       tableMode,
     });
+    const richHtmlChunks =
+      richChunks.length === legacyHtmlChunks.length ? richChunks.map((chunk) => chunk.text) : [];
     const fallbackChunks = splitTelegramPlainTextFallback(
       opts.plainText ?? text,
-      richChunks.length,
+      legacyHtmlChunks.length,
       4000,
     );
     textResult = await sendTelegramTextChunks(
-      richChunks.map((chunk, index) => ({
-        plainText: fallbackChunks[index] ?? chunk.plainText,
-        htmlText: chunk.text,
+      legacyHtmlChunks.map((htmlText, index) => ({
+        plainText: fallbackChunks[index] ?? htmlText,
+        htmlText,
+        richHtmlText: richHtmlChunks[index],
       })),
       "text send",
     );
