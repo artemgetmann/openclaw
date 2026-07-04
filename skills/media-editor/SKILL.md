@@ -54,3 +54,32 @@ thumbnails, prepare voice notes, or burn/strip subtitles.
 
 After edits, verify with `ffprobe` or a file-size/duration check before saying
 the output is ready.
+
+## Proof Inspection
+
+Before sending a video as proof, verify the file is readable, nonblank, and
+matches the intended capture. Use metadata first, then a black-frame check, then
+a local visual sheet:
+
+```bash
+ffprobe -v error \
+  -show_entries format=duration,size \
+  -show_entries stream=codec_name,width,height,avg_frame_rate \
+  -of json "/path/to/review.mp4"
+
+ffmpeg -hide_banner -nostats \
+  -i "/path/to/review.mp4" \
+  -vf blackdetect=d=0.2:pix_th=0.10 \
+  -an -f null -
+
+ffmpeg -y -hide_banner -nostats \
+  -i "/path/to/review.mp4" \
+  -vf "fps=1,scale=360:-1,tile=5x1" \
+  -frames:v 1 "/path/to/review-contact.png"
+```
+
+Confirm `ffprobe` shows the expected codec, dimensions, duration, and file
+size. Treat any `blackdetect` interval as a proof blocker until explained. Open
+the contact sheet locally and confirm it shows the target flow. Contact sheets,
+frames, thumbnails, and other inspection artifacts stay local unless the user
+explicitly asks for them.

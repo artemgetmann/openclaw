@@ -418,6 +418,7 @@ describe("screen record CLI params", () => {
 
   it("documents video-first proof artifacts and keeps inspection sheets local by default", () => {
     const skill = readFileSync("skills/screen-record/SKILL.md", "utf8");
+    const mediaSkill = readFileSync("skills/media-editor/SKILL.md", "utf8");
 
     expect(skill).toMatch(/User-facing proof is\s+MP4\/video by default/i);
     expect(skill).toMatch(
@@ -425,8 +426,11 @@ describe("screen record CLI params", () => {
     );
     expect(skill).toMatch(/GIF is not the default proof format/i);
     expect(skill).toMatch(/Inspect the final video locally before calling it proof/i);
+    expect(skill).toMatch(/media-editor.+proof-inspection recipe/i);
+    expect(skill).toMatch(/custom bundled\s+skill allowlist/i);
     expect(skill).toMatch(/ffprobe -v error/i);
-    expect(skill).toMatch(/blackdetect=d=0\.2:pix_th=0\.10/i);
-    expect(skill).toMatch(/review-contact\.png/i);
+    expect(mediaSkill).toMatch(/ffprobe -v error/i);
+    expect(mediaSkill).toMatch(/blackdetect=d=0\.2:pix_th=0\.10/i);
+    expect(mediaSkill).toMatch(/review-contact\.png/i);
   });
 });

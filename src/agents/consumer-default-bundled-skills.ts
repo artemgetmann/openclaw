@@ -10,6 +10,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "apple-notes",
   "apple-reminders",
   "media-editor",
+  "video-frames",
   "elevenlabs-creative",
   "screen-record",
   "gog",
