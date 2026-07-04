@@ -810,6 +810,9 @@ export const dispatchTelegramMessage = async ({
   let draftLaneEventQueue = Promise.resolve();
   let processingDraftLaneEvent = false;
   let progressController: TelegramProgressController | undefined;
+  // Structured plan checklists own only explicit plan updates; later assistant
+  // partials are answer candidates and must not be folded back into the plan.
+  let activeProgressKind: "generic" | "plan" | undefined;
   let sawAssistantPartial = false;
   // Once a tool boundary proves the assistant is narrating work, later
   // phase-less assistant partials should keep editing that same progress
@@ -1082,6 +1085,7 @@ export const dispatchTelegramMessage = async ({
       if (progressController === controller) {
         progressController = undefined;
       }
+      activeProgressKind = undefined;
     }
     logPreviewLedger({
       lane: "progress",
@@ -1300,6 +1304,7 @@ export const dispatchTelegramMessage = async ({
     if (
       lane === answerLane &&
       routeToolStatusPartialsToProgress &&
+      activeProgressKind !== "plan" &&
       updateActiveProgressPreviewFromPartial(previewText, "answer-partial-progress-preview")
     ) {
       // This is a live preview of the current assistant text, not committed
@@ -1426,7 +1431,7 @@ export const dispatchTelegramMessage = async ({
   };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
-    options: { replace?: boolean } = {},
+    options: { replace?: boolean; progressKind?: "generic" | "plan" } = {},
   ) => {
     if (!text) {
       return false;
@@ -1445,6 +1450,7 @@ export const dispatchTelegramMessage = async ({
     if (!controller) {
       return false;
     }
+    activeProgressKind = options.progressKind ?? (options.replace ? "plan" : "generic");
     // Progress owns the transient bubble. The final answer must be sent as its
     // own durable message if no later answer stream appears. When a later
     // answer stream does appear, final delivery may safely finalize that active
@@ -1786,8 +1792,10 @@ export const dispatchTelegramMessage = async ({
       // Same-chat message-tool progress is model-authored working state. Render
       // it through the mutable progress controller so it never becomes durable
       // Telegram text and never reaches TTS as a tool result.
+      const progressKind = resolveOpenClawProgressKind(payload) === "plan" ? "plan" : "generic";
       await updateAnswerProgressFromBlock(payload.text, {
-        replace: resolveOpenClawProgressKind(payload) === "plan",
+        replace: progressKind === "plan",
+        progressKind,
       });
       return;
     }
@@ -2458,10 +2466,10 @@ export const dispatchTelegramMessage = async ({
         onToolResult: (payload) =>
           enqueueDraftLaneEvent(async () => {
             await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
-            if (getActiveProgressController()) {
+            await sendToolPayload(payload);
+            if (getActiveProgressController() && activeProgressKind !== "plan") {
               routeToolStatusPartialsToProgress = true;
             }
-            await sendToolPayload(payload);
           }),
         onPartialReply:
           canStreamAnswerDraft || canStreamReasoningDraft
@@ -2513,7 +2521,7 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: async (payload) => {
           await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
-          if (getActiveProgressController()) {
+          if (getActiveProgressController() && activeProgressKind !== "plan") {
             routeToolStatusPartialsToProgress = true;
           }
           if (!statusReactionController) {
