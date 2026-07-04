@@ -117,6 +117,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
     "monitor.create",
     "monitor.update",
+    "monitor.routeEvent",
     "monitor.stop",
   ],
   [ADMIN_SCOPE]: [

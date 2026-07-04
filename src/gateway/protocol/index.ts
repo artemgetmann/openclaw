@@ -157,6 +157,7 @@ import {
   MonitorCreateParamsSchema,
   MonitorUpdateParamsSchema,
   MonitorStopParamsSchema,
+  MonitorRouteEventParamsSchema,
   type NodeDescribeParams,
   NodeDescribeParamsSchema,
   type NodeEventParams,
@@ -417,6 +418,7 @@ export const validateMonitorGetParams = ajv.compile(MonitorGetParamsSchema);
 export const validateMonitorCreateParams = ajv.compile(MonitorCreateParamsSchema);
 export const validateMonitorUpdateParams = ajv.compile(MonitorUpdateParamsSchema);
 export const validateMonitorStopParams = ajv.compile(MonitorStopParamsSchema);
+export const validateMonitorRouteEventParams = ajv.compile(MonitorRouteEventParamsSchema);
 export const validateMonitorRecord = ajv.compile<MonitorRecord>(MonitorRecordSchema);
 export const validateDevicePairListParams = ajv.compile<DevicePairListParams>(
   DevicePairListParamsSchema,
@@ -599,6 +601,7 @@ export {
   MonitorCreateParamsSchema,
   MonitorUpdateParamsSchema,
   MonitorStopParamsSchema,
+  MonitorRouteEventParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   ChatHistoryParamsSchema,

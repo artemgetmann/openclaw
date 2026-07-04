@@ -5,6 +5,7 @@ import {
   resolveMonitorOriginDelivery,
   resolveMonitorWatchDelivery,
 } from "../../monitor/delivery.js";
+import { routeMonitorEvent } from "../../monitor/event-router.js";
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   createMonitorRecord,
@@ -18,6 +19,8 @@ import {
 import {
   isTerminalMonitorStatus,
   type MonitorActionPolicy,
+  type MonitorEventEnvelope,
+  type MonitorTrigger,
   type MonitorUpdatePatch,
 } from "../../monitor/types.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
@@ -28,6 +31,7 @@ import {
   validateMonitorCreateParams,
   validateMonitorGetParams,
   validateMonitorListParams,
+  validateMonitorRouteEventParams,
   validateMonitorStopParams,
   validateMonitorUpdateParams,
 } from "../protocol/index.js";
@@ -100,6 +104,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       sourceType: string;
       sourceTarget: Record<string, unknown>;
       cadence: CronJobCreate["schedule"];
+      trigger?: MonitorTrigger;
       expiryAt?: string;
       stopCondition?: string;
       actionPolicy?: MonitorActionPolicy;
@@ -160,6 +165,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
         sourceType: p.sourceType,
         sourceTarget: p.sourceTarget,
         cadence: p.cadence,
+        trigger: p.trigger,
         expiryAt: p.expiryAt,
         stopCondition: p.stopCondition,
         actionPolicy: p.actionPolicy,
@@ -187,6 +193,33 @@ export const monitorHandlers: GatewayRequestHandlers = {
       originSessionKey: p.originSessionKey,
     });
     respond(true, monitor, undefined);
+  },
+  "monitor.routeEvent": async ({ params, respond, context }) => {
+    if (!validateMonitorRouteEventParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid monitor.routeEvent params: ${formatValidationErrors(validateMonitorRouteEventParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const event = params as MonitorEventEnvelope;
+    const store = await loadMonitorStore(resolveStorePath(context.cronStorePath));
+    const routes = routeMonitorEvent({ monitors: store.monitors, event });
+    const wakes = [];
+    for (const route of routes) {
+      // The router only decides that this event belongs to the monitor. The
+      // existing cron job remains the execution owner so origin delivery and
+      // the durable monitor session stay exactly where the monitor was created.
+      const enqueue = await context.cron.enqueueRun(route.cronJobId, "force");
+      wakes.push({ ...route, enqueue });
+    }
+
+    respond(true, { matched: wakes.length, wakes }, undefined);
   },
   "monitor.update": async ({ params, respond, context }) => {
     if (!validateMonitorUpdateParams(params)) {

@@ -103,6 +103,7 @@ const BASE_METHODS = [
   "monitor.get",
   "monitor.create",
   "monitor.update",
+  "monitor.routeEvent",
   "monitor.stop",
   "gateway.identity.get",
   "system-presence",

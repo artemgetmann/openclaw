@@ -157,6 +157,7 @@ export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): M
     sourceType: input.sourceType.trim(),
     sourceTarget: input.sourceTarget,
     cadence: input.cadence,
+    trigger: input.trigger ?? { kind: "schedule", cadence: input.cadence },
     ...(input.expiryAt?.trim() ? { expiryAt: input.expiryAt.trim() } : {}),
     ...(input.stopCondition?.trim() ? { stopCondition: input.stopCondition.trim() } : {}),
     actionPolicy: input.actionPolicy ?? "notify_draft",

@@ -18,6 +18,72 @@ const MonitorStatusSchema = Type.Union([
 
 const LooseObjectSchema = Type.Object({}, { additionalProperties: true });
 
+const MonitorEventTriggerKindSchema = Type.Union([
+  Type.Literal("webhook"),
+  Type.Literal("local_listener"),
+  Type.Literal("process_exit"),
+  Type.Literal("browser_observer"),
+]);
+
+const MonitorTriggerMatchSchema = Type.Object(
+  {
+    sourceType: Type.Optional(Type.String()),
+    sourceTarget: Type.Optional(LooseObjectSchema),
+    matchKeys: Type.Optional(Type.Array(Type.String())),
+    eventTypes: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false },
+);
+
+const MonitorTriggerSchema = Type.Union([
+  Type.Object(
+    {
+      kind: Type.Literal("schedule"),
+      cadence: Type.Optional(CronScheduleSchema),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: MonitorEventTriggerKindSchema,
+      match: Type.Optional(MonitorTriggerMatchSchema),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("hybrid"),
+      schedule: Type.Optional(
+        Type.Object(
+          { cadence: Type.Optional(CronScheduleSchema) },
+          { additionalProperties: false },
+        ),
+      ),
+      event: Type.Object(
+        {
+          kind: MonitorEventTriggerKindSchema,
+          match: Type.Optional(MonitorTriggerMatchSchema),
+        },
+        { additionalProperties: false },
+      ),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+const MonitorEventEnvelopeSchema = Type.Object(
+  {
+    triggerKind: MonitorEventTriggerKindSchema,
+    sourceType: NonEmptyString,
+    sourceTarget: LooseObjectSchema,
+    eventType: Type.Optional(Type.String()),
+    idempotencyKey: Type.Optional(Type.String()),
+    receivedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    evidence: Type.Optional(LooseObjectSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const MonitorRecordSchema = Type.Object(
   {
     monitorId: NonEmptyString,
@@ -30,6 +96,7 @@ export const MonitorRecordSchema = Type.Object(
     sourceType: NonEmptyString,
     sourceTarget: LooseObjectSchema,
     cadence: CronScheduleSchema,
+    trigger: Type.Optional(MonitorTriggerSchema),
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: MonitorActionPolicySchema,
@@ -62,6 +129,7 @@ export const MonitorCreateParamsSchema = Type.Object(
     sourceType: NonEmptyString,
     sourceTarget: LooseObjectSchema,
     cadence: CronScheduleSchema,
+    trigger: Type.Optional(MonitorTriggerSchema),
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(MonitorActionPolicySchema),
@@ -80,6 +148,7 @@ export const MonitorUpdateParamsSchema = Type.Object(
         watchDelivery: Type.Optional(CronDeliverySchema),
         sourceTarget: Type.Optional(LooseObjectSchema),
         cadence: Type.Optional(CronScheduleSchema),
+        trigger: Type.Optional(MonitorTriggerSchema),
         expiryAt: Type.Optional(Type.String()),
         stopCondition: Type.Optional(Type.String()),
         actionPolicy: Type.Optional(MonitorActionPolicySchema),
@@ -98,3 +167,5 @@ export const MonitorStopParamsSchema = Type.Object(
   { monitorId: NonEmptyString },
   { additionalProperties: false },
 );
+
+export const MonitorRouteEventParamsSchema = MonitorEventEnvelopeSchema;

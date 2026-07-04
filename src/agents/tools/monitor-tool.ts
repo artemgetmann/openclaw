@@ -23,6 +23,7 @@ const MonitorToolSchema = Type.Object(
     sourceType: Type.Optional(Type.String()),
     sourceTarget: Type.Optional(Type.Object({}, { additionalProperties: true })),
     cadence: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    trigger: Type.Optional(Type.Object({}, { additionalProperties: true })),
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(stringEnum(MONITOR_ACTION_POLICIES)),
@@ -118,6 +119,12 @@ For monitor-related user replies/status:
               sourceType: readStringParam(params, "sourceType", { required: true }),
               sourceTarget,
               cadence,
+              trigger:
+                params.trigger &&
+                typeof params.trigger === "object" &&
+                !Array.isArray(params.trigger)
+                  ? params.trigger
+                  : undefined,
               expiryAt: readStringParam(params, "expiryAt"),
               stopCondition: readStringParam(params, "stopCondition"),
               actionPolicy:
