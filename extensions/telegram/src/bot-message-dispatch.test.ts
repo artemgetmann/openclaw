@@ -6,6 +6,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
+import { __testing as workLogTesting } from "./work-log.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -61,6 +62,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     editMessageTelegram.mockClear();
     guardedTelegramDeleteMessage.mockReset();
     guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: false, suppressed: true });
+    workLogTesting.resetTelegramWorkLogsForTests();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
@@ -218,9 +220,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Checking the page.");
-    expect(progressStream.flush).not.toHaveBeenCalled();
-    expect(progressStream.clear).toHaveBeenCalledWith({ waitForInFlight: false });
-    expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(progressStream.update).toHaveBeenCalledWith("Work log");
+    expect(progressStream.flush).toHaveBeenCalledTimes(1);
+    expect(progressStream.clear).not.toHaveBeenCalled();
+    expect(progressStream.materialize.mock.invocationCallOrder[0]).toBeLessThan(
       deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(deliverReplies).toHaveBeenCalledWith(
@@ -287,7 +290,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       2,
       "Checking example.com.\n\nChecking the IANA reserved domains page.",
     );
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith("Work log");
+    expect(progressStream.flush).toHaveBeenCalledTimes(1);
+    expect(progressStream.materialize).toHaveBeenCalledTimes(1);
+    expect(progressStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Final answer." })],
@@ -325,6 +331,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
         await replyOptions?.onPartialReply?.({
           text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+          channelData: { openclaw: { assistantPhase: "final_answer" } },
         });
         await dispatcherOptions.deliver(
           {
@@ -353,11 +360,13 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(progressStream.update).not.toHaveBeenCalledWith(
       expect.stringContaining("Ran it.\n\nWhat I tested:"),
     );
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith("Work log");
+    expect(progressStream.flush).toHaveBeenCalledTimes(1);
+    expect(progressStream.clear).not.toHaveBeenCalled();
     expect(answerStream.update).toHaveBeenCalledWith(
       "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
     );
-    expect(progressStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(progressStream.materialize.mock.invocationCallOrder[0]).toBeLessThan(
       answerStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expectFinalPreviewEditedInPlace(
@@ -384,7 +393,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(progressStream.update).toHaveBeenCalledWith("Opening the browser tab.");
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith("Work log");
+    expect(progressStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Done." })],
@@ -421,8 +431,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       2,
       "Plan updated\n\n- [x] Inspect files\n\n- [x] Render checklist\n\n- [~] Run tests",
     );
-    expect(progressStream.update).toHaveBeenCalledTimes(2);
-    expect(progressStream.clear).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith("Work log");
+    expect(progressStream.update).toHaveBeenCalledTimes(3);
+    expect(progressStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Done." })],
@@ -465,7 +476,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     expect(progressStream.update).not.toHaveBeenCalledWith(finalText);
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
-    expect(progressStream.clear).toHaveBeenCalled();
+    expect(progressStream.update).toHaveBeenCalledWith("Work log");
+    expect(progressStream.clear).not.toHaveBeenCalled();
     expectFinalPreviewEditedInPlace(9105, finalText);
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -605,9 +617,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(answerStream.update).toHaveBeenCalledWith(
       "Checking the current branch and recent edits.",
     );
-    expect(answerStream.clear).toHaveBeenCalledTimes(1);
+    expect(answerStream.update).toHaveBeenCalledWith("Work log");
+    expect(answerStream.clear).not.toHaveBeenCalled();
     expect(answerStream.update.mock.invocationCallOrder[1]).toBeLessThan(
-      answerStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      answerStream.materialize.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(answerStream.forceNewMessage).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledTimes(1);
@@ -674,7 +687,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "The branch is clean enough to patch safely.",
     );
     expectFinalPreviewEditedInPlace(9403, "The branch is clean enough to patch safely.");
-    expect(speculativeAnswerStream.clear).toHaveBeenCalledTimes(1);
+    expect(speculativeAnswerStream.update).toHaveBeenCalledWith("Work log");
+    expect(speculativeAnswerStream.clear).not.toHaveBeenCalled();
   });
 
   it("treats a terminal ambiguous block as the final answer", async () => {
@@ -694,7 +708,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("keeps final answer text on Telegram rich-message transport", async () => {
+  it("keeps final answer text on legacy Telegram HTML transport", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "Final answer for normal clients." },
@@ -707,10 +721,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     const call = deliverReplies.mock.calls[0]?.[0];
-    expect(call).not.toEqual(expect.objectContaining({ richMessages: false }));
     expect(call).toEqual(
       expect.objectContaining({
         copySafeBlockquotes: true,
+        richMessages: false,
         replies: [expect.objectContaining({ text: "Final answer for normal clients." })],
       }),
     );
@@ -1567,7 +1581,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         replies: [expect.objectContaining({ text: "Final answer." })],
       }),
     );
-    expect(deliverReplies.mock.calls[0]?.[0]).not.toEqual(
+    expect(deliverReplies.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ richMessages: false }),
     );
     expect(deliverReplies).toHaveBeenNthCalledWith(
@@ -1919,8 +1933,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(draftA.update).toHaveBeenCalledWith("working");
     expect(draftB.update).toHaveBeenCalledWith("working");
-    expect(draftA.clear).toHaveBeenCalledTimes(1);
-    expect(draftB.clear).toHaveBeenCalledTimes(1);
+    expect(draftA.update).toHaveBeenCalledWith("Work log");
+    expect(draftB.update).toHaveBeenCalledWith("Work log");
+    expect(draftA.clear).not.toHaveBeenCalled();
+    expect(draftB.clear).not.toHaveBeenCalled();
   });
 
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
