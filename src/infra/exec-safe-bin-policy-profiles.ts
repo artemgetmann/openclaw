@@ -343,6 +343,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "download"],
       ["telegram-user", "inbox"],
       ["telegram-user", "wait"],
+      ["telegram-user", "monitor-listen"],
       ["media", "transcribe"],
     ],
     allowUnknownOptions: false,
@@ -357,6 +358,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     ],
     allowedValueFlags: [
       "--after-id",
+      "--account-id",
       "--before-id",
       "--chat",
       "--caption",

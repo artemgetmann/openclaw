@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import type { MonitorEventEnvelope, MonitorEventTriggerKind } from "../monitor/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { buildTelegramUserMonitorEventEnvelope } from "../telegram-user/monitor-event.js";
+import type { TelegramUserMessage } from "../telegram-user/types.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
 import { resolveAllowedAgentIds } from "./hooks-policy.js";
@@ -363,6 +365,17 @@ function normalizeGmailString(raw: unknown): string | undefined {
   return value ? value : undefined;
 }
 
+function normalizeHookNumberishString(raw: unknown): string | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim();
+  return value ? value : undefined;
+}
+
 function addGmailEvidenceString(
   evidence: Record<string, unknown>,
   key: string,
@@ -372,6 +385,120 @@ function addGmailEvidenceString(
   if (value) {
     evidence[key] = value;
   }
+}
+
+function normalizeTelegramUserMessageObject(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  return firstPlainObject(payload.message) ?? payload;
+}
+
+function normalizeTelegramMessageNumber(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeTelegramMessageString(raw: unknown): string | null {
+  const value = normalizeHookNumberishString(raw);
+  return value ?? null;
+}
+
+function normalizeTelegramMessageBoolean(raw: unknown): boolean {
+  return raw === true;
+}
+
+function normalizeTelegramUsernameChat(raw: unknown): string | undefined {
+  const username = normalizeHookNumberishString(raw);
+  if (!username) {
+    return undefined;
+  }
+  return username.startsWith("@") ? username : `@${username}`;
+}
+
+function buildTelegramUserMessageFromHook(raw: Record<string, unknown>): TelegramUserMessage {
+  const directTopic = firstPlainObject(raw.direct_messages_topic);
+  const directTopicId =
+    normalizeTelegramMessageNumber(directTopic?.topic_id) ??
+    normalizeTelegramMessageNumber(raw.direct_messages_topic_id);
+  return {
+    chat_id: normalizeTelegramMessageNumber(raw.chat_id),
+    chat_username: normalizeTelegramMessageString(raw.chat_username),
+    chat_title: normalizeTelegramMessageString(raw.chat_title),
+    date: normalizeTelegramMessageString(raw.date),
+    direct_messages_topic: directTopicId === null ? null : { topic_id: directTopicId },
+    direct_messages_topic_id: directTopicId,
+    media_kind: normalizeTelegramMessageString(raw.media_kind) as TelegramUserMessage["media_kind"],
+    message_id: normalizeTelegramMessageNumber(raw.message_id) ?? 0,
+    out: normalizeTelegramMessageBoolean(raw.out),
+    reply_to_msg_id: normalizeTelegramMessageNumber(raw.reply_to_msg_id),
+    reply_to_top_id: normalizeTelegramMessageNumber(raw.reply_to_top_id),
+    sender_id: normalizeTelegramMessageNumber(raw.sender_id),
+    text: normalizeTelegramMessageString(raw.text) ?? "",
+    thread_anchor: normalizeTelegramMessageNumber(raw.thread_anchor),
+  };
+}
+
+export function normalizeTelegramUserMonitorEventPayload(
+  payload: Record<string, unknown>,
+  options?: { idempotencyKey?: string; nowMs?: number },
+): { ok: true; value: HookMonitorEventPayload } | { ok: false; error: string } {
+  const message = normalizeTelegramUserMessageObject(payload);
+  const chat =
+    normalizeHookNumberishString(payload.chat) ??
+    normalizeHookNumberishString(payload.target) ??
+    normalizeHookNumberishString(payload.to) ??
+    normalizeTelegramUsernameChat(message.chat_username) ??
+    normalizeHookNumberishString(message.chat_id);
+  if (!chat) {
+    return { ok: false, error: "telegram-user chat required" };
+  }
+
+  const messageId =
+    normalizeHookNumberishString(message.message_id) ??
+    normalizeHookNumberishString(payload.messageId);
+  if (!messageId) {
+    return { ok: false, error: "telegram-user message_id required" };
+  }
+  if (message.out === true) {
+    return { ok: false, error: "telegram-user monitor events require inbound messages" };
+  }
+
+  const accountId =
+    normalizeHookNumberishString(payload.accountId) ??
+    normalizeHookNumberishString(payload.account);
+  const hookMessage = buildTelegramUserMessageFromHook({
+    ...message,
+    message_id: message.message_id ?? payload.messageId,
+    ...(payload.threadAnchor ? { direct_messages_topic_id: payload.threadAnchor } : {}),
+    ...(payload.topicAnchor ? { direct_messages_topic_id: payload.topicAnchor } : {}),
+    ...(payload.topicId ? { direct_messages_topic_id: payload.topicId } : {}),
+  });
+  const envelope = buildTelegramUserMonitorEventEnvelope(hookMessage, {
+    accountId,
+    chat,
+    eventType: normalizeGmailString(payload.eventType),
+    nowMs: options?.nowMs,
+  });
+  const idempotencyKey = options?.idempotencyKey ?? envelope.idempotencyKey;
+
+  // The local listener adapter emits the same normalized event envelope as the
+  // generic monitor hook. Message content stays evidence, not routing authority.
+  return normalizeMonitorEventPayload(
+    {
+      ...envelope,
+      idempotencyKey,
+    },
+    {
+      idempotencyKey,
+      nowMs: options?.nowMs,
+    },
+  );
 }
 
 export function normalizeGmailMonitorEventPayload(

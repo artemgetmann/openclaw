@@ -360,6 +360,32 @@ describe("exec safe bin policy product-owned cli defaults", () => {
     ).toBe(true);
     expect(
       validateSafeBinArgv(
+        [
+          "telegram-user",
+          "monitor-listen",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--after-id",
+          "10",
+          "--account-id",
+          "personal",
+          "--thread-anchor",
+          "7001",
+          "--contains",
+          "reply",
+          "--limit",
+          "20",
+          "--timeout-ms",
+          "1000",
+          "--poll-interval-ms",
+          "50",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
         ["media", "transcribe", "--file", "/tmp/openclaw-media/voice.oga", "--json"],
         openclawProfile,
       ),

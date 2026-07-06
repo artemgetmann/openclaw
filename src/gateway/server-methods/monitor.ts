@@ -55,6 +55,9 @@ function resolveGoalBoundEventTriggerKind(sourceType: string): MonitorEventTrigg
   if (normalized === "gmail") {
     return "webhook";
   }
+  if (normalized === "telegram-user") {
+    return "local_listener";
+  }
   return undefined;
 }
 
@@ -64,6 +67,9 @@ function readSourceTargetString(
 ): string | undefined {
   for (const key of keys) {
     const value = sourceTarget[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
@@ -88,6 +94,32 @@ function resolveGmailEventSourceTarget(
   };
 }
 
+function resolveTelegramUserEventSourceTarget(
+  sourceTarget: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const chat = readSourceTargetString(sourceTarget, ["chat", "chatId", "target", "to"]);
+  if (!chat) {
+    return undefined;
+  }
+
+  // The local listener owns the watched chat configuration. Keep sourceTarget
+  // to stable routing keys so inbound message text stays evidence, not authority.
+  const eventSourceTarget: Record<string, unknown> = { chat };
+  const accountId = readSourceTargetString(sourceTarget, ["accountId", "account"]);
+  if (accountId) {
+    eventSourceTarget.accountId = accountId;
+  }
+  const threadAnchor = readSourceTargetString(sourceTarget, [
+    "threadAnchor",
+    "topicAnchor",
+    "topicId",
+  ]);
+  if (threadAnchor) {
+    eventSourceTarget.threadAnchor = threadAnchor;
+  }
+  return eventSourceTarget;
+}
+
 function hasGmailSourceTargetQualifiers(sourceTarget: Record<string, unknown>): boolean {
   const qualifierTarget = { ...sourceTarget };
   delete qualifierTarget.account;
@@ -110,6 +142,16 @@ function resolveGoalBoundTriggerMatch(params: {
     const eventSourceTarget = resolveGmailEventSourceTarget(params.sourceTarget);
     return eventSourceTarget
       ? { sourceType: params.sourceType, sourceTarget: eventSourceTarget }
+      : undefined;
+  }
+  if (normalized === "telegram-user") {
+    const eventSourceTarget = resolveTelegramUserEventSourceTarget(params.sourceTarget);
+    return eventSourceTarget
+      ? {
+          sourceType: params.sourceType,
+          sourceTarget: eventSourceTarget,
+          eventTypes: ["message.created"],
+        }
       : undefined;
   }
   return { sourceType: params.sourceType, sourceTarget: params.sourceTarget };
