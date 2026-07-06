@@ -893,6 +893,86 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(2, "123", "Name | Score\nAda | 9", {});
   });
 
+  it("falls back to legacy HTML when rich delivery returns explicit empty text", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+      text: "",
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Final answer for normal clients." }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Final answer for normal clients."),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
+  it("keeps rich delivery when Telegram returns visible native rich content", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+      text: "",
+      rich_message: {
+        blocks: [{ type: "paragraph", text: { type: "plain", text: "Visible final." } }],
+      },
+    });
+    const sendMessage = vi.fn();
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Visible final." }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to legacy HTML when Telegram returns an empty native rich message", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+      rich_message: { blocks: [] },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Final answer fallback." }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Final answer fallback."),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
   it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn(async (_chatId: string, text: string) => {
