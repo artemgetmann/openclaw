@@ -612,6 +612,10 @@ what actually dominates size. This is read-only:
 bash scripts/report-jarvis-release-size.sh --app dist/Jarvis.app
 ```
 
+The script writes an env summary, a largest-entry report, and a focused detail
+report covering top packages, bundled extensions, duplicate asset buckets,
+native binaries, and likely dev/docs/test payload candidates.
+
 Do not delete bundled files in the release lane without proof that Intel
 support, runtime startup, onboarding templates, bundled skills, and Sparkle
 validation still work.
