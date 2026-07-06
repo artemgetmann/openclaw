@@ -1177,6 +1177,7 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/materialize-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/verify-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/package-mac-app.sh"
+      hash_consumer_runtime_path "scripts/lib/macos-runtime-prune.sh"
       hash_consumer_runtime_path "scripts/lib/consumer-gog-runtime.sh"
       hash_consumer_runtime_path "scripts/lib/openclaw-runtime-payloads.sh"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
@@ -1283,6 +1284,7 @@ prepare_bundled_consumer_runtime() {
   local uv_x64_root=""
   local deploy_root=""
   local runtime_input_key=""
+  local extension_node_modules=""
 
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
   runtime_input_key="$(consumer_runtime_input_key)"
@@ -1343,6 +1345,7 @@ prepare_bundled_consumer_runtime() {
     --exclude 'jarvis-release-manifest.env' \
     --exclude 'consumer-handoff' \
     "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
+  openclaw_dedupe_bundled_dist_assets "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
 
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
   trap 'rm -rf "$deploy_root"' RETURN
@@ -1359,6 +1362,9 @@ prepare_bundled_consumer_runtime() {
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
   rm -rf "$deploy_root"
   trap - RETURN
+  openclaw_prune_bundled_node_modules_development_payloads \
+    "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules" \
+    "$VALIDATED_NODE_BIN"
   openclaw_prune_bundled_koffi_non_macos "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
 
   stage_consumer_matrix_crypto_x64_twin
@@ -1387,6 +1393,11 @@ prepare_bundled_consumer_runtime() {
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
   cp -R "$ROOT_DIR/extensions" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
   materialize_bundled_extension_node_modules
+  while IFS= read -r -d '' extension_node_modules; do
+    openclaw_prune_bundled_node_modules_development_payloads \
+      "$extension_node_modules" \
+      "$VALIDATED_NODE_BIN"
+  done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions" -mindepth 2 -maxdepth 2 -type d -name node_modules -print0)
 
   local telegram_user_tooling_dest="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/scripts/telegram-e2e"
   local telegram_user_tooling_file=""
