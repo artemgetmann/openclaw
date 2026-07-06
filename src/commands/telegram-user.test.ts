@@ -34,6 +34,7 @@ const runtime: RuntimeEnv = {
 
 const {
   telegramUserInboxCommand,
+  telegramUserMonitorListenCommand,
   telegramUserDoctorCommand,
   telegramUserLoginCommand,
   telegramUserLogoutCommand,
@@ -863,6 +864,59 @@ describe("telegram-user commands", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Ops Room"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("server down"));
+  });
+
+  it("emits a monitor event envelope for one new inbound Telegram-as-me message", async () => {
+    backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      messages: [
+        {
+          chat_id: 10,
+          chat_title: null,
+          chat_username: "jarvis_tester_1_bot",
+          date: "2026-07-06T00:00:00.000Z",
+          direct_messages_topic: { topic_id: 7001 },
+          direct_messages_topic_id: 7001,
+          message_id: 201,
+          out: false,
+          reply_to_msg_id: null,
+          reply_to_top_id: null,
+          sender_id: 456,
+          text: "monitor reply",
+          thread_anchor: 7001,
+        },
+      ],
+    });
+
+    await telegramUserMonitorListenCommand(
+      {
+        accountId: "personal",
+        afterId: "200",
+        chat: "@jarvis_tester_1_bot",
+        contains: "reply",
+        limit: "5",
+        pollIntervalMs: "1",
+        timeoutMs: "10",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserRead).toHaveBeenCalledWith({
+      afterId: 200,
+      chat: "@jarvis_tester_1_bot",
+      contains: "reply",
+      envFile: undefined,
+      limit: 5,
+      session: undefined,
+    });
+    expect(backendMocks.runTelegramUserSend).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('"triggerKind": "local_listener"'),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('"sourceType": "telegram-user"'),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"text": "monitor reply"'));
   });
 
   it("waits until a reply matches by DM topic id", async () => {

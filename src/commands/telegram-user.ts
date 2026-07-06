@@ -2,6 +2,8 @@ import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  getTelegramUserDefaultPollIntervalMs,
+  getTelegramUserDefaultWaitTimeoutMs,
   runTelegramUserInbox,
   runTelegramUserLogin,
   runTelegramUserLogout,
@@ -12,7 +14,12 @@ import {
   runTelegramUserStatus,
   runTelegramUserTopicCreate,
   runTelegramUserTopicDelete,
+  sleep,
 } from "../telegram-user/backend.js";
+import {
+  buildTelegramUserMonitorEventEnvelope,
+  pickTelegramUserMonitorMessage,
+} from "../telegram-user/monitor-event.js";
 import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
@@ -934,6 +941,66 @@ export async function telegramUserInboxCommand(opts: Record<string, unknown>, ru
     return;
   }
   logInboxText(runtime, result, { dmOnly, unreadOnly });
+}
+
+export async function telegramUserMonitorListenCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  if (!chat) {
+    throw new Error("Telegram user monitor-listen requires --chat.");
+  }
+  const afterId = readRequiredNumberOpt(
+    opts,
+    "afterId",
+    "--after-id",
+    "Telegram user monitor-listen",
+  );
+  if (afterId === undefined) {
+    throw new Error("Telegram user monitor-listen requires --after-id.");
+  }
+
+  const startedAt = Date.now();
+  const timeoutMs = readNumberOpt(opts, "timeoutMs") ?? getTelegramUserDefaultWaitTimeoutMs();
+  const pollIntervalMs =
+    readNumberOpt(opts, "pollIntervalMs") ?? getTelegramUserDefaultPollIntervalMs();
+  const limit = readNumberOpt(opts, "limit") ?? 80;
+  const contains = readStringOpt(opts, "contains");
+  const threadAnchor = readNumberOpt(opts, "threadAnchor");
+  const accountId = readStringOpt(opts, "accountId");
+
+  // One-shot by design: this proves the listener envelope without claiming
+  // daemon persistence, gateway dispatch, or durable cursor semantics.
+  while (Date.now() - startedAt < timeoutMs) {
+    const readResult = await runTelegramUserRead({
+      ...resolveBackendOptions(opts),
+      afterId,
+      chat,
+      contains,
+      limit,
+    });
+    const message = pickTelegramUserMonitorMessage(readResult.messages, {
+      afterId,
+      contains,
+      threadAnchor,
+    });
+    if (message) {
+      logJson(
+        runtime,
+        buildTelegramUserMonitorEventEnvelope(message, {
+          accountId,
+          chat,
+        }),
+      );
+      return;
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  throw new Error(
+    `Telegram user monitor-listen timed out after ${timeoutMs}ms (chat=${chat}, afterId=${afterId}).`,
+  );
 }
 
 export async function telegramUserWaitCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

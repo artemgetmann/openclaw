@@ -78,6 +78,10 @@ export function registerTelegramUserCli(program: Command) {
             "openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json",
             "Wait for a matching reply with structured diagnostics.",
           ],
+          [
+            "openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot --after-id 123 --json",
+            "Read until one new inbound Telegram-as-me message appears, then print a monitor event envelope.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/channels/telegram",
           "docs.openclaw.ai/channels/telegram",
@@ -262,6 +266,26 @@ export function registerTelegramUserCli(program: Command) {
       await runTelegramUserCommand(async () => {
         const { telegramUserWaitCommand } = await import("../commands/telegram-user.js");
         await telegramUserWaitCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("monitor-listen")
+      .description("Poll until one new inbound message appears and emit a monitor event envelope")
+      .requiredOption("--chat <target>", "Target chat username or id")
+      .requiredOption("--after-id <id>", "Only consider messages newer than this id"),
+  )
+    .option("--account-id <id>", "Optional Telegram-as-me account id for routing")
+    .option("--thread-anchor <id>", "Match reply_to_top_id, reply_to_msg_id, or DM topic id")
+    .option("--contains <text>", "Require this substring")
+    .option("--limit <n>", "Read up to this many recent messages per poll", "80")
+    .option("--timeout-ms <ms>", "Overall listen timeout in milliseconds", "45000")
+    .option("--poll-interval-ms <ms>", "Polling interval in milliseconds", "1000")
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserMonitorListenCommand } = await import("../commands/telegram-user.js");
+        await telegramUserMonitorListenCommand(opts, defaultRuntime);
       });
     });
 }

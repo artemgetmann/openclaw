@@ -65,6 +65,14 @@ function hasStringPath(record: Record<string, unknown>, path: string): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function hasStringOrNumberPath(record: Record<string, unknown>, path: string): boolean {
+  const value = readPath(record, path);
+  return (
+    (typeof value === "string" && value.trim().length > 0) ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
 function triggerSourceTargetIsAuthoritative(params: {
   sourceType: string;
   sourceTarget: Record<string, unknown>;
@@ -81,6 +89,14 @@ function triggerSourceTargetIsAuthoritative(params: {
       hasStringPath(params.sourceTarget, "threadId") ||
       hasStringPath(params.sourceTarget, "gmailThreadId");
     return hasAccount && hasThread;
+  }
+  if (normalizeString(params.sourceType) === "telegram-user") {
+    return (
+      hasStringOrNumberPath(params.sourceTarget, "chat") ||
+      hasStringOrNumberPath(params.sourceTarget, "chatId") ||
+      hasStringOrNumberPath(params.sourceTarget, "target") ||
+      hasStringOrNumberPath(params.sourceTarget, "to")
+    );
   }
   return false;
 }
