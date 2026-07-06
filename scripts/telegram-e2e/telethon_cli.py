@@ -926,13 +926,17 @@ async def run_read(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
   contains = str(args.contains or "")
+  read_kwargs = {
+    "limit": compute_message_scan_cap(contains = contains, limit = limit),
+  }
+  if args.after_id:
+    read_kwargs["min_id"] = int(args.after_id)
+  if args.before_id:
+    read_kwargs["max_id"] = int(args.before_id)
   with acquire_session_lock(session_path):
     client, _ = await connect_client(session_path)
     try:
-      messages = await client.get_messages(
-        resolve_chat(args.chat),
-        limit = compute_message_scan_cap(contains = contains, limit = limit),
-      )
+      messages = await client.get_messages(resolve_chat(args.chat), **read_kwargs)
       normalized = []
       for message in messages:
         message_id = int(getattr(message, "id", 0) or 0)

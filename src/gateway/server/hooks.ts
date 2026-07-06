@@ -7,10 +7,10 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { MonitorEventEnvelope } from "../../monitor/types.js";
 import {
   normalizeHookDispatchSessionKey,
   type HookAgentDispatchPayload,
+  type HookMonitorEventPayload,
   type HooksConfigResolved,
 } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
@@ -32,7 +32,7 @@ export function createGatewayHooksRequestHandler(params: {
   bindHost: string;
   port: number;
   logHooks: SubsystemLogger;
-  dispatchMonitorEventHook: (event: MonitorEventEnvelope) => Promise<MonitorEventDispatchResult>;
+  dispatchMonitorEventHook: (event: HookMonitorEventPayload) => Promise<MonitorEventDispatchResult>;
 }) {
   const {
     deps,
