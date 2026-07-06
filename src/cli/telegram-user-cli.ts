@@ -83,8 +83,8 @@ export function registerTelegramUserCli(program: Command) {
             "Read until one new inbound Telegram-as-me message appears, then print a monitor event envelope.",
           ],
           [
-            "openclaw telegram-user monitor-poll --cron-store /tmp/cron.json --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event --json",
-            "Poll durable goal-bound Telegram-as-me monitors once, dispatching through the gateway hook only when configured.",
+            "openclaw telegram-user monitor-poll --watch --cron-store /tmp/cron.json --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event --json",
+            "Poll durable goal-bound Telegram-as-me monitors in the foreground, dispatching through the gateway hook only when configured.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/channels/telegram",
@@ -304,6 +304,9 @@ export function registerTelegramUserCli(program: Command) {
     .option("--hook-url <url>", "Full gateway hook URL for dispatching matched monitor events")
     .option("--hook-token <token>", "Bearer token for --hook-url")
     .option("--limit <n>", "Read up to this many recent messages per monitor", "80")
+    .option("--watch", "Keep polling in the foreground until interrupted", false)
+    .option("--poll-interval-ms <ms>", "Delay between --watch polls", "1000")
+    .option("--max-runs <n>", "Stop --watch after this many polls; intended for smoke tests")
     .option(
       "--commit-without-dispatch",
       "Advance event cursors without dispatching; intended for explicit observe-only maintenance",

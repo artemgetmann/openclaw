@@ -67,7 +67,9 @@ describe("telegram-user cli", () => {
     );
     expect(help).toContain("compact agent-friendly rows");
     expect(help).toContain("openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot");
-    expect(help).toContain("openclaw telegram-user monitor-poll --cron-store /tmp/cron.json");
+    expect(help).toContain(
+      "openclaw telegram-user monitor-poll --watch --cron-store /tmp/cron.json",
+    );
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
   });
 
@@ -166,6 +168,11 @@ describe("telegram-user cli", () => {
         "secret",
         "--limit",
         "12",
+        "--watch",
+        "--poll-interval-ms",
+        "2500",
+        "--max-runs",
+        "3",
         "--commit-without-dispatch",
         "--json",
       ],
@@ -181,7 +188,10 @@ describe("telegram-user cli", () => {
         hookUrl: "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
         json: true,
         limit: "12",
+        maxRuns: "3",
         monitorStore: "/tmp/monitors.json",
+        pollIntervalMs: "2500",
+        watch: true,
       }),
       expect.anything(),
     );

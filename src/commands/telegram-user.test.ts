@@ -935,6 +935,68 @@ describe("telegram-user commands", () => {
     expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
   });
 
+  it("rejects monitor-poll watch mode without dispatch or explicit cursor commit", async () => {
+    await expect(
+      telegramUserMonitorPollCommand(
+        {
+          watch: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("--watch requires --hook-url or --commit-without-dispatch");
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid monitor-poll watch bounds before looping", async () => {
+    await expect(
+      telegramUserMonitorPollCommand(
+        {
+          commitWithoutDispatch: true,
+          maxRuns: "abc",
+          watch: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("--max-runs");
+    await expect(
+      telegramUserMonitorPollCommand(
+        {
+          commitWithoutDispatch: true,
+          pollIntervalMs: "0",
+          watch: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("--poll-interval-ms");
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+    expect(backendMocks.sleep).not.toHaveBeenCalled();
+  });
+
+  it("runs monitor-poll watch mode repeatedly until max-runs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf-8");
+
+    await telegramUserMonitorPollCommand(
+      {
+        commitWithoutDispatch: true,
+        json: true,
+        maxRuns: "2",
+        monitorStore,
+        pollIntervalMs: "7",
+        watch: true,
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+    expect(backendMocks.sleep).toHaveBeenCalledTimes(1);
+    expect(backendMocks.sleep).toHaveBeenCalledWith(7);
+    expect(runtime.log).toHaveBeenCalledTimes(2);
+    expect(runtime.log).toHaveBeenNthCalledWith(1, expect.stringContaining('"run": 1'));
+    expect(runtime.log).toHaveBeenNthCalledWith(2, expect.stringContaining('"run": 2'));
+  });
+
   it("accepts custom local hooks.path monitor-poll URLs", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
     const monitorStore = path.join(root, "monitors.json");

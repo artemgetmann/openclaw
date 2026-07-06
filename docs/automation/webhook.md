@@ -213,6 +213,23 @@ openclaw telegram-user monitor-poll \
   --json
 ```
 
+To keep the poller running in the foreground, opt in with `--watch`:
+
+```bash
+openclaw telegram-user monitor-poll \
+  --watch \
+  --poll-interval-ms 5000 \
+  --cron-store /path/to/cron.json \
+  --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event \
+  --hook-token "$OPENCLAW_GATEWAY_TOKEN" \
+  --json
+```
+
+Watch mode requires either `--hook-url` or `--commit-without-dispatch`. The
+hook path is the normal mode. `--commit-without-dispatch` is for explicit
+observe-only maintenance because it can consume replies without waking a
+monitor session.
+
 If a monitor has no explicit cursor seed such as `afterId`, the first poll
 checkpoints the current visible Telegram history and emits no wake. This avoids
 turning old chat history into a fresh monitor event when the listener starts.

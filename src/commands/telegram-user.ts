@@ -382,9 +382,10 @@ function resolveLocalTelegramMonitorHookUrl(raw: string): string {
 
 function formatTelegramMonitorPollText(
   result: Awaited<ReturnType<typeof pollTelegramUserMonitorEvents>>,
+  runNumber?: number,
 ): string {
   const lines = [
-    `Telegram user monitor-poll checked=${result.checked} events=${result.events.length} dispatched=${result.dispatched} updated_cursors=${result.updatedCursors} skipped=${result.skipped.length}`,
+    `Telegram user monitor-poll${runNumber ? ` run=${runNumber}` : ""} checked=${result.checked} events=${result.events.length} dispatched=${result.dispatched} updated_cursors=${result.updatedCursors} skipped=${result.skipped.length}`,
     `Cursor store: ${result.cursorStorePath}`,
   ];
   for (const skipped of result.skipped) {
@@ -401,6 +402,25 @@ function formatTelegramMonitorPollText(
     lines.push("No Telegram user monitor events detected.");
   }
   return lines.join("\n");
+}
+
+function readPositiveIntegerOpt(
+  opts: Record<string, unknown>,
+  key: string,
+  flag: string,
+  context: string,
+): number | undefined {
+  const value = readNumberOpt(opts, key);
+  if (value === undefined) {
+    if (hasProvidedOpt(opts, key)) {
+      throw new Error(`${context} requires ${flag} to be a positive integer.`);
+    }
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${context} requires ${flag} to be a positive integer.`);
+  }
+  return value;
 }
 
 function logPrecheckText(runtime: RuntimeEnv, precheck: TelegramUserPrecheck) {
@@ -1092,22 +1112,54 @@ export async function telegramUserMonitorPollCommand(
 ) {
   const hookUrl = readStringOpt(opts, "hookUrl");
   const localHookUrl = hookUrl ? resolveLocalTelegramMonitorHookUrl(hookUrl) : undefined;
-  const result = await pollTelegramUserMonitorEvents({
+  const commitWithoutDispatch = readBooleanOpt(opts, "commitWithoutDispatch");
+  const loop = readBooleanOpt(opts, "watch");
+  const maxRuns = readPositiveIntegerOpt(
+    opts,
+    "maxRuns",
+    "--max-runs",
+    "Telegram user monitor-poll",
+  );
+  const pollIntervalMs =
+    readPositiveIntegerOpt(
+      opts,
+      "pollIntervalMs",
+      "--poll-interval-ms",
+      "Telegram user monitor-poll",
+    ) ?? getTelegramUserDefaultPollIntervalMs();
+
+  if (loop && !localHookUrl && !commitWithoutDispatch) {
+    throw new Error(
+      "Telegram user monitor-poll --watch requires --hook-url or --commit-without-dispatch so matched events can advance the cursor.",
+    );
+  }
+
+  const basePollOptions = {
     ...resolveBackendOptions(opts),
-    commitWithoutDispatch: readBooleanOpt(opts, "commitWithoutDispatch"),
+    commitWithoutDispatch,
     cronStorePath: readStringOpt(opts, "cronStore"),
     cursorStorePath: readStringOpt(opts, "cursorStore"),
     limit: readNumberOpt(opts, "limit") ?? 80,
     monitorStorePath: readStringOpt(opts, "monitorStore"),
     dispatchEvent: localHookUrl
-      ? async (context) => postTelegramUserMonitorEventHook(context, opts, localHookUrl)
+      ? async (context: TelegramUserMonitorPollDispatchContext) =>
+          postTelegramUserMonitorEventHook(context, opts, localHookUrl)
       : undefined,
-  });
-  if (readBooleanOpt(opts, "json")) {
-    logJson(runtime, result);
-    return;
+  };
+
+  for (let runNumber = 1; ; runNumber += 1) {
+    const result = await pollTelegramUserMonitorEvents(basePollOptions);
+    if (readBooleanOpt(opts, "json")) {
+      logJson(runtime, loop ? { run: runNumber, ...result } : result);
+    } else {
+      runtime.log(formatTelegramMonitorPollText(result, loop ? runNumber : undefined));
+    }
+
+    if (!loop || (maxRuns !== undefined && runNumber >= maxRuns)) {
+      return;
+    }
+    await sleep(pollIntervalMs);
   }
-  runtime.log(formatTelegramMonitorPollText(result));
 }
 
 export async function telegramUserWaitCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
