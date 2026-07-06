@@ -31,6 +31,10 @@ openclaw gui-control set-value --runtime open-computer-use --app TextEdit --inte
 ## Routing
 
 - Prefer `openclaw gui-control --runtime open-computer-use` for GUI operation.
+- Do not acquire `~/.codex/bin/cua-guard` for this path. That guard is only
+  for the Codex-native Computer Use tool/plugin; Jarvis GUI Control is the
+  product CLI surface and must remain usable even when Codex Computer Use has
+  another owner.
 - Do not use Peekaboo as the first choice for normal GUI-operation requests.
   Use the `screen-record` skill and `openclaw screen record` for target-aware
   video proof. Peekaboo is for still screenshots, UI maps, diagnostics, or an

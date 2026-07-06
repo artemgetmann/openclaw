@@ -4,7 +4,7 @@ import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
-import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
+import { buildFinalTtsCaptionPreview, buildFinalTtsSpokenPreview } from "./tts-caption-preview.js";
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
@@ -288,12 +288,44 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(preview?.endsWith("...")).toBe(true);
   });
 
-  it("omits final TTS caption previews for markdown table answers", () => {
+  it("summarizes markdown table answers for final TTS captions", () => {
     const preview = buildFinalTtsCaptionPreview(
       ["| Item | Color | Score |", "| --- | --- | ---: |", "| Apple | red | 9 |"].join("\n"),
     );
 
-    expect(preview).toBeUndefined();
+    expect(preview).toBe("Full table is in Telegram. Key rows: Item: Apple, Color: red, Score: 9.");
+    expect(preview).not.toContain("|");
+  });
+
+  it("preserves prose, table summary, and follow-up order for final TTS speech", () => {
+    const spokenPreview = buildFinalTtsSpokenPreview(
+      [
+        "Here is the clean pick:",
+        "",
+        "| Place | Why |",
+        "| --- | --- |",
+        "| Warung Local | light food, short ride |",
+        "| Fancy Spot | more effort, less upside |",
+        "",
+        "- Go simple.",
+        "- Keep dessert optional.",
+        "",
+        "1. Eat first.",
+        "2. Decide after.",
+      ].join("\n"),
+    );
+
+    expect(spokenPreview).toBe(
+      "Here is the clean pick: Full table is in Telegram. Key rows: Place: Warung Local, Why: light food, short ride; Place: Fancy Spot, Why: more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.",
+    );
+    expect(spokenPreview).not.toContain("|");
+    expect(spokenPreview).not.toContain("`");
+    expect(spokenPreview?.indexOf("Here is the clean pick")).toBeLessThan(
+      spokenPreview?.indexOf("Full table is in Telegram") ?? -1,
+    );
+    expect(spokenPreview?.indexOf("Full table is in Telegram")).toBeLessThan(
+      spokenPreview?.indexOf("- Go simple") ?? -1,
+    );
   });
 
   it("keeps synthesized final TTS media-only outside Telegram", async () => {

@@ -2449,6 +2449,83 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("keeps /tts on for table answers but voices and captions a short human summary", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const finalText = [
+      "Here is the clean pick:",
+      "",
+      "| Place | Why |",
+      "| --- | --- |",
+      "| Warung Local | light food, short ride |",
+      "| Fancy Spot | more effort, less upside |",
+      "",
+      "- Go simple.",
+      "- Keep dessert optional.",
+      "",
+      "1. Eat first.",
+      "2. Decide after.",
+    ].join("\n");
+    const spokenSummary =
+      "Here is the clean pick: Full table is in Telegram. Key rows: Place: Warung Local, Why: light food, short ride; Place: Fancy Spot, Why: more effort, less upside. - Go simple. - Keep dessert optional. 1. Eat first. 2. Decide after.";
+    const captionSummary =
+      "Here is the clean pick: Full table is in Telegram. Key rows: Place: Warung Local, Why: light food, short ride; Place: Fancy Spot, Why: more effort, less upsi...";
+    const replyResolver = async () => ({ text: finalText }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const finalTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls.filter(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCalls).toHaveLength(1);
+    expect(finalTtsCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        payload: { text: spokenSummary },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: captionSummary,
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
+      }),
+    );
+    const voiceCaption = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[1]?.[0]
+      ?.text;
+    expect(voiceCaption).toBeTruthy();
+    expect(voiceCaption).not.toContain("|");
+    expect(spokenSummary.indexOf("Here is the clean pick")).toBeLessThan(
+      spokenSummary.indexOf("Full table is in Telegram"),
+    );
+    expect(spokenSummary.indexOf("Full table is in Telegram")).toBeLessThan(
+      spokenSummary.indexOf("- Go simple"),
+    );
+    expect(voiceCaption).toContain("Warung Local");
+    expect(voiceCaption).toContain("Fancy Spot");
+  });
+
   it("synthesizes ACP final TTS from completed assistant output", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

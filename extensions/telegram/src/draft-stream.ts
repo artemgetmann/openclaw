@@ -4,6 +4,12 @@ import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js"
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { guardedTelegramDeleteMessage, type TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
+import {
+  getTelegramRichEditRawApi,
+  getTelegramRichDraftRawApi,
+  getTelegramRichRawApi,
+  type TelegramInputRichMessage,
+} from "./rich-message.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -22,6 +28,10 @@ type TelegramSendMessageDraft = (
     parse_mode?: "HTML";
   },
 ) => Promise<unknown>;
+
+type TelegramPreviewSendParams = Record<string, unknown> & {
+  parse_mode?: "HTML";
+};
 
 /**
  * Keep draft-id allocation shared across bundled chunks so concurrent preview
@@ -59,7 +69,7 @@ function shouldFallbackFromDraftTransport(err: unknown): boolean {
             ? err.description
             : ""
           : "";
-  if (!/sendMessageDraft/i.test(text)) {
+  if (!/send(?:Rich)?MessageDraft/i.test(text)) {
     return false;
   }
   return DRAFT_METHOD_UNAVAILABLE_RE.test(text) || DRAFT_CHAT_UNSUPPORTED_RE.test(text);
@@ -85,6 +95,8 @@ export type TelegramDraftStream = {
 type TelegramDraftPreview = {
   text: string;
   parseMode?: "HTML";
+  /** Native Telegram rich-message payload. Legacy HTML text remains the fallback. */
+  richMessage?: TelegramInputRichMessage;
 };
 
 type SupersededTelegramPreview = {
@@ -177,17 +189,23 @@ export function createTelegramDraftStream(params: {
   let lastSentText = "";
   let lastDeliveredText = "";
   let lastSentParseMode: "HTML" | undefined;
+  let lastSentRichMessage: TelegramInputRichMessage | undefined;
+  let lastSentRichMessageKey: string | undefined;
   let previewRevision = 0;
   let generation = 0;
   let previewStoppedBecauseLength = false;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
+    renderedRichMessage?: TelegramInputRichMessage;
     sendGeneration: number;
   };
+  const richMessageKey = (richMessage: TelegramInputRichMessage | undefined) =>
+    richMessage ? JSON.stringify(richMessage) : undefined;
   const sendRenderedMessageWithThreadFallback = async (sendArgs: {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
+    renderedRichMessage?: TelegramInputRichMessage;
     fallbackWarnMessage: string;
   }) => {
     const sendParams = sendArgs.renderedParseMode
@@ -199,6 +217,38 @@ export function createTelegramDraftStream(params: {
     const usedThreadParams =
       "message_thread_id" in (sendParams ?? {}) &&
       typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
+    const richMessage = sendArgs.renderedRichMessage;
+    const richRawApi = richMessage ? getTelegramRichRawApi(params.api) : null;
+    if (richRawApi && richMessage) {
+      const richParams: TelegramPreviewSendParams = {};
+      if (threadParams?.message_thread_id != null) {
+        richParams.message_thread_id = threadParams.message_thread_id;
+      }
+      if (params.replyToMessageId != null) {
+        richParams.reply_parameters = {
+          message_id: params.replyToMessageId,
+          allow_sending_without_reply: true,
+        };
+      }
+      try {
+        return {
+          sent: await richRawApi.sendRichMessage({
+            chat_id: chatId,
+            rich_message: richMessage,
+            ...richParams,
+          }),
+          usedThreadParams:
+            "message_thread_id" in richParams && typeof richParams.message_thread_id === "number",
+          threadFallback: false,
+        };
+      } catch (err) {
+        params.warn?.(
+          `telegram stream preview rich send failed; falling back to legacy sendMessage: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
     try {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
@@ -231,6 +281,7 @@ export function createTelegramDraftStream(params: {
   const sendMessageTransportPreview = async ({
     renderedText,
     renderedParseMode,
+    renderedRichMessage,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
@@ -240,7 +291,29 @@ export function createTelegramDraftStream(params: {
         textLength: renderedText.length,
         messageId: streamMessageId,
       });
-      if (renderedParseMode) {
+      const richEdit = renderedRichMessage ? getTelegramRichEditRawApi(params.api) : null;
+      if (richEdit) {
+        try {
+          await richEdit.editMessageText({
+            chat_id: chatId,
+            message_id: streamMessageId,
+            rich_message: renderedRichMessage!,
+          });
+        } catch (err) {
+          params.warn?.(
+            `telegram stream preview rich edit failed; falling back to legacy editMessageText: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          if (renderedParseMode) {
+            await params.api.editMessageText(chatId, streamMessageId, renderedText, {
+              parse_mode: renderedParseMode,
+            });
+          } else {
+            await params.api.editMessageText(chatId, streamMessageId, renderedText);
+          }
+        }
+      } else if (renderedParseMode) {
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
           parse_mode: renderedParseMode,
         });
@@ -266,6 +339,7 @@ export function createTelegramDraftStream(params: {
       sendResult = await sendRenderedMessageWithThreadFallback({
         renderedText,
         renderedParseMode,
+        renderedRichMessage,
         fallbackWarnMessage:
           "telegram stream preview send failed with message_thread_id, retrying without thread",
       });
@@ -312,6 +386,7 @@ export function createTelegramDraftStream(params: {
   const sendDraftTransportPreview = async ({
     renderedText,
     renderedParseMode,
+    renderedRichMessage,
   }: PreviewSendParams): Promise<boolean> => {
     const draftId = streamDraftId ?? allocateTelegramDraftId();
     streamDraftId = draftId;
@@ -326,12 +401,39 @@ export function createTelegramDraftStream(params: {
       operation: "draft",
       textLength: renderedText.length,
     });
-    await resolvedDraftApi!(
-      chatId,
-      draftId,
-      renderedText,
-      Object.keys(draftParams).length > 0 ? draftParams : undefined,
-    );
+    const richMessage = renderedRichMessage;
+    const richDraftApi = richMessage ? getTelegramRichDraftRawApi(params.api) : null;
+    if (richDraftApi && richMessage) {
+      try {
+        await richDraftApi.sendRichMessageDraft({
+          chat_id: chatId,
+          draft_id: draftId,
+          rich_message: richMessage,
+          ...(threadParams?.message_thread_id != null
+            ? { message_thread_id: threadParams.message_thread_id }
+            : {}),
+        });
+      } catch (err) {
+        params.warn?.(
+          `telegram stream rich draft failed; falling back to legacy sendMessageDraft: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        await resolvedDraftApi!(
+          chatId,
+          draftId,
+          renderedText,
+          Object.keys(draftParams).length > 0 ? draftParams : undefined,
+        );
+      }
+    } else {
+      await resolvedDraftApi!(
+        chatId,
+        draftId,
+        renderedText,
+        Object.keys(draftParams).length > 0 ? draftParams : undefined,
+      );
+    }
     params.onPreviewComplete?.({
       previewTransport,
       operation: "draft",
@@ -370,6 +472,7 @@ export function createTelegramDraftStream(params: {
     const rendered = params.renderText?.(trimmed) ?? { text: trimmed };
     const renderedText = rendered.text.trimEnd();
     const renderedParseMode = rendered.parseMode;
+    const renderedRichMessage = rendered.richMessage;
     if (!renderedText) {
       return false;
     }
@@ -383,7 +486,12 @@ export function createTelegramDraftStream(params: {
       );
       return false;
     }
-    if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
+    const renderedRichMessageKey = richMessageKey(renderedRichMessage);
+    if (
+      renderedText === lastSentText &&
+      renderedParseMode === lastSentParseMode &&
+      renderedRichMessageKey === lastSentRichMessageKey
+    ) {
       return true;
     }
     const sendGeneration = generation;
@@ -397,6 +505,8 @@ export function createTelegramDraftStream(params: {
 
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
+    lastSentRichMessage = renderedRichMessage;
+    lastSentRichMessageKey = renderedRichMessageKey;
     try {
       let sent = false;
       if (previewTransport === "draft") {
@@ -404,6 +514,7 @@ export function createTelegramDraftStream(params: {
           sent = await sendDraftTransportPreview({
             renderedText,
             renderedParseMode,
+            renderedRichMessage,
             sendGeneration,
           });
         } catch (err) {
@@ -418,6 +529,7 @@ export function createTelegramDraftStream(params: {
           sent = await sendMessageTransportPreview({
             renderedText,
             renderedParseMode,
+            renderedRichMessage,
             sendGeneration,
           });
         }
@@ -425,6 +537,7 @@ export function createTelegramDraftStream(params: {
         sent = await sendMessageTransportPreview({
           renderedText,
           renderedParseMode,
+          renderedRichMessage,
           sendGeneration,
         });
       }
@@ -507,6 +620,8 @@ export function createTelegramDraftStream(params: {
     }
     lastSentText = "";
     lastSentParseMode = undefined;
+    lastSentRichMessage = undefined;
+    lastSentRichMessageKey = undefined;
     previewStoppedBecauseLength = false;
     loop.resetPending();
     loop.resetThrottleWindow();
@@ -538,11 +653,13 @@ export function createTelegramDraftStream(params: {
       return undefined;
     }
     const renderedParseMode = lastSentText ? lastSentParseMode : undefined;
+    const renderedRichMessage = lastSentText ? lastSentRichMessage : undefined;
     try {
       const { sent, usedThreadParams, threadFallback } =
         await sendRenderedMessageWithThreadFallback({
           renderedText,
           renderedParseMode,
+          renderedRichMessage,
           fallbackWarnMessage:
             "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
         });

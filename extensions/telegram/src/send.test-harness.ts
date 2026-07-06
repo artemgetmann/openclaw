@@ -87,8 +87,11 @@ export function installTelegramSendTestHooks() {
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
     botCtorSpy.mockReset();
+    delete (botApi as Record<string, unknown>).raw;
     for (const fn of Object.values(botApi)) {
-      fn.mockReset();
+      if (typeof fn === "function" && "mockReset" in fn) {
+        fn.mockReset();
+      }
     }
   });
 }
