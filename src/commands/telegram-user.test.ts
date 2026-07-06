@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -35,6 +38,7 @@ const runtime: RuntimeEnv = {
 const {
   telegramUserInboxCommand,
   telegramUserMonitorListenCommand,
+  telegramUserMonitorPollCommand,
   telegramUserDoctorCommand,
   telegramUserLoginCommand,
   telegramUserLogoutCommand,
@@ -917,6 +921,141 @@ describe("telegram-user commands", () => {
       expect.stringContaining('"sourceType": "telegram-user"'),
     );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"text": "monitor reply"'));
+  });
+
+  it("rejects remote monitor-poll hook URLs before reading Telegram", async () => {
+    await expect(
+      telegramUserMonitorPollCommand(
+        {
+          hookUrl: "https://example.com/hooks/telegram-user-monitor-event",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("must point to the local gateway");
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+  });
+
+  it("accepts custom local hooks.path monitor-poll URLs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf-8");
+
+    await telegramUserMonitorPollCommand(
+      {
+        hookUrl: "http://127.0.0.1:18789/secret/telegram-user-monitor-event",
+        json: true,
+        monitorStore,
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"checked": 0'));
+  });
+
+  it("posts monitor-poll hook payloads scoped to the filtered monitor", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(
+      monitorStore,
+      JSON.stringify(
+        {
+          version: 1,
+          monitors: [
+            {
+              monitorId: "telegram-monitor-1",
+              agentId: "main",
+              name: "Telegram-as-me wait",
+              originSessionKey: "agent:main:telegram:direct:user-1",
+              monitorSessionKey: "agent:main:monitor:telegram-monitor-1",
+              sourceType: "telegram-user",
+              sourceTarget: {
+                accountId: "personal",
+                afterId: 100,
+                chat: "@jarvis_tester_1_bot",
+                threadAnchor: "7001",
+              },
+              cadence: { kind: "every", everyMs: 300_000 },
+              trigger: {
+                kind: "local_listener",
+                match: {
+                  sourceType: "telegram-user",
+                  sourceTarget: {
+                    accountId: "personal",
+                    chat: "@jarvis_tester_1_bot",
+                    threadAnchor: "7001",
+                  },
+                  eventTypes: ["message.created"],
+                },
+              },
+              actionPolicy: "notify_draft",
+              goal: {
+                id: "goal-telegram-reply",
+                objective: "Wait until the Telegram contact replies.",
+              },
+              status: "active",
+              cronJobId: "cron-telegram-monitor-1",
+              createdAtMs: 1_000_000,
+              updatedAtMs: 1_000_000,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      messages: [
+        {
+          chat_id: 10,
+          chat_title: "Jarvis Lab",
+          chat_username: "jarvis_tester_1_bot",
+          date: "2026-07-06T00:00:00.000Z",
+          direct_messages_topic: { topic_id: 7001 },
+          direct_messages_topic_id: 7001,
+          media_kind: null,
+          message_id: 101,
+          out: false,
+          reply_to_msg_id: null,
+          reply_to_top_id: null,
+          sender_id: 456,
+          text: "fresh reply",
+          thread_anchor: 7001,
+        },
+      ],
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ matched: 1, wakes: [{ monitorId: "telegram-monitor-1" }] }), {
+        status: 200,
+      }),
+    );
+
+    let body: { monitorId?: string } = {};
+    let fetchUrl: unknown;
+    try {
+      await telegramUserMonitorPollCommand(
+        {
+          hookUrl: "http://127.0.0.1:18789/hooks/telegram-user-monitor-event/",
+          json: true,
+          monitorStore,
+        },
+        runtime,
+      );
+      const requestBody = fetchMock.mock.calls[0]?.[1]?.body;
+      if (typeof requestBody !== "string") {
+        throw new Error("expected monitor-poll hook body to be JSON text");
+      }
+      body = JSON.parse(requestBody) as {
+        monitorId?: string;
+      };
+      fetchUrl = fetchMock.mock.calls[0]?.[0];
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(body.monitorId).toBe("telegram-monitor-1");
+    expect(fetchUrl).toBe("http://127.0.0.1:18789/hooks/telegram-user-monitor-event");
   });
 
   it("waits until a reply matches by DM topic id", async () => {

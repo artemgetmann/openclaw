@@ -201,6 +201,22 @@ For terminal-first listener proof without dispatching to the gateway, use:
 openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot --after-id 123 --json
 ```
 
+For durable goal-bound Telegram-as-me waits, use the cursor poller. It reads
+eligible monitor records, stores a cursor beside the monitor store, and only
+advances an event cursor after hook dispatch succeeds:
+
+```bash
+openclaw telegram-user monitor-poll \
+  --cron-store /path/to/cron.json \
+  --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event \
+  --hook-token "$OPENCLAW_GATEWAY_TOKEN" \
+  --json
+```
+
+If a monitor has no explicit cursor seed such as `afterId`, the first poll
+checkpoints the current visible Telegram history and emits no wake. This avoids
+turning old chat history into a fresh monitor event when the listener starts.
+
 ## Session key policy (breaking change)
 
 `/hooks/agent` payload `sessionKey` overrides are disabled by default.

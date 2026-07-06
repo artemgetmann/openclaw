@@ -4,7 +4,6 @@ import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { MonitorEventEnvelope } from "../monitor/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -16,7 +15,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
-import type { HooksConfigResolved } from "./hooks.js";
+import type { HookMonitorEventPayload, HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import {
   createGatewayBroadcaster,
@@ -65,7 +64,7 @@ export async function createGatewayRuntimeState(params: {
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
-  dispatchMonitorEventHook: (event: MonitorEventEnvelope) => Promise<MonitorEventDispatchResult>;
+  dispatchMonitorEventHook: (event: HookMonitorEventPayload) => Promise<MonitorEventDispatchResult>;
   pluginRegistry: PluginRegistry;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;

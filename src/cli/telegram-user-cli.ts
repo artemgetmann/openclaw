@@ -82,6 +82,10 @@ export function registerTelegramUserCli(program: Command) {
             "openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot --after-id 123 --json",
             "Read until one new inbound Telegram-as-me message appears, then print a monitor event envelope.",
           ],
+          [
+            "openclaw telegram-user monitor-poll --cron-store /tmp/cron.json --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event --json",
+            "Poll durable goal-bound Telegram-as-me monitors once, dispatching through the gateway hook only when configured.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/channels/telegram",
           "docs.openclaw.ai/channels/telegram",
@@ -286,6 +290,29 @@ export function registerTelegramUserCli(program: Command) {
       await runTelegramUserCommand(async () => {
         const { telegramUserMonitorListenCommand } = await import("../commands/telegram-user.js");
         await telegramUserMonitorListenCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("monitor-poll")
+      .description("Poll durable goal-bound Telegram-as-me monitor cursors once"),
+  )
+    .option("--cron-store <path>", "Cron store path; monitor/cursor stores default beside it")
+    .option("--monitor-store <path>", "Monitor store path; overrides derivation from --cron-store")
+    .option("--cursor-store <path>", "Cursor store path; overrides derivation from monitor store")
+    .option("--hook-url <url>", "Full gateway hook URL for dispatching matched monitor events")
+    .option("--hook-token <token>", "Bearer token for --hook-url")
+    .option("--limit <n>", "Read up to this many recent messages per monitor", "80")
+    .option(
+      "--commit-without-dispatch",
+      "Advance event cursors without dispatching; intended for explicit observe-only maintenance",
+      false,
+    )
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserMonitorPollCommand } = await import("../commands/telegram-user.js");
+        await telegramUserMonitorPollCommand(opts, defaultRuntime);
       });
     });
 }

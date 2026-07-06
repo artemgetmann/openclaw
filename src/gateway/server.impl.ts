@@ -596,6 +596,7 @@ export async function startGatewayServer(
                 cronStorePath,
                 cron,
                 event,
+                monitorId: event.monitorId,
               });
             },
             pluginRegistry,

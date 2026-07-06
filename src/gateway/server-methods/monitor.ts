@@ -330,9 +330,12 @@ export async function dispatchMonitorEventToCron(params: {
   cronStorePath: string;
   cron: Pick<CronService, "enqueueRun">;
   event: MonitorEventEnvelope;
+  monitorId?: string;
 }): Promise<MonitorEventDispatchResult> {
   const store = await loadMonitorStore(resolveStorePath(params.cronStorePath));
-  const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event });
+  const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event }).filter(
+    (route) => !params.monitorId || route.monitorId === params.monitorId,
+  );
   const wakes: MonitorEventDispatchResult["wakes"] = [];
   for (const route of routes) {
     // The router only decides that this event belongs to the monitor. The

@@ -229,7 +229,9 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   allowUnsafeExternalContent?: boolean;
 };
 
-export type HookMonitorEventPayload = MonitorEventEnvelope;
+export type HookMonitorEventPayload = MonitorEventEnvelope & {
+  monitorId?: string;
+};
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
@@ -334,6 +336,7 @@ export function normalizeMonitorEventPayload(
   const idempotencyKey =
     resolveOptionalHookIdempotencyKey(payload.idempotencyKey) ?? options?.idempotencyKey;
   const eventType = normalizeOptionalHookString(payload.eventType);
+  const monitorId = normalizeOptionalHookString(payload.monitorId);
 
   return {
     ok: true,
@@ -343,6 +346,7 @@ export function normalizeMonitorEventPayload(
       sourceTarget: payload.sourceTarget,
       ...(eventType ? { eventType } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(monitorId ? { monitorId } : {}),
       receivedAtMs,
       ...(payload.evidence ? { evidence: payload.evidence } : {}),
     },
@@ -493,6 +497,7 @@ export function normalizeTelegramUserMonitorEventPayload(
     {
       ...envelope,
       idempotencyKey,
+      monitorId: normalizeHookNumberishString(payload.monitorId),
     },
     {
       idempotencyKey,

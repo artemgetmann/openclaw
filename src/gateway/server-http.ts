@@ -660,6 +660,7 @@ export function createHooksRequestHandler(
           sourceType: normalized.value.sourceType,
           sourceTarget: normalized.value.sourceTarget,
           eventType: normalized.value.eventType ?? null,
+          monitorId: normalized.value.monitorId ?? null,
         },
       });
       const cachedResponse = resolveCachedHookResponse(replayKey, now);
@@ -699,6 +700,7 @@ export function createHooksRequestHandler(
           sourceType: normalized.value.sourceType,
           sourceTarget: normalized.value.sourceTarget,
           eventType: normalized.value.eventType ?? null,
+          monitorId: normalized.value.monitorId ?? null,
         },
       });
       const cachedResponse = resolveCachedHookResponse(replayKey, now);
@@ -740,6 +742,7 @@ export function createHooksRequestHandler(
           sourceType: normalized.value.sourceType,
           sourceTarget: normalized.value.sourceTarget,
           eventType: normalized.value.eventType ?? null,
+          monitorId: normalized.value.monitorId ?? null,
         },
       });
       const cachedResponse = resolveCachedHookResponse(replayKey, now);

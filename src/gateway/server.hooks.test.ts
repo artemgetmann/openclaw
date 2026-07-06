@@ -733,6 +733,75 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("scopes Telegram-as-me hook dispatch to the requested monitor when supplied", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    const { cronStorePath, monitorStorePath } = await seedTelegramUserMonitorEventStores();
+    const cronStore = JSON.parse(await fs.readFile(cronStorePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    cronStore.jobs.push({
+      id: "cron-telegram-monitor-2",
+      agentId: "main",
+      name: "Telegram-as-me sibling monitor",
+      enabled: true,
+      createdAtMs: 1_000_000,
+      updatedAtMs: 1_000_000,
+      schedule: { kind: "every", everyMs: 300_000 },
+      sessionTarget: "session:agent:main:monitor:telegram-monitor-2",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "monitorWake", monitorId: "telegram-monitor-2" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+        accountId: "default",
+      },
+      state: { nextRunAtMs: 1_300_000 },
+    });
+    await fs.writeFile(cronStorePath, JSON.stringify(cronStore, null, 2), "utf-8");
+    const monitorStore = JSON.parse(await fs.readFile(monitorStorePath, "utf-8")) as {
+      monitors: Array<Record<string, unknown>>;
+    };
+    monitorStore.monitors.push({
+      ...monitorStore.monitors[0],
+      monitorId: "telegram-monitor-2",
+      name: "Telegram-as-me sibling monitor",
+      monitorSessionKey: "agent:main:monitor:telegram-monitor-2",
+      sourceTarget: {
+        accountId: "personal",
+        chat: "@jarvis_tester_1_bot",
+        contains: "bar",
+        threadAnchor: "7001",
+      },
+      cronJobId: "cron-telegram-monitor-2",
+    });
+    await fs.writeFile(monitorStorePath, JSON.stringify(monitorStore, null, 2), "utf-8");
+
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/telegram-user-monitor-event", {
+        accountId: "personal",
+        chat: "@jarvis_tester_1_bot",
+        monitorId: "telegram-monitor-1",
+        message: {
+          chat_id: 10,
+          chat_username: "jarvis_tester_1_bot",
+          direct_messages_topic: { topic_id: 7001 },
+          message_id: 127,
+          out: false,
+          sender_id: 456,
+          text: "foo reply",
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        matched?: number;
+        wakes?: Array<{ monitorId?: string }>;
+      };
+      expect(body.matched).toBe(1);
+      expect(body.wakes?.map((wake) => wake.monitorId)).toEqual(["telegram-monitor-1"]);
+    });
+  });
+
   test("routes Telegram-as-me payloads that only expose normalized thread_anchor", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await seedTelegramUserMonitorEventStores();
