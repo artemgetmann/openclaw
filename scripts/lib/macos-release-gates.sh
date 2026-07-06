@@ -22,6 +22,80 @@ openclaw_macos_release_head() {
   git -C "$root" rev-parse HEAD
 }
 
+openclaw_jarvis_release_worktree_name() {
+  printf '%s\n' "${OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME:-jarvis-release-current}"
+}
+
+openclaw_jarvis_release_home_clone() {
+  printf '%s\n' "${OPENCLAW_MAIN_HOME_CLONE:-/Users/user/Programming_Projects/openclaw}"
+}
+
+openclaw_jarvis_release_worktree_path() {
+  local home_clone
+  local release_name
+
+  home_clone="$(openclaw_jarvis_release_home_clone)"
+  release_name="$(openclaw_jarvis_release_worktree_name)"
+  printf '%s/.worktrees/%s\n' "$home_clone" "$release_name"
+}
+
+openclaw_jarvis_release_worktree_branch() {
+  printf 'codex/%s\n' "$(openclaw_jarvis_release_worktree_name)"
+}
+
+openclaw_physical_path() {
+  local path="$1"
+  (cd "$path" && pwd -P)
+}
+
+openclaw_require_jarvis_release_worktree() {
+  local root="$1"
+  local expected_path_override="${2:-}"
+  local expected_branch_override="${3:-}"
+  local expected_path expected_branch
+  local current_path expected_physical
+  local current_branch
+  local failed=0
+
+  expected_path="${expected_path_override:-$(openclaw_jarvis_release_worktree_path)}"
+  expected_branch="${expected_branch_override:-$(openclaw_jarvis_release_worktree_branch)}"
+  current_path="$(openclaw_physical_path "$root")"
+  expected_physical="$(openclaw_physical_path "$expected_path" 2>/dev/null || printf '%s\n' "$expected_path")"
+  current_branch="$(git -C "$root" branch --show-current 2>/dev/null || true)"
+
+  # Public Jarvis packaging is intentionally tied to one warmed lane. A random
+  # worktree can be made "warm" too, but that scatters artifacts, receipts, and
+  # release proof. Fail before package/notary/publish work starts.
+  if [[ "$current_path" != "$expected_physical" ]]; then
+    echo "jarvis_release_worktree=current_path_mismatch" >&2
+    failed=1
+  fi
+
+  if [[ "$current_branch" != "$expected_branch" ]]; then
+    echo "jarvis_release_worktree=current_branch_mismatch" >&2
+    failed=1
+  fi
+
+  if [[ "$failed" != "0" ]]; then
+    cat >&2 <<EOF
+ERROR: Jarvis public release packaging must run from the blessed warmed release worktree.
+
+Current path:  $current_path
+Expected path: $expected_physical
+Current branch:  ${current_branch:-detached}
+Expected branch: $expected_branch
+
+Prepare and enter the release lane first:
+  cd "$(openclaw_jarvis_release_home_clone)"
+  bash scripts/jarvis-release-worktree.sh
+EOF
+    exit 1
+  fi
+
+  echo "jarvis_release_worktree=ok"
+  echo "jarvis_release_worktree_path=$current_path"
+}
+
 openclaw_macos_prewarm_proof_path() {
   local root="$1"
   local proof_path
@@ -151,8 +225,9 @@ openclaw_require_macos_prewarm_proof() {
   cat >&2 <<EOF
 ERROR: cold or stale macOS release lane.
 
-Run the blessed warmup before app-building release phases:
-  bash scripts/prewarm-worktree.sh --root "\$PWD" --macos
+Refresh the blessed release worktree before app-building release phases:
+  cd "$(openclaw_jarvis_release_home_clone)"
+  bash scripts/jarvis-release-worktree.sh
 
 Emergency override only:
   ALLOW_COLD_RELEASE_LANE=1 bash scripts/package-openclaw-mac-dist.sh ...

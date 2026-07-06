@@ -48,7 +48,7 @@ Options:
                       Required with --publish-release-assets. Must match the
                       repo's latest release because Sparkle checks the public
                       releases/latest/download appcast feed.
-  --phase <full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast>
+  --phase <full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast>
                       full is the default one-shot lane. post-app-build resumes
                       from an existing dist/Jarvis.app and runs the release tail.
                       local-proof builds and verifies dist/Jarvis.app, writes
@@ -59,6 +59,10 @@ Options:
                       jarvis-appcast.xml from an existing accepted Jarvis.app
                       without rebuilding, notarizing, stapling, uploading, or
                       verifying public URLs.
+                      publish-sparkle-assets-only uploads and verifies only
+                      Jarvis.zip plus jarvis-appcast.xml after accepted app
+                      notarization. It intentionally does not upload Jarvis.dmg
+                      or claim a fresh-install/sendable release.
   --resume-after-app-build
                       Alias for --phase post-app-build.
   --local-proof
@@ -107,6 +111,7 @@ Env:
                       Emergency-only bypass for the macOS prewarm proof gate.
                       Normal app-building phases must first run:
                       bash scripts/prewarm-worktree.sh --root "$PWD" --macos
+                      This does not bypass the blessed release-worktree guard.
   ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1
                       Emergency-only bypass when the built CFBundleVersion is
                       not newer than /Applications/Jarvis.app
@@ -294,7 +299,7 @@ require_release_publish_prereqs() {
     return 0
   fi
 
-  if [[ "$NOTARIZE" != "1" && "$PACKAGE_PHASE" != "publish-assets-only" ]]; then
+  if [[ "$NOTARIZE" != "1" && "$PACKAGE_PHASE" != "publish-assets-only" && "$PACKAGE_PHASE" != "publish-sparkle-assets-only" ]]; then
     echo "ERROR: --publish-release-assets requires notarization." >&2
     echo "SKIP_NOTARIZE=1 is local smoke/dev packaging and must not publish." >&2
     exit 1
@@ -316,7 +321,7 @@ require_release_publish_prereqs() {
   fi
 
   require_latest_release_tag
-  if [[ "$PACKAGE_PHASE" != "publish-assets-only" ]]; then
+  if [[ "$PACKAGE_PHASE" != "publish-assets-only" && "$PACKAGE_PHASE" != "publish-sparkle-assets-only" ]]; then
     require_sparkle_private_key_file
   fi
 }
@@ -482,6 +487,56 @@ verify_public_release_assets() {
       --dmg-url "$JARVIS_DMG_PUBLIC_URL" \
       --zip-url "$(jarvis_appcast_zip_public_url)" \
       --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
+}
+
+verify_sparkle_public_release_assets() {
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  for artifact in "$APP_PATH" "$ZIP" "$appcast"; do
+    if [[ ! -e "$artifact" ]]; then
+      echo "ERROR: Sparkle release artifact missing before public verification: $artifact" >&2
+      exit 1
+    fi
+  done
+
+  jarvis_release_retry \
+    "Jarvis public Sparkle asset verification" \
+    "$ROOT_DIR/scripts/verify-jarvis-release-assets.mjs" \
+      --sparkle-only \
+      --app-path "$APP_PATH" \
+      --zip-path "$ZIP" \
+      --zip-url "$(jarvis_appcast_zip_public_url)" \
+      --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
+}
+
+publish_sparkle_release_assets() {
+  if [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]]; then
+    return 0
+  fi
+
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  require_latest_release_tag
+
+  for artifact in "$ZIP" "$appcast"; do
+    if [[ ! -f "$artifact" ]]; then
+      echo "ERROR: Sparkle release asset missing before upload: $artifact" >&2
+      exit 1
+    fi
+  done
+  require_local_appcast_targets_current_tag
+
+  github_release_upload_preflight
+
+  # Existing users update through Sparkle using the ZIP and appcast. The DMG is
+  # a separate fresh-install/sendable installer truth, so this urgent path keeps
+  # the upload set narrow and refuses to imply the DMG is live.
+  echo "🚀 Uploading Jarvis Sparkle update assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
+  jarvis_release_retry \
+    "gh release upload Jarvis Sparkle assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
+    gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" "$appcast" \
+      --repo "$GITHUB_RELEASE_REPO" \
+      --clobber
+
+  verify_sparkle_public_release_assets
 }
 
 sign_dmg_if_possible() {
@@ -720,6 +775,44 @@ require_notarized_manifest_before_publish() {
     echo "Poll the saved submissions before uploading public assets." >&2
     exit 1
   fi
+}
+
+require_sparkle_manifest_before_publish() {
+  local app_status
+  app_status="$(manifest_value "JARVIS_APP_NOTARY_STATUS")"
+
+  if [[ "$app_status" != "Accepted" ]]; then
+    echo "ERROR: Sparkle-only publish requires accepted app notarization in $RELEASE_MANIFEST_PATH." >&2
+    echo "app_notary_status=${app_status:-missing}" >&2
+    echo "Poll the app notarization receipt before uploading public Sparkle assets." >&2
+    exit 1
+  fi
+}
+
+require_sparkle_assets_before_publish() {
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  local failed=0
+
+  # Sparkle is the updater path for existing users. It only needs the accepted
+  # app bundle, the ZIP made from that bundle, and the signed appcast pointing
+  # at the immutable tagged ZIP URL. The DMG remains a separate fresh-install
+  # artifact and is deliberately not part of this gate.
+  if [[ ! -d "$APP_PATH" ]]; then
+    echo "ERROR: Sparkle-only publish requires an existing app bundle: $APP_PATH" >&2
+    failed=1
+  fi
+  if [[ ! -f "$ZIP" ]]; then
+    echo "ERROR: Sparkle-only publish requires an existing ZIP: $ZIP" >&2
+    failed=1
+  fi
+  if [[ ! -f "$appcast" ]]; then
+    echo "ERROR: Sparkle-only publish requires an existing appcast: $appcast" >&2
+    failed=1
+  fi
+  [[ "$failed" == "0" ]] || exit 1
+
+  require_sparkle_manifest_before_publish
+  require_local_appcast_targets_current_tag
 }
 
 require_local_release_asset_phase_inputs() {
@@ -1015,14 +1108,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PACKAGE_PHASE" in
-  full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|trusted-ring-fast)
+  full|local-proof|post-app-build|build-app-only|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only|trusted-ring-fast)
     ;;
   *)
     echo "ERROR: unknown --phase value: $PACKAGE_PHASE" >&2
-    echo "Use --phase full, local-proof, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, create-local-release-assets-only, publish-assets-only, verify-public-assets-only, or trusted-ring-fast." >&2
+    echo "Use --phase full, local-proof, post-app-build, build-app-only, submit-app-notarization, poll-app-notarization, submit-dmg-notarization, poll-dmg-notarization, create-local-release-assets-only, publish-assets-only, verify-public-assets-only, publish-sparkle-assets-only, verify-sparkle-assets-only, or trusted-ring-fast." >&2
     exit 1
     ;;
 esac
+
+openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 
 if [[ "$PACKAGE_PHASE" == "local-proof" ]]; then
   SKIP_NOTARIZE=1
@@ -1093,6 +1188,9 @@ case "$PACKAGE_PHASE" in
   publish-assets-only)
     require_notarized_manifest_before_publish
     ;;
+  publish-sparkle-assets-only|verify-sparkle-assets-only)
+    require_sparkle_manifest_before_publish
+    ;;
 esac
 
 case "$PACKAGE_PHASE" in
@@ -1116,7 +1214,21 @@ case "$PACKAGE_PHASE" in
     fi
     require_release_publish_prereqs
     ;;
+  publish-sparkle-assets-only)
+    require_sparkle_manifest_before_publish
+    if [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]]; then
+      echo "ERROR: --phase publish-sparkle-assets-only requires --publish-release-assets." >&2
+      exit 1
+    fi
+    require_release_publish_prereqs
+    ;;
   verify-public-assets-only)
+    if [[ -n "$GITHUB_RELEASE_TAG" ]]; then
+      require_latest_release_tag
+    fi
+    ;;
+  verify-sparkle-assets-only)
+    require_sparkle_manifest_before_publish
     if [[ -n "$GITHUB_RELEASE_TAG" ]]; then
       require_latest_release_tag
     fi
@@ -1234,11 +1346,33 @@ case "$PACKAGE_PHASE" in
     echo "sparkle_update_live=true"
     exit 0
     ;;
+  publish-sparkle-assets-only)
+    require_sparkle_assets_before_publish
+    publish_sparkle_release_assets
+    write_release_manifest
+    echo "sparkle_update_live=true"
+    echo "release_sendable=false"
+    echo "fresh_install_sendable=false"
+    echo "dmg_update_live=false"
+    echo "reason=Sparkle update is live for existing users; DMG/fresh-install package was not published by this phase"
+    exit 0
+    ;;
   verify-public-assets-only)
     verify_public_release_assets
     write_release_manifest
     echo "release_sendable=true"
     echo "sparkle_update_live=true"
+    exit 0
+    ;;
+  verify-sparkle-assets-only)
+    require_sparkle_assets_before_publish
+    verify_sparkle_public_release_assets
+    write_release_manifest
+    echo "sparkle_update_live=true"
+    echo "release_sendable=false"
+    echo "fresh_install_sendable=false"
+    echo "dmg_update_live=false"
+    echo "reason=Sparkle update assets are public; DMG/fresh-install package was not verified by this phase"
     exit 0
     ;;
 esac

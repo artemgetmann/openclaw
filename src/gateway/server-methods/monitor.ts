@@ -13,7 +13,7 @@ import { routeMonitorEvent, type MonitorEventRoute } from "../../monitor/event-r
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   createMonitorRecord,
-  findActiveMonitorByIdentity,
+  createMonitorIdentityKey,
   findMonitor,
   loadMonitorStore,
   resolveMonitorStorePath,
@@ -24,7 +24,9 @@ import {
   isTerminalMonitorStatus,
   type MonitorActionPolicy,
   type MonitorEventEnvelope,
+  type MonitorEventTriggerKind,
   type MonitorGoalSnapshot,
+  type MonitorTriggerMatch,
   type MonitorTrigger,
   type MonitorUpdatePatch,
 } from "../../monitor/types.js";
@@ -44,6 +46,252 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function resolveStorePath(cronStorePath: string) {
   return resolveMonitorStorePath({ cronStorePath });
+}
+
+function resolveGoalBoundEventTriggerKind(sourceType: string): MonitorEventTriggerKind | undefined {
+  const normalized = sourceType.trim().toLowerCase();
+  // Only default to adapters that exist today. Future listener adapters can add
+  // their own defaults once they can emit the same monitor event envelope.
+  if (normalized === "gmail") {
+    return "webhook";
+  }
+  if (normalized === "telegram-user") {
+    return "local_listener";
+  }
+  return undefined;
+}
+
+function readSourceTargetString(
+  sourceTarget: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = sourceTarget[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function resolveGmailEventSourceTarget(
+  sourceTarget: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const threadId = readSourceTargetString(sourceTarget, ["threadId", "gmailThreadId"]);
+  if (!threadId) {
+    return undefined;
+  }
+  const account = readSourceTargetString(sourceTarget, ["account", "accountId", "emailAddress"]);
+  if (!account) {
+    return undefined;
+  }
+  return {
+    account,
+    threadId,
+  };
+}
+
+function resolveTelegramUserEventSourceTarget(
+  sourceTarget: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const chat = readSourceTargetString(sourceTarget, ["chat", "chatId", "target", "to"]);
+  if (!chat) {
+    return undefined;
+  }
+
+  // The local listener owns the watched chat configuration. Keep sourceTarget
+  // to stable routing keys so inbound message text stays evidence, not authority.
+  const eventSourceTarget: Record<string, unknown> = { chat };
+  const accountId = readSourceTargetString(sourceTarget, ["accountId", "account"]);
+  if (accountId) {
+    eventSourceTarget.accountId = accountId;
+  }
+  const threadAnchor = readSourceTargetString(sourceTarget, [
+    "threadAnchor",
+    "topicAnchor",
+    "topicId",
+  ]);
+  if (threadAnchor) {
+    eventSourceTarget.threadAnchor = threadAnchor;
+  }
+  return eventSourceTarget;
+}
+
+function hasGmailSourceTargetQualifiers(sourceTarget: Record<string, unknown>): boolean {
+  const qualifierTarget = { ...sourceTarget };
+  delete qualifierTarget.account;
+  delete qualifierTarget.accountId;
+  delete qualifierTarget.emailAddress;
+  delete qualifierTarget.threadId;
+  delete qualifierTarget.gmailThreadId;
+  return Object.keys(qualifierTarget).length > 0;
+}
+
+function resolveGoalBoundTriggerMatch(params: {
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+}): MonitorTriggerMatch | undefined {
+  const normalized = params.sourceType.trim().toLowerCase();
+  if (normalized === "gmail") {
+    if (hasGmailSourceTargetQualifiers(params.sourceTarget)) {
+      return undefined;
+    }
+    const eventSourceTarget = resolveGmailEventSourceTarget(params.sourceTarget);
+    return eventSourceTarget
+      ? { sourceType: params.sourceType, sourceTarget: eventSourceTarget }
+      : undefined;
+  }
+  if (normalized === "telegram-user") {
+    const eventSourceTarget = resolveTelegramUserEventSourceTarget(params.sourceTarget);
+    return eventSourceTarget
+      ? {
+          sourceType: params.sourceType,
+          sourceTarget: eventSourceTarget,
+          eventTypes: ["message.created"],
+        }
+      : undefined;
+  }
+  return { sourceType: params.sourceType, sourceTarget: params.sourceTarget };
+}
+
+function buildGoalBoundMonitorTrigger(params: {
+  goal?: MonitorGoalSnapshot;
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+  cadence: CronJobCreate["schedule"];
+}): MonitorTrigger | undefined {
+  if (!params.goal) {
+    return undefined;
+  }
+  const eventKind = resolveGoalBoundEventTriggerKind(params.sourceType);
+  if (!eventKind) {
+    return undefined;
+  }
+  const match = resolveGoalBoundTriggerMatch({
+    sourceType: params.sourceType,
+    sourceTarget: params.sourceTarget,
+  });
+  if (!match) {
+    return undefined;
+  }
+  return {
+    kind: "hybrid",
+    schedule: { cadence: params.cadence },
+    event: {
+      kind: eventKind,
+      match,
+    },
+  };
+}
+
+function resolveMonitorCreateTrigger(params: {
+  explicitTrigger?: MonitorTrigger;
+  goal?: MonitorGoalSnapshot;
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+  cadence: CronJobCreate["schedule"];
+}): MonitorTrigger | undefined {
+  return params.explicitTrigger
+    ? normalizeTriggerScheduleCadence(params.explicitTrigger, params.cadence)
+    : buildGoalBoundMonitorTrigger(params);
+}
+
+function resolveMonitorIdentitySourceTarget(params: {
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+}): Record<string, unknown> {
+  if (params.sourceType.trim().toLowerCase() !== "gmail") {
+    return params.sourceTarget;
+  }
+  const eventSourceTarget = resolveGmailEventSourceTarget(params.sourceTarget);
+  if (!eventSourceTarget) {
+    return params.sourceTarget;
+  }
+  const normalized = { ...params.sourceTarget };
+  delete normalized.accountId;
+  delete normalized.emailAddress;
+  delete normalized.gmailThreadId;
+  return {
+    ...normalized,
+    ...eventSourceTarget,
+  };
+}
+
+function createMonitorCreateIdentityKey(params: {
+  agentId: string;
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+  actionPolicy?: MonitorActionPolicy;
+  purposeLabel?: string;
+}): string {
+  return createMonitorIdentityKey({
+    ...params,
+    sourceTarget: resolveMonitorIdentitySourceTarget({
+      sourceType: params.sourceType,
+      sourceTarget: params.sourceTarget,
+    }),
+  });
+}
+
+function findActiveMonitorByCreateIdentity(
+  store: Awaited<ReturnType<typeof loadMonitorStore>>,
+  input: {
+    agentId: string;
+    sourceType: string;
+    sourceTarget: Record<string, unknown>;
+    actionPolicy?: MonitorActionPolicy;
+    purposeLabel?: string;
+  },
+) {
+  const identityKey = createMonitorCreateIdentityKey(input);
+  return store.monitors.find(
+    (monitor) =>
+      (monitor.status === "active" || monitor.status === "degraded") &&
+      createMonitorCreateIdentityKey({
+        agentId: monitor.agentId,
+        sourceType: monitor.sourceType,
+        sourceTarget: monitor.sourceTarget,
+        actionPolicy: monitor.actionPolicy,
+        purposeLabel: monitor.name,
+      }) === identityKey,
+  );
+}
+
+function buildScheduleMonitorTrigger(cadence: CronJobCreate["schedule"]): MonitorTrigger {
+  return { kind: "schedule", cadence };
+}
+
+function normalizeTriggerScheduleCadence(
+  trigger: MonitorTrigger,
+  cadence: CronJobCreate["schedule"],
+): MonitorTrigger {
+  if (trigger.kind === "schedule") {
+    return { ...trigger, cadence };
+  }
+  if (trigger.kind === "hybrid") {
+    return {
+      ...trigger,
+      schedule: {
+        ...trigger.schedule,
+        cadence,
+      },
+    };
+  }
+  return trigger;
+}
+
+function monitorTriggersEqual(
+  left: MonitorTrigger | undefined,
+  right: MonitorTrigger | undefined,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function shouldUpgradeExistingTrigger(existing: MonitorTrigger | undefined): boolean {
+  return !existing || existing.kind === "schedule";
 }
 
 async function resolveMonitorGoalSnapshot(params: {
@@ -82,9 +330,12 @@ export async function dispatchMonitorEventToCron(params: {
   cronStorePath: string;
   cron: Pick<CronService, "enqueueRun">;
   event: MonitorEventEnvelope;
+  monitorId?: string;
 }): Promise<MonitorEventDispatchResult> {
   const store = await loadMonitorStore(resolveStorePath(params.cronStorePath));
-  const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event });
+  const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event }).filter(
+    (route) => !params.monitorId || route.monitorId === params.monitorId,
+  );
   const wakes: MonitorEventDispatchResult["wakes"] = [];
   for (const route of routes) {
     // The router only decides that this event belongs to the monitor. The
@@ -175,7 +426,14 @@ export const monitorHandlers: GatewayRequestHandlers = {
       agentId: p.agentId,
       cfg,
     });
-    const existingMonitor = findActiveMonitorByIdentity(store, {
+    const trigger = resolveMonitorCreateTrigger({
+      explicitTrigger: p.trigger,
+      goal,
+      sourceType: p.sourceType,
+      sourceTarget: p.sourceTarget,
+      cadence: p.cadence,
+    });
+    const existingMonitor = findActiveMonitorByCreateIdentity(store, {
       agentId: p.agentId,
       sourceType: p.sourceType,
       sourceTarget: p.sourceTarget,
@@ -183,12 +441,36 @@ export const monitorHandlers: GatewayRequestHandlers = {
       purposeLabel: p.name,
     });
     if (existingMonitor) {
+      const reconciledTrigger = resolveMonitorCreateTrigger({
+        explicitTrigger: p.trigger,
+        goal,
+        sourceType: p.sourceType,
+        sourceTarget: p.sourceTarget,
+        cadence: existingMonitor.cadence,
+      });
+      const nextTrigger =
+        reconciledTrigger ??
+        (!existingMonitor.trigger
+          ? buildScheduleMonitorTrigger(existingMonitor.cadence)
+          : undefined);
       const goalChanged = goal
         ? existingMonitor.goal?.id !== goal.id || existingMonitor.goal?.objective !== goal.objective
         : existingMonitor.goal !== undefined;
-      const reconciled = goalChanged
-        ? updateMonitorRecord(existingMonitor, { goal }, Date.now())
-        : existingMonitor;
+      const triggerChanged =
+        nextTrigger !== undefined &&
+        shouldUpgradeExistingTrigger(existingMonitor.trigger) &&
+        !monitorTriggersEqual(existingMonitor.trigger, nextTrigger);
+      const reconciled =
+        goalChanged || triggerChanged
+          ? updateMonitorRecord(
+              existingMonitor,
+              {
+                ...(goalChanged ? { goal } : {}),
+                ...(triggerChanged ? { trigger: nextTrigger } : {}),
+              },
+              Date.now(),
+            )
+          : existingMonitor;
       if (reconciled !== existingMonitor) {
         const index = store.monitors.findIndex(
           (monitor) => monitor.monitorId === existingMonitor.monitorId,
@@ -247,7 +529,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
         sourceType: p.sourceType,
         sourceTarget: p.sourceTarget,
         cadence: p.cadence,
-        trigger: p.trigger,
+        trigger,
         expiryAt: p.expiryAt,
         stopCondition: p.stopCondition,
         actionPolicy: p.actionPolicy,

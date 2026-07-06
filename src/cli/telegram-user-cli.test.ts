@@ -3,6 +3,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const telegramUserInboxCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDoctorCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserMonitorListenCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserMonitorPollCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserReadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
@@ -12,6 +14,8 @@ const telegramUserTopicDeleteCommand = vi.fn().mockResolvedValue(undefined);
 vi.mock("../commands/telegram-user.js", () => ({
   telegramUserDoctorCommand,
   telegramUserInboxCommand,
+  telegramUserMonitorListenCommand,
+  telegramUserMonitorPollCommand,
   telegramUserReadCommand,
   telegramUserDownloadCommand,
   telegramUserSendCommand,
@@ -62,6 +66,8 @@ describe("telegram-user cli", () => {
       "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830",
     );
     expect(help).toContain("compact agent-friendly rows");
+    expect(help).toContain("openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot");
+    expect(help).toContain("openclaw telegram-user monitor-poll --cron-store /tmp/cron.json");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
   });
 
@@ -95,6 +101,89 @@ describe("telegram-user cli", () => {
         session: "/tmp/userbot.session",
       }),
       expect.any(Object),
+    );
+  });
+
+  it("registers monitor-listen and forwards listener options", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    expect(telegramUser?.commands.map((command) => command.name())).toContain("monitor-listen");
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "monitor-listen",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--after-id",
+        "123",
+        "--account-id",
+        "personal",
+        "--thread-anchor",
+        "7001",
+        "--contains",
+        "reply",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserMonitorListenCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "personal",
+        afterId: "123",
+        chat: "@jarvis_tester_1_bot",
+        contains: "reply",
+        json: true,
+        threadAnchor: "7001",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("registers monitor-poll and forwards cursor/dispatch options", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    expect(telegramUser?.commands.map((command) => command.name())).toContain("monitor-poll");
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "monitor-poll",
+        "--cron-store",
+        "/tmp/cron.json",
+        "--monitor-store",
+        "/tmp/monitors.json",
+        "--cursor-store",
+        "/tmp/cursors.json",
+        "--hook-url",
+        "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+        "--hook-token",
+        "secret",
+        "--limit",
+        "12",
+        "--commit-without-dispatch",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserMonitorPollCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commitWithoutDispatch: true,
+        cronStore: "/tmp/cron.json",
+        cursorStore: "/tmp/cursors.json",
+        hookToken: "secret",
+        hookUrl: "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+        json: true,
+        limit: "12",
+        monitorStore: "/tmp/monitors.json",
+      }),
+      expect.anything(),
     );
   });
 

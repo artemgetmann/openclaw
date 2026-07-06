@@ -428,6 +428,23 @@ describe("exec approvals safe bins", () => {
       evaluate([
         "openclaw",
         "telegram-user",
+        "monitor-poll",
+        "--cron-store",
+        "/tmp/cron.json",
+        "--cursor-store",
+        "/tmp/cursors.json",
+        "--hook-url",
+        "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+        "--hook-token",
+        "secret",
+        "--commit-without-dispatch",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
         "inbox",
         "--unread",
         "--dm-only",

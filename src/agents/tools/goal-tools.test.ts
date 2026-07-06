@@ -4,16 +4,21 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSessionGoal, getSessionGoal, updateSessionStore } from "../../config/sessions.js";
 import { resolveMonitorStorePath, saveMonitorStore } from "../../monitor/store.js";
+import type { MonitorRecord } from "../../monitor/types.js";
 import { createCreateGoalTool, createGetGoalTool, createUpdateGoalTool } from "./goal-tools.js";
 
 describe("goal tools", () => {
   let tempDir = "";
   let storePath = "";
+  let cronStorePath = "";
+  let monitorStorePath = "";
   const sessionKey = "agent:main:telegram:direct:123";
 
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-goal-tools-"));
     storePath = path.join(tempDir, "sessions.json");
+    cronStorePath = path.join(tempDir, "cron", "jobs.json");
+    monitorStorePath = resolveMonitorStorePath({ cronStorePath });
     await updateSessionStore(storePath, (store) => {
       store[sessionKey] = { sessionId: "session-1", updatedAt: 1 };
     });
@@ -26,7 +31,7 @@ describe("goal tools", () => {
   it("creates, reads, and updates the current session goal", async () => {
     const options = {
       agentSessionKey: sessionKey,
-      config: { session: { store: storePath } },
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
     };
     const create = createCreateGoalTool(options);
     const get = createGetGoalTool(options);
@@ -59,7 +64,7 @@ describe("goal tools", () => {
   it("ignores model-supplied token budgets", async () => {
     const create = createCreateGoalTool({
       agentSessionKey: sessionKey,
-      config: { session: { store: storePath } },
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
     });
     const created = await create.execute?.("call-1", { objective: "Do it.", token_budget: 1 });
     expect(created?.details).toMatchObject({
@@ -77,9 +82,8 @@ describe("goal tools", () => {
       storePath,
       objective: "Get the refund confirmed.",
     });
-    const cronStorePath = path.join(tempDir, "cron", "jobs.json");
     const monitorSessionKey = "agent:main:monitor:monitor-1";
-    await saveMonitorStore(resolveMonitorStorePath({ cronStorePath }), {
+    await saveMonitorStore(monitorStorePath, {
       version: 1,
       monitors: [
         {
@@ -118,5 +122,211 @@ describe("goal tools", () => {
     expect((await getSessionGoal({ sessionKey: monitorSessionKey, storePath })).status).toBe(
       "missing",
     );
+  });
+
+  function buildMonitor(overrides: Partial<MonitorRecord>): MonitorRecord {
+    const monitorId = overrides.monitorId ?? "monitor-1";
+    return {
+      monitorId,
+      agentId: "main",
+      originSessionKey: sessionKey,
+      monitorSessionKey: `agent:main:monitor:${monitorId}`,
+      sourceType: "gmail",
+      sourceTarget: { account: "me@example.com", threadId: monitorId },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_draft",
+      goal: { id: "goal-1", objective: "Get the refund confirmed." },
+      status: "active",
+      cronJobId: `cron-${monitorId}`,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      ...overrides,
+    };
+  }
+
+  it("includes active and degraded monitors bound to the current goal", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Get the refund confirmed.",
+    });
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [
+        buildMonitor({
+          monitorId: "monitor-active",
+          name: "Refund thread",
+          goal: { id: goal.id, objective: goal.objective },
+          status: "active",
+          actionPolicy: "notify_draft",
+          lastWakeStatus: "active",
+          updatedAtMs: 20,
+          expiryAt: "2026-07-05T00:00:00.000Z",
+        }),
+        buildMonitor({
+          monitorId: "monitor-degraded",
+          goal: { id: goal.id, objective: goal.objective },
+          status: "degraded",
+          sourceType: "telegram-user",
+          actionPolicy: "auto_send",
+          lastWakeStatus: "degraded",
+          updatedAtMs: 30,
+        }),
+      ],
+    });
+
+    const get = createGetGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const snapshot = await get.execute?.("call-get-waits", {});
+
+    expect(snapshot?.details).toMatchObject({
+      status: "found",
+      waitingOnMonitors: [
+        {
+          monitorId: "monitor-active",
+          status: "active",
+          name: "Refund thread",
+          sourceType: "gmail",
+          actionPolicy: "notify_draft",
+          lastWakeStatus: "active",
+          updatedAtMs: 20,
+          expiryAt: "2026-07-05T00:00:00.000Z",
+        },
+        {
+          monitorId: "monitor-degraded",
+          status: "degraded",
+          sourceType: "telegram-user",
+          actionPolicy: "auto_send",
+          lastWakeStatus: "degraded",
+          updatedAtMs: 30,
+        },
+      ],
+    });
+    expect(JSON.stringify(snapshot?.details)).not.toContain("sourceTarget");
+    expect(JSON.stringify(snapshot?.details)).not.toContain("cronJobId");
+    expect(JSON.stringify(snapshot?.details)).not.toContain("trigger");
+  });
+
+  it("omits terminal monitors from current goal waits", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Get the refund confirmed.",
+    });
+    const goalSnapshot = { id: goal.id, objective: goal.objective };
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [
+        buildMonitor({ monitorId: "monitor-stopped", goal: goalSnapshot, status: "stopped" }),
+        buildMonitor({ monitorId: "monitor-completed", goal: goalSnapshot, status: "completed" }),
+        buildMonitor({ monitorId: "monitor-expired", goal: goalSnapshot, status: "expired" }),
+      ],
+    });
+
+    const get = createGetGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const snapshot = await get.execute?.("call-get-terminal", {});
+
+    expect(snapshot?.details).toMatchObject({ status: "found" });
+    expect(snapshot?.details).not.toHaveProperty("waitingOnMonitors");
+  });
+
+  it("omits monitors bound to unrelated goal IDs", async () => {
+    await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Get the refund confirmed.",
+    });
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [buildMonitor({ goal: { id: "goal-other", objective: "Do something else." } })],
+    });
+
+    const get = createGetGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const snapshot = await get.execute?.("call-get-other-goal", {});
+
+    expect(snapshot?.details).toMatchObject({ status: "found" });
+    expect(snapshot?.details).not.toHaveProperty("waitingOnMonitors");
+  });
+
+  it("omits monitors with the same goal ID but a different origin session", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Get the refund confirmed.",
+    });
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [
+        buildMonitor({
+          goal: { id: goal.id, objective: goal.objective },
+          originSessionKey: "agent:main:telegram:direct:999",
+        }),
+      ],
+    });
+
+    const get = createGetGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const snapshot = await get.execute?.("call-get-other-origin", {});
+
+    expect(snapshot?.details).toMatchObject({ status: "found" });
+    expect(snapshot?.details).not.toHaveProperty("waitingOnMonitors");
+  });
+
+  it("resolves origin-scope waits when get_goal is called from a monitor session", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Get the refund confirmed.",
+    });
+    const monitorSessionKey = "agent:main:monitor:monitor-origin";
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [
+        buildMonitor({
+          monitorId: "monitor-origin",
+          monitorSessionKey,
+          goal: { id: goal.id, objective: goal.objective },
+          status: "active",
+          updatedAtMs: 40,
+        }),
+      ],
+    });
+
+    const get = createGetGoalTool({
+      agentSessionKey: monitorSessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const snapshot = await get.execute?.("call-get-monitor-session", {});
+
+    expect(snapshot?.details).toMatchObject({
+      status: "found",
+      goal: { id: goal.id, objective: goal.objective },
+      waitingOnMonitors: [{ monitorId: "monitor-origin", updatedAtMs: 40 }],
+    });
+  });
+
+  it("keeps missing goals unchanged without empty waiting metadata", async () => {
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [buildMonitor({ monitorId: "monitor-without-goal-session" })],
+    });
+
+    const get = createGetGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const snapshot = await get.execute?.("call-get-missing", {});
+
+    expect(snapshot?.details).toEqual({ status: "missing" });
   });
 });

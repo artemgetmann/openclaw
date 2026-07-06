@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { clearCliSessionId } from "../../agents/cli-session.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -434,8 +434,12 @@ export async function runReplyAgent(params: {
     }
     const contextTokenBudget =
       agentCfgContextTokens ??
+      resolveContextTokensForModel({
+        cfg,
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+      }) ??
       activeSessionEntry?.contextTokens ??
-      lookupContextTokens(followupRun.run.model) ??
       DEFAULT_CONTEXT_TOKENS;
     const precheck = evaluateReplyHardReservePrecheck({
       provider: followupRun.run.provider,
@@ -701,6 +705,11 @@ export async function runReplyAgent(params: {
       : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
+      resolveContextTokensForModel({
+        cfg,
+        provider: providerUsed,
+        model: modelUsed,
+      }) ??
       lookupContextTokens(modelUsed) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;

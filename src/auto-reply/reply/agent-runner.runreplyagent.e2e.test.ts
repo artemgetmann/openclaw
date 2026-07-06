@@ -1340,6 +1340,85 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("uses the active Codex GPT-5.5 budget instead of stale session context during hard-reserve preflight", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "codex-gpt55-session";
+      const sessionKey = "agent:main:telegram:group:-1003783709877:topic:17730";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "openai-codex": { command: "codex" },
+            },
+            compaction: {
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        // This stale 200k value comes from older/default session metadata. It
+        // must not override the active openai-codex/gpt-5.5 effective window.
+        contextTokens: 200_000,
+        totalTokens: 190_000,
+        inputTokens: 238_001,
+        outputTokens: 12,
+        totalTokensFresh: true,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "compacted Sveta workflow transcript", "utf-8");
+
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "CONTEXT_BUDGET_OK" }],
+        meta: {
+          agentMeta: {
+            model: "gpt-5.5",
+            provider: "openai-codex",
+            usage: { input: 181_831, output: 12, total: 190_547 },
+          },
+        },
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        runOverrides: {
+          agentId: "main",
+          agentDir: stateDir,
+          sessionId,
+          sessionFile: transcriptPath,
+          messageProvider: "telegram",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          config: cfg,
+          persistedPromptTokens: 238_001,
+        },
+      });
+      const res = await run();
+
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(res).toMatchObject({ text: "CONTEXT_BUDGET_OK" });
+      // The precheck must use 258400 immediately, even though the stale
+      // caller-owned session object still says 200000. Persistence below keeps
+      // the next real Telegram turn from inheriting that old budget.
+      expect(sessionStore[sessionKey].contextTokens).toBe(200_000);
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted[sessionKey].contextTokens).toBe(258_400);
+    });
+  });
+
   it("surfaces hard-reserve overflow without resetting when memory flush cannot recover", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "b17264e8-4cdf-45bc-9e95-d3ae455f50e9";

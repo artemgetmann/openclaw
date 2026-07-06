@@ -112,8 +112,9 @@ class FakeReadClient:
   async def disconnect(self) -> None:
     self.disconnected = True
 
-  async def get_messages(self, chat, *, limit: int):
-    self.get_messages_calls.append({"chat": chat, "limit": limit})
+  async def get_messages(self, chat, **kwargs):
+    limit = int(kwargs.get("limit") or 0)
+    self.get_messages_calls.append({"chat": chat, **kwargs})
     return self.messages[:limit]
 
 
@@ -550,6 +551,53 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake_client.get_messages_calls, [{"chat": "@jarvis_tester_1_bot", "limit": 200}])
     self.assertEqual(len(emitted["messages"]), 1)
     self.assertEqual(emitted["messages"][0]["text"], "proof matched")
+
+  async def test_run_read_pushes_message_id_bounds_into_telethon_query(self) -> None:
+    fake_client = FakeReadClient([
+      SimpleNamespace(
+        chat = SimpleNamespace(id = 10, title = None, username = "jarvis_tester_1_bot"),
+        chat_id = 10,
+        date = None,
+        direct_messages_topic = None,
+        id = 150,
+        message = "bounded",
+        out = False,
+        reply_to = None,
+        sender_id = 102,
+      ),
+    ])
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_read(
+          argparse.Namespace(
+            after_id = 100,
+            before_id = 200,
+            chat = "@jarvis_tester_1_bot",
+            contains = "",
+            limit = 5,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(
+      fake_client.get_messages_calls,
+      [{"chat": "@jarvis_tester_1_bot", "limit": 5, "min_id": 100, "max_id": 200}],
+    )
+    self.assertEqual(len(emitted["messages"]), 1)
+    self.assertEqual(emitted["messages"][0]["message_id"], 150)
 
   async def test_run_download_saves_message_media_to_deterministic_output_path(self) -> None:
     message = build_fake_media_message(media_kind = "voice", message_id = 52830)

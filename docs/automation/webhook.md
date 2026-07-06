@@ -162,6 +162,61 @@ Effect:
 - Derives an idempotency key from account/thread/message id when the request does not provide one.
 - Wakes matching durable monitors only; it does not spawn the Gmail agent-summary hook.
 
+### `POST /hooks/telegram-user-monitor-event`
+
+Accepts Telegram-as-me local-listener payloads and routes them through the same
+durable monitor event path as `/hooks/monitor-event`.
+
+Payload example:
+
+```json
+{
+  "accountId": "personal",
+  "chat": "@jarvis_tester_1_bot",
+  "message": {
+    "chat_id": 10,
+    "chat_username": "jarvis_tester_1_bot",
+    "direct_messages_topic": { "topic_id": 7001 },
+    "message_id": 123,
+    "out": false,
+    "sender_id": 456,
+    "text": "Hi"
+  }
+}
+```
+
+Effect:
+
+- Normalizes to `triggerKind: "local_listener"`, `sourceType: "telegram-user"`,
+  and stable `sourceTarget` routing keys such as `{ chat, accountId, threadAnchor }`.
+- Keeps inbound message text and sender metadata in `evidence`; the event body
+  is not treated as instruction authority.
+- Derives an idempotency key from account/chat/thread/message id when the
+  request does not provide one.
+- Wakes matching durable monitors only; it does not send Telegram messages.
+
+For terminal-first listener proof without dispatching to the gateway, use:
+
+```bash
+openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot --after-id 123 --json
+```
+
+For durable goal-bound Telegram-as-me waits, use the cursor poller. It reads
+eligible monitor records, stores a cursor beside the monitor store, and only
+advances an event cursor after hook dispatch succeeds:
+
+```bash
+openclaw telegram-user monitor-poll \
+  --cron-store /path/to/cron.json \
+  --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event \
+  --hook-token "$OPENCLAW_GATEWAY_TOKEN" \
+  --json
+```
+
+If a monitor has no explicit cursor seed such as `afterId`, the first poll
+checkpoints the current visible Telegram history and emits no wake. This avoids
+turning old chat history into a fresh monitor event when the listener starts.
+
 ## Session key policy (breaking change)
 
 `/hooks/agent` payload `sessionKey` overrides are disabled by default.

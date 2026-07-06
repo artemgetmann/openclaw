@@ -60,6 +60,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
+import { buildTelegramRichMessage } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -516,6 +517,9 @@ export const dispatchTelegramMessage = async ({
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode }),
     parseMode: "HTML" as const,
+    // Keep the legacy HTML text for fallback, but let Bot API 10.1 clients
+    // render streamed previews/final edits as native rich-message blocks.
+    richMessage: buildTelegramRichMessage({ text, textMode: "markdown" }, { tableMode }),
   });
   latencyTrace?.mark("route_account_session_selected", {
     accountId: route.accountId,
@@ -1895,6 +1899,8 @@ export const dispatchTelegramMessage = async ({
         accountId: route.accountId,
         linkPreview: telegramCfg.linkPreview,
         buttons: previewButtons,
+        richMessages: telegramCfg.richMessages,
+        tableMode,
       });
       logPreviewLedger({
         lane: laneName,

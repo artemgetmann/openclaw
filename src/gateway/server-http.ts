@@ -47,6 +47,7 @@ import {
   resolveHookIdempotencyKey,
   normalizeGmailMonitorEventPayload,
   normalizeMonitorEventPayload,
+  normalizeTelegramUserMonitorEventPayload,
   normalizeWakePayload,
   readJsonBody,
   normalizeHookDispatchSessionKey,
@@ -659,6 +660,7 @@ export function createHooksRequestHandler(
           sourceType: normalized.value.sourceType,
           sourceTarget: normalized.value.sourceTarget,
           eventType: normalized.value.eventType ?? null,
+          monitorId: normalized.value.monitorId ?? null,
         },
       });
       const cachedResponse = resolveCachedHookResponse(replayKey, now);
@@ -698,6 +700,7 @@ export function createHooksRequestHandler(
           sourceType: normalized.value.sourceType,
           sourceTarget: normalized.value.sourceTarget,
           eventType: normalized.value.eventType ?? null,
+          monitorId: normalized.value.monitorId ?? null,
         },
       });
       const cachedResponse = resolveCachedHookResponse(replayKey, now);
@@ -713,6 +716,51 @@ export function createHooksRequestHandler(
       } catch (err) {
         logHooks.warn(`hook gmail-monitor-event failed: ${String(err)}`);
         sendJson(res, 503, { ok: false, error: "gmail monitor event dispatch unavailable" });
+      }
+      return true;
+    }
+
+    if (subPath === "telegram-user-monitor-event") {
+      const normalized = normalizeTelegramUserMonitorEventPayload(
+        payload as Record<string, unknown>,
+        {
+          idempotencyKey,
+          nowMs: now,
+        },
+      );
+      if (!normalized.ok) {
+        sendJson(res, 400, { ok: false, error: normalized.error });
+        return true;
+      }
+      const replayIdempotencyKey = normalized.value.idempotencyKey ?? idempotencyKey;
+      const replayKey = buildHookReplayCacheKey({
+        pathKey: "telegram-user-monitor-event",
+        token,
+        idempotencyKey: replayIdempotencyKey,
+        dispatchScope: {
+          triggerKind: normalized.value.triggerKind,
+          sourceType: normalized.value.sourceType,
+          sourceTarget: normalized.value.sourceTarget,
+          eventType: normalized.value.eventType ?? null,
+          monitorId: normalized.value.monitorId ?? null,
+        },
+      });
+      const cachedResponse = resolveCachedHookResponse(replayKey, now);
+      if (cachedResponse) {
+        sendJson(res, 200, { ok: true, ...cachedResponse, replayed: true });
+        return true;
+      }
+
+      try {
+        const result = await dispatchMonitorEventHook(normalized.value);
+        rememberHookResponse(replayKey, result, now);
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        logHooks.warn(`hook telegram-user-monitor-event failed: ${String(err)}`);
+        sendJson(res, 503, {
+          ok: false,
+          error: "telegram-user monitor event dispatch unavailable",
+        });
       }
       return true;
     }

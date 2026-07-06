@@ -286,5 +286,14 @@ screenshots are useful for quick checks, but Peekaboo live capture can produce
 black frames even when native stills and video are usable. If you do use
 `peekaboo capture live --mode screen --duration <seconds> --video-out <path>
 --path <frames-dir> --json`, inspect the contact sheet before trusting it. Do
-not use Computer Use unless the local `cua-guard acquire` check passes in the
-same process.
+not treat Peekaboo-only output as Jarvis GUI Control proof.
+
+For GUI operation, use Jarvis GUI Control:
+
+```bash
+pnpm openclaw:local gui-control observe --runtime open-computer-use --app Telegram --json
+```
+
+Do not acquire `~/.codex/bin/cua-guard` for Jarvis GUI Control. That guard is
+only for Codex-native Computer Use, and a Codex lease failure must not be
+reported as a Jarvis GUI Control blocker.

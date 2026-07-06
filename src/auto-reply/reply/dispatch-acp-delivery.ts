@@ -15,7 +15,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
-import { buildFinalTtsCaptionPreview } from "./tts-caption-preview.js";
+import { buildFinalTtsCaptionPreview, buildFinalTtsSpokenPreview } from "./tts-caption-preview.js";
 
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
@@ -328,11 +328,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
+    const ttsInputPayload =
+      kind === "final" && typeof payload.text === "string"
+        ? { ...payload, text: buildFinalTtsSpokenPreview(payload.text) ?? payload.text }
+        : payload;
     const ttsPayload =
       kind !== "final" || isSourcePreviewToolPayload(payload)
         ? payload
         : await maybeApplyTtsToPayload({
-            payload,
+            payload: ttsInputPayload,
             cfg: params.cfg,
             channel: params.ttsChannel,
             kind,
@@ -372,8 +376,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     logVerbose(
       `dispatch-acp: final TTS supplement synthesis start textLength=${finalText.length} channel=${params.ttsChannel ?? "unknown"}`,
     );
+    const spokenFinalText = buildFinalTtsSpokenPreview(finalText) ?? finalText;
     const ttsPayload = await maybeApplyTtsToPayload({
-      payload: { text: finalText },
+      payload: { text: spokenFinalText },
       cfg: params.cfg,
       channel: params.ttsChannel,
       kind: "final",
