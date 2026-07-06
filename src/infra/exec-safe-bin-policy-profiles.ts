@@ -357,6 +357,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--unread",
       "--version",
       "--voice",
+      "--watch",
     ],
     allowedValueFlags: [
       "--after-id",
@@ -375,6 +376,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--media",
       "--message",
       "--monitor-store",
+      "--max-runs",
       "--phone",
       "--poll-interval-ms",
       "--reply-to",
