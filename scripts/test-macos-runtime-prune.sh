@@ -84,7 +84,72 @@ test_fails_when_required_macos_triplet_missing() {
   pass "fails when required macOS Koffi triplet is missing"
 }
 
+test_prunes_node_modules_development_payloads() {
+  local node_modules_dir="$TMP_DIR/dev-payload-node-modules"
+
+  mkdir -p "$node_modules_dir/pkg/docs" \
+    "$node_modules_dir/pkg/src" \
+    "$node_modules_dir/pkg/test" \
+    "$node_modules_dir/pkg/examples" \
+    "$node_modules_dir/pkg/benchmarks"
+  printf 'runtime code\n' >"$node_modules_dir/pkg/src/index.js"
+  printf 'metadata\n' >"$node_modules_dir/pkg/package.json"
+  printf 'notes\n' >"$node_modules_dir/pkg/docs/readme.md"
+  printf 'spec\n' >"$node_modules_dir/pkg/test/spec.js"
+  printf 'sample\n' >"$node_modules_dir/pkg/examples/sample.js"
+  printf 'bench\n' >"$node_modules_dir/pkg/benchmarks/bench.js"
+
+  openclaw_prune_bundled_node_modules_development_payloads "$node_modules_dir"
+
+  [[ -f "$node_modules_dir/pkg/src/index.js" ]] || fail "runtime source was pruned"
+  [[ -f "$node_modules_dir/pkg/package.json" ]] || fail "package metadata was pruned"
+  [[ ! -e "$node_modules_dir/pkg/docs" ]] || fail "docs payload was kept"
+  [[ ! -e "$node_modules_dir/pkg/test" ]] || fail "test payload was kept"
+  [[ ! -e "$node_modules_dir/pkg/examples" ]] || fail "examples payload was kept"
+  [[ ! -e "$node_modules_dir/pkg/benchmarks" ]] || fail "benchmarks payload was kept"
+
+  pass "prunes node_modules development payloads"
+}
+
+test_dedupes_identical_plugin_sdk_assets() {
+  local dist_dir="$TMP_DIR/duplicate-assets-dist"
+
+  mkdir -p "$dist_dir/assets/nested" "$dist_dir/plugin-sdk/assets/nested"
+  printf 'native bytes\n' >"$dist_dir/assets/matrix-sdk-crypto.darwin-arm64.node"
+  printf 'native bytes\n' >"$dist_dir/plugin-sdk/assets/matrix-sdk-crypto.darwin-arm64.node"
+  printf 'asset\n' >"$dist_dir/assets/nested/chunk.js"
+  printf 'asset\n' >"$dist_dir/plugin-sdk/assets/nested/chunk.js"
+
+  openclaw_dedupe_bundled_dist_assets "$dist_dir"
+
+  [[ -L "$dist_dir/plugin-sdk/assets" ]] || fail "plugin SDK assets were not replaced by a symlink"
+  [[ "$(readlink "$dist_dir/plugin-sdk/assets")" == "../assets" ]] || fail "plugin SDK assets symlink target is wrong"
+  [[ -f "$dist_dir/plugin-sdk/assets/nested/chunk.js" ]] || fail "symlinked plugin SDK asset is unreadable"
+  [[ -f "$dist_dir/assets/matrix-sdk-crypto.darwin-arm64.node" ]] || fail "canonical asset was pruned"
+
+  pass "dedupes identical plugin SDK assets"
+}
+
+test_keeps_different_plugin_sdk_assets() {
+  local dist_dir="$TMP_DIR/different-assets-dist"
+
+  mkdir -p "$dist_dir/assets" "$dist_dir/plugin-sdk/assets"
+  printf 'canonical\n' >"$dist_dir/assets/chunk.js"
+  printf 'plugin-specific\n' >"$dist_dir/plugin-sdk/assets/chunk.js"
+
+  openclaw_dedupe_bundled_dist_assets "$dist_dir"
+
+  [[ ! -L "$dist_dir/plugin-sdk/assets" ]] || fail "different plugin SDK assets were symlinked"
+  [[ -f "$dist_dir/plugin-sdk/assets/chunk.js" ]] || fail "different plugin SDK asset was pruned"
+  [[ "$(cat "$dist_dir/plugin-sdk/assets/chunk.js")" == "plugin-specific" ]] || fail "different plugin SDK asset content changed"
+
+  pass "keeps different plugin SDK assets"
+}
+
 test_prunes_only_non_macos_triplets
 test_noops_when_koffi_absent
 test_prunes_pnpm_virtual_store_koffi
 test_fails_when_required_macos_triplet_missing
+test_prunes_node_modules_development_payloads
+test_dedupes_identical_plugin_sdk_assets
+test_keeps_different_plugin_sdk_assets

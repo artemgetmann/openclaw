@@ -37,6 +37,69 @@ openclaw_prune_bundled_koffi_non_macos() {
   done
 }
 
+openclaw_prune_bundled_node_modules_development_payloads() {
+  local node_modules_dir="$1"
+
+  if [[ ! -d "$node_modules_dir" ]]; then
+    return 0
+  fi
+
+  local removed_count=0
+  local removed_kib=0
+  local candidate=""
+
+  # Production npm packages often ship tests, examples, docs, and benchmarks.
+  # Jarvis does not execute those paths at runtime, and this function only runs
+  # against already-materialized bundled node_modules trees inside the app. Keep
+  # the prune narrow so package code, native binaries, types, and package
+  # metadata remain intact.
+  while IFS= read -r -d '' candidate; do
+    local candidate_kib
+    candidate_kib="$(du -sk "$candidate" 2>/dev/null | awk '{print $1}')"
+    removed_kib=$((removed_kib + ${candidate_kib:-0}))
+    rm -rf "$candidate"
+    removed_count=$((removed_count + 1))
+  done < <(find "$node_modules_dir" -type d \( \
+    -name docs -o \
+    -name doc -o \
+    -name test -o \
+    -name tests -o \
+    -name __tests__ -o \
+    -name example -o \
+    -name examples -o \
+    -name benchmark -o \
+    -name benchmarks \
+  \) -prune -print0)
+
+  if [[ "$removed_count" -gt 0 ]]; then
+    echo "Pruned bundled node_modules development payloads: ${removed_count} directories, ${removed_kib} KiB ($node_modules_dir)"
+  fi
+}
+
+openclaw_dedupe_bundled_dist_assets() {
+  local dist_dir="$1"
+  local root_assets="$dist_dir/assets"
+  local plugin_sdk_assets="$dist_dir/plugin-sdk/assets"
+
+  if [[ ! -d "$root_assets" || ! -d "$plugin_sdk_assets" ]]; then
+    return 0
+  fi
+
+  # The plugin SDK build can carry a second copy of the same emitted assets.
+  # Keep the compatibility path as a symlink so any runtime code that resolves
+  # dist/plugin-sdk/assets still reaches the canonical dist/assets payload.
+  if ! diff -qr "$root_assets" "$plugin_sdk_assets" >/dev/null; then
+    echo "WARN: bundled dist/plugin-sdk/assets differs from dist/assets; keeping both asset trees." >&2
+    return 0
+  fi
+
+  local asset_kib
+  asset_kib="$(du -sk "$plugin_sdk_assets" 2>/dev/null | awk '{print $1}')"
+  rm -rf "$plugin_sdk_assets"
+  ln -s ../assets "$plugin_sdk_assets"
+  echo "Pruned duplicate bundled plugin SDK assets: ${asset_kib:-unknown} KiB ($plugin_sdk_assets -> ../assets)"
+}
+
 openclaw_prune_koffi_build_dir_non_macos() {
   local koffi_build_dir="$1"
 
