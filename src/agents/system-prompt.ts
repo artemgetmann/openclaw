@@ -42,8 +42,9 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
+    "- Treat <available_skills> as the primary fast path. If the catalog is truncated/compact, or the user explicitly names a missing skill/capability, use targeted skill discovery such as `openclaw skills check --json` before concluding no matching skill exists or proceeding generically.",
     trimmed,
-    "- When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+    "- When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; use the prompt inventory first, then targeted skill discovery only when the prompt is incomplete or the user named an absent capability.",
     "",
   ];
 }

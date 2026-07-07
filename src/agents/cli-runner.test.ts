@@ -653,7 +653,7 @@ describe("runCliAgent with process supervisor", () => {
         "Before saying a skill is missing or unavailable, inspect <available_skills> in this prompt.",
       );
       expect(systemPrompt).toContain(
-        "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
+        "If the user asks whether a skill exists, answer from <available_skills> first. If the catalog is truncated/compact or the user explicitly names a missing skill/capability, run targeted OpenClaw skill discovery before concluding it is absent; do not rely on Claude Code's native /skill registry.",
       );
       expect(systemPrompt).toContain(
         "Use the listed <location> path exactly. Do not construct a fallback path like workspace/skills/<name>/SKILL.md",
@@ -662,7 +662,7 @@ describe("runCliAgent with process supervisor", () => {
         "preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH",
       );
       expect(systemPrompt).toContain(
-        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; use the prompt inventory first, then targeted skill discovery only when the prompt is incomplete or the user named an absent capability.",
       );
       expect(systemPrompt).toContain("<available_skills>");
       expect(systemPrompt).toContain("reddit");
@@ -746,7 +746,7 @@ describe("runCliAgent with process supervisor", () => {
         "preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH",
       );
       expect(promptArg).toContain(
-        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; use the prompt inventory first, then targeted skill discovery only when the prompt is incomplete or the user named an absent capability.",
       );
       expect(promptArg).toContain("<available_skills>");
       expect(promptArg).toContain("<name>reddit</name>");

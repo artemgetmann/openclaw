@@ -4,7 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
+import {
+  buildWorkspaceSkillSnapshot,
+  buildWorkspaceSkillsPrompt,
+  resolveSkillsPromptForRun,
+} from "./skills.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 let truncationWorkspaceTemplateDir = "";
@@ -196,6 +200,121 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toContain("⚠️ Skills truncated");
     expect(snapshot.prompt.length).toBeLessThan(2000);
+  });
+
+  it("uses compact catalog before dropping skills when full descriptions exceed char budget", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+
+    for (let i = 0; i < 12; i += 1) {
+      const name = `verbose-skill-${String(i).padStart(2, "0")}`;
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: `Verbose skill ${i}. ${"routing text ".repeat(80)}`,
+      });
+    }
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 12,
+            maxSkillsPromptChars: 3_200,
+          },
+        },
+      },
+    });
+
+    expect(snapshot.prompt).toContain("compact format");
+    expect(snapshot.prompt).toContain("<name>verbose-skill-11</name>");
+    expect(snapshot.prompt).not.toContain("Verbose skill 11");
+  });
+
+  it("prioritizes a user-mentioned Build in Public skill before prompt truncation", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const managedDir = path.join(workspaceDir, ".managed");
+
+    for (let i = 0; i < 80; i += 1) {
+      const name = `aaa-generic-${String(i).padStart(2, "0")}`;
+      await writeSkill({
+        dir: path.join(managedDir, name),
+        name,
+        description: "Generic broad helper. " + "x".repeat(250),
+      });
+    }
+    await writeSkill({
+      dir: path.join(managedDir, "twitter-post"),
+      name: "twitter-post",
+      description: "Draft and post to Twitter/X with correct audience and composer behavior.",
+    });
+    await writeSkill({
+      dir: path.join(managedDir, "x-build-in-public-post"),
+      name: "x-build-in-public-post",
+      description:
+        "Post to the X/Twitter Build in Public community audience. Use when the user mentions Build in Public.",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 20,
+            maxSkillsPromptChars: 3_000,
+          },
+        },
+      },
+      userPrompt: "Use the Build in Public/Twitter/personal brand/tone skills and post this on X.",
+    });
+
+    expect(snapshot.prompt).toContain("<name>x-build-in-public-post</name>");
+    expect(snapshot.prompt).toContain("<name>twitter-post</name>");
+  });
+
+  it("reranks stored skill snapshots for the current user turn", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const managedDir = path.join(workspaceDir, ".managed");
+
+    for (let i = 0; i < 50; i += 1) {
+      const name = `aaa-generic-${String(i).padStart(2, "0")}`;
+      await writeSkill({
+        dir: path.join(managedDir, name),
+        name,
+        description: "Generic helper. " + "x".repeat(200),
+      });
+    }
+    await writeSkill({
+      dir: path.join(managedDir, "x-build-in-public-post"),
+      name: "x-build-in-public-post",
+      description: "Post to the X/Twitter Build in Public community audience.",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 10,
+            maxSkillsPromptChars: 2_000,
+          },
+        },
+      },
+    });
+    expect(snapshot.prompt).not.toContain("<name>x-build-in-public-post</name>");
+
+    const rerankedPrompt = resolveSkillsPromptForRun({
+      skillsSnapshot: snapshot,
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 10,
+            maxSkillsPromptChars: 2_000,
+          },
+        },
+      },
+      workspaceDir,
+      userPrompt: "Use the Build in Public skill for an X post.",
+    });
+
+    expect(rerankedPrompt).toContain("<name>x-build-in-public-post</name>");
   });
 
   it("keeps workspace skills ahead of bundled skills when prompt limits truncate", async () => {

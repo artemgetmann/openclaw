@@ -113,7 +113,7 @@ const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
 const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
-const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
+const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 45_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 
 function resolvePromptSourcePriority(source?: string): number {
@@ -631,42 +631,230 @@ function loadSkillEntries(
   return skillEntries;
 }
 
-function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
-  skillsForPrompt: Skill[];
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/**
+ * Compact skill catalog: name + location only. This preserves awareness of
+ * late-catalog skills when descriptions make the full inventory too large.
+ */
+export function formatSkillsCompact(skills: Skill[]): string {
+  if (skills.length === 0) {
+    return "";
+  }
+  const lines = [
+    "\n\nThe following skills provide specialized instructions for specific tasks.",
+    "Use the read tool to load a skill's file when the task matches its name.",
+    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+    "",
+    "<available_skills>",
+  ];
+  for (const skill of skills) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}
+
+function buildSkillsLimitNote(params: {
   truncated: boolean;
-  truncatedReason: "count" | "chars" | null;
+  compact: boolean;
+  included: number;
+  total: number;
+}): string {
+  if (params.truncated) {
+    return `⚠️ Skills truncated: included ${params.included} of ${params.total}${params.compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`;
+  }
+  if (params.compact) {
+    return "⚠️ Skills catalog using compact format (descriptions omitted). Run `openclaw skills check` to audit.";
+  }
+  return "";
+}
+
+function buildRenderedSkillsPrompt(params: {
+  remoteNote?: string;
+  skills: Skill[];
+  total: number;
+  compact: boolean;
+}): string {
+  const truncated = params.skills.length < params.total;
+  const limitNote = buildSkillsLimitNote({
+    truncated,
+    compact: params.compact,
+    included: params.skills.length,
+    total: params.total,
+  });
+  const catalog = params.compact
+    ? formatSkillsCompact(params.skills)
+    : formatSkillsForPrompt(params.skills);
+  return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
+}
+
+function normalizeSkillMatchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectSkillMatchTerms(skill: Skill): string[] {
+  const name = skill.name ?? "";
+  const description = skill.description ?? "";
+  const nameWords = normalizeSkillMatchText(name).split(" ").filter(Boolean);
+  const terms = new Set<string>([
+    normalizeSkillMatchText(name),
+    normalizeSkillMatchText(name.replace(/[-_]+/g, " ")),
+    normalizeSkillMatchText(description),
+    ...nameWords,
+  ]);
+  if (name.includes("x-")) {
+    terms.add(normalizeSkillMatchText(name.replace(/^x-/, "twitter-")));
+  }
+  if (name.includes("twitter")) {
+    terms.add(normalizeSkillMatchText(name.replace(/twitter/g, "x")));
+  }
+  return Array.from(terms).filter((term) => term.length >= 2);
+}
+
+function scoreSkillForUserPrompt(skill: Skill, userPrompt?: string): number {
+  const query = normalizeSkillMatchText(userPrompt ?? "");
+  if (!query) {
+    return 0;
+  }
+
+  let score = 0;
+  const normalizedName = normalizeSkillMatchText(skill.name ?? "");
+  const normalizedDescription = normalizeSkillMatchText(skill.description ?? "");
+  const nameWords = normalizedName.split(" ").filter(Boolean);
+  const queryWords = new Set(query.split(" ").filter((word) => word.length >= 3));
+
+  if (normalizedName && query.includes(normalizedName)) {
+    score += 1_000;
+  }
+  if (normalizedName && normalizedName.split(" ").every((word) => queryWords.has(word))) {
+    score += 500;
+  }
+  for (const word of nameWords) {
+    if (word.length >= 3 && queryWords.has(word)) {
+      score += 120;
+    }
+  }
+
+  const terms = collectSkillMatchTerms(skill);
+  for (const term of terms) {
+    if (term.length >= 4 && query.includes(term)) {
+      score += term === normalizedName ? 400 : 160;
+    }
+  }
+
+  for (const word of queryWords) {
+    if (normalizedDescription.includes(word)) {
+      score += 12;
+    }
+  }
+
+  const externalMutationWords = ["post", "send", "reply", "publish", "tweet", "dm", "message"];
+  const looksExternalMutation = externalMutationWords.some((word) => queryWords.has(word));
+  if (looksExternalMutation) {
+    const routingText = `${normalizedName} ${normalizedDescription}`;
+    if (/\b(post|send|reply|publish|tweet|dm|message|twitter|x)\b/.test(routingText)) {
+      score += 80;
+    }
+  }
+
+  // Common user phrasing: "Build in Public" should lift x/twitter community skills.
+  if (query.includes("build in public")) {
+    const routingText = `${normalizedName} ${normalizedDescription}`;
+    if (routingText.includes("build in public")) {
+      score += 800;
+    }
+    if (routingText.includes("twitter") || /\bx\b/.test(routingText)) {
+      score += 120;
+    }
+  }
+
+  return score;
+}
+
+function rankSkillsForPromptByUserPrompt(skills: Skill[], userPrompt?: string): Skill[] {
+  const query = userPrompt?.trim();
+  if (!query) {
+    return skills;
+  }
+  return skills
+    .map((skill, index) => ({ skill, index, score: scoreSkillForUserPrompt(skill, query) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return a.index - b.index;
+    })
+    .map(({ skill }) => skill);
+}
+
+function applySkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  remoteNote?: string;
+}): {
+  skillsForPrompt: Skill[];
+  compact: boolean;
 } {
   const limits = resolveSkillsLimits(params.config);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
-  let truncated = total > byCount.length;
-  let truncatedReason: "count" | "chars" | null = truncated ? "count" : null;
+  let compact = false;
 
-  const fits = (skills: Skill[]): boolean => {
-    const block = formatSkillsForPrompt(skills);
-    return block.length <= limits.maxSkillsPromptChars;
-  };
+  const fitsFull = (skills: Skill[]): boolean =>
+    buildRenderedSkillsPrompt({
+      remoteNote: params.remoteNote,
+      skills,
+      total,
+      compact: false,
+    }).length <= limits.maxSkillsPromptChars;
 
-  if (!fits(skillsForPrompt)) {
-    // Binary search the largest prefix that fits in the char budget.
-    let lo = 0;
-    let hi = skillsForPrompt.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fits(skillsForPrompt.slice(0, mid))) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
+  const fitsCompact = (skills: Skill[]): boolean =>
+    buildRenderedSkillsPrompt({
+      remoteNote: params.remoteNote,
+      skills,
+      total,
+      compact: true,
+    }).length <= limits.maxSkillsPromptChars;
+
+  if (!fitsFull(skillsForPrompt)) {
+    // Full format exceeds budget. Try compact (name + location, no description)
+    // to preserve skill awareness before dropping entries.
+    if (fitsCompact(skillsForPrompt)) {
+      compact = true;
+    } else {
+      compact = true;
+      let lo = 0;
+      let hi = skillsForPrompt.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fitsCompact(skillsForPrompt.slice(0, mid))) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
       }
+      skillsForPrompt = skillsForPrompt.slice(0, lo);
     }
-    skillsForPrompt = skillsForPrompt.slice(0, lo);
-    truncated = true;
-    truncatedReason = "chars";
   }
 
-  return { skillsForPrompt, truncated, truncatedReason };
+  return { skillsForPrompt, compact };
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -704,6 +892,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** Current user turn text, used only to rank prompt-visible skills before truncation. */
+  userPrompt?: string;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -727,20 +917,20 @@ function resolveWorkspaceSkillPromptState(
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config);
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
-    skills: resolvedSkills,
+  const promptSkills = compactSkillPaths(
+    rankSkillsForPromptByUserPrompt(resolvedSkills, opts?.userPrompt),
+  );
+  const { skillsForPrompt, compact } = applySkillsPromptLimits({
+    skills: promptSkills,
     config: opts?.config,
-  });
-  const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
-    : "";
-  const prompt = [
     remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  });
+  const prompt = buildRenderedSkillsPrompt({
+    remoteNote,
+    skills: skillsForPrompt,
+    total: resolvedSkills.length,
+    compact,
+  });
   return { eligible, prompt, resolvedSkills };
 }
 
@@ -749,7 +939,23 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  userPrompt?: string;
 }): string {
+  const snapshotSkills = params.skillsSnapshot?.resolvedSkills;
+  if (snapshotSkills && snapshotSkills.length > 0 && params.userPrompt?.trim()) {
+    const rankedSkills = compactSkillPaths(
+      rankSkillsForPromptByUserPrompt(snapshotSkills, params.userPrompt),
+    );
+    const { skillsForPrompt, compact } = applySkillsPromptLimits({
+      skills: rankedSkills,
+      config: params.config,
+    });
+    return buildRenderedSkillsPrompt({
+      skills: skillsForPrompt,
+      total: snapshotSkills.length,
+      compact,
+    });
+  }
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
@@ -758,6 +964,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      userPrompt: params.userPrompt,
     });
     return prompt.trim() ? prompt : "";
   }
