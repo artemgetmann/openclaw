@@ -294,3 +294,51 @@ export async function resolveNodeProgramArguments(params: {
     nodePath: params.nodePath,
   });
 }
+
+export async function resolveTelegramMonitorProgramArguments(params: {
+  cronStore?: string;
+  cursorStore?: string;
+  envFile?: string;
+  hookUrl: string;
+  intervalMs: number;
+  limit?: number;
+  monitorStore?: string;
+  session?: string;
+  dev?: boolean;
+  runtime?: GatewayRuntimePreference;
+  nodePath?: string;
+}): Promise<GatewayProgramArgs> {
+  const args = [
+    "telegram-user",
+    "monitor-poll",
+    "--watch",
+    "--poll-interval-ms",
+    String(params.intervalMs),
+    "--hook-url",
+    params.hookUrl,
+  ];
+  if (params.cronStore) {
+    args.push("--cron-store", params.cronStore);
+  }
+  if (params.monitorStore) {
+    args.push("--monitor-store", params.monitorStore);
+  }
+  if (params.cursorStore) {
+    args.push("--cursor-store", params.cursorStore);
+  }
+  if (params.envFile) {
+    args.push("--env-file", params.envFile);
+  }
+  if (params.limit !== undefined) {
+    args.push("--limit", String(params.limit));
+  }
+  if (params.session) {
+    args.push("--session", params.session);
+  }
+  return resolveCliProgramArguments({
+    args,
+    dev: params.dev,
+    runtime: params.runtime,
+    nodePath: params.nodePath,
+  });
+}

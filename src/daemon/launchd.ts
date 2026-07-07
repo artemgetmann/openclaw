@@ -7,6 +7,7 @@ import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { resolveCanonicalMainRepoRoot } from "../infra/telegram-live-token-claims.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_SERVICE_KIND,
   GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
@@ -67,6 +68,11 @@ function isPublicJarvisLaunchAgentTarget(env: GatewayServiceEnv): boolean {
     return explicitLabel === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL;
   }
   return false;
+}
+
+function isGatewayServiceKind(env: GatewayServiceEnv): boolean {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
 }
 
 function isPathInside(root: string, candidate: string): boolean {
@@ -964,9 +970,11 @@ export async function restartLaunchAgent({
     return { outcome: "completed" };
   }
 
-  const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
-  if (cleanupPort !== null) {
-    cleanStaleGatewayProcessesSync(cleanupPort);
+  if (isGatewayServiceKind(serviceEnv)) {
+    const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
+    if (cleanupPort !== null) {
+      cleanStaleGatewayProcessesSync(cleanupPort);
+    }
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);

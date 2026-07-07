@@ -20,6 +20,7 @@ import {
   buildTelegramUserMonitorEventEnvelope,
   pickTelegramUserMonitorMessage,
 } from "../telegram-user/monitor-event.js";
+import { resolveLocalTelegramMonitorHookUrl } from "../telegram-user/monitor-hook-url.js";
 import {
   pollTelegramUserMonitorEvents,
   type TelegramUserMonitorPollDispatchContext,
@@ -329,7 +330,7 @@ async function postTelegramUserMonitorEventHook(
   opts: Record<string, unknown>,
   hookUrl: string,
 ) {
-  const hookToken = readStringOpt(opts, "hookToken");
+  const hookToken = readStringOpt(opts, "hookToken") ?? process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   const response = await fetch(hookUrl, {
     method: "POST",
     headers: {
@@ -355,29 +356,6 @@ async function postTelegramUserMonitorEventHook(
   } catch {
     return body;
   }
-}
-
-function resolveLocalTelegramMonitorHookUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch (err) {
-    throw new Error(`Telegram user monitor-poll requires a valid --hook-url: ${String(err)}`, {
-      cause: err,
-    });
-  }
-  const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || !loopbackHosts.has(url.hostname)) {
-    throw new Error("Telegram user monitor-poll --hook-url must point to the local gateway.");
-  }
-  const normalizedPath = url.pathname.replace(/\/+$/, "");
-  if (!normalizedPath.endsWith("/telegram-user-monitor-event")) {
-    throw new Error(
-      "Telegram user monitor-poll --hook-url must target a telegram-user-monitor-event hook.",
-    );
-  }
-  url.pathname = normalizedPath;
-  return url.toString();
 }
 
 function formatTelegramMonitorPollText(
