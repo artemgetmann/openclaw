@@ -56,11 +56,11 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
       install: `{
         "id": "brew",
         "kind": "brew",
-        "formula": "steipete/tap/gogcli",
+        "formula": "openclaw/tap/gogcli",
         "bins": ["gog"],
         "versionCommand": ["gog", "--version"],
         "versionRegex": "v?(?<version>[0-9]+\\\\.[0-9]+\\\\.[0-9]+)",
-        "recommendedVersion": "0.31.0"
+        "recommendedVersion": "0.33.0"
       }`,
     });
 
@@ -84,10 +84,10 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
           installId: "brew",
           kind: "brew",
           bins: ["gog"],
-          formula: "steipete/tap/gogcli",
+          formula: "openclaw/tap/gogcli",
           versionCommand: ["gog", "--version"],
           versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
-          recommendedVersion: "0.31.0",
+          recommendedVersion: "0.33.0",
         },
       ],
     });
@@ -97,18 +97,18 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
   it("fails when a local CLI is newer than packaged release metadata", () => {
     const skillsRoot = makeTempRoot();
     const binDir = path.join(makeTempRoot(), "bin");
-    writeFakeTool(binDir, "gog", "gog v0.32.0");
+    writeFakeTool(binDir, "gog", "gog v0.34.0");
     writeSkill({
       root: skillsRoot,
       name: "gog",
       install: `{
         "id": "brew",
         "kind": "brew",
-        "formula": "steipete/tap/gogcli",
+        "formula": "openclaw/tap/gogcli",
         "bins": ["gog"],
         "versionCommand": ["gog", "--version"],
         "versionRegex": "v?(?<version>[0-9]+\\\\.[0-9]+\\\\.[0-9]+)",
-        "recommendedVersion": "0.31.0"
+        "recommendedVersion": "0.33.0"
       }`,
     });
 
@@ -123,22 +123,22 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("local tool is newer than packaged release metadata: gog");
-    expect(result.stderr).toContain("local_version=0.32.0");
-    expect(result.stderr).toContain("packaged_recommended_version=0.31.0");
+    expect(result.stderr).toContain("local_version=0.34.0");
+    expect(result.stderr).toContain("packaged_recommended_version=0.33.0");
   });
 
   it("allows intentional local drift override during packaging", () => {
     const skillsRoot = makeTempRoot();
     const binDir = path.join(makeTempRoot(), "bin");
-    writeFakeTool(binDir, "gog", "gog v0.32.0");
+    writeFakeTool(binDir, "gog", "gog v0.34.0");
     writeSkill({
       root: skillsRoot,
       name: "gog",
       install: `{
         "kind": "brew",
-        "formula": "steipete/tap/gogcli",
+        "formula": "openclaw/tap/gogcli",
         "versionCommand": ["gog", "--version"],
-        "recommendedVersion": "0.31.0"
+        "recommendedVersion": "0.33.0"
       }`,
     });
 
@@ -166,9 +166,9 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
       name: "gog",
       install: `{
         "kind": "brew",
-        "formula": "steipete/tap/gogcli",
+        "formula": "openclaw/tap/gogcli",
         "versionCommand": ["definitely-missing-gog-for-test", "--version"],
-        "recommendedVersion": "0.31.0"
+        "recommendedVersion": "0.33.0"
       }`,
     });
 
