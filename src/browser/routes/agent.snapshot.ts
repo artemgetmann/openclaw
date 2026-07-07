@@ -4,6 +4,7 @@ import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
   navigateChromeMcpPage,
+  readChromeMcpPdfResource,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
@@ -301,11 +302,28 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-      return jsonError(
+      await withRouteTabContext({
+        req,
         res,
-        501,
-        "pdf is not supported for existing-session profiles yet; use screenshot/snapshot instead.",
-      );
+        ctx,
+        targetId,
+        run: async ({ profileCtx: routeProfileCtx, tab }) => {
+          const pdf = await readChromeMcpPdfResource({
+            profileName: routeProfileCtx.profile.name,
+            userDataDir: routeProfileCtx.profile.userDataDir,
+            targetId: tab.targetId,
+          });
+          await saveBrowserMediaResponse({
+            res,
+            buffer: pdf.buffer,
+            contentType: "application/pdf",
+            maxBytes: pdf.buffer.byteLength,
+            targetId: tab.targetId,
+            url: pdf.url,
+          });
+        },
+      });
+      return;
     }
     await withPlaywrightRouteContext({
       req,
@@ -324,7 +342,7 @@ export function registerBrowserAgentSnapshotRoutes(
           contentType: "application/pdf",
           maxBytes: pdf.buffer.byteLength,
           targetId: tab.targetId,
-          url: tab.url,
+          url: pdf.url ?? tab.url,
         });
       },
     });

@@ -22,6 +22,130 @@ import {
 } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
+type PdfResourceCandidate = { frameId: string; url: string };
+type NativePdfResourceResult = { buffer: Buffer; url: string };
+
+class NativePdfResourceUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NativePdfResourceUnavailableError";
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function isPdfMime(mimeType: unknown): boolean {
+  if (typeof mimeType !== "string") {
+    return false;
+  }
+  return mimeType.split(";")[0]?.trim().toLowerCase() === "application/pdf";
+}
+
+function decodePdfResourceContent(result: unknown): Buffer {
+  const record = asRecord(result);
+  const content = typeof record?.content === "string" ? record.content : "";
+  if (!content) {
+    return Buffer.alloc(0);
+  }
+  return record?.base64Encoded === true ? Buffer.from(content, "base64") : Buffer.from(content);
+}
+
+function collectPdfResourceCandidates(frameTree: unknown): PdfResourceCandidate[] {
+  const candidates: PdfResourceCandidate[] = [];
+
+  const visit = (node: unknown): void => {
+    const tree = asRecord(node);
+    const frame = asRecord(tree?.frame);
+    const frameId = typeof frame?.id === "string" ? frame.id : "";
+    const frameUrl = typeof frame?.url === "string" ? frame.url : "";
+
+    // Chrome's PDF viewer can surface the native PDF either as the current
+    // frame or as a resource owned by the viewer frame. Treat either as a
+    // native-byte candidate before considering any print fallback.
+    if (frameId && frameUrl && isPdfMime(frame?.mimeType)) {
+      candidates.push({ frameId, url: frameUrl });
+    }
+
+    const resources = Array.isArray(tree?.resources) ? tree.resources : [];
+    for (const resource of resources) {
+      const rec = asRecord(resource);
+      const url = typeof rec?.url === "string" ? rec.url : "";
+      if (frameId && url && isPdfMime(rec?.mimeType)) {
+        candidates.push({ frameId, url });
+      }
+    }
+
+    const childFrames = Array.isArray(tree?.childFrames) ? tree.childFrames : [];
+    for (const childFrame of childFrames) {
+      visit(childFrame);
+    }
+  };
+
+  visit(frameTree);
+  return candidates;
+}
+
+function assertNativePdfBuffer(buffer: Buffer, url: string): void {
+  if (buffer.subarray(0, 5).toString("ascii") !== "%PDF-") {
+    throw new Error(`Chrome resource for "${url}" was not a native PDF payload`);
+  }
+}
+
+async function readLoadedNativePdfResourceViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  page: Awaited<ReturnType<typeof getPageForTargetId>>;
+}): Promise<NativePdfResourceResult | undefined> {
+  return await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      let resourceTreeResult: Record<string, unknown> | undefined;
+      try {
+        // Some Chrome targets require the Page domain before resource APIs work.
+        // Failure here is not itself proof that the page is a PDF, so keep HTML
+        // page printing available when there are no observable PDF resources.
+        await send("Page.enable").catch(() => {});
+        resourceTreeResult = asRecord(await send("Page.getResourceTree"));
+      } catch {
+        return undefined;
+      }
+
+      const candidates = collectPdfResourceCandidates(resourceTreeResult?.frameTree);
+      if (candidates.length === 0) {
+        return undefined;
+      }
+
+      const errors: string[] = [];
+      for (const candidate of candidates) {
+        try {
+          const contentResult = await send("Page.getResourceContent", {
+            frameId: candidate.frameId,
+            url: candidate.url,
+          });
+          const buffer = decodePdfResourceContent(contentResult);
+          assertNativePdfBuffer(buffer, candidate.url);
+          return { buffer, url: candidate.url };
+        } catch (err) {
+          errors.push(`${candidate.url}: ${String(err instanceof Error ? err.message : err)}`);
+        }
+      }
+
+      throw new NativePdfResourceUnavailableError(
+        [
+          "Current tab contains an application/pdf resource, but Chrome did not expose the native PDF bytes from the loaded resource.",
+          "Refusing to print the Chrome PDF viewer UI as a PDF.",
+          "Arm browser download/PDF capture before the click or navigation that creates the PDF, then retry.",
+          `Details: ${errors.join("; ")}`,
+        ].join(" "),
+      );
+    },
+  });
+}
+
 function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 5000)));
 }
@@ -259,9 +383,17 @@ export async function closePageViaPlaywright(opts: {
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-}): Promise<{ buffer: Buffer }> {
+}): Promise<{ buffer: Buffer; url?: string }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  const nativePdf = await readLoadedNativePdfResourceViaPlaywright({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
+  if (nativePdf) {
+    return nativePdf;
+  }
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };
 }
