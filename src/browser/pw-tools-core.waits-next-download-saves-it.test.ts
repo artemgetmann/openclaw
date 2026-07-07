@@ -61,9 +61,13 @@ describe("pw-tools-core", () => {
 
   function createDownloadEventHarness() {
     let downloadHandler: ((download: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
+    let responseHandler: ((response: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (payload: unknown) => void) => {
       if (event === "download") {
         downloadHandler = handler;
+      }
+      if (event === "response") {
+        responseHandler = handler;
       }
     });
     const off = vi.fn();
@@ -72,8 +76,14 @@ describe("pw-tools-core", () => {
       trigger: (download: unknown) => {
         downloadHandler?.(download);
       },
+      triggerResponse: (response: unknown) => {
+        responseHandler?.(response);
+      },
       expectArmed: () => {
         expect(downloadHandler).toBeDefined();
+      },
+      expectResponseArmed: () => {
+        expect(responseHandler).toBeDefined();
       },
     };
   }
@@ -125,6 +135,43 @@ describe("pw-tools-core", () => {
       const res = await p;
       await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+    });
+  });
+
+  it("captures token-bound PDF response bytes while clicking when no download event fires", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const pdfBytes = Buffer.from("%PDF-1.7\nnative response\n%%EOF\n");
+      const response = {
+        url: () => "https://example.com/api/sitecore/Bill/ActualbillDownload",
+        headers: () => ({
+          "content-type": "application/pdf",
+          "content-disposition": 'attachment; filename="ActualbillDownload.pdf"',
+        }),
+        body: async () => pdfBytes,
+      };
+      const click = vi.fn(async () => {
+        harness.triggerResponse(response);
+      });
+      setPwToolsCoreCurrentRefLocator({ click });
+
+      const targetPath = path.join(tempDir, "bill.pdf");
+      const res = await mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "view-bill",
+        path: targetPath,
+        timeoutMs: 1000,
+      });
+
+      harness.expectArmed();
+      harness.expectResponseArmed();
+      expect(res).toEqual({
+        url: "https://example.com/api/sitecore/Bill/ActualbillDownload",
+        suggestedFilename: "ActualbillDownload.pdf",
+        path: targetPath,
+      });
+      expect(await fs.readFile(targetPath)).toEqual(pdfBytes);
     });
   });
   it("clicks a ref and atomically finalizes explicit download paths", async () => {

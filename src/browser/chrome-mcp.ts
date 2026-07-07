@@ -14,6 +14,13 @@ import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.j
 import type { BrowserTab } from "./client.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
+import { writeViaSiblingTempPath } from "./output-atomic.js";
+import {
+  decodeCdpResponseBody,
+  hasPdfSignature,
+  inferPdfResponseFilename,
+  pdfResponseMetadataMatches,
+} from "./pdf-response-capture.js";
 
 type ChromeMcpStructuredPage = {
   id: number;
@@ -783,6 +790,9 @@ type ChromeMcpPdfResourceResult = {
   url: string;
   buffer: Buffer;
 };
+type ChromeMcpCapturedPdfResponse = ChromeMcpPdfResourceResult & {
+  suggestedFilename: string;
+};
 
 const CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS = 250;
 
@@ -974,9 +984,77 @@ function assertNativePdfBuffer(buffer: Buffer, url: string): void {
   }
 }
 
+function createChromeMcpPdfNetworkCapture(params: {
+  send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
+}) {
+  const candidates = new Map<
+    string,
+    { url: string; headers: Record<string, unknown>; mimeType?: unknown }
+  >();
+  let resolved = false;
+  let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
+  const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
+    resolvePdf = resolve;
+  });
+
+  const observeEvent = (method: string, event: Record<string, unknown> | undefined) => {
+    if (!event) {
+      return;
+    }
+    if (method === "Network.responseReceived") {
+      const requestId = typeof event.requestId === "string" ? event.requestId : "";
+      const response = asRecord(event.response);
+      const url = typeof response?.url === "string" ? response.url : "";
+      const headers = asRecord(response?.headers) ?? {};
+      const mimeType = response?.mimeType;
+      if (requestId && pdfResponseMetadataMatches({ url, headers, mimeType })) {
+        candidates.set(requestId, { url, headers, mimeType });
+      }
+      return;
+    }
+
+    if (method !== "Network.loadingFinished") {
+      return;
+    }
+    const requestId = typeof event.requestId === "string" ? event.requestId : "";
+    const candidate = requestId ? candidates.get(requestId) : undefined;
+    if (!candidate || resolved) {
+      return;
+    }
+
+    // Pull the body as soon as Chrome marks the token-bound response done.
+    // Waiting until after the PDF viewer navigates can leave only an
+    // unreplayable URL, which is exactly how POST-backed bills become HTML.
+    void (async () => {
+      try {
+        const bodyResult = await params.send("Network.getResponseBody", { requestId });
+        const buffer = decodeCdpResponseBody(bodyResult);
+        if (resolved || !hasPdfSignature(buffer)) {
+          return;
+        }
+        resolved = true;
+        resolvePdf?.({
+          url: candidate.url,
+          suggestedFilename: inferPdfResponseFilename(candidate),
+          buffer,
+        });
+      } catch {
+        // Keep the normal filesystem download waiter alive. Some Chrome
+        // versions do not retain every response body even when metadata says
+        // PDF, and that should not break ordinary downloads.
+      } finally {
+        candidates.delete(requestId);
+      }
+    })();
+  };
+
+  return { promise, observeEvent };
+}
+
 export const chromeMcpPdfResourceInternalsForTest = {
   assertNativePdfBuffer,
   collectPdfResourceCandidates,
+  createChromeMcpPdfNetworkCapture,
   decodeChromeResourceContent,
 };
 
@@ -1203,6 +1281,31 @@ async function moveCompletedDownload(params: {
   return finalPath;
 }
 
+async function writeCapturedPdfResponse(params: {
+  buffer: Buffer;
+  downloadDir: string;
+  requestedPath?: string;
+  suggestedFilename: string;
+}): Promise<string> {
+  const requestedPath = params.requestedPath?.trim();
+  const finalPath = path.resolve(
+    requestedPath || path.join(params.downloadDir, params.suggestedFilename || "download.pdf"),
+  );
+  await fs.mkdir(path.dirname(finalPath), { recursive: true });
+
+  // Network-captured PDFs skip Chrome's on-disk download machinery, so use the
+  // same sibling-temp finalization pattern as browser-managed downloads. This
+  // keeps explicit output paths atomic and blocks hardlink alias surprises.
+  await writeViaSiblingTempPath({
+    rootDir: path.dirname(finalPath),
+    targetPath: finalPath,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, params.buffer);
+    },
+  });
+  return finalPath;
+}
+
 async function waitForChromeDownloadFile(params: {
   directory: string;
   requestedPath?: string;
@@ -1210,12 +1313,16 @@ async function waitForChromeDownloadFile(params: {
   startedAtMs: number;
   beforeNames: Set<string>;
   timeoutMs: number;
+  isCancelled?: () => boolean;
 }): Promise<string> {
   const deadline = Date.now() + params.timeoutMs;
   let stableCandidatePath: string | undefined;
   let stableCandidateSize: number | undefined;
 
   while (Date.now() <= deadline) {
+    if (params.isCancelled?.()) {
+      throw new Error("Download wait cancelled");
+    }
     if (params.suggestedFilename) {
       const suggestedPath = path.join(params.directory, params.suggestedFilename);
       if (
@@ -1307,6 +1414,16 @@ async function runChromeMcpDownloadSession(params: {
     }
   };
 
+  let send: (
+    method: string,
+    commandParams?: Record<string, unknown>,
+  ) => Promise<unknown> = async () => {
+    throw new Error("Chrome DevTools command channel is not ready");
+  };
+  const pdfNetworkCapture = createChromeMcpPdfNetworkCapture({
+    send: async (method, commandParams) => await send(method, commandParams),
+  });
+
   ws.on("message", (data: RawData) => {
     let message: CdpEvent;
     try {
@@ -1324,6 +1441,7 @@ async function runChromeMcpDownloadSession(params: {
       if (message.method.endsWith(".downloadProgress") && event?.state === "completed") {
         completed = true;
       }
+      pdfNetworkCapture.observeEvent(message.method, event ?? undefined);
     }
     if (typeof message.id !== "number") {
       return;
@@ -1360,10 +1478,7 @@ async function runChromeMcpDownloadSession(params: {
     });
   });
 
-  const send = async (
-    method: string,
-    commandParams?: Record<string, unknown>,
-  ): Promise<unknown> => {
+  send = async (method: string, commandParams?: Record<string, unknown>): Promise<unknown> => {
     const id = ++nextId;
     return await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(
@@ -1387,20 +1502,49 @@ async function runChromeMcpDownloadSession(params: {
 
   try {
     await send("Page.enable");
+    await send("Network.enable").catch(() => {});
     await send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: downloadDir,
     });
 
     await params.trigger?.();
-    const savedPath = await waitForChromeDownloadFile({
+    let downloadWaitCancelled = false;
+    const downloadPromise = waitForChromeDownloadFile({
       directory: downloadDir,
       requestedPath: params.path,
       suggestedFilename,
       startedAtMs,
       beforeNames,
       timeoutMs,
-    });
+      isCancelled: () => downloadWaitCancelled,
+    })
+      .then((savedPath) => ({ kind: "download" as const, savedPath }))
+      .catch((err) => {
+        if (downloadWaitCancelled) {
+          return new Promise<never>(() => {});
+        }
+        throw err;
+      });
+    const result = await Promise.race([
+      downloadPromise,
+      pdfNetworkCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf })),
+    ]);
+    if (result.kind === "pdf") {
+      downloadWaitCancelled = true;
+      const savedPath = await writeCapturedPdfResponse({
+        buffer: result.pdf.buffer,
+        downloadDir,
+        requestedPath: params.path,
+        suggestedFilename: result.pdf.suggestedFilename,
+      });
+      return {
+        url: result.pdf.url,
+        suggestedFilename: result.pdf.suggestedFilename,
+        path: savedPath,
+      };
+    }
+    const savedPath = result.savedPath;
     if (!completed) {
       // Completion events are best-effort across Chrome versions; the stable-file
       // check above is the proof that matters.

@@ -6,6 +6,11 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
+  hasPdfSignature,
+  inferPdfResponseFilename,
+  pdfResponseMetadataMatches,
+} from "./pdf-response-capture.js";
+import {
   ensurePageState,
   getPageForTargetId,
   refLocator,
@@ -82,6 +87,12 @@ type DownloadPayload = {
   saveAs?: (outPath: string) => Promise<void>;
 };
 
+type PdfResponsePayload = {
+  url: string;
+  suggestedFilename: string;
+  buffer: Buffer;
+};
+
 async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   const suggested = download.suggestedFilename?.() || "download.bin";
   const requestedPath = outPath?.trim();
@@ -107,20 +118,143 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   };
 }
 
+async function savePdfResponsePayload(pdf: PdfResponsePayload, outPath: string) {
+  const requestedPath = outPath?.trim();
+  const resolvedOutPath = path.resolve(
+    requestedPath || buildTempDownloadPath(pdf.suggestedFilename || "download.pdf"),
+  );
+  await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
+
+  if (!requestedPath) {
+    await fs.writeFile(resolvedOutPath, pdf.buffer);
+  } else {
+    await writeViaSiblingTempPath({
+      rootDir: path.dirname(resolvedOutPath),
+      targetPath: resolvedOutPath,
+      writeTemp: async (tempPath) => {
+        await fs.writeFile(tempPath, pdf.buffer);
+      },
+    });
+  }
+
+  return {
+    url: pdf.url,
+    suggestedFilename: pdf.suggestedFilename,
+    path: resolvedOutPath,
+  };
+}
+
+function createPdfResponseWaiter(page: Page, timeoutMs: number) {
+  let done = false;
+  let timer: NodeJS.Timeout | undefined;
+  let handler: ((response: unknown) => void) | undefined;
+  let resolvePdf: ((payload: PdfResponsePayload) => void) | undefined;
+
+  const cleanup = () => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = undefined;
+    if (handler) {
+      page.off("response", handler as never);
+      handler = undefined;
+    }
+  };
+
+  const promise = new Promise<PdfResponsePayload>((resolve) => {
+    resolvePdf = resolve;
+    handler = (response: unknown) => {
+      if (done) {
+        return;
+      }
+      const resp = response as {
+        url?: () => string;
+        headers?: () => Record<string, string>;
+        body?: () => Promise<Buffer>;
+      };
+      const url = resp.url?.() || "";
+      const headers = resp.headers?.() ?? {};
+      if (!pdfResponseMetadataMatches({ url, headers })) {
+        return;
+      }
+
+      // Read immediately while the browser still owns the token-bound response.
+      // Later URL fetches can replay as login/fallback HTML, so the body capture
+      // must happen inside this response event rather than after navigation.
+      void (async () => {
+        try {
+          const buffer = typeof resp.body === "function" ? await resp.body() : Buffer.alloc(0);
+          if (done || !hasPdfSignature(buffer)) {
+            return;
+          }
+          done = true;
+          cleanup();
+          resolvePdf?.({
+            url,
+            suggestedFilename: inferPdfResponseFilename({ url, headers }),
+            buffer,
+          });
+        } catch {
+          // A matching response that cannot expose a body should not break a
+          // normal browser download. Keep waiting for either a later PDF response
+          // or the ordinary download event.
+        }
+      })();
+    };
+
+    page.on("response", handler as never);
+    timer = setTimeout(() => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+    }, timeoutMs);
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+    },
+  };
+}
+
 async function awaitDownloadPayload(params: {
   waiter: ReturnType<typeof createPageDownloadWaiter>;
+  pdfWaiter?: ReturnType<typeof createPdfResponseWaiter>;
   state: ReturnType<typeof ensurePageState>;
   armId: number;
   outPath?: string;
 }) {
   try {
-    const download = (await params.waiter.promise) as DownloadPayload;
+    const downloadPromise = params.waiter.promise.then((download) => ({
+      kind: "download" as const,
+      download: download as DownloadPayload,
+    }));
+    const pdfPromise = params.pdfWaiter?.promise.then((pdf) => ({
+      kind: "pdf" as const,
+      pdf,
+    }));
+    const result = pdfPromise
+      ? await Promise.race([downloadPromise, pdfPromise])
+      : await downloadPromise;
     if (params.state.armIdDownload !== params.armId) {
       throw new Error("Download was superseded by another waiter");
     }
-    return await saveDownloadPayload(download, params.outPath ?? "");
+    if (result.kind === "pdf") {
+      params.waiter.cancel();
+      return await savePdfResponsePayload(result.pdf, params.outPath ?? "");
+    }
+    params.pdfWaiter?.cancel();
+    return await saveDownloadPayload(result.download, params.outPath ?? "");
   } catch (err) {
     params.waiter.cancel();
+    params.pdfWaiter?.cancel();
     throw err;
   }
 }
@@ -236,7 +370,8 @@ export async function waitForDownloadViaPlaywright(opts: {
   const armId = state.armIdDownload;
 
   const waiter = createPageDownloadWaiter(page, timeout);
-  return await awaitDownloadPayload({ waiter, state, armId, outPath: opts.path });
+  const pdfWaiter = createPdfResponseWaiter(page, timeout);
+  return await awaitDownloadPayload({ waiter, pdfWaiter, state, armId, outPath: opts.path });
 }
 
 export async function downloadViaPlaywright(opts: {
@@ -265,6 +400,7 @@ export async function downloadViaPlaywright(opts: {
   const armId = state.armIdDownload;
 
   const waiter = createPageDownloadWaiter(page, timeout);
+  const pdfWaiter = createPdfResponseWaiter(page, timeout);
   try {
     const locator = refLocator(page, ref);
     try {
@@ -272,9 +408,10 @@ export async function downloadViaPlaywright(opts: {
     } catch (err) {
       throw toAIFriendlyError(err, ref);
     }
-    return await awaitDownloadPayload({ waiter, state, armId, outPath });
+    return await awaitDownloadPayload({ waiter, pdfWaiter, state, armId, outPath });
   } catch (err) {
     waiter.cancel();
+    pdfWaiter.cancel();
     throw err;
   }
 }
