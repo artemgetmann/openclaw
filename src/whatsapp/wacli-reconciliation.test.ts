@@ -119,6 +119,14 @@ describe("findLatestInboundReplyAcrossResolvedChats", () => {
       );
       expect(result.preferredMonitorChatJid).toBe("235317080666280@lid");
       expect(resolvePreferredMonitorChatJid(result)).toBe("235317080666280@lid");
+
+      const seeded = findLatestInboundReplyAcrossResolvedChats({
+        dbPath,
+        seedMsgId: "outbound-1",
+        target: "6281238581815@s.whatsapp.net",
+      });
+      expect(seeded.seedMessage?.chatJid).toBe("6281238581815@s.whatsapp.net");
+      expect(seeded.latestInboundReply?.chatJid).toBe("235317080666280@lid");
     });
   });
 
