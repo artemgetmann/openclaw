@@ -119,6 +119,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "whatsapp-monitor",
+    description: "WhatsApp-as-me durable monitor polling tools",
+    hasSubcommands: true,
+  },
+  {
     name: "media",
     description: "Generic local media tools",
     hasSubcommands: true,

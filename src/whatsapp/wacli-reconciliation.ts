@@ -59,6 +59,7 @@ export type WacliReplyLookupResult = {
   seedPhones: string[];
   identityNames: string[];
   candidates: WacliCandidateChat[];
+  seedMessage?: WacliConversationTurn | null;
   latestInboundReply: WacliLatestInboundReply | null;
   recentConversation: WacliConversationTurn[];
   continuity: WacliReplyContinuity;
@@ -253,6 +254,7 @@ function buildReplyContinuity(params: {
  */
 export function findLatestInboundReplyAcrossResolvedChats(params: {
   dbPath: string;
+  seedMsgId?: string;
   target: string;
 }): WacliReplyLookupResult {
   const { DatabaseSync } = requireNodeSqlite();
@@ -396,9 +398,35 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
         );
       });
 
+    let seedMessage: WacliConversationTurn | null = null;
     let latestInboundReply: WacliLatestInboundReply | null = null;
     if (candidates.length > 0) {
       const candidateJids = candidates.map((candidate) => candidate.jid);
+      const requestedSeedMsgId = params.seedMsgId?.trim();
+      if (requestedSeedMsgId) {
+        const seedRows = db
+          .prepare(
+            `SELECT chat_jid AS chatJid,
+                    msg_id AS msgId,
+                    sender_jid AS senderJid,
+                    ts,
+                    from_me AS fromMe,
+                    text,
+                    media_type AS mediaType,
+                    media_caption AS mediaCaption,
+                    display_text AS displayText,
+                    chat_name AS chatName,
+                    sender_name AS senderName
+             FROM messages
+             WHERE msg_id = ?
+               AND chat_jid IN (${candidateJids.map(() => "?").join(",")})
+             ORDER BY ts DESC, rowid DESC
+             LIMIT 1`,
+          )
+          .all(requestedSeedMsgId, ...candidateJids) as unknown as WacliReplyRecord[];
+        seedMessage = seedRows[0] ? toConversationTurn(seedRows[0]) : null;
+      }
+
       const inbound = db
         .prepare(
           `SELECT chat_jid AS chatJid,
@@ -493,6 +521,7 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       seedPhones: uniqueNonEmpty([seedPhone]),
       identityNames: [...identityNames].toSorted(),
       candidates,
+      seedMessage,
       latestInboundReply,
       recentConversation,
       continuity,
