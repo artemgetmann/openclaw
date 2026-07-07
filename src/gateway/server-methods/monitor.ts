@@ -32,6 +32,7 @@ import {
   type MonitorUpdatePatch,
 } from "../../monitor/types.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { normalizeWhatsAppLidJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   ErrorCodes,
   errorShape,
@@ -57,6 +58,9 @@ function resolveGoalBoundEventTriggerKind(sourceType: string): MonitorEventTrigg
     return "webhook";
   }
   if (normalized === "telegram-user") {
+    return "local_listener";
+  }
+  if (normalized === "whatsapp") {
     return "local_listener";
   }
   return undefined;
@@ -121,6 +125,36 @@ function resolveTelegramUserEventSourceTarget(
   return eventSourceTarget;
 }
 
+function resolveWhatsAppEventSourceTarget(
+  sourceTarget: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const eventSourceTarget: Record<string, unknown> = {};
+  const accountId = readSourceTargetString(sourceTarget, ["accountId", "account"]);
+  if (accountId) {
+    eventSourceTarget.accountId = accountId;
+  }
+
+  // WhatsApp-as-me monitors can start from several user-facing aliases, but the
+  // local listener adapter emits a canonical target plus the resolved chat JID.
+  // Normalize aliases here so accepted monitor.create shapes still route to the
+  // event envelope without trusting message text or sender-provided labels.
+  const rawTarget = readSourceTargetString(sourceTarget, ["target", "to", "chat", "chatId"]);
+  const normalizedLid = rawTarget ? normalizeWhatsAppLidJid(rawTarget) : null;
+  if (normalizedLid) {
+    eventSourceTarget.chatJid = normalizedLid;
+  } else if (rawTarget) {
+    eventSourceTarget.target = normalizeWhatsAppTarget(rawTarget) ?? rawTarget;
+  }
+  const chatJid = readSourceTargetString(sourceTarget, ["chatJid"]);
+  if (chatJid) {
+    eventSourceTarget.chatJid = normalizeWhatsAppLidJid(chatJid) ?? chatJid;
+  }
+
+  return Object.keys(eventSourceTarget).some((key) => key !== "accountId")
+    ? eventSourceTarget
+    : undefined;
+}
+
 function hasGmailSourceTargetQualifiers(sourceTarget: Record<string, unknown>): boolean {
   const qualifierTarget = { ...sourceTarget };
   delete qualifierTarget.account;
@@ -147,6 +181,16 @@ function resolveGoalBoundTriggerMatch(params: {
   }
   if (normalized === "telegram-user") {
     const eventSourceTarget = resolveTelegramUserEventSourceTarget(params.sourceTarget);
+    return eventSourceTarget
+      ? {
+          sourceType: params.sourceType,
+          sourceTarget: eventSourceTarget,
+          eventTypes: ["message.created"],
+        }
+      : undefined;
+  }
+  if (normalized === "whatsapp") {
+    const eventSourceTarget = resolveWhatsAppEventSourceTarget(params.sourceTarget);
     return eventSourceTarget
       ? {
           sourceType: params.sourceType,
@@ -204,6 +248,9 @@ function resolveMonitorIdentitySourceTarget(params: {
   sourceType: string;
   sourceTarget: Record<string, unknown>;
 }): Record<string, unknown> {
+  if (params.sourceType.trim().toLowerCase() === "whatsapp") {
+    return resolveWhatsAppEventSourceTarget(params.sourceTarget) ?? params.sourceTarget;
+  }
   if (params.sourceType.trim().toLowerCase() !== "gmail") {
     return params.sourceTarget;
   }
