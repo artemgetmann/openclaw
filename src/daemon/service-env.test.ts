@@ -8,6 +8,7 @@ import {
   buildNodeServiceEnvironment,
   buildServiceEnvironment,
   buildTelegramMonitorServiceEnvironment,
+  buildWhatsAppMonitorServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
 } from "./service-env.js";
@@ -581,6 +582,27 @@ describe("buildTelegramMonitorServiceEnvironment", () => {
   });
 });
 
+describe("buildWhatsAppMonitorServiceEnvironment", () => {
+  it("scopes service identity by profile", () => {
+    const env = buildWhatsAppMonitorServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_GATEWAY_TOKEN: " whatsapp-token ",
+        OPENCLAW_PROFILE: "consumer-lane",
+      },
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("whatsapp-token");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.consumer-lane.whatsapp-monitor");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-whatsapp-monitor-consumer-lane");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw WhatsApp Monitor (consumer-lane)");
+    expect(env.OPENCLAW_PROFILE).toBe("consumer-lane");
+    expect(env.OPENCLAW_SERVICE_KIND).toBe("whatsapp-monitor");
+    expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
+  });
+});
+
 describe("shared Node TLS env defaults", () => {
   const builders = [
     {
@@ -592,6 +614,16 @@ describe("shared Node TLS env defaults", () => {
       name: "node service env",
       build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
         buildNodeServiceEnvironment({ env, platform }),
+    },
+    {
+      name: "telegram monitor service env",
+      build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
+        buildTelegramMonitorServiceEnvironment({ env, platform }),
+    },
+    {
+      name: "whatsapp monitor service env",
+      build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
+        buildWhatsAppMonitorServiceEnvironment({ env, platform }),
     },
   ] as const;
 

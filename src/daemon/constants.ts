@@ -17,6 +17,12 @@ export const TELEGRAM_MONITOR_WINDOWS_TASK_NAME = "OpenClaw Telegram Monitor";
 export const TELEGRAM_MONITOR_SERVICE_MARKER = "openclaw";
 export const TELEGRAM_MONITOR_SERVICE_KIND = "telegram-monitor";
 export const TELEGRAM_MONITOR_WINDOWS_TASK_SCRIPT_NAME = "telegram-monitor.cmd";
+export const WHATSAPP_MONITOR_LAUNCH_AGENT_LABEL = "ai.openclaw.whatsapp-monitor";
+export const WHATSAPP_MONITOR_SYSTEMD_SERVICE_NAME = "openclaw-whatsapp-monitor";
+export const WHATSAPP_MONITOR_WINDOWS_TASK_NAME = "OpenClaw WhatsApp Monitor";
+export const WHATSAPP_MONITOR_SERVICE_MARKER = "openclaw";
+export const WHATSAPP_MONITOR_SERVICE_KIND = "whatsapp-monitor";
+export const WHATSAPP_MONITOR_WINDOWS_TASK_SCRIPT_NAME = "whatsapp-monitor.cmd";
 export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS: string[] = [];
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [
   "clawdbot-gateway",
@@ -160,4 +166,47 @@ export function formatTelegramMonitorServiceDescription(params?: {
     return "OpenClaw Telegram Monitor";
   }
   return `OpenClaw Telegram Monitor (${parts.join(", ")})`;
+}
+
+export function resolveWhatsAppMonitorLaunchAgentLabel(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) {
+    return WHATSAPP_MONITOR_LAUNCH_AGENT_LABEL;
+  }
+  return `ai.openclaw.${normalized}.whatsapp-monitor`;
+}
+
+export function resolveWhatsAppMonitorSystemdServiceName(profile?: string): string {
+  const suffix = resolveGatewayProfileSuffix(profile);
+  if (!suffix) {
+    return WHATSAPP_MONITOR_SYSTEMD_SERVICE_NAME;
+  }
+  return `openclaw-whatsapp-monitor${suffix}`;
+}
+
+export function resolveWhatsAppMonitorWindowsTaskName(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) {
+    return WHATSAPP_MONITOR_WINDOWS_TASK_NAME;
+  }
+  return `OpenClaw WhatsApp Monitor (${normalized})`;
+}
+
+export function formatWhatsAppMonitorServiceDescription(params?: {
+  profile?: string;
+  version?: string;
+}): string {
+  const profile = normalizeGatewayProfile(params?.profile);
+  const version = params?.version?.trim();
+  const parts: string[] = [];
+  if (profile) {
+    parts.push(`profile: ${profile}`);
+  }
+  if (version) {
+    parts.push(`v${version}`);
+  }
+  if (parts.length === 0) {
+    return "OpenClaw WhatsApp Monitor";
+  }
+  return `OpenClaw WhatsApp Monitor (${parts.join(", ")})`;
 }

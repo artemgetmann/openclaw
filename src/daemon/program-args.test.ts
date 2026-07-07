@@ -20,7 +20,10 @@ vi.mock("node:child_process", () => ({
   execFileSync: childProcessMocks.execFileSync,
 }));
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import {
+  resolveGatewayProgramArguments,
+  resolveWhatsAppMonitorProgramArguments,
+} from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -166,6 +169,51 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+    expect(result.workingDirectory).toBe(path.resolve("/repo"));
+  });
+});
+
+describe("resolveWhatsAppMonitorProgramArguments", () => {
+  it("builds the supervised watch command without hook token arguments", async () => {
+    const entryPath = path.resolve("/repo/dist/index.js");
+    process.argv = ["/opt/homebrew/opt/node@22/bin/node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveWhatsAppMonitorProgramArguments({
+      cronStore: "/tmp/cron.json",
+      cursorStore: "/tmp/cursors.json",
+      dbPath: "/tmp/wacli.db",
+      hookUrl: "http://127.0.0.1:18789/hooks/monitor-event",
+      intervalMs: 2500,
+      maxRuns: 3,
+      monitorStore: "/tmp/monitors.json",
+      nodePath: "/opt/homebrew/opt/node@22/bin/node",
+      runtime: "node",
+    });
+
+    expect(result.programArguments).toEqual([
+      "/opt/homebrew/opt/node@22/bin/node",
+      entryPath,
+      "whatsapp-monitor",
+      "poll",
+      "--watch",
+      "--db-path",
+      "/tmp/wacli.db",
+      "--poll-interval-ms",
+      "2500",
+      "--hook-url",
+      "http://127.0.0.1:18789/hooks/monitor-event",
+      "--cron-store",
+      "/tmp/cron.json",
+      "--monitor-store",
+      "/tmp/monitors.json",
+      "--cursor-store",
+      "/tmp/cursors.json",
+      "--max-runs",
+      "3",
+    ]);
+    expect(result.programArguments).not.toContain("--hook-token");
     expect(result.workingDirectory).toBe(path.resolve("/repo"));
   });
 });
