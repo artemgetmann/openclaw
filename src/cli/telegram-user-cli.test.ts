@@ -419,6 +419,7 @@ describe("telegram-user cli", () => {
         "/tmp/proof.ogg",
         "--caption",
         "voice caption",
+        "--force-document",
         "--voice",
         "--reply-to",
         "15248",
@@ -433,6 +434,7 @@ describe("telegram-user cli", () => {
       expect.objectContaining({
         caption: "voice caption",
         chat: "@jarvis_tester_1_bot",
+        forceDocument: true,
         json: true,
         media: "/tmp/proof.ogg",
         replyTo: "15248",

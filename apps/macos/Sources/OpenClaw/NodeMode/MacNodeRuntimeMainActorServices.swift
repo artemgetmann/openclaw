@@ -12,7 +12,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
@@ -35,7 +35,7 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
         try await self.screenRecorder.record(
             screenIndex: screenIndex,

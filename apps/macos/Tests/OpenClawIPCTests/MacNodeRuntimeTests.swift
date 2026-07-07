@@ -60,15 +60,16 @@ struct MacNodeRuntimeTests {
                 durationMs: Int?,
                 fps: Double?,
                 includeAudio: Bool?,
-                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+                outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
             {
                 #expect(appName == "Telegram")
                 #expect(bundleId == "ru.keepcoder.Telegram")
                 #expect(windowId == 42)
+                #expect(durationMs == 250)
                 let url = FileManager().temporaryDirectory
                     .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
                 try Data("ok".utf8).write(to: url)
-                return (path: url.path, hasAudio: false)
+                return (path: url.path, durationMs: 250, hasAudio: false)
             }
 
             func locationAuthorizationStatus() -> CLAuthorizationStatus {
@@ -105,10 +106,12 @@ struct MacNodeRuntimeTests {
         struct Payload: Decodable {
             var format: String
             var base64: String
+            var durationMs: Int
         }
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+        #expect(payload.durationMs == 250)
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

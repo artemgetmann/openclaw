@@ -560,6 +560,13 @@ def build_parser() -> argparse.ArgumentParser:
   send.add_argument("--message", help = "Message text, or caption when --media is present")
   send.add_argument("--media", help = "Media path or URL to upload")
   send.add_argument("--caption", help = "Caption for --media; overrides --message")
+  send.add_argument(
+    "--force-document",
+    "--as-document",
+    action = "store_true",
+    dest = "force_document",
+    help = "Send uploaded media as a Telegram document instead of Telegram's inferred media type",
+  )
   send.add_argument("--reply-to", type = int, default = 0, help = "Reply-to message id")
   send.add_argument(
     "--voice",
@@ -846,11 +853,15 @@ async def run_send(args: argparse.Namespace) -> int:
     client, _ = await connect_client(session_path)
     try:
       if media:
+        # Telegram clients can render silent MP4 uploads as looping animations.
+        # force_document keeps review proof as an inspectable file attachment
+        # instead of letting client-side media heuristics change the UX.
         sent = await client.send_file(
           entity = resolve_chat(args.chat),
           file = media,
           caption = caption or message_text or None,
           reply_to = args.reply_to or None,
+          force_document = bool(getattr(args, "force_document", False)),
           voice_note = bool(args.voice),
         )
       else:

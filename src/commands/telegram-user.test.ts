@@ -316,6 +316,7 @@ describe("telegram-user commands", () => {
       caption: undefined,
       chat: "@jarvis_tester_1_bot",
       envFile: undefined,
+      forceDocument: false,
       media: undefined,
       message: "hello",
       session: undefined,
@@ -360,6 +361,7 @@ describe("telegram-user commands", () => {
       caption: "voice caption",
       chat: "-1003783709877",
       envFile: undefined,
+      forceDocument: false,
       media: "/tmp/proof.ogg",
       message: undefined,
       session: undefined,
@@ -470,6 +472,47 @@ describe("telegram-user commands", () => {
       expect.objectContaining({
         caption: "fallback caption",
         media: "/tmp/proof.pdf",
+        message: undefined,
+      }),
+    );
+  });
+
+  it("can force media uploads to document mode for proof videos", async () => {
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: {
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: "2026-03-24T00:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: "document",
+        message_id: 127,
+        out: true,
+        reply_to_msg_id: null,
+        reply_to_top_id: null,
+        sender_id: 99,
+        text: "review video",
+        thread_anchor: null,
+      },
+    });
+
+    await telegramUserSendCommand(
+      {
+        caption: "review video",
+        chat: "-1003783709877",
+        forceDocument: true,
+        media: "/tmp/openclaw/review.mp4",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "review video",
+        forceDocument: true,
+        media: "/tmp/openclaw/review.mp4",
         message: undefined,
       }),
     );

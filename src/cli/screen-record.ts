@@ -70,6 +70,9 @@ type NativeScreencaptureFallbackContext = {
   config?: Pick<OpenClawConfig, "gateway">;
 };
 
+const minScreenRecordDurationMs = 250;
+const maxScreenRecordDurationMs = 60_000;
+
 class ScreenRecordNoLocalNodeError extends Error {
   constructor(nodes: NodeListNode[]) {
     super(formatNoScreenRecordNodeMessage(nodes));
@@ -167,7 +170,14 @@ export function buildScreenRecordParams(
     );
   }
 
-  const durationMs = opts.duration ? parseDurationMs(opts.duration) : 30_000;
+  const requestedDurationMs = opts.duration ? parseDurationMs(opts.duration) : 30_000;
+  // Match the native ScreenCaptureKit service cap before invoking the node so
+  // CLI output reports the effective duration instead of a value the recorder
+  // can never honor.
+  const durationMs = Math.min(
+    maxScreenRecordDurationMs,
+    Math.max(minScreenRecordDurationMs, requestedDurationMs),
+  );
   const fps = parseOptionalNumber(opts.fps ?? "12", "--fps");
 
   return {

@@ -53,6 +53,27 @@ describe("screen record CLI params", () => {
     });
   });
 
+  it("clamps requested duration to the recorder's native limits before invoking the node", () => {
+    expect(
+      buildScreenRecordParams(
+        { app: "Telegram", duration: "120s" },
+        {
+          requireTarget: true,
+          requireDisplayReason: true,
+        },
+      ).durationMs,
+    ).toBe(60_000);
+    expect(
+      buildScreenRecordParams(
+        { app: "Telegram", duration: "10" },
+        {
+          requireTarget: true,
+          requireDisplayReason: true,
+        },
+      ).durationMs,
+    ).toBe(250);
+  });
+
   it("keeps legacy nodes screen capture compatible without explicit targets", () => {
     const params = buildScreenRecordParams(
       { screen: "0", duration: "1000", audio: true },

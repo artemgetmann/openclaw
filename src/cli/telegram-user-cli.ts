@@ -168,6 +168,12 @@ export function registerTelegramUserCli(program: Command) {
   )
     .option("--media <path-or-url>", "Upload this media file or URL")
     .option("--caption <text>", "Caption for --media; overrides --message when both are present")
+    .option(
+      "--force-document",
+      "Upload media as a document so Telegram does not reinterpret silent MP4s as animations",
+      false,
+    )
+    .option("--as-document", "Alias for --force-document", false)
     .option("--voice", "Send uploaded audio as a Telegram voice note", false)
     .option("--audio-as-voice", "Alias for --voice", false)
     .option("--reply-to <id>", "Reply to this message id")

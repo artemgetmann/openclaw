@@ -681,6 +681,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
             message = None,
             reply_to = 15248,
             session = str(session_path),
+            force_document = False,
             voice = True,
           )
         )
@@ -694,6 +695,41 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertTrue(fake_client.send_file_calls[0]["voice_note"])
     self.assertEqual(emitted["message"]["media_kind"], "voice")
     self.assertEqual(emitted["message"]["message_id"], 501)
+
+  async def test_run_send_uploads_media_as_document_when_forced(self) -> None:
+    fake_client = FakeSendClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_send(
+          argparse.Namespace(
+            caption = "review video",
+            chat = "-1003783709877",
+            media = "/tmp/openclaw/review.mp4",
+            message = None,
+            reply_to = 0,
+            session = str(session_path),
+            force_document = True,
+            voice = False,
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(fake_client.send_file_calls[0]["file"], "/tmp/openclaw/review.mp4")
+    self.assertTrue(fake_client.send_file_calls[0]["force_document"])
+    self.assertFalse(fake_client.send_file_calls[0]["voice_note"])
+    self.assertEqual(emitted["message"]["media_kind"], "document")
 
   async def test_run_send_preserves_text_send_when_media_is_absent(self) -> None:
     fake_client = FakeSendClient()
@@ -719,6 +755,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
             message = "text proof",
             reply_to = 0,
             session = str(session_path),
+            force_document = False,
             voice = False,
           )
         )
@@ -860,11 +897,13 @@ class TelethonCliSyncTests(unittest.TestCase):
       "/tmp/proof.ogg",
       "--caption",
       "voice proof",
+      "--force-document",
       "--voice",
     ])
     self.assertEqual(send_args.command, "send")
     self.assertEqual(send_args.media, "/tmp/proof.ogg")
     self.assertEqual(send_args.caption, "voice proof")
+    self.assertTrue(send_args.force_document)
     self.assertTrue(send_args.voice)
 
     download_args = parser.parse_args([

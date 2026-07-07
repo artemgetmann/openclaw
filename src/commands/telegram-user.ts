@@ -928,6 +928,7 @@ export async function telegramUserSendCommand(opts: Record<string, unknown>, run
     media,
     message: media ? undefined : message,
     replyTo: resolveSendReplyTo(opts),
+    forceDocument: readBooleanOpt(opts, "forceDocument") || readBooleanOpt(opts, "asDocument"),
     voice: readBooleanOpt(opts, "voice") || readBooleanOpt(opts, "audioAsVoice"),
   });
   if (readBooleanOpt(opts, "json")) {

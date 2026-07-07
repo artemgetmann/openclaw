@@ -495,6 +495,7 @@ export async function runTelegramUserSend(
     media?: string | null;
     message?: string | null;
     replyTo?: number | null;
+    forceDocument?: boolean | null;
     voice?: boolean | null;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserSendResult> {
@@ -503,6 +504,9 @@ export async function runTelegramUserSend(
   pushOptionalStringArg(args, "--media", params.media);
   pushOptionalStringArg(args, "--caption", params.caption);
   pushOptionalNumberArg(args, "--reply-to", params.replyTo);
+  if (params.forceDocument) {
+    args.push("--force-document");
+  }
   if (params.voice) {
     args.push("--voice");
   }

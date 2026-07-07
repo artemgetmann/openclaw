@@ -39,7 +39,7 @@ final class ScreenRecordService {
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
@@ -100,7 +100,7 @@ final class ScreenRecordService {
         }
 
         try await recorder.finish()
-        return (path: outURL.path, hasAudio: recorder.hasAudio)
+        return (path: outURL.path, durationMs: durationMs, hasAudio: recorder.hasAudio)
     }
 
     private struct CapturePlan {
@@ -186,8 +186,20 @@ final class ScreenRecordService {
     }
 
     private static func pickBestWindow(_ windows: [SCWindow]) -> SCWindow? {
-        windows
+        let visibleWindows = windows
             .filter { $0.isOnScreen && $0.frame.width > 0 && $0.frame.height > 0 }
+
+        // Stage Manager exposes tiny app thumbnails as on-screen windows. Those
+        // are useful for macOS switching, but they are not credible proof
+        // targets; silently recording one produces a tiny MP4 that looks valid
+        // while proving the wrong UI. App-name matching should therefore choose
+        // only realistic windows, while explicit --window-id remains exact.
+        let realisticWindows = visibleWindows.filter { window in
+            let frame = window.frame
+            return frame.width >= 320 && frame.height >= 240 && frame.width * frame.height >= 100_000
+        }
+
+        return realisticWindows
             .sorted {
                 if $0.isActive != $1.isActive { return $0.isActive && !$1.isActive }
                 let lhsArea = $0.frame.width * $0.frame.height

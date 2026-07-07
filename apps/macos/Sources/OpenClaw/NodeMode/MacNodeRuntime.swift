@@ -363,7 +363,7 @@ actor MacNodeRuntime {
         let payload = try Self.encodePayload(ScreenPayload(
             format: "mp4",
             base64: data.base64EncodedString(),
-            durationMs: params.durationMs,
+            durationMs: res.durationMs,
             fps: params.fps,
             screenIndex: params.screenIndex,
             appName: params.appName,
