@@ -35,6 +35,16 @@ export function isWhatsAppUserTarget(value: string): boolean {
   return WHATSAPP_USER_JID_RE.test(candidate) || WHATSAPP_LID_RE.test(candidate);
 }
 
+export function normalizeWhatsAppLidJid(value: string): string | null {
+  const candidate = stripWhatsAppTargetPrefixes(value);
+  const match = candidate.match(WHATSAPP_LID_RE);
+  return match ? `${match[1]}@lid` : null;
+}
+
+export function isWhatsAppLidJid(value: string): boolean {
+  return normalizeWhatsAppLidJid(value) !== null;
+}
+
 /**
  * Extract the phone number from a WhatsApp user JID.
  * "41796666864:0@s.whatsapp.net" -> "41796666864"
