@@ -26,6 +26,12 @@ import {
   resolveTelegramMonitorLaunchAgentLabel,
   resolveTelegramMonitorSystemdServiceName,
   resolveTelegramMonitorWindowsTaskName,
+  WHATSAPP_MONITOR_SERVICE_KIND,
+  WHATSAPP_MONITOR_SERVICE_MARKER,
+  WHATSAPP_MONITOR_WINDOWS_TASK_SCRIPT_NAME,
+  resolveWhatsAppMonitorLaunchAgentLabel,
+  resolveWhatsAppMonitorSystemdServiceName,
+  resolveWhatsAppMonitorWindowsTaskName,
 } from "./constants.js";
 
 export type MinimalServicePathOptions = {
@@ -410,6 +416,37 @@ export function buildTelegramMonitorServiceEnvironment(params: {
     OPENCLAW_SERVICE_VERSION: VERSION,
     // launchd/systemd already supervise the poller. Keep the managed PID as
     // the long-lived process instead of spawning a warning-suppression child.
+    OPENCLAW_NO_RESPAWN: "1",
+  };
+}
+
+export function buildWhatsAppMonitorServiceEnvironment(params: {
+  env: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+}): Record<string, string | undefined> {
+  const { env } = params;
+  const platform = params.platform ?? process.platform;
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const profile = env.OPENCLAW_PROFILE;
+  const gatewayToken =
+    env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+  return {
+    ...buildCommonServiceEnvironment(env, sharedEnv),
+    OPENCLAW_CONSUMER_INSTANCE_ID: env.OPENCLAW_CONSUMER_INSTANCE_ID,
+    OPENCLAW_HOME: env.OPENCLAW_HOME,
+    OPENCLAW_LOG_DIR: env.OPENCLAW_LOG_DIR,
+    OPENCLAW_PROFILE: profile,
+    OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_LAUNCHD_LABEL: resolveWhatsAppMonitorLaunchAgentLabel(profile),
+    OPENCLAW_SYSTEMD_UNIT: resolveWhatsAppMonitorSystemdServiceName(profile),
+    OPENCLAW_WINDOWS_TASK_NAME: resolveWhatsAppMonitorWindowsTaskName(profile),
+    OPENCLAW_TASK_SCRIPT_NAME: WHATSAPP_MONITOR_WINDOWS_TASK_SCRIPT_NAME,
+    OPENCLAW_LOG_PREFIX: "whatsapp-monitor",
+    OPENCLAW_SERVICE_MARKER: WHATSAPP_MONITOR_SERVICE_MARKER,
+    OPENCLAW_SERVICE_KIND: WHATSAPP_MONITOR_SERVICE_KIND,
+    OPENCLAW_SERVICE_VERSION: VERSION,
+    // The supervisor owns process lifetime. The poller must remain the tracked
+    // long-lived process so status and restart operations target the real service.
     OPENCLAW_NO_RESPAWN: "1",
   };
 }

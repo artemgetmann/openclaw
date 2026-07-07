@@ -58,7 +58,7 @@ function readPositiveIntegerOpt(
   return value;
 }
 
-function resolveLocalMonitorHookUrl(hookUrl: string): string {
+export function resolveLocalWhatsAppMonitorHookUrl(hookUrl: string): string {
   let url: URL;
   try {
     url = new URL(hookUrl);
@@ -148,7 +148,7 @@ export async function whatsappMonitorPollCommand(
   }
 
   const hookUrl = readStringOpt(opts, "hookUrl");
-  const localHookUrl = hookUrl ? resolveLocalMonitorHookUrl(hookUrl) : undefined;
+  const localHookUrl = hookUrl ? resolveLocalWhatsAppMonitorHookUrl(hookUrl) : undefined;
   const commitWithoutDispatch = readBooleanOpt(opts, "commitWithoutDispatch");
   const watch = readBooleanOpt(opts, "watch");
   const maxRuns = readPositiveIntegerOpt(opts, "maxRuns", "--max-runs", "WhatsApp monitor poll");

@@ -342,3 +342,42 @@ export async function resolveTelegramMonitorProgramArguments(params: {
     nodePath: params.nodePath,
   });
 }
+
+export async function resolveWhatsAppMonitorProgramArguments(params: {
+  cronStore?: string;
+  cursorStore?: string;
+  dbPath: string;
+  hookUrl: string;
+  intervalMs: number;
+  monitorStore?: string;
+  dev?: boolean;
+  runtime?: GatewayRuntimePreference;
+  nodePath?: string;
+}): Promise<GatewayProgramArgs> {
+  const args = [
+    "whatsapp-monitor",
+    "poll",
+    "--watch",
+    "--db-path",
+    params.dbPath,
+    "--poll-interval-ms",
+    String(params.intervalMs),
+    "--hook-url",
+    params.hookUrl,
+  ];
+  if (params.cronStore) {
+    args.push("--cron-store", params.cronStore);
+  }
+  if (params.monitorStore) {
+    args.push("--monitor-store", params.monitorStore);
+  }
+  if (params.cursorStore) {
+    args.push("--cursor-store", params.cursorStore);
+  }
+  return resolveCliProgramArguments({
+    args,
+    dev: params.dev,
+    runtime: params.runtime,
+    nodePath: params.nodePath,
+  });
+}
