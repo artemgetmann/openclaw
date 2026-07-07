@@ -186,7 +186,6 @@ describe("resolveWhatsAppMonitorProgramArguments", () => {
       dbPath: "/tmp/wacli.db",
       hookUrl: "http://127.0.0.1:18789/hooks/monitor-event",
       intervalMs: 2500,
-      maxRuns: 3,
       monitorStore: "/tmp/monitors.json",
       nodePath: "/opt/homebrew/opt/node@22/bin/node",
       runtime: "node",
@@ -210,10 +209,9 @@ describe("resolveWhatsAppMonitorProgramArguments", () => {
       "/tmp/monitors.json",
       "--cursor-store",
       "/tmp/cursors.json",
-      "--max-runs",
-      "3",
     ]);
     expect(result.programArguments).not.toContain("--hook-token");
+    expect(result.programArguments).not.toContain("--max-runs");
     expect(result.workingDirectory).toBe(path.resolve("/repo"));
   });
 });

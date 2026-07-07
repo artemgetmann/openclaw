@@ -349,7 +349,6 @@ export async function resolveWhatsAppMonitorProgramArguments(params: {
   dbPath: string;
   hookUrl: string;
   intervalMs: number;
-  maxRuns?: number;
   monitorStore?: string;
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
@@ -374,9 +373,6 @@ export async function resolveWhatsAppMonitorProgramArguments(params: {
   }
   if (params.cursorStore) {
     args.push("--cursor-store", params.cursorStore);
-  }
-  if (params.maxRuns !== undefined) {
-    args.push("--max-runs", String(params.maxRuns));
   }
   return resolveCliProgramArguments({
     args,

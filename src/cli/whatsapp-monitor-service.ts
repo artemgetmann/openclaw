@@ -46,7 +46,6 @@ type WhatsAppMonitorServiceInstallOptions = {
   force?: boolean;
   hookUrl?: string;
   json?: boolean;
-  maxRuns?: string | number;
   monitorStore?: string;
   pollIntervalMs?: string | number;
   runtime?: string;
@@ -85,8 +84,12 @@ function renderWhatsAppMonitorServiceStartHints(env: NodeJS.ProcessEnv = process
   const daemonEnv = resolveWhatsAppMonitorServiceCliEnv(env);
   const profile = daemonEnv.OPENCLAW_PROFILE;
   return buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw whatsapp-monitor monitor-service install"),
-    startCommand: formatCliCommand("openclaw whatsapp-monitor monitor-service install --force"),
+    installCommand: formatCliCommand(
+      "openclaw whatsapp-monitor monitor-service install --db-path /path/to/wacli.db",
+    ),
+    startCommand: formatCliCommand(
+      "openclaw whatsapp-monitor monitor-service install --db-path /path/to/wacli.db --force",
+    ),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveWhatsAppMonitorLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveWhatsAppMonitorSystemdServiceName(profile),
     windowsTaskName: resolveWhatsAppMonitorWindowsTaskName(profile),
@@ -130,12 +133,10 @@ export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServ
 
   let dbPath: string;
   let intervalMs: number;
-  let maxRuns: number | undefined;
   try {
     dbPath = readRequiredStringOption(opts.dbPath, "--db-path");
     intervalMs =
       readPositiveIntegerOption(opts.pollIntervalMs ?? "1000", "--poll-interval-ms") ?? 1000;
-    maxRuns = readPositiveIntegerOption(opts.maxRuns, "--max-runs") ?? undefined;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     return;
@@ -160,7 +161,7 @@ export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServ
     if (!json) {
       defaultRuntime.log(`WhatsApp monitor service already ${service.loadedText}.`);
       defaultRuntime.log(
-        `Reinstall with: ${formatCliCommand("openclaw whatsapp-monitor monitor-service install --force")}`,
+        `Reinstall with: ${formatCliCommand("openclaw whatsapp-monitor monitor-service install --db-path /path/to/wacli.db --force")}`,
       );
     }
     return;
@@ -173,7 +174,6 @@ export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServ
     env: process.env,
     hookUrl: opts.hookUrl,
     intervalMs,
-    maxRuns,
     monitorStore: opts.monitorStore,
     runtime: runtimeRaw,
     warn: (message) => {

@@ -87,7 +87,6 @@ export function registerWhatsAppMonitorCli(program: Command) {
     .option("--cursor-store <path>", "Cursor store path; overrides derivation from monitor store")
     .option("--hook-url <url>", "Gateway /hooks/monitor-event URL for dispatching matched events")
     .option("--poll-interval-ms <ms>", "Delay between poll runs", "1000")
-    .option("--max-runs <n>", "Stop after this many polls; intended for smoke tests")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)

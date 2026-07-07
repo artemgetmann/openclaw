@@ -91,7 +91,6 @@ describe("whatsapp monitor service install helpers", () => {
         OPENCLAW_GATEWAY_TOKEN: " secret-token ",
       },
       intervalMs: 2500,
-      maxRuns: 3,
       monitorStore: "/tmp/monitors.json",
       runtime: "node",
     });
@@ -103,7 +102,6 @@ describe("whatsapp monitor service install helpers", () => {
         dbPath: "/tmp/wacli.db",
         hookUrl: "http://127.0.0.1:18888/hooks/monitor-event",
         intervalMs: 2500,
-        maxRuns: 3,
         monitorStore: "/tmp/monitors.json",
         nodePath: "/usr/local/bin/node",
         runtime: "node",

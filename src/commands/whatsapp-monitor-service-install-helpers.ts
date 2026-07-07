@@ -48,7 +48,6 @@ export async function buildWhatsAppMonitorServiceInstallPlan(params: {
   env: Record<string, string | undefined>;
   hookUrl?: string;
   intervalMs: number;
-  maxRuns?: number;
   monitorStore?: string;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
@@ -74,7 +73,6 @@ export async function buildWhatsAppMonitorServiceInstallPlan(params: {
     dbPath: params.dbPath,
     hookUrl,
     intervalMs: params.intervalMs,
-    maxRuns: params.maxRuns,
     monitorStore: params.monitorStore,
     dev: devMode,
     runtime: params.runtime,
