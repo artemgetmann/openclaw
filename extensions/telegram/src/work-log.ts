@@ -55,23 +55,32 @@ function pruneExpiredWorkLogs(now = Date.now()) {
   }
 }
 
-function truncateSingleLine(input: string, maxChars: number): string {
-  const normalized = input.replace(/\s+/g, " ").trim();
+function normalizeProgressEntry(input: string, maxChars: number): string {
+  // Expanded Work Log entries are user-facing history, not compact telemetry.
+  // Preserve meaningful internal newlines so plan/checklist progress stays
+  // scannable instead of collapsing into one hard-to-read sentence.
+  const normalized = input
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
   if (normalized.length <= maxChars) {
     return normalized;
   }
-  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
 function normalizeProgressEntries(entries: readonly string[]): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const rawEntry of entries) {
-    const entry = truncateSingleLine(rawEntry, MAX_PROGRESS_ENTRY_CHARS);
+    const entry = normalizeProgressEntry(rawEntry, MAX_PROGRESS_ENTRY_CHARS);
     if (!entry) {
       continue;
     }
-    const key = entry.toLowerCase();
+    const key = entry.replace(/\s+/g, " ").toLowerCase();
     if (seen.has(key)) {
       continue;
     }

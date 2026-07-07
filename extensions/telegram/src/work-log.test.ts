@@ -31,6 +31,29 @@ describe("telegram work log", () => {
     });
   });
 
+  it("preserves meaningful internal newlines in expanded progress entries", () => {
+    const entry = registerTelegramWorkLog({
+      progressEntries: [
+        ["Plan updated", "- [x] Inspect files", "- [~] Render checklist", "- [ ] Run tests"].join(
+          "\n",
+        ),
+      ],
+      now: 1000,
+    });
+
+    expect(renderTelegramWorkLog(entry!, true)).toEqual({
+      text: [
+        "Work log",
+        "",
+        "Plan updated",
+        "- [x] Inspect files",
+        "- [~] Render checklist",
+        "- [ ] Run tests",
+      ].join("\n"),
+      buttons: [[{ text: "Hide", callback_data: "wl:1:hide" }]],
+    });
+  });
+
   it("expires old entries and builds mutable Telegram reply markup", () => {
     const entry = registerTelegramWorkLog({
       progressEntries: ["Checking state"],
