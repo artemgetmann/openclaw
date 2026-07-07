@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache } from "../config/config.js";
+import type { MonitorEventEnvelope } from "../monitor/types.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -522,6 +523,48 @@ describe("exec approvals", () => {
     expect(vi.mocked(enqueueSystemEventForOrigin).mock.calls[0]?.[0]).toContain(
       "untrusted command output",
     );
+  });
+
+  it("preserves monitorExit when an approved gateway exec runs in the async follow-up path", async () => {
+    await writePromptingExecApprovalsConfig();
+    mockAcceptedApprovalFlow({});
+    const routeProcessExitMonitorEvent = vi.fn(async (_event: MonitorEventEnvelope) => undefined);
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      routeProcessExitMonitorEvent,
+    });
+
+    const result = await tool.execute("call-gw-monitor-exit", {
+      command: "echo approved-monitor",
+      background: true,
+      monitorExit: true,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect
+      .poll(() => routeProcessExitMonitorEvent.mock.calls.length, {
+        timeout: 3_000,
+        interval: 20,
+      })
+      .toBe(1);
+
+    expect(routeProcessExitMonitorEvent.mock.calls[0]?.[0]).toMatchObject({
+      triggerKind: "process_exit",
+      sourceType: "exec",
+      eventType: "completed",
+      sourceTarget: {
+        sessionKey: "agent:main:main",
+      },
+      evidence: {
+        command: "echo approved-monitor",
+        status: "completed",
+        tail: expect.stringContaining("approved-monitor"),
+      },
+    });
   });
 
   it("preserves the originating delivery route when queuing exec completion context", async () => {

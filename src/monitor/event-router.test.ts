@@ -270,6 +270,59 @@ describe("monitor event router", () => {
     expect(wrongChat).toEqual([]);
   });
 
+  it("routes process_exit events only to the armed exec session", () => {
+    const monitor = baseMonitor({
+      sourceType: "exec",
+      sourceTarget: { sessionId: "exec-session-1" },
+      trigger: {
+        kind: "process_exit",
+        match: {
+          sourceType: "exec",
+          sourceTarget: { sessionId: "exec-session-1" },
+          eventTypes: ["completed", "failed"],
+        },
+      },
+    });
+
+    const matching = routeMonitorEvent({
+      monitors: [monitor],
+      event: {
+        triggerKind: "process_exit",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-1" },
+        eventType: "completed",
+        evidence: { command: "pnpm test", tail: "done" },
+      },
+    });
+    const wrongSession = routeMonitorEvent({
+      monitors: [monitor],
+      event: {
+        triggerKind: "process_exit",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-2" },
+        eventType: "completed",
+      },
+    });
+    const wrongEventType = routeMonitorEvent({
+      monitors: [monitor],
+      event: {
+        triggerKind: "process_exit",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-1" },
+        eventType: "heartbeat",
+      },
+    });
+
+    expect(matching).toHaveLength(1);
+    expect(matching[0]).toMatchObject({
+      monitorId: "monitor-1",
+      cronJobId: "cron-job-1",
+      originSessionKey: "agent:main:telegram:direct:19098680",
+    });
+    expect(wrongSession).toEqual([]);
+    expect(wrongEventType).toEqual([]);
+  });
+
   it("treats telegram-user trigger targets as canonical routing keys", () => {
     const routes = routeMonitorEvent({
       monitors: [

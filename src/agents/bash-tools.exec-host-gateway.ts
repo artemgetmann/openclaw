@@ -12,6 +12,7 @@ import {
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
+import type { MonitorEventEnvelope } from "../monitor/types.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -56,6 +57,8 @@ export type ProcessGatewayAllowlistParams = {
   scopeKey?: string;
   warnings: string[];
   notifySessionKey?: string;
+  monitorExit?: boolean;
+  routeProcessExitMonitorEvent?: (event: MonitorEventEnvelope) => Promise<void> | void;
   approvalRunningNoticeMs: number;
   maxOutput: number;
   pendingMaxOutput: number;
@@ -268,6 +271,8 @@ export async function processGatewayAllowlist(
           pendingMaxOutput: params.pendingMaxOutput,
           notifyOnExit: false,
           notifyOnExitEmptySuccess: false,
+          monitorExit: params.monitorExit === true,
+          routeProcessExitMonitorEvent: params.routeProcessExitMonitorEvent,
           scopeKey: params.scopeKey,
           sessionKey: params.notifySessionKey,
           timeoutSec: effectiveTimeout,
