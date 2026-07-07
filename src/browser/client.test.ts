@@ -149,7 +149,11 @@ describe("browser client", () => {
       {},
     );
 
-    expect(calls[0]?.init?.timeoutMs).toBe(60_000);
+    const openBody = calls[0]?.init?.body;
+    expect(calls[0]?.init?.timeoutMs).toBe(95_000);
+    expect(typeof openBody === "string" ? JSON.parse(openBody) : null).toMatchObject({
+      timeoutMs: 60_000,
+    });
     expect(calls[1]?.init?.timeoutMs).toBe(55_000);
     expect(calls[2]?.init?.timeoutMs).toBe(50_000);
     expect(calls[3]?.init?.timeoutMs).toBe(65_000);
