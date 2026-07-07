@@ -7,6 +7,10 @@ import { fetchBrowserJson } from "./client-fetch.js";
 export const BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS = 60_000;
 const BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS = BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS;
 const BROWSER_PAGE_LOAD_TIMEOUT_MS = 45_000;
+// `tabs/open` can recover when Chrome MCP opens a tab but the `new_page` tool
+// itself times out. That recovery lists pages after the operation timeout, so
+// the outer client request needs slack or it aborts the recovery path first.
+const BROWSER_OPEN_RECOVERY_SLACK_MS = 35_000;
 const BROWSER_STATUS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_PROFILES_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_TABS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
@@ -268,6 +272,7 @@ export async function browserOpenTab(
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
   const timeoutMs = Math.max(BROWSER_PAGE_LOAD_TIMEOUT_MS, opts?.timeoutMs ?? 0);
+  const requestTimeoutMs = timeoutMs + BROWSER_OPEN_RECOVERY_SLACK_MS;
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -275,7 +280,7 @@ export async function browserOpenTab(
       url,
       timeoutMs,
     }),
-    timeoutMs,
+    timeoutMs: requestTimeoutMs,
   });
 }
 

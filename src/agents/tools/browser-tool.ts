@@ -572,6 +572,19 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   return capabilities.usesChromeMcp || profile.cloneFromUserProfile;
 }
 
+function shouldUseExistingSessionOpenBudget(profileName: string | undefined): boolean {
+  if (!profileName) {
+    return false;
+  }
+  if (profileName === "user-live") {
+    return true;
+  }
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const profile = resolveProfile(resolved, profileName);
+  return !!profile && getBrowserProfileCapabilities(profile).usesChromeMcp;
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -799,16 +812,15 @@ export function createBrowserTool(opts?: {
           case "open": {
             const targetUrl = readTargetUrlParam(params);
             const { timeoutMs } = readOptionalTargetAndTimeout(params);
-            const effectiveTimeoutMs =
-              profile === "user-live"
-                ? Math.max(timeoutMs ?? 0, BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS)
-                : timeoutMs;
+            const effectiveTimeoutMs = shouldUseExistingSessionOpenBudget(profile)
+              ? Math.max(timeoutMs ?? 0, BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS)
+              : timeoutMs;
             if (proxyRequest) {
               const result = await proxyRequest({
                 method: "POST",
                 path: "/tabs/open",
                 profile,
-                body: { url: targetUrl },
+                body: { url: targetUrl, timeoutMs: effectiveTimeoutMs },
                 timeoutMs: effectiveTimeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
               });
               return jsonResult(result);
