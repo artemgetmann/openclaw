@@ -413,6 +413,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolResult?.({
+          text: "Reading the repo.",
+          channelData: { openclaw: { sourcePreview: true } },
+        });
+        await replyOptions?.onToolResult?.({
           text: "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
           channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
         });
@@ -428,16 +432,21 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(progressStream.update).toHaveBeenNthCalledWith(
-      1,
-      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
-    );
+    expect(progressStream.update).toHaveBeenNthCalledWith(1, "Reading the repo.");
     expect(progressStream.update).toHaveBeenNthCalledWith(
       2,
-      "Plan updated\n\n- [x] Inspect files\n\n- [x] Render checklist\n\n- [~] Run tests",
+      "Reading the repo.\n\nPlan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+    );
+    expect(progressStream.update).toHaveBeenNthCalledWith(
+      3,
+      [
+        "Reading the repo.",
+        "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
+        "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
+      ].join("\n\n"),
     );
     expect(progressStream.update).toHaveBeenCalledWith("Work log");
-    expect(progressStream.update).toHaveBeenCalledTimes(3);
+    expect(progressStream.update).toHaveBeenCalledTimes(4);
     expect(progressStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -477,7 +486,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(progressStream.update).toHaveBeenCalledWith(
-      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Write temp report\n\n- [ ] Summarize",
+      "Plan updated\n- [~] Inspect files\n- [ ] Write temp report\n- [ ] Summarize",
     );
     expect(progressStream.update).not.toHaveBeenCalledWith(finalText);
     expect(answerStream.update).toHaveBeenCalledWith(finalText);

@@ -101,17 +101,57 @@ export function createTelegramProgressController(params: {
   const progressEntryKeys = new Set<string>();
 
   const normalizeProgressEntryKey = (entry: string) => entry.replace(/\s+/g, " ").trim();
+  const isStructuredProgressBlock = (entry: string) => {
+    const lines = entry.split(/\n/).map((line) => line.trim());
+    const meaningfulLines = lines.filter(Boolean);
+    const checklistLines = meaningfulLines.filter((line) => /^[-*]\s+\[[ xX~]\]\s+/.test(line));
+    return checklistLines.length > 0 && meaningfulLines.length > checklistLines.length;
+  };
+
+  const splitProgressEntries = (text: string) => {
+    const normalizedText = text.replace(/\r\n?/g, "\n").trim();
+    if (!normalizedText) {
+      return [];
+    }
+    if (isStructuredProgressBlock(normalizedText)) {
+      return [normalizedText];
+    }
+    // Plain provider progress can arrive as a cumulative newline-delimited
+    // snapshot. Split only unstructured text so checklists keep their shape.
+    return normalizedText
+      .split(/\n+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  };
+
+  const truncateProgressEntry = (entry: string) => {
+    if (entry.length <= maxProgressChars) {
+      return entry;
+    }
+    const lines = entry
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length <= 1) {
+      return entry.slice(0, maxProgressChars);
+    }
+    const retained: string[] = [];
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const candidate = [lines[index], ...retained].join("\n");
+      if (candidate.length > maxProgressChars) {
+        if (retained.length === 0) {
+          retained.unshift(lines[index].slice(0, maxProgressChars));
+        }
+        break;
+      }
+      retained.unshift(lines[index]);
+    }
+    return retained.join("\n");
+  };
 
   const appendProgressEntries = (text: string) => {
     let didAppend = false;
-    // Providers can deliver one status per block or an already-joined block.
-    // Store one logical line per entry so repeated cumulative snapshots do not
-    // duplicate earlier progress inside the single transient Telegram bubble.
-    for (const rawEntry of text.split(/\n+/)) {
-      const entry = rawEntry.trim();
-      if (!entry) {
-        continue;
-      }
+    for (const entry of splitProgressEntries(text)) {
       const key = normalizeProgressEntryKey(entry);
       if (progressEntryKeys.has(key)) {
         continue;
@@ -132,9 +172,7 @@ export function createTelegramProgressController(params: {
     }
 
     const latestEntry = entries[entries.length - 1] ?? "";
-    const retained: string[] = [
-      latestEntry.length > maxProgressChars ? latestEntry.slice(0, maxProgressChars) : latestEntry,
-    ];
+    const retained: string[] = [truncateProgressEntry(latestEntry)];
     for (let index = entries.length - 2; index >= 0; index -= 1) {
       const candidate = [entries[index], ...retained].join(PROGRESS_ENTRY_SEPARATOR);
       // This text is shown directly in Telegram previews/drafts. Do not add a
@@ -201,11 +239,9 @@ export function createTelegramProgressController(params: {
       if (!progressText) {
         return;
       }
-      // Replacement snapshots, such as plan checklists, become the new progress
-      // baseline. Later append-style updates must not resurrect pre-snapshot
-      // history from progressEntries.
-      progressEntries.length = 0;
-      progressEntryKeys.clear();
+      // Telegram consumer progress is a visible work history. Even callers
+      // that still use the older replace hook should append so a structural
+      // plan snapshot cannot erase earlier model-authored progress.
       appendProgressEntries(progressText);
       const replacementProgressText = renderProgressHistory();
       if (!replacementProgressText) {
