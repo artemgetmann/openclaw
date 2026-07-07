@@ -88,6 +88,7 @@ export type MonitorRecord = {
 export type MonitorStoreFile = {
   version: 1;
   monitors: MonitorRecord[];
+  pendingEvents?: MonitorEventEnvelope[];
 };
 
 export type MonitorCreateInput = {

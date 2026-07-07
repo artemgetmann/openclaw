@@ -58,6 +58,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { callGatewayTool } from "./tools/gateway.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -447,6 +448,9 @@ export function createOpenClawCodingTools(options?: {
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     notifyOnExitEmptySuccess:
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+    routeProcessExitMonitorEvent:
+      options?.exec?.routeProcessExitMonitorEvent ??
+      ((event) => callGatewayTool("monitor.routeEvent", {}, event)),
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,

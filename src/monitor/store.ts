@@ -17,6 +17,7 @@ export const DEFAULT_MONITOR_DIR = path.join(CONFIG_DIR, "monitors");
 export const DEFAULT_MONITOR_STORE_PATH = path.join(DEFAULT_MONITOR_DIR, "monitors.json");
 
 const serializedStoreCache = new Map<string, string>();
+const monitorStoreWriteLocks = new Map<string, Promise<void>>();
 
 type MonitorIdentityInput = {
   agentId: string;
@@ -104,7 +105,14 @@ export async function loadMonitorStore(storePath: string): Promise<MonitorStoreF
     const monitors = Array.isArray(parsedRecord.monitors)
       ? (parsedRecord.monitors as MonitorRecord[])
       : [];
-    const store = { version: 1 as const, monitors: monitors.filter(Boolean) };
+    const pendingEvents = Array.isArray(parsedRecord.pendingEvents)
+      ? (parsedRecord.pendingEvents as MonitorStoreFile["pendingEvents"])?.filter(Boolean)
+      : undefined;
+    const store = {
+      version: 1 as const,
+      monitors: monitors.filter(Boolean),
+      ...(pendingEvents?.length ? { pendingEvents } : {}),
+    };
     serializedStoreCache.set(storePath, JSON.stringify(store, null, 2));
     return store;
   } catch (err) {
@@ -113,6 +121,29 @@ export async function loadMonitorStore(storePath: string): Promise<MonitorStoreF
       return { version: 1, monitors: [] };
     }
     throw err;
+  }
+}
+
+export async function withMonitorStoreWriteLock<T>(
+  storePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = monitorStoreWriteLocks.get(storePath) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const current = previous.catch(() => undefined).then(() => gate);
+  monitorStoreWriteLocks.set(storePath, current);
+
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (monitorStoreWriteLocks.get(storePath) === current) {
+      monitorStoreWriteLocks.delete(storePath);
+    }
   }
 }
 

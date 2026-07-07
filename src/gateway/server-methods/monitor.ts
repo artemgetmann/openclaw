@@ -19,6 +19,7 @@ import {
   resolveMonitorStorePath,
   saveMonitorStore,
   updateMonitorRecord,
+  withMonitorStoreWriteLock,
 } from "../../monitor/store.js";
 import {
   isTerminalMonitorStatus,
@@ -326,16 +327,137 @@ export type MonitorEventDispatchResult = {
   >;
 };
 
+const MAX_PENDING_PROCESS_EXIT_EVENTS = 100;
+
+function monitorEventIdentityKey(event: MonitorEventEnvelope): string {
+  const idempotencyKey = event.idempotencyKey?.trim();
+  if (idempotencyKey) {
+    return idempotencyKey;
+  }
+  return JSON.stringify({
+    triggerKind: event.triggerKind,
+    sourceType: event.sourceType,
+    sourceTarget: event.sourceTarget,
+    eventType: event.eventType,
+    receivedAtMs: event.receivedAtMs,
+  });
+}
+
+async function replayPendingProcessExitEventsForMonitor(params: {
+  cronStorePath: string;
+  cron: Pick<CronService, "enqueueRun">;
+  monitorId: string;
+}) {
+  const store = await loadMonitorStore(resolveStorePath(params.cronStorePath));
+  const pendingProcessExitEvents =
+    store.pendingEvents?.filter((event) => event.triggerKind === "process_exit") ?? [];
+  for (const event of pendingProcessExitEvents) {
+    await dispatchMonitorEventToCronUnlocked({
+      cronStorePath: params.cronStorePath,
+      cron: params.cron,
+      event,
+      monitorId: params.monitorId,
+    });
+  }
+}
+
+async function replayPendingProcessExitEventsIfPossible(params: {
+  cronStorePath: string;
+  cron: unknown;
+  monitorId: string;
+}) {
+  const enqueueRun = (params.cron as Partial<Pick<CronService, "enqueueRun">>).enqueueRun;
+  if (typeof enqueueRun !== "function") {
+    return;
+  }
+  await replayPendingProcessExitEventsForMonitor({
+    cronStorePath: params.cronStorePath,
+    cron: { enqueueRun: enqueueRun.bind(params.cron) },
+    monitorId: params.monitorId,
+  });
+}
+
 export async function dispatchMonitorEventToCron(params: {
   cronStorePath: string;
   cron: Pick<CronService, "enqueueRun">;
   event: MonitorEventEnvelope;
   monitorId?: string;
 }): Promise<MonitorEventDispatchResult> {
-  const store = await loadMonitorStore(resolveStorePath(params.cronStorePath));
+  const storePath = resolveStorePath(params.cronStorePath);
+  return await withMonitorStoreWriteLock(
+    storePath,
+    async () => await dispatchMonitorEventToCronUnlocked(params),
+  );
+}
+
+async function dispatchMonitorEventToCronUnlocked(params: {
+  cronStorePath: string;
+  cron: Pick<CronService, "enqueueRun">;
+  event: MonitorEventEnvelope;
+  monitorId?: string;
+}): Promise<MonitorEventDispatchResult> {
+  const storePath = resolveStorePath(params.cronStorePath);
+  const store = await loadMonitorStore(storePath);
   const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event }).filter(
     (route) => !params.monitorId || route.monitorId === params.monitorId,
   );
+  if (params.event.triggerKind === "process_exit") {
+    let storeChanged = false;
+    const eventKey = monitorEventIdentityKey(params.event);
+    if (routes.length === 0 && !params.monitorId) {
+      // Fast background commands can exit before the monitor record exists.
+      // Keep a small durable one-shot backlog so monitor.create can replay it.
+      const pending = store.pendingEvents ?? [];
+      if (!pending.some((event) => monitorEventIdentityKey(event) === eventKey)) {
+        store.pendingEvents = [...pending, params.event]
+          .filter((event) => event.triggerKind === "process_exit")
+          .slice(-MAX_PENDING_PROCESS_EXIT_EVENTS);
+        storeChanged = true;
+      }
+    }
+    if (routes.length > 0 && store.pendingEvents?.length) {
+      const pending = store.pendingEvents.filter(
+        (event) => monitorEventIdentityKey(event) !== eventKey,
+      );
+      if (pending.length !== store.pendingEvents.length) {
+        if (pending.length) {
+          store.pendingEvents = pending;
+        } else {
+          delete store.pendingEvents;
+        }
+        storeChanged = true;
+      }
+    }
+    // Process output is local to the originating exec session, so persist the
+    // exit evidence before enqueueing the monitor wake that will inspect it.
+    for (const route of routes) {
+      const index = store.monitors.findIndex((monitor) => monitor.monitorId === route.monitorId);
+      if (index >= 0) {
+        const monitor = store.monitors[index];
+        store.monitors[index] = updateMonitorRecord(
+          monitor,
+          {
+            lastCheckpoint: {
+              ...monitor.lastCheckpoint,
+              processExitEvent: {
+                eventType: params.event.eventType,
+                idempotencyKey: params.event.idempotencyKey,
+                receivedAtMs: params.event.receivedAtMs,
+                sourceTarget: params.event.sourceTarget,
+                evidence: params.event.evidence,
+              },
+            },
+          },
+          Date.now(),
+        );
+        storeChanged = true;
+      }
+    }
+    if (storeChanged) {
+      await saveMonitorStore(storePath, store);
+    }
+  }
+
   const wakes: MonitorEventDispatchResult["wakes"] = [];
   for (const route of routes) {
     // The router only decides that this event belongs to the monitor. The
@@ -418,148 +540,161 @@ export const monitorHandlers: GatewayRequestHandlers = {
       lastCheckpoint?: Record<string, unknown>;
     };
     const storePath = resolveStorePath(context.cronStorePath);
-    const store = await loadMonitorStore(storePath);
-    const cfg = loadConfig();
-    const goal = await resolveMonitorGoalSnapshot({
-      explicitGoal: p.goal,
-      originSessionKey: p.originSessionKey,
-      agentId: p.agentId,
-      cfg,
-    });
-    const trigger = resolveMonitorCreateTrigger({
-      explicitTrigger: p.trigger,
-      goal,
-      sourceType: p.sourceType,
-      sourceTarget: p.sourceTarget,
-      cadence: p.cadence,
-    });
-    const existingMonitor = findActiveMonitorByCreateIdentity(store, {
-      agentId: p.agentId,
-      sourceType: p.sourceType,
-      sourceTarget: p.sourceTarget,
-      actionPolicy: p.actionPolicy,
-      purposeLabel: p.name,
-    });
-    if (existingMonitor) {
-      const reconciledTrigger = resolveMonitorCreateTrigger({
+    await withMonitorStoreWriteLock(storePath, async () => {
+      const store = await loadMonitorStore(storePath);
+      const cfg = loadConfig();
+      const goal = await resolveMonitorGoalSnapshot({
+        explicitGoal: p.goal,
+        originSessionKey: p.originSessionKey,
+        agentId: p.agentId,
+        cfg,
+      });
+      const trigger = resolveMonitorCreateTrigger({
         explicitTrigger: p.trigger,
         goal,
         sourceType: p.sourceType,
         sourceTarget: p.sourceTarget,
-        cadence: existingMonitor.cadence,
+        cadence: p.cadence,
       });
-      const nextTrigger =
-        reconciledTrigger ??
-        (!existingMonitor.trigger
-          ? buildScheduleMonitorTrigger(existingMonitor.cadence)
-          : undefined);
-      const goalChanged = goal
-        ? existingMonitor.goal?.id !== goal.id || existingMonitor.goal?.objective !== goal.objective
-        : existingMonitor.goal !== undefined;
-      const triggerChanged =
-        nextTrigger !== undefined &&
-        shouldUpgradeExistingTrigger(existingMonitor.trigger) &&
-        !monitorTriggersEqual(existingMonitor.trigger, nextTrigger);
-      const reconciled =
-        goalChanged || triggerChanged
-          ? updateMonitorRecord(
-              existingMonitor,
-              {
-                ...(goalChanged ? { goal } : {}),
-                ...(triggerChanged ? { trigger: nextTrigger } : {}),
-              },
-              Date.now(),
-            )
-          : existingMonitor;
-      if (reconciled !== existingMonitor) {
-        const index = store.monitors.findIndex(
-          (monitor) => monitor.monitorId === existingMonitor.monitorId,
-        );
-        if (index >= 0) {
-          store.monitors[index] = reconciled;
-          await saveMonitorStore(storePath, store);
-        }
-      }
-      respond(true, reconciled, undefined);
-      return;
-    }
-    const monitorId = crypto.randomBytes(12).toString("hex");
-    const watchDelivery = resolveMonitorWatchDelivery({
-      sourceType: p.sourceType,
-      sourceTarget: p.sourceTarget,
-      explicitWatchDelivery: p.watchDelivery,
-    });
-    const actionTarget = resolveMonitorActionTarget({
-      sourceType: p.sourceType,
-      sourceTarget: p.sourceTarget,
-      explicitWatchDelivery: watchDelivery,
-    });
-    const monitorSessionKey = toAgentStoreSessionKey({
-      agentId: p.agentId,
-      requestKey: `monitor:${monitorId}`,
-      mainKey: cfg.session?.mainKey,
-    });
-    const cronDelivery = resolveMonitorOriginDelivery({
-      originSessionKey: p.originSessionKey,
-      originDelivery: p.originDelivery,
-    });
-    const cronJob: CronJobCreate = {
-      name: p.name?.trim() || `${p.sourceType.trim()} monitor`,
-      enabled: true,
-      schedule: p.cadence,
-      sessionTarget: `session:${monitorSessionKey}`,
-      wakeMode: "next-heartbeat",
-      payload: {
-        kind: "monitorWake",
-        monitorId,
-      },
-      delivery: cronDelivery,
-      agentId: p.agentId,
-    };
-    const createdJob = await context.cron.add(cronJob);
-    const monitor = createMonitorRecord(
-      {
-        monitorId,
+      const existingMonitor = findActiveMonitorByCreateIdentity(store, {
         agentId: p.agentId,
-        name: p.name,
+        sourceType: p.sourceType,
+        sourceTarget: p.sourceTarget,
+        actionPolicy: p.actionPolicy,
+        purposeLabel: p.name,
+      });
+      if (existingMonitor) {
+        const reconciledTrigger = resolveMonitorCreateTrigger({
+          explicitTrigger: p.trigger,
+          goal,
+          sourceType: p.sourceType,
+          sourceTarget: p.sourceTarget,
+          cadence: existingMonitor.cadence,
+        });
+        const nextTrigger =
+          reconciledTrigger ??
+          (!existingMonitor.trigger
+            ? buildScheduleMonitorTrigger(existingMonitor.cadence)
+            : undefined);
+        const goalChanged = goal
+          ? existingMonitor.goal?.id !== goal.id ||
+            existingMonitor.goal?.objective !== goal.objective
+          : existingMonitor.goal !== undefined;
+        const triggerChanged =
+          nextTrigger !== undefined &&
+          shouldUpgradeExistingTrigger(existingMonitor.trigger) &&
+          !monitorTriggersEqual(existingMonitor.trigger, nextTrigger);
+        const reconciled =
+          goalChanged || triggerChanged
+            ? updateMonitorRecord(
+                existingMonitor,
+                {
+                  ...(goalChanged ? { goal } : {}),
+                  ...(triggerChanged ? { trigger: nextTrigger } : {}),
+                },
+                Date.now(),
+              )
+            : existingMonitor;
+        if (reconciled !== existingMonitor) {
+          const index = store.monitors.findIndex(
+            (monitor) => monitor.monitorId === existingMonitor.monitorId,
+          );
+          if (index >= 0) {
+            store.monitors[index] = reconciled;
+            await saveMonitorStore(storePath, store);
+          }
+        }
+        await replayPendingProcessExitEventsIfPossible({
+          cronStorePath: context.cronStorePath,
+          cron: context.cron,
+          monitorId: reconciled.monitorId,
+        });
+        respond(true, reconciled, undefined);
+        return;
+      }
+      const monitorId = crypto.randomBytes(12).toString("hex");
+      const watchDelivery = resolveMonitorWatchDelivery({
+        sourceType: p.sourceType,
+        sourceTarget: p.sourceTarget,
+        explicitWatchDelivery: p.watchDelivery,
+      });
+      const actionTarget = resolveMonitorActionTarget({
+        sourceType: p.sourceType,
+        sourceTarget: p.sourceTarget,
+        explicitWatchDelivery: watchDelivery,
+      });
+      const monitorSessionKey = toAgentStoreSessionKey({
+        agentId: p.agentId,
+        requestKey: `monitor:${monitorId}`,
+        mainKey: cfg.session?.mainKey,
+      });
+      const cronDelivery = resolveMonitorOriginDelivery({
         originSessionKey: p.originSessionKey,
-        originDelivery: createdJob.delivery,
-        ...(watchDelivery ? { watchDelivery } : {}),
-        monitorSessionKey,
+        originDelivery: p.originDelivery,
+      });
+      const cronJob: CronJobCreate = {
+        name: p.name?.trim() || `${p.sourceType.trim()} monitor`,
+        enabled: true,
+        schedule: p.cadence,
+        sessionTarget: `session:${monitorSessionKey}`,
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "monitorWake",
+          monitorId,
+        },
+        delivery: cronDelivery,
+        agentId: p.agentId,
+      };
+      const createdJob = await context.cron.add(cronJob);
+      const monitor = createMonitorRecord(
+        {
+          monitorId,
+          agentId: p.agentId,
+          name: p.name,
+          originSessionKey: p.originSessionKey,
+          originDelivery: createdJob.delivery,
+          ...(watchDelivery ? { watchDelivery } : {}),
+          monitorSessionKey,
+          sourceType: p.sourceType,
+          sourceTarget: p.sourceTarget,
+          cadence: p.cadence,
+          trigger,
+          expiryAt: p.expiryAt,
+          stopCondition: p.stopCondition,
+          actionPolicy: p.actionPolicy,
+          goal,
+          lastCheckpoint: p.lastCheckpoint,
+          cronJobId: createdJob.id,
+        },
+        Date.now(),
+      );
+      store.monitors.push(monitor);
+      await saveMonitorStore(storePath, store);
+      await seedMonitorSession({
+        cfg,
+        agentId: p.agentId,
+        sessionKey: monitor.monitorSessionKey,
+        sessionId: crypto.randomUUID(),
+        label: `Monitor: ${monitor.name ?? monitor.sourceType}`,
+        instructions: p.instructions,
         sourceType: p.sourceType,
         sourceTarget: p.sourceTarget,
         cadence: p.cadence,
-        trigger,
-        expiryAt: p.expiryAt,
         stopCondition: p.stopCondition,
-        actionPolicy: p.actionPolicy,
-        goal,
-        lastCheckpoint: p.lastCheckpoint,
-        cronJobId: createdJob.id,
-      },
-      Date.now(),
-    );
-    store.monitors.push(monitor);
-    await saveMonitorStore(storePath, store);
-    await seedMonitorSession({
-      cfg,
-      agentId: p.agentId,
-      sessionKey: monitor.monitorSessionKey,
-      sessionId: crypto.randomUUID(),
-      label: `Monitor: ${monitor.name ?? monitor.sourceType}`,
-      instructions: p.instructions,
-      sourceType: p.sourceType,
-      sourceTarget: p.sourceTarget,
-      cadence: p.cadence,
-      stopCondition: p.stopCondition,
-      expiryAt: p.expiryAt,
-      actionPolicy: monitor.actionPolicy,
-      goal: monitor.goal,
-      watchDeliveryConfigured: Boolean(actionTarget ?? watchDelivery),
-      originSessionKey: p.originSessionKey,
-      originDelivery: monitor.originDelivery,
+        expiryAt: p.expiryAt,
+        actionPolicy: monitor.actionPolicy,
+        goal: monitor.goal,
+        watchDeliveryConfigured: Boolean(actionTarget ?? watchDelivery),
+        originSessionKey: p.originSessionKey,
+        originDelivery: monitor.originDelivery,
+      });
+      await replayPendingProcessExitEventsIfPossible({
+        cronStorePath: context.cronStorePath,
+        cron: context.cron,
+        monitorId: monitor.monitorId,
+      });
+      respond(true, monitor, undefined);
     });
-    respond(true, monitor, undefined);
   },
   "monitor.routeEvent": async ({ params, respond, context }) => {
     if (!validateMonitorRouteEventParams(params)) {
@@ -597,23 +732,25 @@ export const monitorHandlers: GatewayRequestHandlers = {
     }
     const p = params as { monitorId: string; patch: MonitorUpdatePatch };
     const storePath = resolveStorePath(context.cronStorePath);
-    const store = await loadMonitorStore(storePath);
-    const index = store.monitors.findIndex((monitor) => monitor.monitorId === p.monitorId);
-    if (index === -1) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `monitor not found: ${p.monitorId}`),
-      );
-      return;
-    }
-    const updated = updateMonitorRecord(store.monitors[index], p.patch, Date.now());
-    store.monitors[index] = updated;
-    await saveMonitorStore(storePath, store);
-    if (isTerminalMonitorStatus(updated.status)) {
-      await context.cron.update(updated.cronJobId, { enabled: false });
-    }
-    respond(true, updated, undefined);
+    await withMonitorStoreWriteLock(storePath, async () => {
+      const store = await loadMonitorStore(storePath);
+      const index = store.monitors.findIndex((monitor) => monitor.monitorId === p.monitorId);
+      if (index === -1) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `monitor not found: ${p.monitorId}`),
+        );
+        return;
+      }
+      const updated = updateMonitorRecord(store.monitors[index], p.patch, Date.now());
+      store.monitors[index] = updated;
+      await saveMonitorStore(storePath, store);
+      if (isTerminalMonitorStatus(updated.status)) {
+        await context.cron.update(updated.cronJobId, { enabled: false });
+      }
+      respond(true, updated, undefined);
+    });
   },
   "monitor.stop": async ({ params, respond, context }) => {
     if (!validateMonitorStopParams(params)) {
@@ -629,20 +766,22 @@ export const monitorHandlers: GatewayRequestHandlers = {
     }
     const monitorId = (params as { monitorId: string }).monitorId;
     const storePath = resolveStorePath(context.cronStorePath);
-    const store = await loadMonitorStore(storePath);
-    const index = store.monitors.findIndex((monitor) => monitor.monitorId === monitorId);
-    if (index === -1) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `monitor not found: ${monitorId}`),
-      );
-      return;
-    }
-    const stopped = updateMonitorRecord(store.monitors[index], { status: "stopped" }, Date.now());
-    store.monitors[index] = stopped;
-    await saveMonitorStore(storePath, store);
-    await context.cron.update(stopped.cronJobId, { enabled: false });
-    respond(true, stopped, undefined);
+    await withMonitorStoreWriteLock(storePath, async () => {
+      const store = await loadMonitorStore(storePath);
+      const index = store.monitors.findIndex((monitor) => monitor.monitorId === monitorId);
+      if (index === -1) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `monitor not found: ${monitorId}`),
+        );
+        return;
+      }
+      const stopped = updateMonitorRecord(store.monitors[index], { status: "stopped" }, Date.now());
+      store.monitors[index] = stopped;
+      await saveMonitorStore(storePath, store);
+      await context.cron.update(stopped.cronJobId, { enabled: false });
+      respond(true, stopped, undefined);
+    });
   },
 };

@@ -1394,6 +1394,229 @@ describe("monitor gateway handlers", () => {
     expect(call?.[1]).toEqual({ matched: 0, wakes: [] });
   });
 
+  it("routes matching process_exit events to the existing durable monitor session", async () => {
+    const invokeContext = createInvokeContext();
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Wait for the background test run to finish, then inspect the result.",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:direct:user-1",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-1" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        trigger: {
+          kind: "process_exit",
+          match: {
+            sourceType: "exec",
+            sourceTarget: { sessionId: "exec-session-1" },
+            eventTypes: ["completed", "failed"],
+          },
+        },
+      },
+      "req-route-process-exit-create",
+    );
+
+    invokeContext.respond.mockClear();
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "process_exit",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-1" },
+        eventType: "completed",
+        evidence: {
+          // Evidence is forwarded to the monitor wake context only; routing is
+          // still decided by stable session id keys above.
+          command: "npx vitest run",
+          tail: "Tests passed",
+        },
+      },
+      respond: invokeContext.respond as never,
+      context: {
+        cronStorePath: invokeContext.cronStorePath,
+        cron: {
+          add: invokeContext.cronAdd,
+          update: invokeContext.cronUpdate,
+          enqueueRun: invokeContext.cronEnqueueRun,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-route-process-exit", method: "monitor.routeEvent" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(invokeContext.cronEnqueueRun).toHaveBeenCalledOnce();
+    expect(invokeContext.cronEnqueueRun).toHaveBeenCalledWith("cron-job-1", "force");
+    const monitorStore = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(monitorStore.monitors[0]?.lastCheckpoint).toMatchObject({
+      processExitEvent: {
+        eventType: "completed",
+        sourceTarget: { sessionId: "exec-session-1" },
+        evidence: {
+          command: "npx vitest run",
+          tail: "Tests passed",
+        },
+      },
+    });
+    const call = invokeContext.respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      matched: 1,
+      wakes: [
+        {
+          cronJobId: "cron-job-1",
+          originSessionKey: "agent:main:telegram:direct:user-1",
+          originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        },
+      ],
+    });
+  });
+
+  it("replays pending process_exit events when the matching monitor is created", async () => {
+    const invokeContext = createInvokeContext();
+
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "process_exit",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-fast" },
+        eventType: "completed",
+        idempotencyKey: "exec:exec-session-fast:exit",
+        evidence: {
+          command: "true",
+          status: "completed",
+          tail: "",
+        },
+      },
+      respond: invokeContext.respond as never,
+      context: {
+        cronStorePath: invokeContext.cronStorePath,
+        cron: {
+          add: invokeContext.cronAdd,
+          update: invokeContext.cronUpdate,
+          enqueueRun: invokeContext.cronEnqueueRun,
+        },
+      } as never,
+      client: null,
+      req: {
+        type: "req",
+        id: "req-route-process-exit-before-monitor",
+        method: "monitor.routeEvent",
+      },
+      isWebchatConnect: () => false,
+    });
+
+    expect(invokeContext.cronEnqueueRun).not.toHaveBeenCalled();
+    expect(invokeContext.respond.mock.calls[0]?.[1]).toEqual({ matched: 0, wakes: [] });
+    let monitorStore = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(monitorStore.pendingEvents).toHaveLength(1);
+
+    invokeContext.respond.mockClear();
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Wait for the short background command to finish, then inspect it.",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:direct:user-1",
+        originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-fast" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        trigger: {
+          kind: "process_exit",
+          match: {
+            sourceType: "exec",
+            sourceTarget: { sessionId: "exec-session-fast" },
+            eventTypes: ["completed", "failed"],
+          },
+        },
+      },
+      "req-create-after-process-exit",
+    );
+
+    expect(invokeContext.cronEnqueueRun).toHaveBeenCalledOnce();
+    expect(invokeContext.cronEnqueueRun).toHaveBeenCalledWith("cron-job-1", "force");
+    monitorStore = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(monitorStore.pendingEvents).toBeUndefined();
+    expect(monitorStore.monitors[0]?.lastCheckpoint).toMatchObject({
+      processExitEvent: {
+        eventType: "completed",
+        idempotencyKey: "exec:exec-session-fast:exit",
+        sourceTarget: { sessionId: "exec-session-fast" },
+        evidence: {
+          command: "true",
+          status: "completed",
+          tail: "",
+        },
+      },
+    });
+  });
+
+  it("does not route non-matching process_exit events to a monitor wake", async () => {
+    const invokeContext = createInvokeContext();
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Wait for the background test run to finish, then inspect the result.",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-1" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        trigger: {
+          kind: "process_exit",
+          match: {
+            sourceType: "exec",
+            sourceTarget: { sessionId: "exec-session-1" },
+            eventTypes: ["completed", "failed"],
+          },
+        },
+      },
+      "req-route-process-exit-nomatch-create",
+    );
+
+    invokeContext.respond.mockClear();
+    invokeContext.cronEnqueueRun.mockClear();
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "process_exit",
+        sourceType: "exec",
+        sourceTarget: { sessionId: "exec-session-2" },
+        eventType: "completed",
+      },
+      respond: invokeContext.respond as never,
+      context: {
+        cronStorePath: invokeContext.cronStorePath,
+        cron: {
+          add: invokeContext.cronAdd,
+          update: invokeContext.cronUpdate,
+          enqueueRun: invokeContext.cronEnqueueRun,
+        },
+      } as never,
+      client: null,
+      req: {
+        type: "req",
+        id: "req-route-process-exit-nomatch",
+        method: "monitor.routeEvent",
+      },
+      isWebchatConnect: () => false,
+    });
+
+    expect(invokeContext.cronEnqueueRun).not.toHaveBeenCalled();
+    const call = invokeContext.respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual({ matched: 0, wakes: [] });
+  });
+
   it("accepts legacy monitor records without trigger metadata", () => {
     const legacyRecord = {
       monitorId: "monitor-legacy",

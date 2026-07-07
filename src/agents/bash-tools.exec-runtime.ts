@@ -6,6 +6,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { MonitorEventEnvelope } from "../monitor/types.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -141,6 +142,12 @@ export const execSchema = Type.Object({
       description: "Node id/name for host=node.",
     }),
   ),
+  monitorExit: Type.Optional(
+    Type.Boolean({
+      description:
+        "Emit a process_exit monitor event when this backgrounded command exits. Use only after creating a matching durable monitor for this explicit wait.",
+    }),
+  ),
 });
 
 export type ExecProcessOutcome = {
@@ -226,6 +233,66 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   );
 }
 
+export function buildProcessExitMonitorEvent(params: {
+  session: ProcessSession;
+  status: "completed" | "failed";
+  receivedAtMs?: number;
+}): MonitorEventEnvelope {
+  const sourceTarget: Record<string, unknown> = {
+    sessionId: params.session.id,
+  };
+  if (params.session.scopeKey) {
+    sourceTarget.scopeKey = params.session.scopeKey;
+  }
+  if (params.session.sessionKey) {
+    sourceTarget.sessionKey = params.session.sessionKey;
+  }
+
+  return {
+    triggerKind: "process_exit",
+    sourceType: "exec",
+    sourceTarget,
+    eventType: params.status,
+    idempotencyKey: `exec:${params.session.id}:exit`,
+    receivedAtMs: params.receivedAtMs ?? Date.now(),
+    evidence: {
+      sessionId: params.session.id,
+      command: params.session.command,
+      cwd: params.session.cwd,
+      startedAt: params.session.startedAt,
+      exitCode: params.session.exitCode ?? null,
+      exitSignal: params.session.exitSignal ?? null,
+      status: params.status,
+      totalOutputChars: params.session.totalOutputChars,
+      truncated: params.session.truncated,
+      tail: params.session.tail,
+    },
+  };
+}
+
+async function maybeRouteProcessExitMonitorEvent(
+  session: ProcessSession,
+  status: "completed" | "failed",
+  routeProcessExitMonitorEvent?: (event: MonitorEventEnvelope) => Promise<void> | void,
+) {
+  // This is intentionally opt-in. Background exec is common; only explicit
+  // waits that have been armed by the agent should wake durable monitors.
+  if (
+    !session.backgrounded ||
+    !session.processExitMonitorEvent ||
+    session.processExitMonitorEventEmitted ||
+    !routeProcessExitMonitorEvent
+  ) {
+    return;
+  }
+  session.processExitMonitorEventEmitted = true;
+  try {
+    await routeProcessExitMonitorEvent(buildProcessExitMonitorEvent({ session, status }));
+  } catch (error) {
+    logWarn(`exec: process_exit monitor event routing failed for ${session.id}: ${String(error)}`);
+  }
+}
+
 export function createApprovalSlug(id: string) {
   return id.slice(0, APPROVAL_SLUG_LENGTH);
 }
@@ -301,6 +368,8 @@ export async function runExecProcess(opts: {
   pendingMaxOutput: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  monitorExit?: boolean;
+  routeProcessExitMonitorEvent?: (event: MonitorEventEnvelope) => Promise<void> | void;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number | null;
@@ -323,6 +392,8 @@ export async function runExecProcess(opts: {
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
+    processExitMonitorEvent: opts.monitorExit === true,
+    processExitMonitorEventEmitted: false,
     child: undefined,
     stdin: undefined,
     pid: undefined,
@@ -516,11 +587,17 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        await maybeRouteProcessExitMonitorEvent(
+          session,
+          "failed",
+          opts.routeProcessExitMonitorEvent,
+        );
         throw retryErr;
       }
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      await maybeRouteProcessExitMonitorEvent(session, "failed", opts.routeProcessExitMonitorEvent);
       throw err;
     }
   }
@@ -542,6 +619,7 @@ export async function runExecProcess(opts: {
 
       markExited(session, exit.exitCode, exit.exitSignal, status);
       maybeNotifyOnExit(session, status);
+      await maybeRouteProcessExitMonitorEvent(session, status, opts.routeProcessExitMonitorEvent);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
@@ -591,6 +669,7 @@ export async function runExecProcess(opts: {
     .catch((err): ExecProcessOutcome => {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      void maybeRouteProcessExitMonitorEvent(session, "failed", opts.routeProcessExitMonitorEvent);
       const aggregated = session.aggregated.trim();
       const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
       return {
