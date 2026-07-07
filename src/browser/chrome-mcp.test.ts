@@ -7,6 +7,7 @@ import { type RawData, type WebSocket, WebSocketServer } from "ws";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
+  chromeMcpPdfResourceInternalsForTest,
   closeChromeMcpSession,
   downloadChromeMcpElement,
   evaluateChromeMcpScript,
@@ -1220,6 +1221,52 @@ describe("chrome MCP page parsing", () => {
     const calls = (session.client.callTool as unknown as { mock: { calls: unknown[][] } }).mock
       .calls;
     expect(calls[0]?.[2]).toEqual(expect.objectContaining({ timeout: 1234 }));
+  });
+
+  it("finds and validates native PDF resources from Chrome resource trees", () => {
+    const candidates = chromeMcpPdfResourceInternalsForTest.collectPdfResourceCandidates({
+      frame: {
+        id: "viewer-frame",
+        url: "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html",
+        mimeType: "text/html",
+      },
+      resources: [
+        {
+          url: "https://www.dewa.gov.ae/api/sitecore/Bill/ActualbillDownload",
+          mimeType: "application/pdf",
+        },
+      ],
+      childFrames: [
+        {
+          frame: {
+            id: "pdf-frame",
+            url: "https://example.com/current.pdf",
+            mimeType: "application/pdf",
+          },
+          resources: [],
+        },
+      ],
+    });
+    const pdfBytes = Buffer.from("%PDF-1.7\nnative pdf\n%%EOF\n");
+    const decoded = chromeMcpPdfResourceInternalsForTest.decodeChromeResourceContent({
+      content: pdfBytes.toString("base64"),
+      base64Encoded: true,
+    });
+
+    expect(candidates).toEqual([
+      {
+        frameId: "viewer-frame",
+        url: "https://www.dewa.gov.ae/api/sitecore/Bill/ActualbillDownload",
+      },
+      { frameId: "pdf-frame", url: "https://example.com/current.pdf" },
+    ]);
+    expect(decoded.equals(pdfBytes)).toBe(true);
+    expect(() =>
+      chromeMcpPdfResourceInternalsForTest.assertNativePdfBuffer(
+        Buffer.from("<html>login</html>"),
+        "https://example.com/current.pdf",
+      ),
+    ).toThrow("was not a native PDF payload");
   });
 
   it("clicks an existing-session element and saves the DevTools download artifact", async () => {

@@ -38,6 +38,10 @@ const chromeMcpMocks = vi.hoisted(() => ({
   insertTextViaCdp: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   pressChromeMcpKey: vi.fn(async () => {}),
+  readChromeMcpPdfResource: vi.fn(async () => ({
+    url: "https://example.com/report.pdf",
+    buffer: Buffer.from("%PDF-1.7\nnative pdf\n%%EOF\n"),
+  })),
   resolveChromeMcpPageWebSocketUrl: vi.fn(async () => "ws://127.0.0.1/devtools/page/7"),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
@@ -66,6 +70,7 @@ vi.mock("../chrome-mcp.js", () => ({
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
   pressChromeMcpKey: chromeMcpMocks.pressChromeMcpKey,
+  readChromeMcpPdfResource: chromeMcpMocks.readChromeMcpPdfResource,
   resolveChromeMcpPageWebSocketUrl: chromeMcpMocks.resolveChromeMcpPageWebSocketUrl,
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
@@ -141,6 +146,16 @@ function getSnapshotPostHandler() {
   return handler;
 }
 
+function getPdfPostHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { ssrfPolicy: undefined } }),
+  } as never);
+  const handler = postHandlers.get("/pdf");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 function getActPostHandler() {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActRoutes(app, {
@@ -181,6 +196,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.insertTextViaCdp.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.pressChromeMcpKey.mockClear();
+    chromeMcpMocks.readChromeMcpPdfResource.mockClear();
     chromeMcpMocks.resolveChromeMcpPageWebSocketUrl.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
@@ -329,6 +345,31 @@ describe("existing-session browser routes", () => {
       uid: "btn-1",
       fullPage: false,
       format: "jpeg",
+    });
+  });
+
+  it("saves native PDF resources for existing-session profiles", async () => {
+    routeState.tab = {
+      targetId: "7",
+      url: "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html",
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
+    };
+    const handler = getPdfPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: {}, body: {} }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      path: "/tmp/fake.png",
+      targetId: "7",
+      url: "https://example.com/report.pdf",
+    });
+    expect(chromeMcpMocks.readChromeMcpPdfResource).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      userDataDir: undefined,
+      targetId: "7",
     });
   });
 
