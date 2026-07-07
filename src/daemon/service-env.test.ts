@@ -7,6 +7,7 @@ import {
   buildMinimalServicePath,
   buildNodeServiceEnvironment,
   buildServiceEnvironment,
+  buildTelegramMonitorServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
 } from "./service-env.js";
@@ -556,6 +557,27 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+});
+
+describe("buildTelegramMonitorServiceEnvironment", () => {
+  it("scopes service identity by profile", () => {
+    const env = buildTelegramMonitorServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_GATEWAY_TOKEN: " telegram-token ",
+        OPENCLAW_PROFILE: "consumer-lane",
+      },
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("telegram-token");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.consumer-lane.telegram-monitor");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-telegram-monitor-consumer-lane");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Telegram Monitor (consumer-lane)");
+    expect(env.OPENCLAW_PROFILE).toBe("consumer-lane");
+    expect(env.OPENCLAW_SERVICE_KIND).toBe("telegram-monitor");
+    expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
   });
 });
 
