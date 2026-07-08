@@ -54,6 +54,27 @@ describe("telegram work log", () => {
     });
   });
 
+  it("keeps normal long plan snapshots readable in expanded progress entries", () => {
+    const planSnapshot = [
+      "Plan updated",
+      "I'm tracing the Telegram work-log and progress-streaming path first, then I'll write a temporary analysis file, delete it, and finish with a short memory recap.",
+      "- [x] Inspect how Telegram progress messages become a retained work log",
+      "- [x] Verify the final answer is sent durably instead of disappearing with progress",
+      "- [~] Confirm the retained work log keeps enough detail for the user to understand what happened",
+      "- [ ] Summarize the memory documents briefly after the local file cleanup",
+    ].join("\n");
+
+    const entry = registerTelegramWorkLog({
+      progressEntries: [planSnapshot],
+      now: 1000,
+    });
+
+    const expanded = renderTelegramWorkLog(entry!, true).text;
+
+    expect(expanded).toContain("Summarize the memory documents briefly");
+    expect(expanded).not.toContain("...");
+  });
+
   it("expires old entries and builds mutable Telegram reply markup", () => {
     const entry = registerTelegramWorkLog({
       progressEntries: ["Checking state"],

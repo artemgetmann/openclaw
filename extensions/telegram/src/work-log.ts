@@ -3,7 +3,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 
 const WORK_LOG_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROGRESS_ENTRIES = 12;
-const MAX_PROGRESS_ENTRY_CHARS = 260;
+const MAX_PROGRESS_ENTRY_CHARS = 900;
 const MAX_TOOL_NAMES = 4;
 
 type TelegramWorkLogEntry = {
@@ -58,7 +58,9 @@ function pruneExpiredWorkLogs(now = Date.now()) {
 function normalizeProgressEntry(input: string, maxChars: number): string {
   // Expanded Work Log entries are user-facing history, not compact telemetry.
   // Preserve meaningful internal newlines so plan/checklist progress stays
-  // scannable instead of collapsing into one hard-to-read sentence.
+  // scannable instead of collapsing into one hard-to-read sentence. The cap is
+  // intentionally roomy because plan snapshots often carry several checklist
+  // rows; trimming them too aggressively makes the retained proof misleading.
   const normalized = input
     .replace(/\r\n?/g, "\n")
     .split("\n")
