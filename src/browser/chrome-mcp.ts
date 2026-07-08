@@ -779,6 +779,10 @@ type ChromeMcpDownloadResult = {
   suggestedFilename: string;
   path: string;
 };
+type ChromeMcpPdfResourceResult = {
+  url: string;
+  buffer: Buffer;
+};
 
 const CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS = 250;
 
@@ -793,6 +797,225 @@ function decodeChromeDevToolsRawMessage(data: RawData): string {
     return Buffer.concat(data).toString("utf8");
   }
   return Buffer.from(data).toString("utf8");
+}
+
+async function withChromeDevToolsPageSession<T>(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+  run: (
+    send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
+  ) => Promise<T>;
+}): Promise<T> {
+  const timeoutMs = Math.max(1_000, params.timeoutMs ?? CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
+  const wsUrl = await resolveChromeMcpPageWebSocketUrl({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+  });
+  if (!wsUrl) {
+    throw new Error(
+      "existing-session CDP access requires a per-tab DevTools websocket; retry after Chrome exposes remote debugging for this profile.",
+    );
+  }
+
+  const ws = new WebSocket(wsUrl, {
+    handshakeTimeout: Math.min(timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+  });
+  let nextId = 0;
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+
+  const failAll = (err: Error): void => {
+    for (const [id, entry] of pending.entries()) {
+      clearTimeout(entry.timer);
+      pending.delete(id);
+      entry.reject(err);
+    }
+  };
+
+  ws.on("message", (data: RawData) => {
+    let message: CdpEvent;
+    try {
+      message = JSON.parse(decodeChromeDevToolsRawMessage(data)) as CdpEvent;
+    } catch {
+      return;
+    }
+    if (typeof message.id !== "number") {
+      return;
+    }
+    const entry = pending.get(message.id);
+    if (!entry) {
+      return;
+    }
+    clearTimeout(entry.timer);
+    pending.delete(message.id);
+    if (message.error) {
+      entry.reject(new Error(message.error.message ?? "Chrome DevTools command failed"));
+      return;
+    }
+    entry.resolve(message.result);
+  });
+
+  ws.on("error", (err) => failAll(err instanceof Error ? err : new Error(String(err))));
+  ws.on("close", () => failAll(new Error("Chrome DevTools WebSocket closed")));
+
+  await new Promise<void>((resolve, reject) => {
+    const openTimeoutMs = Math.min(timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => reject(new Error("Chrome DevTools WebSocket open timed out")),
+      openTimeoutMs,
+    );
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+
+  const send = async (
+    method: string,
+    commandParams?: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const id = ++nextId;
+    return await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(new Error(`${method} timed out`));
+        },
+        Math.min(timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+      );
+      pending.set(id, { resolve, reject, timer });
+      ws.send(JSON.stringify({ id, method, params: commandParams ?? {} }), (err) => {
+        if (!err) {
+          return;
+        }
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(err);
+      });
+    });
+  };
+
+  try {
+    return await params.run(send);
+  } finally {
+    failAll(new Error("Chrome DevTools WebSocket closed"));
+    ws.close();
+  }
+}
+
+function isPdfMime(mimeType: unknown): boolean {
+  if (typeof mimeType !== "string") {
+    return false;
+  }
+  return mimeType.split(";")[0]?.trim().toLowerCase() === "application/pdf";
+}
+
+function decodeChromeResourceContent(result: unknown): Buffer {
+  const record = asRecord(result);
+  const content = typeof record?.content === "string" ? record.content : "";
+  if (!content) {
+    return Buffer.alloc(0);
+  }
+  return record?.base64Encoded === true ? Buffer.from(content, "base64") : Buffer.from(content);
+}
+
+function collectPdfResourceCandidates(frameTree: unknown): Array<{ frameId: string; url: string }> {
+  const candidates: Array<{ frameId: string; url: string }> = [];
+
+  const visit = (node: unknown): void => {
+    const tree = asRecord(node);
+    const frame = asRecord(tree?.frame);
+    const frameId = typeof frame?.id === "string" ? frame.id : "";
+    const frameUrl = typeof frame?.url === "string" ? frame.url : "";
+
+    // Chrome's PDF viewer may expose the PDF as a frame, a child-frame resource,
+    // or both. Keep the frame candidate first so one-time POST-backed PDFs can be
+    // read from Chrome's resource cache without replaying the original request.
+    if (frameId && frameUrl && isPdfMime(frame?.mimeType)) {
+      candidates.push({ frameId, url: frameUrl });
+    }
+
+    const resources = Array.isArray(tree?.resources) ? tree.resources : [];
+    for (const resource of resources) {
+      const rec = asRecord(resource);
+      const url = typeof rec?.url === "string" ? rec.url : "";
+      if (frameId && url && isPdfMime(rec?.mimeType)) {
+        candidates.push({ frameId, url });
+      }
+    }
+
+    const childFrames = Array.isArray(tree?.childFrames) ? tree.childFrames : [];
+    for (const child of childFrames) {
+      visit(child);
+    }
+  };
+
+  visit(frameTree);
+  return candidates;
+}
+
+function assertNativePdfBuffer(buffer: Buffer, url: string): void {
+  const signature = buffer.subarray(0, 5).toString("ascii");
+  if (signature !== "%PDF-") {
+    throw new Error(`Chrome resource for "${url}" was not a native PDF payload`);
+  }
+}
+
+export const chromeMcpPdfResourceInternalsForTest = {
+  assertNativePdfBuffer,
+  collectPdfResourceCandidates,
+  decodeChromeResourceContent,
+};
+
+export async function readChromeMcpPdfResource(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpPdfResourceResult> {
+  return await withChromeDevToolsPageSession({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    timeoutMs: params.timeoutMs,
+    run: async (send) => {
+      const resourceTreeResult = asRecord(await send("Page.getResourceTree"));
+      const candidates = collectPdfResourceCandidates(resourceTreeResult?.frameTree);
+      if (candidates.length === 0) {
+        throw new Error("No application/pdf resource is loaded in the current tab");
+      }
+
+      const errors: string[] = [];
+      for (const candidate of candidates) {
+        try {
+          const contentResult = await send("Page.getResourceContent", {
+            frameId: candidate.frameId,
+            url: candidate.url,
+          });
+          const buffer = decodeChromeResourceContent(contentResult);
+          assertNativePdfBuffer(buffer, candidate.url);
+          return { url: candidate.url, buffer };
+        } catch (err) {
+          errors.push(`${candidate.url}: ${String(err instanceof Error ? err.message : err)}`);
+        }
+      }
+
+      throw new Error(`Failed to read native PDF resource from current tab: ${errors.join("; ")}`);
+    },
+  });
 }
 
 async function captureChromeScreenshotViaWebSocket(params: {

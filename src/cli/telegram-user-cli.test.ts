@@ -10,6 +10,11 @@ const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicCreateCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserTopicDeleteCommand = vi.fn().mockResolvedValue(undefined);
+const runTelegramMonitorServiceInstall = vi.fn().mockResolvedValue(undefined);
+const runTelegramMonitorServiceRestart = vi.fn().mockResolvedValue(undefined);
+const runTelegramMonitorServiceStatus = vi.fn().mockResolvedValue(undefined);
+const runTelegramMonitorServiceStop = vi.fn().mockResolvedValue(undefined);
+const runTelegramMonitorServiceUninstall = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/telegram-user.js", () => ({
   telegramUserDoctorCommand,
@@ -21,6 +26,14 @@ vi.mock("../commands/telegram-user.js", () => ({
   telegramUserSendCommand,
   telegramUserTopicCreateCommand,
   telegramUserTopicDeleteCommand,
+}));
+
+vi.mock("./telegram-user-monitor-service.js", () => ({
+  runTelegramMonitorServiceInstall,
+  runTelegramMonitorServiceRestart,
+  runTelegramMonitorServiceStatus,
+  runTelegramMonitorServiceStop,
+  runTelegramMonitorServiceUninstall,
 }));
 
 describe("telegram-user cli", () => {
@@ -70,6 +83,7 @@ describe("telegram-user cli", () => {
     expect(help).toContain(
       "openclaw telegram-user monitor-poll --watch --cron-store /tmp/cron.json",
     );
+    expect(help).toContain("openclaw telegram-user monitor-service install --hook-url");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
   });
 
@@ -162,6 +176,10 @@ describe("telegram-user cli", () => {
         "/tmp/monitors.json",
         "--cursor-store",
         "/tmp/cursors.json",
+        "--env-file",
+        "/tmp/tg.env",
+        "--session",
+        "/tmp/userbot.session",
         "--hook-url",
         "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
         "--hook-token",
@@ -194,6 +212,65 @@ describe("telegram-user cli", () => {
         watch: true,
       }),
       expect.anything(),
+    );
+  });
+
+  it("registers monitor-service install and forwards service options", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    const monitorService = telegramUser?.commands.find(
+      (command) => command.name() === "monitor-service",
+    );
+    expect(monitorService?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["install", "status", "restart", "stop", "uninstall"]),
+    );
+    expect(monitorService?.commands.map((command) => command.name())).not.toContain("start");
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "monitor-service",
+        "install",
+        "--cron-store",
+        "/tmp/cron.json",
+        "--monitor-store",
+        "/tmp/monitors.json",
+        "--cursor-store",
+        "/tmp/cursors.json",
+        "--env-file",
+        "/tmp/tg.env",
+        "--session",
+        "/tmp/userbot.session",
+        "--hook-url",
+        "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+        "--poll-interval-ms",
+        "2500",
+        "--limit",
+        "12",
+        "--runtime",
+        "node",
+        "--force",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(runTelegramMonitorServiceInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronStore: "/tmp/cron.json",
+        cursorStore: "/tmp/cursors.json",
+        envFile: "/tmp/tg.env",
+        force: true,
+        hookUrl: "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+        json: true,
+        limit: "12",
+        monitorStore: "/tmp/monitors.json",
+        pollIntervalMs: "2500",
+        runtime: "node",
+        session: "/tmp/userbot.session",
+      }),
     );
   });
 

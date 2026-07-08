@@ -98,6 +98,15 @@ function triggerSourceTargetIsAuthoritative(params: {
       hasStringOrNumberPath(params.sourceTarget, "to")
     );
   }
+  if (normalizeString(params.sourceType) === "whatsapp") {
+    return (
+      hasStringOrNumberPath(params.sourceTarget, "target") ||
+      hasStringOrNumberPath(params.sourceTarget, "to") ||
+      hasStringOrNumberPath(params.sourceTarget, "chat") ||
+      hasStringOrNumberPath(params.sourceTarget, "chatId") ||
+      hasStringOrNumberPath(params.sourceTarget, "chatJid")
+    );
+  }
   return false;
 }
 

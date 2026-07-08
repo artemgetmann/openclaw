@@ -200,7 +200,18 @@ async function discardResponseBody(res: Response): Promise<void> {
   }
 }
 
-function enhanceDispatcherPathError(url: string, err: unknown): Error {
+function isTimeoutLikeMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("aborted") ||
+    lower.includes("abort") ||
+    lower.includes("aborterror")
+  );
+}
+
+function enhanceDispatcherPathError(url: string, err: unknown, timeoutMs: number): Error {
   const msg = normalizeErrorMessage(err);
   if (
     isUserLiveBrowserControlRequest(url) &&
@@ -218,6 +229,13 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
     // so callers can retry immediately after approving Chrome's attach prompt.
     return new Error(msg, err instanceof Error ? { cause: err } : undefined);
   }
+  if (isTimeoutLikeMessage(msg)) {
+    const normalized = msg.endsWith(".") ? msg : `${msg}.`;
+    return new Error(
+      `Browser operation timed out inside the OpenClaw browser control service after ${timeoutMs}ms. ${normalized} Check browser.status for this profile, then retry with a higher timeout if the profile is still healthy.`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
   const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
@@ -226,13 +244,7 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = String(err);
-  const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
+  const looksLikeTimeout = isTimeoutLikeMessage(msg);
   if (
     isUserLiveBrowserControlRequest(url) &&
     isRetryableChromeAttachMessage(msg) &&
@@ -406,9 +418,10 @@ export async function fetchBrowserJson<T>(
       throw err;
     }
     // Dispatcher-path failures are service-operation failures, not network
-    // reachability failures. Keep the original context, but retain anti-retry hints.
+    // reachability failures. Preserve the operation context so browser-profile
+    // timeouts do not masquerade as dead gateway processes.
     if (isDispatcherPath) {
-      throw enhanceDispatcherPathError(url, err);
+      throw enhanceDispatcherPathError(url, err, timeoutMs);
     }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }

@@ -345,6 +345,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "wait"],
       ["telegram-user", "monitor-listen"],
       ["telegram-user", "monitor-poll"],
+      ["whatsapp-monitor", "poll"],
       ["media", "transcribe"],
     ],
     allowUnknownOptions: false,
@@ -369,6 +370,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--contains",
       "--cron-store",
       "--cursor-store",
+      "--db-path",
       "--env-file",
       "--hook-token",
       "--hook-url",
@@ -391,6 +393,7 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     guardedValueFlags: {
       "--cron-store": "pathOrSafeLiteral",
       "--cursor-store": "pathOrSafeLiteral",
+      "--db-path": "pathOrSafeLiteral",
       "--media": "pathOrSafeLiteral",
       "--monitor-store": "pathOrSafeLiteral",
     },

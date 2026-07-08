@@ -38,6 +38,7 @@ import {
   resolveMonitorStorePath,
   saveMonitorStore,
   updateMonitorRecord,
+  withMonitorStoreWriteLock,
 } from "../monitor/store.js";
 import { isTerminalMonitorStatus, type MonitorRecord } from "../monitor/types.js";
 import { buildMonitorWakeMessage, isMonitorExpired } from "../monitor/wake.js";
@@ -355,18 +356,26 @@ export function buildGatewayCronService(params: {
       }
       const nowMs = Date.now();
       if (isMonitorExpired(monitor, nowMs)) {
-        const expired = updateMonitorRecord(
+        let expired = updateMonitorRecord(
           monitor,
           { status: "expired", lastWakeAtMs: nowMs, lastWakeStatus: "expired" },
           nowMs,
         );
-        const expiredIndex = monitorStore.monitors.findIndex(
-          (entry) => entry.monitorId === monitorId,
-        );
-        if (expiredIndex >= 0) {
-          monitorStore.monitors[expiredIndex] = expired;
-          await saveMonitorStore(monitorStorePath, monitorStore);
-        }
+        await withMonitorStoreWriteLock(monitorStorePath, async () => {
+          const latestMonitorStore = await loadMonitorStore(monitorStorePath);
+          const expiredIndex = latestMonitorStore.monitors.findIndex(
+            (entry) => entry.monitorId === monitorId,
+          );
+          if (expiredIndex >= 0) {
+            expired = updateMonitorRecord(
+              latestMonitorStore.monitors[expiredIndex],
+              { status: "expired", lastWakeAtMs: nowMs, lastWakeStatus: "expired" },
+              nowMs,
+            );
+            latestMonitorStore.monitors[expiredIndex] = expired;
+            await saveMonitorStore(monitorStorePath, latestMonitorStore);
+          }
+        });
         return {
           status: "skipped",
           error: "monitor expired",
@@ -376,18 +385,26 @@ export function buildGatewayCronService(params: {
       }
       const runtimeConfig = loadConfig();
       if (await isBoundMonitorGoalComplete(monitor, runtimeConfig)) {
-        const stopped = updateMonitorRecord(
+        let stopped = updateMonitorRecord(
           monitor,
           { status: "stopped", lastWakeAtMs: nowMs, lastWakeStatus: "stopped" },
           nowMs,
         );
-        const stoppedIndex = monitorStore.monitors.findIndex(
-          (entry) => entry.monitorId === monitorId,
-        );
-        if (stoppedIndex >= 0) {
-          monitorStore.monitors[stoppedIndex] = stopped;
-          await saveMonitorStore(monitorStorePath, monitorStore);
-        }
+        await withMonitorStoreWriteLock(monitorStorePath, async () => {
+          const latestMonitorStore = await loadMonitorStore(monitorStorePath);
+          const stoppedIndex = latestMonitorStore.monitors.findIndex(
+            (entry) => entry.monitorId === monitorId,
+          );
+          if (stoppedIndex >= 0) {
+            stopped = updateMonitorRecord(
+              latestMonitorStore.monitors[stoppedIndex],
+              { status: "stopped", lastWakeAtMs: nowMs, lastWakeStatus: "stopped" },
+              nowMs,
+            );
+            latestMonitorStore.monitors[stoppedIndex] = stopped;
+            await saveMonitorStore(monitorStorePath, latestMonitorStore);
+          }
+        });
         return {
           status: "skipped",
           summary: stopped.name ?? stopped.monitorId,
@@ -440,35 +457,41 @@ export function buildGatewayCronService(params: {
         // "fresh mini-brain on every wake" bug this redesign is fixing.
         sessionDefaultResetMode: "manual",
       });
-      const latestMonitorStore = await loadMonitorStore(monitorStorePath);
-      const index = latestMonitorStore.monitors.findIndex((entry) => entry.monitorId === monitorId);
-      if (index >= 0) {
-        const currentMonitor = latestMonitorStore.monitors[index];
-        const shouldStopForGoalCompletion = await isBoundMonitorGoalComplete(
-          currentMonitor,
-          runtimeConfig,
+      let stopJob = false;
+      await withMonitorStoreWriteLock(monitorStorePath, async () => {
+        const latestMonitorStore = await loadMonitorStore(monitorStorePath);
+        const index = latestMonitorStore.monitors.findIndex(
+          (entry) => entry.monitorId === monitorId,
         );
-        const nextStatus = shouldStopForGoalCompletion
-          ? "stopped"
-          : result.status === "error"
-            ? "degraded"
-            : result.status === "ok"
-              ? "active"
-              : currentMonitor.status;
-        const updated = updateMonitorRecord(
-          currentMonitor,
-          {
-            status: nextStatus,
-            lastWakeAtMs: nowMs,
-            lastWakeStatus: nextStatus,
-          },
-          nowMs,
-        );
-        latestMonitorStore.monitors[index] = updated;
-        await saveMonitorStore(monitorStorePath, latestMonitorStore);
-        if (shouldStopForGoalCompletion || isTerminalMonitorStatus(updated.status)) {
-          return { ...result, stopJob: true };
+        if (index >= 0) {
+          const currentMonitor = latestMonitorStore.monitors[index];
+          const shouldStopForGoalCompletion = await isBoundMonitorGoalComplete(
+            currentMonitor,
+            runtimeConfig,
+          );
+          const nextStatus = shouldStopForGoalCompletion
+            ? "stopped"
+            : result.status === "error"
+              ? "degraded"
+              : result.status === "ok"
+                ? "active"
+                : currentMonitor.status;
+          const updated = updateMonitorRecord(
+            currentMonitor,
+            {
+              status: nextStatus,
+              lastWakeAtMs: nowMs,
+              lastWakeStatus: nextStatus,
+            },
+            nowMs,
+          );
+          latestMonitorStore.monitors[index] = updated;
+          await saveMonitorStore(monitorStorePath, latestMonitorStore);
+          stopJob = shouldStopForGoalCompletion || isTerminalMonitorStatus(updated.status);
         }
+      });
+      if (stopJob) {
+        return { ...result, stopJob: true };
       }
       return result;
     },

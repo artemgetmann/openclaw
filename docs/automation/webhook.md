@@ -230,6 +230,39 @@ hook path is the normal mode. `--commit-without-dispatch` is for explicit
 observe-only maintenance because it can consume replies without waking a
 monitor session.
 
+After foreground polling is proven for the intended runtime, install the same
+poller as an opt-in supervised service on macOS launchd or Linux systemd:
+
+```bash
+openclaw telegram-user monitor-service install \
+  --poll-interval-ms 5000 \
+  --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event
+```
+
+Use `openclaw telegram-user monitor-service status|restart|stop|uninstall` to
+manage it. The service runs the existing `monitor-poll --watch` path; it does
+not own the gateway, mutate cron scheduling, or dispatch Telegram messages. If
+the gateway requires token auth, set `OPENCLAW_GATEWAY_TOKEN` in the service
+install environment instead of passing a hook token in command arguments.
+Windows service installation is intentionally not wired in this slice; run
+`monitor-poll --watch` under an explicit supervisor there.
+
+WhatsApp-as-me waits use the generic monitor hook. After foreground polling is
+proven against the intended `wacli.db`, install the poller as a separate
+opt-in service:
+
+```bash
+openclaw whatsapp-monitor monitor-service install \
+  --db-path /path/to/wacli.db \
+  --poll-interval-ms 5000 \
+  --hook-url http://127.0.0.1:18789/hooks/monitor-event
+```
+
+Use `openclaw whatsapp-monitor monitor-service status|restart|stop|uninstall`
+to manage it. The service wraps `whatsapp-monitor poll --watch`; bounded smoke
+runs still belong on the foreground poll command via `--max-runs`, not the
+installed service.
+
 If a monitor has no explicit cursor seed such as `afterId`, the first poll
 checkpoints the current visible Telegram history and emits no wake. This avoids
 turning old chat history into a fresh monitor event when the listener starts.

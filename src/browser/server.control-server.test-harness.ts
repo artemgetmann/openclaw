@@ -188,6 +188,10 @@ const chromeMcpMocks = vi.hoisted(() => ({
     type: "page",
   })),
   pressChromeMcpKey: vi.fn(async () => {}),
+  readChromeMcpPdfResource: vi.fn(async () => ({
+    url: "https://example.com/report.pdf",
+    buffer: Buffer.from("%PDF-1.7\nnative pdf\n%%EOF\n"),
+  })),
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
