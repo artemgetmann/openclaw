@@ -66,6 +66,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** If true, omit session goal tools from contexts that do not own a real goal. */
+  disableGoalTools?: boolean;
   /** Controls whether final assistant replies are source-delivered or private. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sessionFile: string;

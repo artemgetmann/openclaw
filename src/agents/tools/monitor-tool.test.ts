@@ -165,4 +165,24 @@ describe("monitor tool", () => {
       },
     });
   });
+
+  it("drops model-only monitor update patch keys before gateway validation", async () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    await tool.execute?.("call-stop-reason", {
+      action: "update",
+      monitorId: "monitor-1",
+      patch: {
+        lastCheckpoint: { checkpointId: "ckpt-1" },
+        stopReason: "end_turn",
+      },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith("monitor.update", expect.any(Object), {
+      monitorId: "monitor-1",
+      patch: {
+        lastCheckpoint: { checkpointId: "ckpt-1" },
+      },
+    });
+  });
 });

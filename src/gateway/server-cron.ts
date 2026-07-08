@@ -452,6 +452,11 @@ export function buildGatewayCronService(params: {
               },
             }
           : {}),
+        // Non-goal monitors are durable continuation state, not user goal sessions.
+        // Exposing goal mutation tools lets a model mark the monitor session itself
+        // complete/blocked, which fails with "session not found" and can degrade an
+        // otherwise successful wake/checkpoint.
+        disableGoalTools: !monitor.goal,
         // Monitor wakes are supposed to continue one durable task over time.
         // Forcing the legacy daily cron reset here would recreate the same
         // "fresh mini-brain on every wake" bug this redesign is fixing.

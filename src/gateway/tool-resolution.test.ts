@@ -143,4 +143,50 @@ describe("gateway tool resolution", () => {
     expect(result.tools.map((tool) => tool.name)).toContain("memory_search");
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
+
+  it("omits goal tools for loopback monitor sessions without a bound goal", async () => {
+    const workspaceDir = await createTempWorkspace();
+    const cronStore = path.join(workspaceDir, "cron", "jobs.json");
+    const monitorStore = path.join(path.dirname(cronStore), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStore), { recursive: true });
+    await fs.writeFile(
+      monitorStore,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-no-goal",
+            agentId: "main",
+            originSessionKey: "agent:main:telegram:direct:user-1",
+            monitorSessionKey: "agent:main:monitor:monitor-no-goal",
+            sourceType: "whatsapp",
+            sourceTarget: { target: "12345@lid" },
+            cadence: { kind: "every", everyMs: 300_000 },
+            actionPolicy: "notify_draft",
+            status: "active",
+            cronJobId: "cron-monitor-no-goal",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        ...createConfig(workspaceDir),
+        cron: { store: cronStore },
+      },
+      sessionKey: "agent:main:monitor:monitor-no-goal",
+      surface: "loopback",
+      senderIsOwner: true,
+    });
+    const toolNames = result.tools.map((tool) => tool.name);
+
+    expect(toolNames).not.toContain("get_goal");
+    expect(toolNames).not.toContain("create_goal");
+    expect(toolNames).not.toContain("update_goal");
+    expect(toolNames).toContain("monitor");
+  });
 });

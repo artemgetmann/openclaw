@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import JSON5 from "json5";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
@@ -16,8 +18,11 @@ import {
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { logWarn } from "../logger.js";
+import { resolveMonitorStorePath } from "../monitor/store.js";
+import type { MonitorStoreFile } from "../monitor/types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
@@ -36,6 +41,26 @@ function logToolResolution(step: string, details: Record<string, unknown>): void
     return;
   }
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
+}
+
+function isUnboundMonitorSession(params: { cfg: OpenClawConfig; sessionKey: string }): boolean {
+  const monitorStorePath = resolveMonitorStorePath({
+    cronStorePath: resolveCronStorePath(params.cfg.cron?.store),
+  });
+  try {
+    const parsed = JSON5.parse(fs.readFileSync(monitorStorePath, "utf-8"));
+    const monitors: MonitorStoreFile["monitors"] = Array.isArray(parsed?.monitors)
+      ? parsed.monitors
+      : [];
+    const monitor = monitors.find((entry) => entry?.monitorSessionKey === params.sessionKey);
+    return Boolean(monitor && !monitor.goal);
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return false;
+    }
+    logWarn(`tool-resolution: failed to inspect monitor store: ${String(err)}`);
+    return false;
+  }
 }
 
 export function resolveGatewayScopedTools(params: {
@@ -97,6 +122,10 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     senderIsOwner: params.senderIsOwner,
     config: params.cfg,
+    disableGoalTools: isUnboundMonitorSession({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    }),
     workspaceDir,
     enableGuiControlTool: params.surface === "loopback",
     pluginToolGlobalRegistryOnly: params.surface === "loopback",
