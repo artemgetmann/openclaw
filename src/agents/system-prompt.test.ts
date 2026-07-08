@@ -217,14 +217,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
-  it("instructs models to call update_plan early for multi-step work", () => {
+  it("instructs models to orient users before update_plan for multi-step work", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["update_plan"],
     });
 
     expect(prompt).toContain("## Planning");
-    expect(prompt).toContain("call update_plan before the first non-trivial tool call");
+    expect(prompt).toContain("use update_plan to track the work");
+    expect(prompt).toContain("first send one short natural-language status note");
+    expect(prompt).toContain("what you are doing now/next");
     expect(prompt).toContain("two or more meaningful steps");
     expect(prompt).toContain("update_plan is not /goal");
     expect(prompt).toContain(DURABLE_PLAN_FILE_POLICY_PROMPT);
