@@ -1799,6 +1799,60 @@ function repairTelegramLiveTesterBundledSkills(config) {
   };
 }
 
+function normalizePluginIdList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set();
+  const normalized = [];
+  for (const value of values) {
+    const pluginId = String(value ?? "").trim();
+    if (!pluginId || seen.has(pluginId)) {
+      continue;
+    }
+    seen.add(pluginId);
+    normalized.push(pluginId);
+  }
+  return normalized;
+}
+
+function collectConfiguredPluginIds(plugins) {
+  const ids = new Set();
+  if (!plugins || typeof plugins !== "object") {
+    return ids;
+  }
+  const entries = plugins.entries && typeof plugins.entries === "object" ? plugins.entries : {};
+  for (const id of Object.keys(entries)) {
+    ids.add(id);
+  }
+  const slots = plugins.slots && typeof plugins.slots === "object" ? plugins.slots : {};
+  for (const id of Object.values(slots)) {
+    if (typeof id === "string" && id.trim()) {
+      ids.add(id.trim());
+    }
+  }
+  return ids;
+}
+
+function sanitizeTelegramLiveTesterPluginDeny(config) {
+  const plugins = config.plugins && typeof config.plugins === "object" ? config.plugins : null;
+  if (!plugins) {
+    return;
+  }
+  const deny = normalizePluginIdList(plugins.deny);
+  if (deny.length === 0) {
+    delete plugins.deny;
+    return;
+  }
+  const configuredPluginIds = collectConfiguredPluginIds(plugins);
+  const retained = deny.filter((pluginId) => configuredPluginIds.has(pluginId));
+  if (retained.length > 0) {
+    plugins.deny = retained;
+  } else {
+    delete plugins.deny;
+  }
+}
+
 export function buildTelegramLiveRuntimeConfig(params) {
   const assignedToken = String(params?.assignedToken ?? "").trim();
   const runtimePort = Number.parseInt(String(params?.runtimePort ?? ""), 10);
@@ -2053,6 +2107,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
       ...structuredClone(pluginSlots),
     },
   };
+  sanitizeTelegramLiveTesterPluginDeny(config);
 
   config.tools = baseTools;
 
@@ -2082,6 +2137,16 @@ function normalizePluginSlotsForParity(slots) {
     return {};
   }
   return slots;
+}
+
+function normalizePluginDenyForParity(plugins) {
+  if (!plugins || typeof plugins !== "object") {
+    return [];
+  }
+  const configuredPluginIds = collectConfiguredPluginIds(plugins);
+  return normalizePluginIdList(plugins.deny)
+    .filter((pluginId) => configuredPluginIds.has(pluginId))
+    .toSorted();
 }
 
 function normalizeTesterModelAllowlistForParity(modelConfig, models) {
@@ -2141,6 +2206,12 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
         normalizePluginSlotsForParity(resolveConfigValue(runtimeConfig, pathKey)),
       );
     }
+    if (pathKey === "plugins.deny") {
+      return !jsonEqual(
+        normalizePluginDenyForParity(baseConfig.plugins),
+        normalizePluginDenyForParity(runtimeConfig.plugins),
+      );
+    }
     if (pathKey === "agents.defaults.models") {
       return !jsonEqual(
         normalizeTesterModelAllowlistForParity(
@@ -2183,8 +2254,8 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
         resolveConfigValue(runtimeConfig, "plugins.allow"),
       ) &&
       jsonEqual(
-        resolveConfigValue(baseConfig, "plugins.deny"),
-        resolveConfigValue(runtimeConfig, "plugins.deny"),
+        normalizePluginDenyForParity(baseConfig.plugins),
+        normalizePluginDenyForParity(runtimeConfig.plugins),
       ) &&
       jsonEqual(
         normalizePluginSlotsForParity(resolveConfigValue(baseConfig, "plugins.slots")),

@@ -109,6 +109,9 @@ describe("summarizeTelegramTesterTokenPool", () => {
       plugins: {
         allow: ["telegram", "browser", "memory"],
         deny: ["experimental"],
+        entries: {
+          experimental: { enabled: false },
+        },
         slots: {
           memory: "default",
         },
@@ -143,6 +146,23 @@ describe("summarizeTelegramTesterTokenPool", () => {
     expect(config.plugins.deny).toEqual(baseConfig.plugins.deny);
     expect(config.plugins.slots).toEqual(baseConfig.plugins.slots);
     expect(config.tools).toEqual(baseConfig.tools);
+  });
+
+  it("drops deny-only local plugin ids from generated tester configs", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        plugins: {
+          deny: ["tool-sanity-guard", "configured-plugin"],
+          entries: {
+            "configured-plugin": { enabled: false },
+          },
+        },
+      },
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.plugins.deny).toEqual(["configured-plugin"]);
   });
 
   it("adds goal-mode to generated-looking tester skill allowlists", () => {
@@ -255,6 +275,45 @@ describe("summarizeTelegramTesterTokenPool", () => {
 
     expect(report.config_diff_allowed_only).toBe(true);
     expect(report.config_diff_unexpected_paths).not.toContain("plugins.slots");
+  });
+
+  it("does not report deny-only plugin pruning as a parity failure", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-deny-parity-"));
+    const baseConfigPath = path.join(root, "base.json");
+    const runtimeConfigPath = path.join(root, "runtime.json");
+    const baseConfig = {
+      plugins: {
+        allow: ["telegram"],
+        deny: ["tool-sanity-guard", "configured-plugin"],
+        entries: {
+          "configured-plugin": { enabled: false },
+        },
+      },
+      tools: {},
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4", fallbacks: [] },
+          models: { "openai-codex/gpt-5.4": {} },
+        },
+      },
+    };
+    const runtimeConfig = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+    writeFileSync(baseConfigPath, JSON.stringify(baseConfig), "utf8");
+    writeFileSync(runtimeConfigPath, JSON.stringify(runtimeConfig), "utf8");
+
+    const report = buildTelegramLiveRuntimeParityReport({
+      baseConfigPath,
+      runtimeConfigPath,
+    });
+
+    expect(runtimeConfig.plugins.deny).toEqual(["configured-plugin"]);
+    expect(report.config_diff_allowed_only).toBe(true);
+    expect(report.config_diff_unexpected_paths).not.toContain("plugins.deny");
+    expect(report.plugins_match).toBe(true);
   });
 
   it("allows tester runtime model twin pruning in the parity report", () => {
