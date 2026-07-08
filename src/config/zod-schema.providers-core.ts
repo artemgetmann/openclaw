@@ -298,6 +298,10 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
+  if (value.enabled === false) {
+    validateTelegramCustomCommands(value, ctx);
+    return;
+  }
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
