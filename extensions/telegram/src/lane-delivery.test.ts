@@ -159,6 +159,14 @@ describe("createLaneTextDeliverer", () => {
     ).toBe("Starting step 1 now\n\n✅ Step 1 done.\n\nMoving to step 2 page\n\n✅ Step 2 done.");
   });
 
+  it("separates fallback status from recording status without punctuation", () => {
+    expect(
+      normalizeAdjacentProgressBoundaries(
+        "retrying with local fallback that avoids terminal apple events recording now",
+      ),
+    ).toBe("retrying with local fallback that avoids terminal apple events\n\nrecording now");
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

@@ -503,14 +503,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
     expect(progressStream.update).toHaveBeenCalledWith("Work log");
     expect(progressStream.clear).not.toHaveBeenCalled();
-    expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        richMessages: false,
-        replies: [expect.objectContaining({ text: finalText })],
-      }),
-    );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expectFinalPreviewEditedInPlace(9105, finalText);
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "" })],
@@ -668,7 +662,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
-  it("sends final answer text separately after retained progress and strips transient prefixes", async () => {
+  it("finalizes visible final preview after retained progress and strips transient prefixes", async () => {
     const speculativeAnswerStream = createTestDraftStream({
       messageId: 9401,
       clearMessageIdOnForceNew: true,
@@ -718,18 +712,8 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(finalAnswerStream.update).toHaveBeenCalledWith(
       "The branch is clean enough to patch safely.",
     );
-    expect(finalAnswerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        richMessages: false,
-        replies: [
-          expect.objectContaining({
-            text: "The branch is clean enough to patch safely.",
-          }),
-        ],
-      }),
-    );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(finalAnswerStream.clear).not.toHaveBeenCalled();
+    expectFinalPreviewEditedInPlace(9403, "The branch is clean enough to patch safely.");
     expect(speculativeAnswerStream.update).toHaveBeenCalledWith("Work log");
     expect(speculativeAnswerStream.clear).not.toHaveBeenCalled();
   });

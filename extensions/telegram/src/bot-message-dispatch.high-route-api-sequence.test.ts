@@ -250,6 +250,23 @@ function richMessageCalls(calls: readonly TelegramApiCall[]) {
   });
 }
 
+function visibleTextMessageCalls(calls: readonly TelegramApiCall[]) {
+  return [...sendMessageCalls(calls), ...richMessageCalls(calls)];
+}
+
+function workLogEditCalls(calls: readonly TelegramApiCall[]) {
+  return calls.filter(
+    (call): call is Extract<TelegramApiCall, { op: "editMessageText" }> =>
+      call.op === "editMessageText" && call.text === "Work log",
+  );
+}
+
+function deleteMessageCalls(calls: readonly TelegramApiCall[]) {
+  return calls.filter((call): call is Extract<TelegramApiCall, { op: "deleteMessage" }> => {
+    return call.op === "deleteMessage";
+  });
+}
+
 describe("dispatchTelegramMessage high-route progress API sequence", () => {
   beforeEach(() => {
     getReplyFromConfig.mockReset();
@@ -284,7 +301,7 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
       }),
     });
 
-    const previewSend = sendMessageCalls(harness.calls).find((call) =>
+    const previewSend = visibleTextMessageCalls(harness.calls).find((call) =>
       call.text.includes(partialAnswer),
     );
     const finalEdit = harness.calls.find(
@@ -295,16 +312,15 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
       (call): call is Extract<TelegramApiCall, { op: "deleteMessage" }> =>
         call.op === "deleteMessage" && call.messageId === previewSend?.messageId,
     );
-
     expect(previewSend).toBeDefined();
     expect(finalEdit).toBeDefined();
     expect(previewDelete).toBe(false);
-    expect(richMessageCalls(harness.calls)).toHaveLength(0);
+    expect(richMessageCalls(harness.calls)).toHaveLength(1);
     expect(harness.calls).toEqual([
       expect.objectContaining({
-        op: "sendMessage",
+        op: "sendRichMessage",
         messageId: previewSend!.messageId,
-        text: partialAnswer,
+        text: expect.stringContaining(partialAnswer),
       }),
       expect.objectContaining({
         op: "editMessageText",
@@ -342,21 +358,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
 
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: finalAnswer,
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
@@ -397,21 +401,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
 
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: expect.stringContaining("Notes covered"),
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
@@ -468,21 +460,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
 
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: finalAnswer,
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
@@ -513,21 +493,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
     expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: progressText,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: finalAnswer,
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });

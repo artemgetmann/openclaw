@@ -181,7 +181,15 @@ export function normalizeAdjacentProgressBoundaries(text: string): string {
     .replace(/\*{4,}(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "\n\n$1")
     .replace(/([.!?])([A-Z]{2,}\b)/g, "$1\n\n$2")
     .replace(/([^\n])(\s*✅\s*)/g, "$1\n\n$2")
-    .replace(/([^\n])(Redirect\b)/g, "$1\n\n$2");
+    .replace(/([^\n])(Redirect\b)/g, "$1\n\n$2")
+    // Some local-proof status lines arrive as adjacent sentence fragments
+    // without punctuation, for example after Apple Events fallback retries.
+    // Split the visible command/state transition instead of showing
+    // "...terminal apple events recording now" as one run-on paragraph.
+    .replace(
+      /\b((?:retrying|using)\b[^\n.!?]{0,180}?\b(?:fallback|apple events)\b[^\n.!?]{0,80}?)\s+(recording now\b)/gi,
+      (_match, prefix: string, next: string) => `${prefix}\n\n${next}`,
+    );
   const paragraphs = separated.split(/\n{2,}/);
   const deduped: string[] = [];
   for (const paragraph of paragraphs) {

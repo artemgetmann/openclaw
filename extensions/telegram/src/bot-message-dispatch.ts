@@ -2050,7 +2050,8 @@ export const dispatchTelegramMessage = async ({
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    if (forceNextAnswerFinalSend) {
+    const shouldForceFreshFinalSend = forceNextAnswerFinalSend && !answerLane.hasStreamedMessage;
+    if (shouldForceFreshFinalSend) {
       forceNextAnswerFinalSend = false;
       await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
       const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
@@ -2062,6 +2063,10 @@ export const dispatchTelegramMessage = async ({
       result = delivered ? "sent" : "skipped";
     } else {
       forceNextAnswerFinalSend = false;
+      // If final-answer text has already opened a visible answer preview, keep
+      // that message alive and finalize it in place. The Work Log was already
+      // frozen by beginFinalAnswerPhase(); clearing this preview would create
+      // the exact "final appears, disappears, then reappears" flash.
       result = await deliverLaneText({
         laneName: "answer",
         text: preparedText,
