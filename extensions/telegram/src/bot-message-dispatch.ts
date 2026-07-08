@@ -1881,10 +1881,11 @@ export const dispatchTelegramMessage = async ({
       // it through the mutable progress controller so it never becomes durable
       // Telegram text and never reaches TTS as a tool result.
       const progressKind = resolveOpenClawProgressKind(payload) === "plan" ? "plan" : "generic";
-      // Plan updates are structural progress, not a new truth baseline. Append
-      // them so a checklist update cannot erase earlier natural status text.
+      // Plan updates are structural state: keep one mutable checklist block
+      // while ordinary progress remains append-only around it.
       await updateAnswerProgressFromBlock(payload.text, {
         progressKind,
+        replace: progressKind === "plan",
       });
       return;
     }

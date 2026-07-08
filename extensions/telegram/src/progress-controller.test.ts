@@ -213,7 +213,7 @@ describe("createTelegramProgressController", () => {
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
-  it("appends replace text without deleting earlier progress", async () => {
+  it("keeps one mutable replacement block without deleting surrounding progress", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
     controller.update("Opening example.com");
@@ -230,18 +230,43 @@ describe("createTelegramProgressController", () => {
       ),
     );
 
-    controller.update("Collecting logs");
+    controller.replace("Plan updated\n- [x] Run tests\n- [~] Review output");
     await vi.waitFor(() =>
       expect(api.editMessageText).toHaveBeenLastCalledWith(
         123,
         77,
-        "Opening example.com\n\nPlan updated\n- [~] Run tests\n\nCollecting logs",
+        "Opening example.com\n\nPlan updated\n- [x] Run tests\n- [~] Review output",
       ),
     );
-    expect(String(api.editMessageText.mock.lastCall?.[2] ?? "")).toContain("Opening example.com");
+
+    controller.update("Collecting logs");
+    expect(controller.lastText()).toBe(
+      "Opening example.com\n\nPlan updated\n- [x] Run tests\n- [~] Review output\n\nCollecting logs",
+    );
+
+    controller.replace("Plan updated\n- [x] Run tests\n- [x] Review output");
+    expect(controller.lastText()).toBe(
+      "Opening example.com\n\nPlan updated\n- [x] Run tests\n- [x] Review output\n\nCollecting logs",
+    );
+
+    await controller.retainAsWorkLog();
+    const workLog = getTelegramWorkLog("1");
+    expect(renderTelegramWorkLog(workLog!, true).text).toBe(
+      [
+        "Work log",
+        "",
+        "Opening example.com",
+        "",
+        "Plan updated",
+        "- [x] Run tests",
+        "- [x] Review output",
+        "",
+        "Collecting logs",
+      ].join("\n"),
+    );
   });
 
-  it("caps replacement snapshots while preserving latest structured progress", async () => {
+  it("caps mutable replacement snapshots while preserving latest structured progress", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
       editMessageText: vi.fn().mockResolvedValue(true),

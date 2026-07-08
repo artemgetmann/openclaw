@@ -99,8 +99,11 @@ export function createTelegramProgressController(params: {
   let lastRenderedProgressText = "";
   const progressEntries: string[] = [];
   const progressEntryKeys = new Set<string>();
+  let replacementProgressEntryIndex: number | undefined;
+  let replacementProgressEntryKey: string | undefined;
 
   const normalizeProgressEntryKey = (entry: string) => entry.replace(/\s+/g, " ").trim();
+  const normalizeReplacementProgressEntry = (entry: string) => entry.replace(/\r\n?/g, "\n").trim();
   const isStructuredProgressBlock = (entry: string) => {
     const lines = entry.split(/\n/).map((line) => line.trim());
     const meaningfulLines = lines.filter(Boolean);
@@ -161,6 +164,39 @@ export function createTelegramProgressController(params: {
       didAppend = true;
     }
     return didAppend;
+  };
+
+  const upsertReplacementProgressEntry = (text: string) => {
+    const entry = normalizeReplacementProgressEntry(text);
+    if (!entry) {
+      return false;
+    }
+    const key = normalizeProgressEntryKey(entry);
+    if (
+      replacementProgressEntryIndex != null &&
+      replacementProgressEntryKey === key &&
+      progressEntries[replacementProgressEntryIndex] === entry
+    ) {
+      return false;
+    }
+
+    // Plan-style progress is structural state, not chronological narration.
+    // Keep one mutable entry at the position where the plan first appeared so
+    // normal progress before and after it still reads in order.
+    if (replacementProgressEntryIndex == null) {
+      const existingIndex = progressEntries.findIndex(
+        (candidate) => normalizeProgressEntryKey(candidate) === key,
+      );
+      replacementProgressEntryIndex = existingIndex >= 0 ? existingIndex : progressEntries.length;
+    }
+
+    if (replacementProgressEntryKey) {
+      progressEntryKeys.delete(replacementProgressEntryKey);
+    }
+    progressEntryKeys.add(key);
+    progressEntries[replacementProgressEntryIndex] = entry;
+    replacementProgressEntryKey = key;
+    return true;
   };
 
   const renderProgressHistory = (previewText?: string) => {
@@ -239,10 +275,9 @@ export function createTelegramProgressController(params: {
       if (!progressText) {
         return;
       }
-      // Telegram consumer progress is a visible work history. Even callers
-      // that still use the older replace hook should append so a structural
-      // plan snapshot cannot erase earlier model-authored progress.
-      appendProgressEntries(progressText);
+      if (!upsertReplacementProgressEntry(progressText)) {
+        return;
+      }
       const replacementProgressText = renderProgressHistory();
       if (!replacementProgressText) {
         return;
