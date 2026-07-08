@@ -36,6 +36,12 @@ export type TelegramInputRichMessage =
       skip_entity_detection?: boolean;
     };
 
+type TelegramRichResponseLike = {
+  text?: unknown;
+  caption?: unknown;
+  rich_message?: unknown;
+};
+
 export type TelegramSendRichMessageParams = {
   chat_id: number | string;
   message_thread_id?: number;
@@ -108,6 +114,108 @@ export function getTelegramRichEditRawApi(api: Bot["api"]): TelegramRichEditRawA
 
 function finiteInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function hasNonBlankString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function richTreeHasVisibleContent(value: unknown, depth = 0): boolean {
+  if (depth > 16) {
+    return false;
+  }
+  if (hasNonBlankString(value)) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => richTreeHasVisibleContent(item, depth + 1));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  // Telegram's RichMessage response is a tree: rich_message.blocks[] contains
+  // block objects, those blocks contain text/caption/items/cells, and RichText
+  // objects recursively contain text. Walk only known visible fields so an id,
+  // type tag, or empty structural array cannot masquerade as readable content.
+  const visibleKeys = [
+    "blocks",
+    "text",
+    "caption",
+    "credit",
+    "summary",
+    "items",
+    "cells",
+    "title",
+    "label",
+  ];
+  for (const key of visibleKeys) {
+    if (hasOwn(value, key) && richTreeHasVisibleContent(value[key], depth + 1)) {
+      return true;
+    }
+  }
+
+  // Rich media blocks are visible even when their optional captions are empty.
+  // The current text-send path should not generate these, but this keeps the
+  // validator aligned with Bot API RichMessage semantics instead of hard-coding
+  // text-only assumptions.
+  return ["photo", "video", "animation", "audio", "voice_note", "map"].some((key) =>
+    hasOwn(value, key),
+  );
+}
+
+export function assertTelegramRichMessageInputHasContent(
+  richMessage: TelegramInputRichMessage,
+): void {
+  const rawText = "html" in richMessage ? richMessage.html : richMessage.markdown;
+  if (!hasNonBlankString(rawText)) {
+    throw new Error("Telegram rich_message payload is empty");
+  }
+}
+
+export function assertTelegramRichSendResponseHasVisibleContent(response: unknown): void {
+  if (!isRecord(response)) {
+    return;
+  }
+
+  const message = response as TelegramRichResponseLike;
+  if (message.rich_message !== undefined) {
+    if (
+      richTreeHasVisibleContent(message.rich_message) ||
+      hasNonBlankString(message.text) ||
+      hasNonBlankString(message.caption)
+    ) {
+      return;
+    }
+    throw new Error("Telegram sendRichMessage returned empty rich_message content");
+  }
+
+  // Bot API 10.1 added Message.rich_message, but local wrappers can lag the
+  // schema and omit that field. Absence is unknown, not blank. Explicit empty
+  // legacy text/caption is different: it is Telegram telling us the visible
+  // response body it exposed is blank, so the caller must fall back to HTML.
+  if (
+    hasOwn(response, "text") &&
+    typeof message.text === "string" &&
+    !hasNonBlankString(message.text)
+  ) {
+    throw new Error("Telegram sendRichMessage returned empty text");
+  }
+  if (
+    hasOwn(response, "caption") &&
+    typeof message.caption === "string" &&
+    !hasNonBlankString(message.caption)
+  ) {
+    throw new Error("Telegram sendRichMessage returned empty caption");
+  }
 }
 
 function isReplyParameters(value: unknown): value is ReplyParameters {

@@ -43,6 +43,8 @@ import {
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
 import {
+  assertTelegramRichMessageInputHasContent,
+  assertTelegramRichSendResponseHasVisibleContent,
   buildTelegramRichMessage,
   getTelegramRichEditRawApi,
   getTelegramRichRawApi,
@@ -711,7 +713,8 @@ export async function sendMessageTelegram(
                 skipEntityDetection: linkPreviewEnabled === false,
               },
             );
-            return await withTelegramThreadFallback(
+            assertTelegramRichMessageInputHasContent(richMessage);
+            const richResult = await withTelegramThreadFallback(
               richParams,
               "rich-message",
               opts.verbose,
@@ -728,6 +731,8 @@ export async function sendMessageTelegram(
                   retryLabel,
                 ),
             );
+            assertTelegramRichSendResponseHasVisibleContent(richResult);
+            return richResult;
           } catch (err) {
             logVerbose(
               `telegram rich-message send failed, retrying legacy sendMessage: ${formatErrorMessage(
