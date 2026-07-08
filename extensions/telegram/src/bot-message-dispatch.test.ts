@@ -918,6 +918,39 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(guardedTelegramDeleteMessage).not.toHaveBeenCalled();
   });
 
+  it("renders streamed draft-preview blockquotes as copy-safe rich code blocks", async () => {
+    const answerStream = createDraftStream(9102);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const draftText = [
+      "Suggested reply:",
+      "",
+      "> Hi Sveta, here is the page: [booking](https://example.com/booking).",
+      "> Please confirm the passenger names.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: draftText });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    const renderText = createTelegramDraftStream.mock.calls[0]?.[0]?.renderText;
+    expect(renderText).toBeTypeOf("function");
+    const rendered = renderText(draftText);
+    expect(rendered).toEqual(
+      expect.objectContaining({
+        parseMode: "HTML",
+        text: expect.stringContaining("<pre><code>"),
+        richMessage: expect.objectContaining({
+          html: expect.stringContaining("<pre><code>"),
+        }),
+      }),
+    );
+    expect(rendered.text).not.toContain("<blockquote>");
+    expect(rendered.richMessage?.html).not.toContain("<blockquote>");
+    expect(rendered.richMessage?.html).not.toContain("<a href");
+  });
+
   it("suppresses raw tool traces when preview streaming is on", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {

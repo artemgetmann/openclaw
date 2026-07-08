@@ -767,11 +767,15 @@ export function sanitizeTelegramRichHtml(html: string): string {
 
 export function markdownToTelegramRichHtml(
   markdown: string,
-  options: { tableMode?: MarkdownTableMode } = {},
+  options: { tableMode?: MarkdownTableMode; copySafeBlockquotes?: boolean } = {},
 ): string {
   const flatHtml =
     options.tableMode === "block"
-      ? renderTelegramRichMarkdownDocument(markdown ?? "")
+      ? renderTelegramRichMarkdownDocument(
+          options.copySafeBlockquotes === true
+            ? rewriteMarkdownBlockquotesAsCopyBlocks(markdown ?? "")
+            : (markdown ?? ""),
+        )
       : markdownToTelegramHtml(markdown, options);
   return sanitizeTelegramRichHtml(renderTelegramRichBlockHtmlFromFlatHtml(flatHtml));
 }
@@ -781,11 +785,15 @@ export function splitTelegramRichMessageTextChunks(params: {
   textLimit: number;
   textMode: TelegramRichTextMode;
   tableMode?: MarkdownTableMode;
+  copySafeBlockquotes?: boolean;
 }): TelegramRichTextChunk[] {
   const html =
     params.textMode === "html"
       ? sanitizeTelegramRichHtml(params.text)
-      : markdownToTelegramRichHtml(params.text, { tableMode: params.tableMode });
+      : markdownToTelegramRichHtml(params.text, {
+          tableMode: params.tableMode,
+          copySafeBlockquotes: params.copySafeBlockquotes,
+        });
   return splitTelegramHtmlChunks(html, params.textLimit).map((chunk) => ({
     text: chunk,
     textMode: "html",
