@@ -515,11 +515,16 @@ export const dispatchTelegramMessage = async ({
     supportsBlockTables: true,
   });
   const renderDraftPreview = (text: string) => ({
-    text: renderTelegramHtmlText(text, { tableMode }),
+    text: renderTelegramHtmlText(text, { tableMode, copySafeBlockquotes: true }),
     parseMode: "HTML" as const,
     // Keep the legacy HTML text for fallback, but let Bot API 10.1 clients
     // render streamed previews/final edits as native rich-message blocks.
-    richMessage: buildTelegramRichMessage({ text, textMode: "markdown" }, { tableMode }),
+    // Quoted draft text is still a copy contract, so render it as code/pre
+    // instead of native blockquotes in the rich preview path too.
+    richMessage: buildTelegramRichMessage(
+      { text, textMode: "markdown" },
+      { tableMode, copySafeBlockquotes: true },
+    ),
   });
   latencyTrace?.mark("route_account_session_selected", {
     accountId: route.accountId,

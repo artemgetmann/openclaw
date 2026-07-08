@@ -77,6 +77,25 @@ describe("markdownToTelegramHtml", () => {
     expect(res).not.toContain("<a href");
   });
 
+  it("can render rich-message draft blockquotes as copyable code blocks", () => {
+    const res = markdownToTelegramRichHtml(
+      [
+        "Suggested reply:",
+        "",
+        "> Hi Sveta, here is the page: [booking](https://example.com/booking).",
+        "> Please confirm the passenger names.",
+      ].join("\n"),
+      { copySafeBlockquotes: true },
+    );
+
+    expect(res).toContain("<p>Suggested reply:</p>");
+    expect(res).toContain("<pre><code>");
+    expect(res).toContain("Hi Sveta, here is the page: booking (https://example.com/booking).");
+    expect(res).toContain("Please confirm the passenger names.");
+    expect(res).not.toContain("<blockquote>");
+    expect(res).not.toContain("<a href");
+  });
+
   it("rewrites only Markdown blockquotes when preparing copy-safe draft blocks", () => {
     const res = rewriteMarkdownBlockquotesAsCopyBlocks(
       "Normal **bold**.\n\n> Draft [link](https://e.com)",
