@@ -136,6 +136,79 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("falls back to legacy preview sends when rich_message send reports blank visible text", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: { sendRichMessage: ReturnType<typeof vi.fn> };
+    };
+    api.sendMessage.mockResolvedValueOnce({ message_id: 18 });
+    api.raw = { sendRichMessage: vi.fn().mockResolvedValue({ message_id: 17, text: "" }) };
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      previewTransport: "message",
+      renderText: (text) => ({
+        text,
+        richMessage: { html: text },
+      }),
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: "Hello" },
+    });
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expect(stream.messageId()).toBe(18);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview rich send failed; falling back to legacy sendMessage: Telegram sendRichMessage returned empty text",
+    );
+  });
+
+  it("falls back to legacy preview edits when rich_message edit reports blank visible text", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: {
+        sendRichMessage: ReturnType<typeof vi.fn>;
+        editMessageText: ReturnType<typeof vi.fn>;
+      };
+    };
+    api.raw = {
+      sendRichMessage: vi.fn().mockResolvedValue({
+        message_id: 17,
+        rich_message: {
+          blocks: [{ type: "paragraph", text: { type: "plain", text: "Hello" } }],
+        },
+      }),
+      editMessageText: vi.fn().mockResolvedValue({ message_id: 17, text: "" }),
+    };
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      previewTransport: "message",
+      renderText: (text) => ({
+        text,
+        richMessage: { html: text },
+      }),
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: { html: "Hello again" },
+    });
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview rich edit failed; falling back to legacy editMessageText: Telegram sendRichMessage returned empty text",
+    );
+  });
+
   it("falls back to legacy HTML edits when rich_message edit fails", async () => {
     const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
       raw: { editMessageText: ReturnType<typeof vi.fn> };
