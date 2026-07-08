@@ -566,6 +566,60 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("falls back to legacy HTML when direct rich text send returns explicit empty text", async () => {
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 7,
+      chat: { id: "123" },
+      text: "",
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const api = {
+      raw: { sendRichMessage },
+      sendMessage,
+    } as unknown as Partial<Bot["api"]>;
+
+    const res = await sendMessageTelegram("123", "Final answer for normal clients.", {
+      token: "tok",
+      api,
+    });
+
+    expect(res).toEqual({ messageId: "8", chatId: "123" });
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Final answer for normal clients.",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
+  it("keeps direct rich text send when Telegram returns visible native rich content", async () => {
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 7,
+      chat: { id: "123" },
+      text: "",
+      rich_message: {
+        blocks: [{ type: "paragraph", text: { type: "plain", text: "Visible final." } }],
+      },
+    });
+    const sendMessage = vi.fn();
+    const api = {
+      raw: { sendRichMessage },
+      sendMessage,
+    } as unknown as Partial<Bot["api"]>;
+
+    const res = await sendMessageTelegram("123", "Visible final.", {
+      token: "tok",
+      api,
+    });
+
+    expect(res).toEqual({ messageId: "7", chatId: "123" });
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("fails when Telegram media send returns no message_id", async () => {
     mockLoadedMedia({ contentType: "image/png", fileName: "photo.png" });
     const sendPhoto = vi.fn().mockResolvedValue({

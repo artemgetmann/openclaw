@@ -10,6 +10,8 @@ import {
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
 import {
+  assertTelegramRichMessageInputHasContent,
+  assertTelegramRichSendResponseHasVisibleContent,
   buildTelegramRichMessage,
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
@@ -181,6 +183,7 @@ export async function sendTelegramText(
             skipEntityDetection: opts?.linkPreview === false,
           },
         );
+        assertTelegramRichMessageInputHasContent(richMessage);
         const res = await sendTelegramWithThreadFallback({
           operation: "sendRichMessage",
           runtime,
@@ -199,6 +202,7 @@ export async function sendTelegramText(
         if (typeof res.message_id !== "number" || !Number.isFinite(res.message_id)) {
           throw new Error("Telegram sendRichMessage returned no message_id");
         }
+        assertTelegramRichSendResponseHasVisibleContent(res);
         runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
         return Math.trunc(res.message_id);
       } catch (err) {

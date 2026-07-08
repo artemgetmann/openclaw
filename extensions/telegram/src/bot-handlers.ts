@@ -110,6 +110,11 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { getSentMessageMetadata, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  getTelegramWorkLog,
+  parseTelegramWorkLogCallbackData,
+  renderTelegramWorkLog,
+} from "./work-log.js";
 
 const APPROVE_CALLBACK_DATA_RE =
   /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
@@ -1632,6 +1637,20 @@ export const registerTelegramHandlers = ({
         senderId,
         messageThreadId: messageThreadId ?? undefined,
       });
+      const workLogCallback = parseTelegramWorkLogCallbackData(data);
+      if (workLogCallback) {
+        const workLog = getTelegramWorkLog(workLogCallback.id);
+        if (!workLog) {
+          await editCallbackMessage("Work log expired.", {
+            reply_markup: { inline_keyboard: [] },
+          });
+          return;
+        }
+        const rendered = renderTelegramWorkLog(workLog, workLogCallback.action === "show");
+        const keyboard = buildInlineKeyboard(rendered.buttons);
+        await editCallbackMessage(rendered.text, keyboard ? { reply_markup: keyboard } : undefined);
+        return;
+      }
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         const resolved = await resolvePluginConversationBindingApproval({
