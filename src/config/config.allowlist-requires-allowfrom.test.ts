@@ -12,6 +12,22 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
     }
   });
 
+  it('accepts disabled telegram dmPolicy="allowlist" while sender is not staged yet', () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          enabled: false,
+          dmPolicy: "allowlist",
+          botToken: "fake",
+          accounts: {
+            default: { botToken: "fake" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it('rejects signal dmPolicy="allowlist" without allowFrom', () => {
     const res = validateConfigObject({
       channels: { signal: { dmPolicy: "allowlist" } },

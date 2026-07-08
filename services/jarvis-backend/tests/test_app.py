@@ -2,6 +2,7 @@ import json
 import os
 import socket
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 import httpx
@@ -9,6 +10,7 @@ import pytest
 
 from app.main import (
     OPENAI_IMAGE_TIMEOUT_SECONDS,
+    TELEGRAM_MANAGED_SETUP_TTL_MINUTES,
     app,
     get_settings,
     telegram_managed_setup_sessions,
@@ -390,6 +392,10 @@ def test_telegram_managed_start_returns_approval_url_without_secret_values(monke
         "https://t.me/newbot/JarvisManagerBot/founder_jarvis_bot"
         "?name=Jarvis%20Founder%20Bot"
     )
+    expires_at = datetime.fromisoformat(body["expiresAt"])
+    ttl = expires_at - datetime.now(timezone.utc)
+    assert ttl > timedelta(minutes=TELEGRAM_MANAGED_SETUP_TTL_MINUTES - 5)
+    assert ttl <= timedelta(minutes=TELEGRAM_MANAGED_SETUP_TTL_MINUTES)
     assert body["suggestedBotUsername"] == "founder_jarvis_bot"
     assert body["status"] == "pending"
     assert health.json()["providers"]["telegram_managed_bots"] is True
@@ -617,7 +623,7 @@ def test_telegram_managed_connected_session_survives_memory_clear(monkeypatch):
     assert len([url for url in requests_seen if url.endswith("/getUpdates")]) == 1
 
 
-def test_telegram_managed_expired_session_returns_gone_and_prunes(monkeypatch):
+def test_telegram_managed_expired_session_returns_gone_without_deleting_session(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
     monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
@@ -631,8 +637,23 @@ def test_telegram_managed_expired_session_returns_gone_and_prunes(monkeypatch):
     expired_at = "2020-01-01T00:00:00+00:00"
     with sqlite3.connect(os.environ["JARVIS_BACKEND_DB_PATH"]) as connection:
         connection.execute(
-            "UPDATE telegram_managed_setup_sessions SET expires_at = ? WHERE setup_id = ?",
-            (expired_at, setup_id),
+            """
+            UPDATE telegram_managed_setup_sessions
+            SET expires_at = ?,
+                status = ?,
+                bot_id = ?,
+                bot_username = ?,
+                managed_child_bot_token = ?
+            WHERE setup_id = ?
+            """,
+            (
+                expired_at,
+                "connected",
+                777000,
+                "founder_jarvis_bot",
+                "777000:test-child-token",
+                setup_id,
+            ),
         )
     telegram_managed_setup_sessions.clear()
 
@@ -642,10 +663,67 @@ def test_telegram_managed_expired_session_returns_gone_and_prunes(monkeypatch):
     assert response.json()["detail"] == "Telegram setup expired"
     with sqlite3.connect(os.environ["JARVIS_BACKEND_DB_PATH"]) as connection:
         row = connection.execute(
-            "SELECT setup_id FROM telegram_managed_setup_sessions WHERE setup_id = ?",
+            """
+            SELECT setup_id, suggested_bot_username, managed_child_bot_token
+            FROM telegram_managed_setup_sessions
+            WHERE setup_id = ?
+            """,
             (setup_id,),
         ).fetchone()
-    assert row is None
+    assert row == (setup_id, "founder_jarvis_bot", None)
+    assert telegram_managed_setup_sessions[setup_id].managed_child_bot_token is None
+
+
+def test_telegram_managed_recently_expired_session_survives_next_start_prune(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+    setup_id = started.json()["setupId"]
+    recently_expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    with sqlite3.connect(os.environ["JARVIS_BACKEND_DB_PATH"]) as connection:
+        connection.execute(
+            """
+            UPDATE telegram_managed_setup_sessions
+            SET expires_at = ?,
+                status = ?,
+                bot_id = ?,
+                bot_username = ?,
+                managed_child_bot_token = ?
+            WHERE setup_id = ?
+            """,
+            (
+                recently_expired_at.isoformat(),
+                "connected",
+                777000,
+                "founder_jarvis_bot",
+                "777000:test-child-token",
+                setup_id,
+            ),
+        )
+    telegram_managed_setup_sessions.clear()
+
+    next_setup = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "second_founder_jarvis_bot"},
+    )
+
+    assert next_setup.status_code == 200
+    with sqlite3.connect(os.environ["JARVIS_BACKEND_DB_PATH"]) as connection:
+        row = connection.execute(
+            """
+            SELECT setup_id, suggested_bot_username, managed_child_bot_token
+            FROM telegram_managed_setup_sessions
+            WHERE setup_id = ?
+            """,
+            (setup_id,),
+        ).fetchone()
+    assert row == (setup_id, "founder_jarvis_bot", None)
 
 
 def test_telegram_managed_status_sanitizes_telegram_api_error(monkeypatch):

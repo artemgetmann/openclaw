@@ -43,7 +43,13 @@ MANAGED_SCRAPE_PREFLIGHT_TIMEOUT_SECONDS = 5.0
 MANAGED_SCRAPE_MAX_REDIRECTS = 5
 MANAGED_SCRAPE_PREFLIGHT_HEADER_LIMIT = 64_000
 TELEGRAM_MANAGED_BOT_TIMEOUT_SECONDS = 20.0
-TELEGRAM_MANAGED_SETUP_TTL_MINUTES = 15
+# Managed bot creation can span Telegram, the app, and a human returning later.
+# A short TTL can strand a real bot the user already created, so keep setup IDs
+# valid long enough for normal onboarding interruptions.
+TELEGRAM_MANAGED_SETUP_TTL_MINUTES = 24 * 60
+# Expired setup rows remain useful product evidence: they let the app show an
+# explicit expired setup instead of "not found" after a backend restart/prune.
+TELEGRAM_MANAGED_SETUP_EXPIRED_RETENTION_DAYS = 7
 MAX_GEMINI_IMAGE_PROMPT_CHARS = 4000
 MAX_OPENAI_IMAGE_PROMPT_CHARS = 4000
 MAX_OPENAI_IMAGE_INPUT_BYTES = 50 * 1024 * 1024
@@ -607,7 +613,7 @@ def _telegram_managed_setup_session(
     store: LicenseStore,
     setup_id: str,
 ) -> TelegramManagedSetupSession:
-    """Fetch a non-expired setup session from durable storage by public setup id."""
+    """Fetch a setup session from durable storage by public setup id."""
 
     # Durable storage is authoritative. The process cache only prevents extra
     # row decoding inside one worker and must not hide restart/redeploy loss.
@@ -615,22 +621,32 @@ def _telegram_managed_setup_session(
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram setup not found")
     if session.expires_at <= _utcnow():
-        store.delete_telegram_managed_setup_session(setup_id=setup_id)
-        telegram_managed_setup_sessions.pop(setup_id, None)
+        # Do not hard-delete on read. An expired row is still valuable because
+        # it proves the setup existed and gives the client a deterministic
+        # recovery message instead of turning a timed-out flow into a mystery.
+        if session.managed_child_bot_token:
+            session.managed_child_bot_token = None
+            store.save_telegram_managed_setup_session(session=session)
+        telegram_managed_setup_sessions[setup_id] = session
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Telegram setup expired")
     telegram_managed_setup_sessions[setup_id] = session
     return session
 
 
 def _prune_expired_telegram_managed_sessions(store: LicenseStore) -> None:
-    """Keep durable setup state and the process cache from growing forever."""
+    """Keep setup state bounded without erasing freshly expired diagnostics."""
 
     now = _utcnow()
-    store.delete_expired_telegram_managed_setup_sessions(now=now)
+    retention_cutoff = now - timedelta(days=TELEGRAM_MANAGED_SETUP_EXPIRED_RETENTION_DAYS)
+    store.scrub_expired_telegram_managed_setup_session_tokens(now=now)
+    store.delete_expired_telegram_managed_setup_sessions(now=retention_cutoff)
+    for session in telegram_managed_setup_sessions.values():
+        if session.expires_at <= now:
+            session.managed_child_bot_token = None
     expired_setup_ids = [
         setup_id
         for setup_id, session in telegram_managed_setup_sessions.items()
-        if session.expires_at <= now
+        if session.expires_at <= retention_cutoff
     ]
     for setup_id in expired_setup_ids:
         telegram_managed_setup_sessions.pop(setup_id, None)
@@ -2112,6 +2128,9 @@ class LicenseStore(Protocol):
     def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
         """Delete one Telegram setup session after expiry or cleanup."""
 
+    def scrub_expired_telegram_managed_setup_session_tokens(self, *, now: datetime) -> None:
+        """Remove child bot tokens from expired setup rows kept for diagnostics."""
+
     def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
         """Delete Telegram setup sessions whose approval window has expired."""
 
@@ -2386,6 +2405,20 @@ class SQLiteLicenseStore:
             connection.execute(
                 "DELETE FROM telegram_managed_setup_sessions WHERE setup_id = ?",
                 (setup_id,),
+            )
+
+    def scrub_expired_telegram_managed_setup_session_tokens(self, *, now: datetime) -> None:
+        """Keep retained expired setup diagnostics without retaining child bot tokens."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                UPDATE telegram_managed_setup_sessions
+                SET managed_child_bot_token = NULL, updated_at = ?
+                WHERE expires_at <= ? AND managed_child_bot_token IS NOT NULL
+                """,
+                (_format_dt(_utcnow()), _format_dt(now)),
             )
 
     def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
@@ -2719,6 +2752,21 @@ class PostgresLicenseStore:
                 cursor.execute(
                     "DELETE FROM telegram_managed_setup_sessions WHERE setup_id = %s",
                     (setup_id,),
+                )
+
+    def scrub_expired_telegram_managed_setup_session_tokens(self, *, now: datetime) -> None:
+        """Keep retained expired setup diagnostics without retaining child bot tokens."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE telegram_managed_setup_sessions
+                    SET managed_child_bot_token = NULL, updated_at = %s
+                    WHERE expires_at <= %s AND managed_child_bot_token IS NOT NULL
+                    """,
+                    (_utcnow(), now),
                 )
 
     def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:

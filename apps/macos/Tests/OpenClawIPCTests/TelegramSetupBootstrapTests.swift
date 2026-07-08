@@ -408,6 +408,9 @@ struct TelegramSetupBootstrapTests {
     @Test func `managed telegram start requires activated Jarvis account token`() async throws {
         await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
+            "JARVIS_BACKEND_BASE_URL": "https://jarvis.example.test",
+            "JARVIS_BACKEND_ACCESS_TOKEN": "server-token",
+            "JARVIS_ACCOUNT_ACCESS_TOKEN": nil,
         ]) {
             let store = ChannelsStore(isPreview: true)
             store.configRoot = [
@@ -497,7 +500,7 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
-    @Test func `managed telegram status installs child token as enabled usable config`() async throws {
+    @Test func `managed telegram status stages child token until owner dm is captured`() async throws {
         let savedRoot = SavedConfigRoot()
         let configPath = TestIsolation.tempConfigPath()
         let stateDir = FileManager.default.temporaryDirectory
@@ -595,7 +598,7 @@ struct TelegramSetupBootstrapTests {
             let bravePluginEntry = try #require(pluginEntries["brave"] as? [String: Any])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
-            #expect(telegram["enabled"] as? Bool == true)
+            #expect(telegram["enabled"] as? Bool == false)
             #expect(telegram["dmPolicy"] as? String == "allowlist")
             #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
             #expect(plugins["allow"] as? [String] == [
@@ -621,6 +624,124 @@ struct TelegramSetupBootstrapTests {
             #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
 
             await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
+    @Test func `setup pause restore keeps unknown owner staged instead of pairing`() async throws {
+        let savedRoot = SavedConfigRoot()
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let initialRoot: [String: Any] = [
+                "channels": [
+                    "telegram": [
+                        "enabled": false,
+                        "botToken": "777000:test-child-token",
+                        "dmPolicy": "allowlist",
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
+                saveLocal: { root in savedRoot.set(root) }))
+
+            let store = ChannelsStore(isPreview: true)
+            try await store._testRestoreTelegramStagedSetupAfterSetupPause(
+                token: "777000:test-child-token")
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            #expect(telegram["enabled"] as? Bool == false)
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
+
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
+    @Test func `setup pause restore enables telegram only after owner id is known`() async throws {
+        let savedRoot = SavedConfigRoot()
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let initialRoot: [String: Any] = [
+                "channels": [
+                    "telegram": [
+                        "enabled": false,
+                        "botToken": "777000:test-child-token",
+                        "dmPolicy": "allowlist",
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
+                saveLocal: { root in savedRoot.set(root) }))
+
+            let store = ChannelsStore(isPreview: true)
+            store.telegramSetupFirstSenderId = "54762251"
+
+            try await store._testRestoreTelegramStagedSetupAfterSetupPause(
+                token: "777000:test-child-token")
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            #expect(telegram["enabled"] as? Bool == true)
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect(telegram["allowFrom"] as? [String] == ["54762251"])
+
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
+    @Test func `managed staged setup enables with captured owner allowlist`() async throws {
+        let savedRoot = SavedConfigRoot()
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let initialRoot: [String: Any] = [
+                "channels": [
+                    "telegram": [
+                        "enabled": false,
+                        "botToken": "777000:test-child-token",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": [],
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
+                saveLocal: { root in savedRoot.set(root) }))
+
+            let store = ChannelsStore(isPreview: true)
+            _ = try await store.applyTelegramSetupBootstrap(
+                token: "777000:test-child-token",
+                dmPolicy: "allowlist",
+                allowFrom: ["1336356696"],
+                enabled: true)
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            let accounts = try #require(telegram["accounts"] as? [String: Any])
+            let defaultAccount = try #require(accounts["default"] as? [String: Any])
+            #expect(telegram["enabled"] as? Bool == true)
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect(telegram["allowFrom"] as? [String] == ["1336356696"])
+            #expect(telegram["botToken"] as? String == "777000:test-child-token")
+            #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+
             await ConfigStore._testClearOverrides()
         }
     }
