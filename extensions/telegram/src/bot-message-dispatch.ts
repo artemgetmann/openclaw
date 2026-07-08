@@ -82,6 +82,7 @@ const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
 const activeTelegramProgressControllers = new Map<string, TelegramProgressController>();
 
 type ProgressCleanupResult = "none" | "completed" | "timed-out" | "failed";
+type ProgressRetainResult = "none" | "retained" | "failed";
 
 function normalizeToolProgressLine(text?: string) {
   return text?.replace(/\s+/g, " ").trim();
@@ -814,6 +815,7 @@ export const dispatchTelegramMessage = async ({
   let draftLaneEventQueue = Promise.resolve();
   let processingDraftLaneEvent = false;
   let progressController: TelegramProgressController | undefined;
+  const workLogToolNames: string[] = [];
   // Structured plan checklists own only explicit plan updates; later assistant
   // partials are answer candidates and must not be folded back into the plan.
   let activeProgressKind: "generic" | "plan" | undefined;
@@ -1028,6 +1030,13 @@ export const dispatchTelegramMessage = async ({
   };
   const getActiveProgressController = () =>
     activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
+  const noteWorkLogToolName = (name: string | undefined) => {
+    const normalized = name?.trim();
+    if (!normalized || workLogToolNames.includes(normalized)) {
+      return;
+    }
+    workLogToolNames.push(normalized);
+  };
   const clearProgressController = async (
     callsite: string,
     options?: { timeoutMs?: number; flushBeforeDelete?: boolean; waitForInFlight?: boolean },
@@ -1100,6 +1109,64 @@ export const dispatchTelegramMessage = async ({
       callsite,
     });
     return cleanupResult;
+  };
+  const retainProgressControllerAsWorkLog = async (
+    callsite: string,
+  ): Promise<ProgressRetainResult> => {
+    const controller =
+      activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
+    if (!controller) {
+      return "none";
+    }
+    logPreviewLedger({
+      lane: "progress",
+      phase: "progress_clear_started",
+      source: "cleanup",
+      messageId: controller.messageId(),
+      callsite,
+    });
+    let retainResult: ProgressRetainResult = "retained";
+    try {
+      const retained = await controller.retainAsWorkLog({ toolNames: workLogToolNames });
+      if (!retained.retained) {
+        retainResult = "none";
+      }
+    } catch (err) {
+      retainResult = "failed";
+      logVerbose(`telegram: progress work log retain failed callsite=${callsite}: ${String(err)}`);
+    } finally {
+      if (activeTelegramProgressControllers.get(progressControllerKey) === controller) {
+        activeTelegramProgressControllers.delete(progressControllerKey);
+      }
+      if (progressController === controller) {
+        progressController = undefined;
+      }
+      activeProgressKind = undefined;
+    }
+    logPreviewLedger({
+      lane: "progress",
+      phase: "progress_clear_completed",
+      source: "cleanup",
+      messageId: controller.messageId(),
+      result: retainResult,
+      callsite,
+    });
+    return retainResult;
+  };
+  const beginFinalAnswerPhase = async (callsite: string): Promise<ProgressRetainResult> => {
+    // Final-answer text is user-visible output, not progress. Freeze any active
+    // progress bubble first so the first final delta cannot briefly edit the
+    // soon-to-be-retained Work Log message.
+    routeToolStatusPartialsToProgress = false;
+    const retainResult = await retainProgressControllerAsWorkLog(callsite);
+    if (retainResult === "retained") {
+      // Once progress has become the Work Log, the paired final must be a
+      // separate durable send. Reusing the generic preview-finalization path
+      // can leave Telegram with a blank answer bubble while TTS speaks the
+      // real text.
+      forceNextAnswerFinalSend = true;
+    }
+    return retainResult;
   };
   const rotateAnswerLaneForNewAssistantMessage = async () => {
     let didForceNewMessage = false;
@@ -1297,13 +1364,11 @@ export const dispatchTelegramMessage = async ({
       isLikelyFinalAnswerPreviewAfterProgress(previewText)
     ) {
       // Tool/status narration owns the transient progress bubble. Once a
-      // final-looking answer starts streaming, delete progress before opening
+      // final-looking answer starts streaming, retain progress before opening
       // the durable answer lane so Telegram never shows final text inside the
-      // soon-to-be-deleted progress message.
+      // soon-to-be-retained Work Log message.
       routeToolStatusPartialsToProgress = false;
-      await clearProgressController("before-answer-partial", {
-        timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
-      });
+      await retainProgressControllerAsWorkLog("before-answer-partial");
     }
     if (
       lane === answerLane &&
@@ -1367,6 +1432,26 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     await lane.stream.flush();
+  };
+  const discardTransientAnswerPreviewBeforeForcedFinal = async (callsite: string) => {
+    if (!answerLane.stream || !answerLane.hasStreamedMessage) {
+      return;
+    }
+    try {
+      // This preview is only a draft fragment that arrived after progress was
+      // retained as Work Log. Remove it before the durable final send so the
+      // user sees one answer bubble, not a stale/blank preview plus the final.
+      await answerLane.stream.clear({ waitForInFlight: true });
+    } catch (err) {
+      logVerbose(
+        `telegram: answer preview cleanup before forced final failed callsite=${callsite}: ${String(err)}`,
+      );
+    } finally {
+      answerLane.stream = undefined;
+      resetDraftLaneState(answerLane);
+      activePreviewLifecycleByLane.answer = "transient";
+      retainPreviewOnCleanupByLane.answer = false;
+    }
   };
   const adoptSpeculativeAnswerPreviewAsProgress = async (callsite: string) => {
     if (!answerLane.stream || !answerLane.hasStreamedMessage) {
@@ -1752,17 +1837,16 @@ export const dispatchTelegramMessage = async ({
       isError: normalizedPayload.isError === true,
     });
     const shouldUseLegacyTextTransport =
+      (durableReason === "final" && !hasMedia) ||
       isControlCommandReplyPayload(normalizedPayload) ||
       isCopySafeDraftReplyPayload(normalizedPayload);
     const shouldUseCopySafeBlockquotes =
       !hasMedia && (isCopySafeDraftReplyPayload(normalizedPayload) || durableReason === "final");
     const result = await deliverReplies({
       ...deliveryBaseOptions,
-      // Control command replies are product UI, not rich content. Some attach
-      // media, such as the /tts on voice preview, so keep their text bubble on
-      // ordinary Telegram transport while preserving media delivery. Normal
-      // final answer text must stay on the rich-capable durable path so tables
-      // can render natively, with deliverReplies handling legacy fallbacks.
+      // Final text currently stays on ordinary Telegram HTML transport because
+      // rich-message delivery previously produced blank bubbles. Media/voice
+      // supplements still use their normal media path.
       ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
       // Final-answer blockquotes are commonly used for draft messages the user
       // wants to copy into another chat. Render those quote bodies as Telegram
@@ -1957,23 +2041,16 @@ export const dispatchTelegramMessage = async ({
       logVerbose("telegram: skipped final echo that matched transient progress");
       return "skipped";
     }
-    // If a progress controller owns the current visible bubble, remove it
-    // before durable final delivery. Sending final first creates the exact UX
-    // bug this path is meant to prevent: progress appears, final appears, then
-    // progress disappears out of order.
-    await clearProgressController("before-final-answer", {
-      timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
-      flushBeforeDelete: false,
-      waitForInFlight: false,
-    });
+    await beginFinalAnswerPhase("before-final-answer");
     setDraftDurableSendClassification("answer", {
       reason: classifyPayloadDurableSendReason(payload, "final"),
       callsite: "answer-final-preview",
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    if (forceNextAnswerFinalSend && !answerLane.hasStreamedMessage) {
+    if (forceNextAnswerFinalSend) {
       forceNextAnswerFinalSend = false;
+      await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
       const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
         reason: classifyPayloadDurableSendReason(payload, "final"),
         callsite: "answer-final-forced-send",
@@ -2016,6 +2093,7 @@ export const dispatchTelegramMessage = async ({
       infoKind?: string;
     },
   ) => {
+    await beginFinalAnswerPhase(`${classification.callsite ?? "final"}-before-final`);
     const delivered = await sendPayload(payload, classification);
     if (delivered) {
       latencyTrace?.mark("final_telegram_send_edit_completed", {
@@ -2482,6 +2560,15 @@ export const dispatchTelegramMessage = async ({
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
                   sawAssistantPartial = true;
+                  if (resolveOpenClawAssistantPhase(payload) === "final_answer") {
+                    const retainResult = await beginFinalAnswerPhase("before-final-answer-partial");
+                    if (retainResult === "retained") {
+                      // The real final payload follows through the dispatcher.
+                      // Do not create an intermediate answer preview after the
+                      // Work Log has already been frozen.
+                      return;
+                    }
+                  }
                   await ingestDraftLaneSegments(payload.text);
                 })
             : undefined,
@@ -2526,6 +2613,7 @@ export const dispatchTelegramMessage = async ({
               })
           : undefined,
         onToolStart: async (payload) => {
+          noteWorkLogToolName(payload.name);
           await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
           if (getActiveProgressController() && activeProgressKind !== "plan") {
             routeToolStatusPartialsToProgress = true;
