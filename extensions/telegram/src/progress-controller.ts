@@ -7,6 +7,11 @@ import {
   type TelegramDraftPreviewTraceEvent,
   type TelegramDraftStream,
 } from "./draft-stream.js";
+import {
+  buildTelegramWorkLogReplyMarkup,
+  registerTelegramWorkLog,
+  renderTelegramWorkLog,
+} from "./work-log.js";
 
 type ProgressPreview = {
   text: string;
@@ -21,6 +26,14 @@ export type TelegramProgressController = {
   preview: (text: string) => void;
   replace: (text: string) => void;
   clear: (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => Promise<void>;
+  retainAsWorkLog: (options?: { toolNames?: readonly string[] }) => Promise<
+    | {
+        retained: true;
+        messageId: number;
+        workLogId: string;
+      }
+    | { retained: false }
+  >;
   messageId: () => number | undefined;
   lastText: () => string;
 };
@@ -134,6 +147,15 @@ export function createTelegramProgressController(params: {
     }
     return retained.join(PROGRESS_ENTRY_SEPARATOR);
   };
+  const readProgressEntriesForWorkLog = () => {
+    if (progressEntries.length > 0) {
+      return progressEntries;
+    }
+    return lastRenderedProgressText
+      .split(/\n+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  };
 
   return {
     update: (text: string) => {
@@ -208,6 +230,39 @@ export function createTelegramProgressController(params: {
       // that point the next durable message is the final answer, so deleting
       // the visible progress bubble beats faithfully rendering stale progress.
       await stream.clear({ waitForInFlight: options?.waitForInFlight });
+    },
+    retainAsWorkLog: async (options?: { toolNames?: readonly string[] }) => {
+      if (cleared || !hasProgress) {
+        return { retained: false };
+      }
+      const workLog = registerTelegramWorkLog({
+        progressEntries: readProgressEntriesForWorkLog(),
+        toolNames: options?.toolNames,
+      });
+      if (!workLog) {
+        return { retained: false };
+      }
+      const collapsed = renderTelegramWorkLog(workLog, false);
+      cleared = true;
+      // Retention converts the mutable progress bubble in place before final
+      // delivery starts. That keeps Telegram ordering stable: Work log first,
+      // then a separate final answer message.
+      stream.update(collapsed.text);
+      await stream.flush();
+      const messageId = await stream.materialize?.();
+      if (typeof messageId !== "number") {
+        return { retained: false };
+      }
+      try {
+        await params.api.editMessageText(params.chatId, messageId, collapsed.text, {
+          reply_markup: buildTelegramWorkLogReplyMarkup(collapsed),
+        });
+      } catch (err) {
+        params.warn?.(
+          `telegram work log buttons failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return { retained: true, messageId, workLogId: workLog.id };
     },
     messageId: () => stream.messageId(),
     lastText: () => lastRenderedProgressText,

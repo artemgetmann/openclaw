@@ -1,6 +1,11 @@
 import type { Bot } from "grammy";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramProgressController } from "./progress-controller.js";
+import {
+  __testing as workLogTesting,
+  getTelegramWorkLog,
+  renderTelegramWorkLog,
+} from "./work-log.js";
 
 function createProgressControllerHarness() {
   let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
@@ -23,6 +28,10 @@ function createProgressControllerHarness() {
 }
 
 describe("createTelegramProgressController", () => {
+  beforeEach(() => {
+    workLogTesting.resetTelegramWorkLogsForTests();
+  });
+
   it("serializes pending first send, flushes pending progress edit, then deletes the same message", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
@@ -138,6 +147,43 @@ describe("createTelegramProgressController", () => {
     expect(adoptedStream.update).toHaveBeenCalledWith("Stale progress edit still queued.");
     expect(adoptedStream.flush).not.toHaveBeenCalled();
     expect(adoptedStream.clear).toHaveBeenCalledWith({ waitForInFlight: false });
+  });
+
+  it("can retain visible progress as a collapsed work log instead of deleting it", async () => {
+    const { api, controller, resolveFirstSend } = createProgressControllerHarness();
+
+    controller.update("Opening example.com");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    resolveFirstSend?.({ message_id: 77 });
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    controller.update("Reading IANA example domains");
+    const retained = await controller.retainAsWorkLog({ toolNames: ["browser.open"] });
+
+    expect(retained).toEqual({ retained: true, messageId: 77, workLogId: "1" });
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 77, "Work log", {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Show", callback_data: "wl:1:show" }]],
+      },
+    });
+  });
+
+  it("expands retained work log progress through the registered callback state", async () => {
+    const { api, controller, resolveFirstSend } = createProgressControllerHarness();
+
+    controller.update("Opening example.com");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    resolveFirstSend?.({ message_id: 77 });
+    controller.update("Reading IANA example domains");
+    await controller.retainAsWorkLog({ toolNames: ["browser.open"] });
+
+    const workLog = getTelegramWorkLog("1");
+    expect(workLog).toBeDefined();
+    expect(renderTelegramWorkLog(workLog!, true)).toEqual({
+      text: "Work log\n\nOpening example.com\n\nReading IANA example domains",
+      buttons: [[{ text: "Hide", callback_data: "wl:1:hide" }]],
+    });
   });
 
   it("dedupes repeated progress entries while preserving first-seen order", async () => {
