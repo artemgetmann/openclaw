@@ -1,11 +1,16 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dispatchMonitorEventToCron } from "../gateway/server-methods/monitor.js";
 import {
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { loadMonitorStore, resolveMonitorStorePath, saveMonitorStore } from "../monitor/store.js";
+import type { MonitorEventEnvelope, MonitorRecord } from "../monitor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -684,6 +689,154 @@ describe("exec notifyOnExit", () => {
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
+});
+
+describe("exec process_exit monitor events", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it("routes an explicitly armed background exec exit to the matching durable monitor", async () => {
+    const routeEvents: MonitorEventEnvelope[] = [];
+    const cronStorePath = path.join(
+      os.tmpdir(),
+      `exec-process-exit-monitor-${process.pid}-${Date.now()}`,
+      "cron.json",
+    );
+    const markerPath = path.join(path.dirname(cronStorePath), "release-process");
+    const cronEnqueueRun = vi.fn(async (jobId: string, mode: "due" | "force") => ({
+      ok: true as const,
+      enqueued: true as const,
+      runId: `manual:${jobId}:${mode}`,
+    }));
+    const tool = createTestExecTool({
+      allowBackground: true,
+      routeProcessExitMonitorEvent: async (event) => {
+        routeEvents.push(event);
+        await dispatchMonitorEventToCron({
+          cronStorePath,
+          cron: { enqueueRun: cronEnqueueRun },
+          event,
+        });
+      },
+    });
+
+    const waitForMarkerCommand = `node -e "const fs=require('fs'); const p=process.argv[1]; const wait=()=>fs.existsSync(p)?console.log('monitor-ready'):setTimeout(wait,10); wait()" ${JSON.stringify(
+      markerPath,
+    )}`;
+    const result = await executeExecCommand(tool, waitForMarkerCommand, {
+      background: true,
+      monitorExit: true,
+    });
+    const sessionId = requireRunningSessionId(result);
+    const monitor: MonitorRecord = {
+      monitorId: "monitor-process-exit",
+      agentId: "main",
+      originSessionKey: "agent:main:telegram:direct:user-1",
+      originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+      monitorSessionKey: "agent:main:monitor:process-exit",
+      sourceType: "exec",
+      sourceTarget: { sessionId },
+      cadence: { kind: "every", everyMs: 300_000 },
+      trigger: {
+        kind: "process_exit",
+        match: {
+          sourceType: "exec",
+          sourceTarget: { sessionId },
+          eventTypes: ["completed", "failed"],
+        },
+      },
+      actionPolicy: "notify_draft",
+      status: "active",
+      cronJobId: "cron-job-process-exit",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    await saveMonitorStore(resolveMonitorStorePath({ cronStorePath }), {
+      version: 1,
+      monitors: [monitor],
+    });
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(markerPath, "go");
+
+    await expect.poll(() => cronEnqueueRun.mock.calls.length, NOTIFY_POLL_OPTIONS).toBe(1);
+
+    expect(routeEvents).toHaveLength(1);
+    const persistedStore = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    expect(routeEvents[0]).toMatchObject({
+      triggerKind: "process_exit",
+      sourceType: "exec",
+      sourceTarget: { sessionId },
+      eventType: "completed",
+      idempotencyKey: `exec:${sessionId}:exit`,
+      evidence: {
+        sessionId,
+        status: "completed",
+        tail: expect.stringContaining("monitor-ready"),
+      },
+    });
+    expect(persistedStore.monitors[0]?.lastCheckpoint).toMatchObject({
+      processExitEvent: {
+        eventType: "completed",
+        sourceTarget: { sessionId },
+        evidence: {
+          sessionId,
+          status: "completed",
+          tail: expect.stringContaining("monitor-ready"),
+        },
+      },
+    });
+    expect(cronEnqueueRun).toHaveBeenCalledWith("cron-job-process-exit", "force");
+  });
+
+  it("does not emit process_exit monitor events unless the exec is explicitly armed", async () => {
+    const routeProcessExitMonitorEvent = vi.fn();
+    const tool = createTestExecTool({
+      allowBackground: true,
+      routeProcessExitMonitorEvent,
+    });
+
+    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("ordinary"));
+    await waitForCompletion(sessionId);
+
+    expect(routeProcessExitMonitorEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not emit process_exit monitor events for foreground exec completions", async () => {
+    const routeProcessExitMonitorEvent = vi.fn();
+    const tool = createTestExecTool({
+      allowBackground: true,
+      routeProcessExitMonitorEvent,
+    });
+
+    await executeExecCommand(tool, ECHO_HI_COMMAND, { monitorExit: true });
+
+    expect(routeProcessExitMonitorEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not double-emit when an armed finished session is later polled or logged", async () => {
+    const routeProcessExitMonitorEvent = vi.fn();
+    const scopedTools = {
+      exec: createTestExecTool({
+        allowBackground: true,
+        routeProcessExitMonitorEvent,
+        scopeKey: "process-exit-dedupe",
+      }),
+      process: createProcessTool({ scopeKey: "process-exit-dedupe" }),
+    };
+
+    const result = await executeExecCommand(scopedTools.exec, echoAfterDelay("armed"), {
+      background: true,
+      monitorExit: true,
+    });
+    const sessionId = requireRunningSessionId(result);
+
+    await expect
+      .poll(() => routeProcessExitMonitorEvent.mock.calls.length, NOTIFY_POLL_OPTIONS)
+      .toBe(1);
+    await executeProcessTool(scopedTools.process, { action: "poll", sessionId });
+    await executeProcessTool(scopedTools.process, { action: "log", sessionId });
+
+    expect(routeProcessExitMonitorEvent).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("exec PATH handling", () => {

@@ -86,6 +86,10 @@ export function registerTelegramUserCli(program: Command) {
             "openclaw telegram-user monitor-poll --watch --cron-store /tmp/cron.json --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event --json",
             "Poll durable goal-bound Telegram-as-me monitors in the foreground, dispatching through the gateway hook only when configured.",
           ],
+          [
+            "openclaw telegram-user monitor-service install --hook-url http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+            "Install the foreground monitor poller as an opt-in supervised service.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/channels/telegram",
           "docs.openclaw.ai/channels/telegram",
@@ -316,6 +320,80 @@ export function registerTelegramUserCli(program: Command) {
       await runTelegramUserCommand(async () => {
         const { telegramUserMonitorPollCommand } = await import("../commands/telegram-user.js");
         await telegramUserMonitorPollCommand(opts, defaultRuntime);
+      });
+    });
+
+  const monitorService = telegramUser
+    .command("monitor-service")
+    .description("Install and manage the Telegram-as-me monitor poller service");
+
+  monitorService
+    .command("status")
+    .description("Show Telegram monitor service status")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { runTelegramMonitorServiceStatus } =
+          await import("./telegram-user-monitor-service.js");
+        await runTelegramMonitorServiceStatus(opts);
+      });
+    });
+
+  monitorService
+    .command("install")
+    .description("Install the Telegram monitor poller service (launchd/systemd)")
+    .option("--cron-store <path>", "Cron store path; monitor/cursor stores default beside it")
+    .option("--monitor-store <path>", "Monitor store path; overrides derivation from --cron-store")
+    .option("--cursor-store <path>", "Cursor store path; overrides derivation from monitor store")
+    .option("--env-file <path>", "Read Telegram user creds from this env file")
+    .option("--session <path>", "Override Telethon session path")
+    .option("--hook-url <url>", "Gateway hook URL for dispatching matched monitor events")
+    .option("--poll-interval-ms <ms>", "Delay between poll runs", "1000")
+    .option("--limit <n>", "Read up to this many recent messages per monitor", "80")
+    .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+    .option("--force", "Reinstall/overwrite if already installed", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { runTelegramMonitorServiceInstall } =
+          await import("./telegram-user-monitor-service.js");
+        await runTelegramMonitorServiceInstall(opts);
+      });
+    });
+
+  monitorService
+    .command("uninstall")
+    .description("Uninstall the Telegram monitor poller service")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { runTelegramMonitorServiceUninstall } =
+          await import("./telegram-user-monitor-service.js");
+        await runTelegramMonitorServiceUninstall(opts);
+      });
+    });
+
+  monitorService
+    .command("stop")
+    .description("Stop the Telegram monitor poller service")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { runTelegramMonitorServiceStop } =
+          await import("./telegram-user-monitor-service.js");
+        await runTelegramMonitorServiceStop(opts);
+      });
+    });
+
+  monitorService
+    .command("restart")
+    .description("Restart the Telegram monitor poller service")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { runTelegramMonitorServiceRestart } =
+          await import("./telegram-user-monitor-service.js");
+        await runTelegramMonitorServiceRestart(opts);
       });
     });
 }

@@ -33,6 +33,8 @@ export interface ProcessSession {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
+  processExitMonitorEvent?: boolean;
+  processExitMonitorEventEmitted?: boolean;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;

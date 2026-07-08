@@ -285,6 +285,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "whatsapp-monitor",
+    description: "WhatsApp-as-me durable monitor polling tools",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../whatsapp-monitor-cli.js");
+      mod.registerWhatsAppMonitorCli(program);
+    },
+  },
+  {
     name: "media",
     description: "Generic local media tools",
     hasSubcommands: true,

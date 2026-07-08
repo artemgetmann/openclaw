@@ -13,11 +13,13 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isNonFatalSystemdInstallProbeError,
   isSystemdUserServiceAvailable,
+  installSystemdService,
   parseSystemdShow,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 type ExecFileError = Error & {
@@ -608,6 +610,70 @@ describe("systemd service control", () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it("installs the explicit systemd unit override", async () => {
+    const writeFile = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("missing"), { code: "ENOENT" }),
+    );
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "daemon-reload");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "enable", "openclaw-telegram-monitor.service");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", "openclaw-telegram-monitor.service");
+        cb(null, "", "");
+      });
+
+    const { stdout } = createWritableStreamMock();
+    await installSystemdService({
+      env: { HOME: TEST_SERVICE_HOME, OPENCLAW_SYSTEMD_UNIT: "openclaw-telegram-monitor" },
+      stdout,
+      programArguments: ["/usr/bin/openclaw", "telegram-user", "monitor-poll", "--watch"],
+      environment: { OPENCLAW_SERVICE_KIND: "telegram-monitor" },
+      description: "OpenClaw Telegram Monitor",
+    });
+
+    expect(writeFile).toHaveBeenCalledWith(
+      "/home/test/.config/systemd/user/openclaw-telegram-monitor.service",
+      expect.stringContaining("Description=OpenClaw Telegram Monitor"),
+      "utf8",
+    );
+  });
+
+  it("uninstalls the explicit systemd unit override", async () => {
+    const unlink = vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "disable", "--now", "openclaw-telegram-monitor.service");
+        cb(null, "", "");
+      });
+
+    const { stdout } = createWritableStreamMock();
+    await uninstallSystemdService({
+      env: { HOME: TEST_SERVICE_HOME, OPENCLAW_SYSTEMD_UNIT: "openclaw-telegram-monitor.service" },
+      stdout,
+    });
+
+    expect(unlink).toHaveBeenCalledWith(
+      "/home/test/.config/systemd/user/openclaw-telegram-monitor.service",
+    );
   });
 
   it("stops the resolved user unit", async () => {

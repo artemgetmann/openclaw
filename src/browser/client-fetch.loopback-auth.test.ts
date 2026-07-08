@@ -145,12 +145,16 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
-  it("preserves dispatcher error context while keeping no-retry hint", async () => {
+  it("reports dispatcher timeouts as browser operation timeouts", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Chrome CDP handshake timeout", "Do NOT retry the browser tool"],
-      omits: ["Can't reach the OpenClaw browser control service"],
+      contains: ["Browser operation timed out", "Chrome CDP handshake timeout"],
+      omits: [
+        "Can't reach the OpenClaw browser control service",
+        "Restart the OpenClaw gateway",
+        "Do NOT retry the browser tool",
+      ],
     });
   });
 
@@ -204,7 +208,7 @@ describe("fetchBrowserJson loopback auth", () => {
           body: JSON.stringify({ kind: "click", ref: "e1" }),
         }),
       {
-        contains: ["timed out", "Do NOT retry the browser tool"],
+        contains: ["Browser operation timed out", "timed out"],
         omits: ["Chrome is waiting for remote-debugging approval", "click Allow if prompted"],
       },
     );
@@ -275,14 +279,16 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
-  it("keeps restart and no-retry hints for non-user-live dispatcher timeouts", async () => {
+  it("keeps non-user-live dispatcher timeouts out of gateway-restart guidance", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
 
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("/tabs/open?profile=openclaw"),
       {
-        contains: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+        contains: ["Browser operation timed out", "timed out"],
         omits: [
+          "Restart the OpenClaw gateway",
+          "Do NOT retry the browser tool",
           "Chrome is waiting for remote-debugging approval",
           "chrome://inspect/#remote-debugging",
         ],

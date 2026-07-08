@@ -1069,6 +1069,27 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("uses the existing-session attach timeout for signed-in Chrome MCP open", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "existing-session",
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "signed-in",
+      url: "https://example.com",
+      timeoutMs: 30000,
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: "signed-in", timeoutMs: 60000 }),
+    );
+  });
+
   it("preserves higher explicit timeout values for user-live open", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", {

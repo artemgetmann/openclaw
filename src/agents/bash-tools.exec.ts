@@ -323,6 +323,7 @@ export function createExecTool(
         security?: string;
         ask?: string;
         node?: string;
+        monitorExit?: boolean;
       };
 
       if (!params.command) {
@@ -558,6 +559,8 @@ export function createExecTool(
           scopeKey: defaults?.scopeKey,
           warnings,
           notifySessionKey,
+          monitorExit: params.monitorExit === true,
+          routeProcessExitMonitorEvent: defaults?.routeProcessExitMonitorEvent,
           approvalRunningNoticeMs,
           maxOutput,
           pendingMaxOutput,
@@ -599,6 +602,8 @@ export function createExecTool(
         pendingMaxOutput,
         notifyOnExit,
         notifyOnExitEmptySuccess,
+        monitorExit: params.monitorExit === true,
+        routeProcessExitMonitorEvent: defaults?.routeProcessExitMonitorEvent,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,

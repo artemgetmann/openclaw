@@ -156,7 +156,7 @@ describe("startup reconciler", () => {
     const stateDir = path.join(root, "state");
     const localBin = path.join(root, "local-bin");
     await fs.mkdir(packageRoot, { recursive: true });
-    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.31.0\n");
+    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.33.0\n");
     const env = { ...process.env, PATH: localBin };
     await writeManifest({
       packageRoot,
@@ -167,7 +167,7 @@ describe("startup reconciler", () => {
           bins: ["gog"],
           versionCommand: ["gog", "--version"],
           versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
-          recommendedVersion: "0.31.0",
+          recommendedVersion: "0.33.0",
         },
       ],
     });
@@ -183,9 +183,9 @@ describe("startup reconciler", () => {
     expect(result.status).toBe("reconciled");
     const managedGog = path.join(stateDir, "bin", "gog");
     const version = spawnSync(managedGog, ["--version"], { encoding: "utf8" });
-    expect(version.stdout.trim()).toBe("gog v0.31.0");
+    expect(version.stdout.trim()).toBe("gog v0.33.0");
     const resolvedVersion = spawnSync("gog", ["--version"], { encoding: "utf8", env });
-    expect(resolvedVersion.stdout.trim()).toBe("gog v0.31.0");
+    expect(resolvedVersion.stdout.trim()).toBe("gog v0.33.0");
     const resolvedPath = spawnSync("/bin/sh", ["-c", "command -v gog"], { encoding: "utf8", env });
     expect(resolvedPath.stdout.trim()).toBe(managedGog);
     expect(env.PATH?.split(path.delimiter).at(0)).toBe(path.join(stateDir, "bin"));
@@ -196,11 +196,11 @@ describe("startup reconciler", () => {
       skillName: "gog",
       displayName: "Google Workspace",
       bin: "gog",
-      recommendedVersion: "0.31.0",
-      sourceVersion: "0.31.0",
+      recommendedVersion: "0.33.0",
+      sourceVersion: "0.33.0",
       status: "updated",
     });
-    expect(messages).toContain("Updated Jarvis-managed Google Workspace CLI to v0.31.0.");
+    expect(messages).toContain("Updated Jarvis-managed Google Workspace CLI to v0.33.0.");
   });
 
   it("writes current status without noisy notifications when skills and tools are already current", async () => {
@@ -213,7 +213,7 @@ describe("startup reconciler", () => {
     await fs.writeFile(path.join(packagedSkill, "SKILL.md"), "# Current\n", "utf8");
     await fs.mkdir(path.dirname(managedSkill), { recursive: true });
     await fs.cp(packagedSkill, managedSkill, { recursive: true });
-    await writeExecutable(path.join(stateDir, "bin", "gog"), "#!/bin/sh\necho gog v0.31.0\n");
+    await writeExecutable(path.join(stateDir, "bin", "gog"), "#!/bin/sh\necho gog v0.33.0\n");
     const packagedHash = await hashSkillDirectory(packagedSkill);
     await writeManifest({
       packageRoot,
@@ -225,7 +225,7 @@ describe("startup reconciler", () => {
           bins: ["gog"],
           versionCommand: ["gog", "--version"],
           versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
-          recommendedVersion: "0.31.0",
+          recommendedVersion: "0.33.0",
         },
       ],
     });
@@ -270,7 +270,7 @@ describe("startup reconciler", () => {
           bins: ["gog"],
           versionCommand: ["gog", "--version"],
           versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
-          recommendedVersion: "0.31.0",
+          recommendedVersion: "0.33.0",
         },
       ],
     });
@@ -303,7 +303,7 @@ describe("startup reconciler", () => {
     const localBin = path.join(root, "local-bin");
     await fs.mkdir(packageRoot, { recursive: true });
     await writeExecutable(path.join(localBin, "brew"), "#!/bin/sh\nexit 99\n");
-    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.31.0\n");
+    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.33.0\n");
     await writeManifest({
       packageRoot,
       managedTools: [
@@ -313,7 +313,7 @@ describe("startup reconciler", () => {
           bins: ["gog"],
           versionCommand: ["gog", "--version"],
           versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
-          recommendedVersion: "0.31.0",
+          recommendedVersion: "0.33.0",
         },
       ],
     });
@@ -328,7 +328,7 @@ describe("startup reconciler", () => {
         if (path.basename(command[0] ?? "") === "brew") {
           throw new Error("Homebrew must not run");
         }
-        return { ok: true, output: "gog v0.31.0" };
+        return { ok: true, output: "gog v0.33.0" };
       },
       log: { info: () => {}, warn: () => {} },
     });

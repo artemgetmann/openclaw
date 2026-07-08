@@ -272,11 +272,18 @@ export function removeTelegramRichNativeQuoteParam(
 
 export function buildTelegramRichMessage(
   chunk: Pick<TelegramRichTextChunk, "text" | "textMode">,
-  options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
+  options: {
+    tableMode?: MarkdownTableMode;
+    skipEntityDetection?: boolean;
+    copySafeBlockquotes?: boolean;
+  } = {},
 ): TelegramInputRichMessage {
   const html =
     chunk.textMode === "html"
       ? sanitizeTelegramRichHtml(chunk.text)
-      : markdownToTelegramRichHtml(chunk.text, { tableMode: options.tableMode });
+      : markdownToTelegramRichHtml(chunk.text, {
+          tableMode: options.tableMode,
+          copySafeBlockquotes: options.copySafeBlockquotes,
+        });
   return options.skipEntityDetection === true ? { html, skip_entity_detection: true } : { html };
 }

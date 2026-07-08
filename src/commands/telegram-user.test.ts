@@ -1120,6 +1120,103 @@ describe("telegram-user commands", () => {
     expect(fetchUrl).toBe("http://127.0.0.1:18789/hooks/telegram-user-monitor-event");
   });
 
+  it("uses OPENCLAW_GATEWAY_TOKEN for monitor-poll hook auth when --hook-token is omitted", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(
+      monitorStore,
+      JSON.stringify(
+        {
+          version: 1,
+          monitors: [
+            {
+              monitorId: "telegram-monitor-token",
+              agentId: "main",
+              name: "Telegram-as-me wait",
+              originSessionKey: "agent:main:telegram:direct:user-1",
+              monitorSessionKey: "agent:main:monitor:telegram-monitor-token",
+              sourceType: "telegram-user",
+              sourceTarget: {
+                afterId: 100,
+                chat: "@jarvis_tester_1_bot",
+              },
+              cadence: { kind: "every", everyMs: 300_000 },
+              trigger: {
+                kind: "local_listener",
+                match: {
+                  sourceType: "telegram-user",
+                  sourceTarget: { chat: "@jarvis_tester_1_bot" },
+                  eventTypes: ["message.created"],
+                },
+              },
+              actionPolicy: "notify_draft",
+              goal: {
+                id: "goal-telegram-reply",
+                objective: "Wait until the Telegram contact replies.",
+              },
+              status: "active",
+              cronJobId: "cron-telegram-monitor-token",
+              createdAtMs: 1_000_000,
+              updatedAtMs: 1_000_000,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      messages: [
+        {
+          chat_id: 10,
+          chat_title: "Jarvis Lab",
+          chat_username: "jarvis_tester_1_bot",
+          date: "2026-07-06T00:00:00.000Z",
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          media_kind: null,
+          message_id: 101,
+          out: false,
+          reply_to_msg_id: null,
+          reply_to_top_id: null,
+          sender_id: 456,
+          text: "fresh reply",
+          thread_anchor: null,
+        },
+      ],
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ matched: 1, wakes: [{ monitorId: "telegram-monitor-token" }] }),
+        {
+          status: 200,
+        },
+      ),
+    );
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-hook-token");
+
+    let headers: unknown;
+    try {
+      await telegramUserMonitorPollCommand(
+        {
+          hookUrl: "http://127.0.0.1:18789/hooks/telegram-user-monitor-event",
+          json: true,
+          monitorStore,
+        },
+        runtime,
+      );
+      headers = fetchMock.mock.calls[0]?.[1]?.headers;
+    } finally {
+      fetchMock.mockRestore();
+      vi.unstubAllEnvs();
+    }
+
+    expect(headers).toMatchObject({
+      Authorization: "Bearer env-hook-token",
+    });
+  });
+
   it("waits until a reply matches by DM topic id", async () => {
     backendMocks.runTelegramUserRead
       .mockResolvedValueOnce({

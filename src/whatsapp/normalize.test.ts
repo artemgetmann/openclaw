@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isWhatsAppGroupJid, isWhatsAppUserTarget, normalizeWhatsAppTarget } from "./normalize.js";
+import {
+  isWhatsAppGroupJid,
+  isWhatsAppLidJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppLidJid,
+  normalizeWhatsAppTarget,
+} from "./normalize.js";
 
 describe("normalizeWhatsAppTarget", () => {
   it("preserves group JIDs", () => {
@@ -55,6 +61,21 @@ describe("isWhatsAppUserTarget", () => {
     expect(isWhatsAppUserTarget("abc@s.whatsapp.net")).toBe(false);
     expect(isWhatsAppUserTarget("123456789-987654321@g.us")).toBe(false);
     expect(isWhatsAppUserTarget("+1555123")).toBe(false);
+  });
+});
+
+describe("isWhatsAppLidJid", () => {
+  it("detects opaque LID JIDs without treating phone JIDs as LIDs", () => {
+    expect(isWhatsAppLidJid("123456789@lid")).toBe(true);
+    expect(isWhatsAppLidJid("whatsapp:123456789@LID")).toBe(true);
+    expect(isWhatsAppLidJid("123456789@s.whatsapp.net")).toBe(false);
+  });
+});
+
+describe("normalizeWhatsAppLidJid", () => {
+  it("strips prefixes and lowercases the LID suffix", () => {
+    expect(normalizeWhatsAppLidJid("whatsapp:123456789@LID")).toBe("123456789@lid");
+    expect(normalizeWhatsAppLidJid("123456789@s.whatsapp.net")).toBeNull();
   });
 });
 

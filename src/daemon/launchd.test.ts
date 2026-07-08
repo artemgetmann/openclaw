@@ -444,6 +444,29 @@ describe("launchd install", () => {
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19001);
   });
 
+  it("skips stale gateway cleanup for non-gateway LaunchAgents", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.telegram-monitor",
+      OPENCLAW_SERVICE_KIND: "telegram-monitor",
+    };
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    expect(result).toEqual({ outcome: "completed" });
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(state.launchctlCalls).toContainEqual([
+      "kickstart",
+      "-k",
+      `${domain}/ai.openclaw.telegram-monitor`,
+    ]);
+  });
+
   it("skips stale cleanup when no explicit launch agent port can be resolved", async () => {
     const env = createDefaultLaunchdEnv();
     state.files.clear();

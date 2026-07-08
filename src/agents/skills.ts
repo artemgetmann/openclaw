@@ -34,6 +34,12 @@ export {
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";
+export {
+  generateCodexSkillPluginProjection,
+  type CodexSkillPluginProjectionResult,
+  type CodexSkillProjectionEntry,
+  type ProjectedCodexSkill,
+} from "./skills/codex-plugin-projection.js";
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
   const raw = config?.skills?.install;
