@@ -60,7 +60,6 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
-import { buildTelegramRichMessage } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -518,14 +517,6 @@ export const dispatchTelegramMessage = async ({
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode, copySafeBlockquotes: true }),
     parseMode: "HTML" as const,
-    // Keep the legacy HTML text for fallback, but let Bot API 10.1 clients
-    // render streamed previews/final edits as native rich-message blocks.
-    // Quoted draft text is still a copy contract, so render it as code/pre
-    // instead of native blockquotes in the rich preview path too.
-    richMessage: buildTelegramRichMessage(
-      { text, textMode: "markdown" },
-      { tableMode, copySafeBlockquotes: true },
-    ),
   });
   latencyTrace?.mark("route_account_session_selected", {
     accountId: route.accountId,
@@ -1988,7 +1979,11 @@ export const dispatchTelegramMessage = async ({
         accountId: route.accountId,
         linkPreview: telegramCfg.linkPreview,
         buttons: previewButtons,
-        richMessages: telegramCfg.richMessages,
+        // Preview edits mutate an already-visible bubble. Telegram can accept
+        // native rich-message edit payloads and still render a blank client
+        // bubble, while the Bot API response looks successful. Keep this path
+        // on legacy HTML; durable final sends are guarded separately.
+        richMessages: false,
         tableMode,
       });
       logPreviewLedger({

@@ -5,6 +5,8 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 import { guardedTelegramDeleteMessage, type TelegramDeleteAuditMetadata } from "./delete-guard.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import {
+  assertTelegramRichMessageInputHasContent,
+  assertTelegramRichSendResponseHasVisibleContent,
   getTelegramRichEditRawApi,
   getTelegramRichDraftRawApi,
   getTelegramRichRawApi,
@@ -231,12 +233,15 @@ export function createTelegramDraftStream(params: {
         };
       }
       try {
+        assertTelegramRichMessageInputHasContent(richMessage);
+        const richSent = await richRawApi.sendRichMessage({
+          chat_id: chatId,
+          rich_message: richMessage,
+          ...richParams,
+        });
+        assertTelegramRichSendResponseHasVisibleContent(richSent);
         return {
-          sent: await richRawApi.sendRichMessage({
-            chat_id: chatId,
-            rich_message: richMessage,
-            ...richParams,
-          }),
+          sent: richSent,
           usedThreadParams:
             "message_thread_id" in richParams && typeof richParams.message_thread_id === "number",
           threadFallback: false,
@@ -294,11 +299,13 @@ export function createTelegramDraftStream(params: {
       const richEdit = renderedRichMessage ? getTelegramRichEditRawApi(params.api) : null;
       if (richEdit) {
         try {
-          await richEdit.editMessageText({
+          assertTelegramRichMessageInputHasContent(renderedRichMessage!);
+          const richEdited = await richEdit.editMessageText({
             chat_id: chatId,
             message_id: streamMessageId,
             rich_message: renderedRichMessage!,
           });
+          assertTelegramRichSendResponseHasVisibleContent(richEdited);
         } catch (err) {
           params.warn?.(
             `telegram stream preview rich edit failed; falling back to legacy editMessageText: ${
