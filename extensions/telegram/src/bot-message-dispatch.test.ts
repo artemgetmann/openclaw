@@ -171,7 +171,12 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   }
 
   function expectFinalPreviewEditedInPlace(messageId: number, text: string) {
-    expect(editMessageTelegram).toHaveBeenCalledWith(123, messageId, text, expect.any(Object));
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      messageId,
+      text,
+      expect.objectContaining({ richMessages: false }),
+    );
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text })],
@@ -857,7 +862,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("finalizes streamed structured answers by editing the same preview with rich-message support", async () => {
+  it("finalizes streamed structured answers by editing the same preview with legacy HTML", async () => {
     const answerStream = createDraftStream(9101);
     createTelegramDraftStream.mockReturnValueOnce(answerStream);
     const finalText = [
@@ -899,18 +904,17 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(renderText(finalText)).toEqual(
       expect.objectContaining({
         parseMode: "HTML",
-        richMessage: expect.objectContaining({
-          html: expect.stringContaining("<table bordered striped>"),
-        }),
+        text: expect.stringContaining("<pre><code>"),
       }),
     );
+    expect(renderText(finalText)).not.toHaveProperty("richMessage");
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       9101,
       finalText,
       expect.objectContaining({
-        richMessages: undefined,
+        richMessages: false,
         tableMode: "block",
       }),
     );
@@ -918,7 +922,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(guardedTelegramDeleteMessage).not.toHaveBeenCalled();
   });
 
-  it("renders streamed draft-preview blockquotes as copy-safe rich code blocks", async () => {
+  it("renders streamed draft-preview blockquotes as copy-safe legacy code blocks", async () => {
     const answerStream = createDraftStream(9102);
     createTelegramDraftStream.mockReturnValueOnce(answerStream);
     const draftText = [
@@ -941,14 +945,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       expect.objectContaining({
         parseMode: "HTML",
         text: expect.stringContaining("<pre><code>"),
-        richMessage: expect.objectContaining({
-          html: expect.stringContaining("<pre><code>"),
-        }),
       }),
     );
+    expect(rendered).not.toHaveProperty("richMessage");
     expect(rendered.text).not.toContain("<blockquote>");
-    expect(rendered.richMessage?.html).not.toContain("<blockquote>");
-    expect(rendered.richMessage?.html).not.toContain("<a href");
+    expect(rendered.text).not.toContain("<a href");
   });
 
   it("suppresses raw tool traces when preview streaming is on", async () => {
