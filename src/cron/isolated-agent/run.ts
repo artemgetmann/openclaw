@@ -329,6 +329,7 @@ export async function runCronIsolatedAgentTurn(params: {
   deliveryContract?: IsolatedDeliveryContract;
   deliveryPromptMode?: "summary" | "reply";
   messageToolTarget?: CronMessageToolTarget;
+  disableGoalTools?: boolean;
   sessionDefaultResetMode?: SessionResetMode;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
@@ -770,6 +771,7 @@ export async function runCronIsolatedAgentTurn(params: {
             currentChannelId: params.messageToolTarget?.to,
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
+            disableGoalTools: params.disableGoalTools,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,

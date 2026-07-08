@@ -124,6 +124,58 @@ describe("goal tools", () => {
     );
   });
 
+  it("ignores goal mutation tools from monitor sessions without a bound goal", async () => {
+    const monitorSessionKey = "agent:main:monitor:monitor-no-goal";
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [
+        {
+          monitorId: "monitor-no-goal",
+          agentId: "main",
+          originSessionKey: sessionKey,
+          monitorSessionKey,
+          sourceType: "whatsapp",
+          sourceTarget: { target: "12345@lid" },
+          cadence: { kind: "every", everyMs: 300_000 },
+          actionPolicy: "notify_draft",
+          status: "active",
+          cronJobId: "cron-job-no-goal",
+          createdAtMs: 1,
+          updatedAtMs: 1,
+        },
+      ],
+    });
+
+    const options = {
+      agentSessionKey: monitorSessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    };
+    const create = createCreateGoalTool(options);
+    const update = createUpdateGoalTool(options);
+
+    await expect(
+      create.execute?.("call-monitor-create", { objective: "Accidentally create goal." }),
+    ).resolves.toMatchObject({
+      details: {
+        status: "ignored",
+        reason: "monitor sessions do not own user goals",
+        monitorId: "monitor-no-goal",
+      },
+    });
+    await expect(
+      update.execute?.("call-monitor-update", { status: "complete" }),
+    ).resolves.toMatchObject({
+      details: {
+        status: "ignored",
+        reason: "monitor session has no bound goal",
+        monitorId: "monitor-no-goal",
+      },
+    });
+    expect((await getSessionGoal({ sessionKey: monitorSessionKey, storePath })).status).toBe(
+      "missing",
+    );
+  });
+
   function buildMonitor(overrides: Partial<MonitorRecord>): MonitorRecord {
     const monitorId = overrides.monitorId ?? "monitor-1";
     return {

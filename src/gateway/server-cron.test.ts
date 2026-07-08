@@ -260,6 +260,7 @@ describe("buildGatewayCronService", () => {
           agentId: "main",
           sessionKey: "agent:main:monitor:monitor-1",
           sessionDefaultResetMode: "manual",
+          disableGoalTools: true,
           job: expect.objectContaining({
             sessionTarget: "session:agent:main:monitor:monitor-1",
             delivery: expect.objectContaining({
@@ -349,6 +350,66 @@ describe("buildGatewayCronService", () => {
         status: "active",
         lastWakeStatus: "active",
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("keeps goal tools available when a monitor wake is bound to an origin goal", async () => {
+    const cfg = createCronConfig("server-cron-monitor-bound-goal-tools");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-bound-goal-tools",
+            agentId: "main",
+            originSessionKey: "agent:main:telegram:direct:user-1",
+            originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+            monitorSessionKey: "agent:main:monitor:monitor-bound-goal-tools",
+            sourceType: "gmail",
+            sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            goal: { id: "goal-1", objective: "Get the refund confirmed." },
+            status: "active",
+            cronJobId: "cron-monitor-bound-goal-tools",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake bound goal tools",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-bound-goal-tools",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-bound-goal-tools" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:monitor:monitor-bound-goal-tools",
+          disableGoalTools: false,
+        }),
+      );
     } finally {
       state.cron.stop();
     }

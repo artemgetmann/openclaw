@@ -91,6 +91,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** If true, omit session goal tools from contexts that do not own a real goal. */
+    disableGoalTools?: boolean;
     /** If true, skip plugin discovery and return core OpenClaw tools only. */
     disablePluginTools?: boolean;
     /** If true, plugin tools may only come from the already-initialized global plugin registry. */
@@ -178,6 +180,22 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const goalTools = options?.disableGoalTools
+    ? []
+    : [
+        createGetGoalTool({
+          agentSessionKey: options?.agentSessionKey,
+          config: options?.config,
+        }),
+        createCreateGoalTool({
+          agentSessionKey: options?.agentSessionKey,
+          config: options?.config,
+        }),
+        createUpdateGoalTool({
+          agentSessionKey: options?.agentSessionKey,
+          config: options?.config,
+        }),
+      ];
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -202,18 +220,7 @@ export function createOpenClawTools(
     createMonitorTool({
       agentSessionKey: options?.agentSessionKey,
     }),
-    createGetGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createCreateGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createUpdateGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
+    ...goalTools,
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,

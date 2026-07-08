@@ -278,6 +278,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** If true, omit session goal tools from contexts that do not own a real goal. */
+  disableGoalTools?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
@@ -550,6 +552,7 @@ export function createOpenClawCodingTools(options?: {
       allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
+      disableGoalTools: options?.disableGoalTools,
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,

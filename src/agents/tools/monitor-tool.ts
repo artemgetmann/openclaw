@@ -10,6 +10,22 @@ import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 const MONITOR_ACTIONS = ["list", "get", "create", "update", "stop"] as const;
 const MONITOR_ACTION_POLICIES = ["notify_draft", "notify_only", "auto_send"] as const;
 const MONITOR_STATUSES = ["active", "degraded", "stopped", "completed", "expired"] as const;
+const MONITOR_UPDATE_PATCH_KEYS = new Set([
+  "name",
+  "originDelivery",
+  "watchDelivery",
+  "sourceTarget",
+  "cadence",
+  "trigger",
+  "expiryAt",
+  "stopCondition",
+  "actionPolicy",
+  "goal",
+  "status",
+  "lastCheckpoint",
+  "lastWakeAtMs",
+  "lastWakeStatus",
+]);
 
 function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined) {
   if (!delivery) {
@@ -27,6 +43,16 @@ function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined
     ...delivery,
     mode: "announce",
   };
+}
+
+function sanitizeMonitorUpdatePatch(patch: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (MONITOR_UPDATE_PATCH_KEYS.has(key)) {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
 }
 
 const MonitorToolSchema = Type.Object(
@@ -179,7 +205,7 @@ For monitor-related user replies/status:
         case "update": {
           const patch =
             params.patch && typeof params.patch === "object" && !Array.isArray(params.patch)
-              ? { ...(params.patch as Record<string, unknown>) }
+              ? sanitizeMonitorUpdatePatch(params.patch as Record<string, unknown>)
               : {};
           const status = readStringParam(params, "status");
           const checkpoint = params.checkpoint;

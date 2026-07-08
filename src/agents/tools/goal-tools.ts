@@ -81,22 +81,29 @@ async function resolveMonitorOriginGoalSessionScope(
   options: GoalToolOptions,
   current: GoalSessionScope,
 ): Promise<GoalSessionScope | undefined> {
-  const cfg = resolveConfig(options);
-  const monitorStorePath = resolveMonitorStorePath({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
-  });
-  const store = await loadMonitorStore(monitorStorePath);
-  const monitor = store.monitors.find(
-    (entry) => entry.monitorSessionKey === current.sessionKey && entry.goal,
-  );
+  const monitor = await resolveCurrentSessionMonitor(options, current);
   if (!monitor?.goal) {
     return undefined;
   }
   return {
     sessionKey: monitor.originSessionKey,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: monitor.agentId }),
+    storePath: resolveStorePath(resolveConfig(options).session?.store, {
+      agentId: monitor.agentId,
+    }),
     expectedGoalId: monitor.goal.id,
   };
+}
+
+async function resolveCurrentSessionMonitor(
+  options: GoalToolOptions,
+  current: Pick<GoalSessionScope, "sessionKey">,
+): Promise<MonitorRecord | undefined> {
+  const cfg = resolveConfig(options);
+  const monitorStorePath = resolveMonitorStorePath({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
+  const store = await loadMonitorStore(monitorStorePath);
+  return store.monitors.find((entry) => entry.monitorSessionKey === current.sessionKey);
 }
 
 async function resolveGoalSessionScope(
@@ -179,10 +186,19 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       "Create a goal only when explicitly requested by the user or system instructions. Fails if a goal already exists; do not silently replace an existing goal.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
+      const current = resolveCurrentGoalSessionScope(options);
+      const monitor = await resolveCurrentSessionMonitor(options, current);
+      if (monitor) {
+        return jsonResult({
+          status: "ignored",
+          reason: "monitor sessions do not own user goals",
+          monitorId: monitor.monitorId,
+        });
+      }
       const params = args as Record<string, unknown>;
       const objective = readStringParam(params, "objective", { required: true });
       const goal = await createSessionGoal({
-        ...resolveCurrentGoalSessionScope(options),
+        ...current,
         objective,
       });
       return jsonResult({ status: "created", goal });
@@ -204,7 +220,24 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         throw new ToolInputError(`status must be one of ${GOAL_TOOL_STATUSES.join(", ")}`);
       }
       const note = readStringParam(params, "note");
-      const scope = await resolveGoalSessionScope(options, { allowMonitorOrigin: true });
+      const current = resolveCurrentGoalSessionScope(options);
+      const monitor = await resolveCurrentSessionMonitor(options, current);
+      if (monitor && !monitor.goal) {
+        return jsonResult({
+          status: "ignored",
+          reason: "monitor session has no bound goal",
+          monitorId: monitor.monitorId,
+        });
+      }
+      const scope = monitor?.goal
+        ? {
+            sessionKey: monitor.originSessionKey,
+            storePath: resolveStorePath(resolveConfig(options).session?.store, {
+              agentId: monitor.agentId,
+            }),
+            expectedGoalId: monitor.goal.id,
+          }
+        : current;
       const goal = await updateSessionGoalStatus({
         ...scope,
         status: status as (typeof GOAL_TOOL_STATUSES)[number],
