@@ -150,16 +150,18 @@ extension ChannelsStore {
                     username,
                     forKey: Self.consumerTelegramBotUsernameDefaultsKey)
             }
-            // Managed approval gives us a dedicated child bot token. Persist it
-            // as an enabled polling provider immediately so the packaged
-            // runtime has an active Telegram surface after reload. Sender trust
-            // is still locked down by allowlist + an empty allowFrom until the
-            // first-task verifier captures or recovers the real user id.
+            // Managed approval gives us a dedicated child bot token, but no
+            // trusted Telegram sender yet. Keep the runtime staged and disabled
+            // until the verifier captures the first DM and persists that sender
+            // into allowFrom. Enabling polling here lets the gateway consume the
+            // first message before setup can identify the owner; the visible
+            // symptom is either silence or a developer pairing prompt in the
+            // consumer chat.
             _ = try await self.applyTelegramSetupBootstrap(
                 token: token,
                 dmPolicy: "allowlist",
                 allowFrom: nil,
-                enabled: true)
+                enabled: false)
             self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
             self.telegramSetupStatus = self.managedTelegramConnectedStatus(
                 botUsername: self.telegramSetupBotUsername)
@@ -240,7 +242,7 @@ extension ChannelsStore {
             guard let dm = try await TelegramSetupVerifier.waitForFirstDirectMessage(token: token) else {
                 self.telegramSetupWaitingForDM = false
                 if pausedPollingProvider {
-                    try? await self.restoreTelegramPairingAfterSetupPause(token: token)
+                    try? await self.restoreTelegramStagedSetupAfterSetupPause(token: token)
                 }
                 if await self.consumerTelegramConfirmFirstTaskCompletionWithGrace() {
                     return
@@ -313,7 +315,7 @@ extension ChannelsStore {
                     enabled: true)
                 restoredByFinalBootstrap = true
             } else if pausedPollingProvider {
-                try? await self.restoreTelegramPairingAfterSetupPause(token: token)
+                try? await self.restoreTelegramStagedSetupAfterSetupPause(token: token)
                 restoredByFinalBootstrap = true
             }
 
@@ -335,7 +337,7 @@ extension ChannelsStore {
             self.telegramSetupWaitingForDM = false
             self.clearConsumerTelegramFirstTaskVerified()
             if pausedPollingProvider && !restoredByFinalBootstrap {
-                try? await self.restoreTelegramPairingAfterSetupPause(token: token)
+                try? await self.restoreTelegramStagedSetupAfterSetupPause(token: token)
             }
             self.telegramSetupStatus = error.localizedDescription
         }
@@ -754,11 +756,25 @@ extension ChannelsStore {
         return TelegramSetupVerifier.normalizeToken((defaultAccount?["botToken"] as? String) ?? "")
     }
 
-    private func restoreTelegramPairingAfterSetupPause(token: String) async throws {
+    private func restoreTelegramStagedSetupAfterSetupPause(token: String) async throws {
+        let knownSender = self.telegramSetupFirstSenderId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let allowFrom: [String]? = if let knownSender, !knownSender.isEmpty {
+            [knownSender]
+        } else {
+            nil
+        }
+
+        // A timeout or Telegram getUpdates conflict during consumer onboarding
+        // should never downgrade the app back into generic pairing mode. Keep
+        // the token staged if the owner is still unknown; enable the runtime
+        // only when we already have the sender id needed for durable allowlist
+        // access.
         _ = try await self.applyTelegramSetupBootstrap(
             token: token,
-            dmPolicy: "pairing",
-            allowFrom: nil)
+            dmPolicy: "allowlist",
+            allowFrom: allowFrom,
+            enabled: allowFrom != nil)
     }
 
     private func startFirstTelegramReply(dm: TelegramSetupDirectMessage) async -> TelegramSetupReplayResult {
@@ -1152,6 +1168,10 @@ extension ChannelsStore {
     ) async -> Bool {
         await self.completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap(
             refresh: refresh)
+    }
+
+    func _testRestoreTelegramStagedSetupAfterSetupPause(token: String) async throws {
+        try await self.restoreTelegramStagedSetupAfterSetupPause(token: token)
     }
 }
 #endif
