@@ -6,7 +6,7 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import { logTelegramProgressDebug } from "../infra/telegram-progress-debug.js";
-import { buildMonitorReceiptChannelData } from "../monitor/receipt.js";
+import { buildMonitorReceiptChannelData, formatMonitorReceipt } from "../monitor/receipt.js";
 import type { MonitorDisclosure } from "../monitor/types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -727,6 +727,7 @@ export async function handleToolExecutionEnd(
       // render a consumer receipt without exposing model-authored prose or
       // making the final assistant answer carry a settings dump.
       await ctx.params.onToolResult({
+        text: formatMonitorReceipt(monitorReceiptDisclosure),
         channelData: buildMonitorReceiptChannelData(monitorReceiptDisclosure),
       });
     } catch {

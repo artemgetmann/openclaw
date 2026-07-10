@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { buildMonitorReceiptChannelData } from "../monitor/receipt.js";
+import { buildMonitorReceiptChannelData, formatMonitorReceipt } from "../monitor/receipt.js";
 import type { MonitorDisclosure } from "../monitor/types.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import {
@@ -420,8 +420,11 @@ describe("handleToolExecutionEnd monitor receipts", () => {
     });
 
     expect(onToolResult).toHaveBeenCalledWith({
+      text: formatMonitorReceipt(disclosure),
       channelData: buildMonitorReceiptChannelData(disclosure),
     });
+    expect(onToolResult.mock.calls[0]?.[0]?.text).toBe(formatMonitorReceipt(disclosure));
+    expect(onToolResult.mock.calls[0]?.[0]?.text).toBeTruthy();
     expect(ctx.emitToolOutput).not.toHaveBeenCalled();
   });
 
