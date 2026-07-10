@@ -280,7 +280,10 @@ struct MacNodeRuntimeTests {
 
         // Expiry is timer-owned: no later screen.record invocation is needed to
         // trigger eventual deletion of an abandoned node artifact.
-        try await Task.sleep(nanoseconds: 100_000_000)
+        let expiryDeadline = Date().addingTimeInterval(1)
+        while artifactPath.map(FileManager().fileExists(atPath:)) == true, Date() < expiryDeadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
         #expect(artifactPath.map(FileManager().fileExists(atPath:)) == false)
 
         let read = MacNodeScreenRecordParams(
