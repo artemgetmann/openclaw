@@ -62,6 +62,7 @@ describe("find-food bundled skill", () => {
     expect(skillMarkdown).toContain("do not rely only");
     expect(skillMarkdown).toContain("place metadata but no current menu");
     expect(skillMarkdown).toContain("Distinguish the evidence source");
+    expect(skillMarkdown).toContain("opening hours, current prices");
 
     const report = buildWorkspaceSkillStatus(workspaceDir, { entries });
     const skill = report.skills.find((candidate) => candidate.name === "find-food");

@@ -29,8 +29,9 @@ alternatives instead of a large option dump.
    readable menu photos when prices or dish selection matter; do not rely only
    on web snippets or Places metadata. Distinguish the evidence source and say
    when an API result contains place metadata but no current menu. Use current
-   browser or menu evidence when opening hours, availability, delivery fees, or
-   item details matter. State when information may be stale or incomplete.
+   browser or menu evidence when opening hours, current prices, availability,
+   delivery fees, or item details matter. State when information may be stale
+   or incomplete.
 6. For menus or menu photos, extract only serious candidates, respect the
    user's constraints, and compare the likely real total. Include tax, service,
    delivery, packaging, and platform fees when visible; otherwise label the
