@@ -1591,6 +1591,57 @@ export const dispatchTelegramMessage = async ({
     skipNextAnswerMessageStartRotation = true;
     return true;
   };
+  const materializeNaturalProgressBesideActivePlan = async (
+    progressText: string,
+    callsite: string,
+  ) => {
+    const stream = answerLane.stream ?? ensureDraftLaneStream("answer");
+    if (!stream) {
+      return false;
+    }
+    // A structured plan owns the progress controller until final retention.
+    // Natural commentary that arrives between plan snapshots therefore uses the
+    // answer lane as a separate durable message instead of appending to, or
+    // stealing ownership from, the plan's Telegram identity.
+    setDraftDurableSendClassification("answer", {
+      reason: "progress",
+      callsite,
+      sourceKind: "block",
+    });
+    stream.update(progressText);
+    answerLane.lastPartialText = progressText;
+    answerLane.hasStreamedMessage = true;
+    await stream.flush();
+    const messageId = await stream.materialize?.();
+    if (typeof messageId === "number") {
+      logTelegramDurableSendClassification({
+        reason: "progress",
+        callsite: `${callsite}-retain`,
+        laneName: "answer",
+        messageId,
+        retained: true,
+        deleteOnCleanup: false,
+        sourceKind: "block",
+      });
+    } else {
+      // Materialization can fail after an unconfirmed send. Never fall back to
+      // the active plan controller here: preserving its identity is safer than
+      // overwriting the checklist or duplicating an uncertain commentary send.
+      stream.forceNewMessage();
+    }
+    answerLane.stream = undefined;
+    resetDraftLaneState(answerLane);
+    // The durable commentary is detached now; lifecycle state describes the
+    // empty active lane, not that archived message. Keeping this `complete`
+    // would make every pre-boundary final delta pre-rotate the answer lane.
+    activePreviewLifecycleByLane.answer = "transient";
+    retainPreviewOnCleanupByLane.answer = false;
+    // Providers may emit the next final delta before its assistant-message
+    // boundary. This helper already detached the commentary, so consume that
+    // delayed boundary instead of rotating the newly visible final preview.
+    skipNextAnswerMessageStartRotation = true;
+    return true;
+  };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
     options: { replace?: boolean; progressKind?: "generic" | "plan" } = {},
@@ -1606,6 +1657,17 @@ export const dispatchTelegramMessage = async ({
     // structural progress boundary must wait for them before it decides whether
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
+    if (options.progressKind !== "plan" && activeProgressKind === "plan") {
+      const materializedBesidePlan = await materializeNaturalProgressBesideActivePlan(
+        progressText,
+        "plan-adjacent-natural-progress",
+      );
+      if (materializedBesidePlan) {
+        forceNextAnswerFinalSend = true;
+        recordTransientProgressPreviewText(progressText);
+        return true;
+      }
+    }
     if (options.progressKind === "plan") {
       const retainedAnswerAcknowledgment = await retainAnswerAcknowledgmentBeforePlan(
         "answer-acknowledgment-before-plan",
