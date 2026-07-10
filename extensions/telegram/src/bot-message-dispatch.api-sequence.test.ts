@@ -342,6 +342,147 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     ).toHaveLength(0);
   });
 
+  it("keeps repeated plans on one Work log across separate natural commentary", async () => {
+    const harness = createTelegramBotHarness(6970);
+    const acknowledgment =
+      "I’ll inspect the package metadata first, then verify the temp-file round trip.";
+    const firstPlan = "Plan updated\n- [~] Inspect files\n- [ ] Run checks";
+    const commentary = "The package name is confirmed; I’m checking the temp file next.";
+    const secondPlan = "Plan updated\n- [x] Inspect files\n- [~] Run checks";
+    const partialAnswerPrefix = "The package metadata is verified.";
+    const partialAnswer = `${partialAnswerPrefix} The temp-file cleanup is verified.`;
+    const finalAnswer = `${partialAnswer} All three checks passed.`;
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: acknowledgment });
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes(acknowledgment)),
+          ).toBe(true),
+        );
+
+        await replyOptions?.onToolStart?.({ name: "update_plan", phase: "completed" });
+        await replyOptions?.onToolResult?.({
+          text: firstPlan,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes("[~] Inspect files")),
+          ).toBe(true),
+        );
+
+        await dispatcherOptions.deliver(
+          {
+            text: commentary,
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes(commentary)),
+          ).toBe(true),
+        );
+
+        await replyOptions?.onToolStart?.({ name: "update_plan", phase: "completed" });
+        await replyOptions?.onToolResult?.({
+          text: secondPlan,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await vi.waitFor(() =>
+          expect(
+            editMessageTextCalls(harness.calls).some((call) =>
+              call.text.includes("[x] Inspect files"),
+            ),
+          ).toBe(true),
+        );
+        // Providers can stream cumulative final snapshots before a delayed
+        // assistant-message boundary, or omit that callback entirely. Both
+        // snapshots must keep one answer identity after commentary detaches.
+        await replyOptions?.onPartialReply?.({ text: partialAnswerPrefix });
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes(partialAnswerPrefix)),
+          ).toBe(true),
+        );
+        await replyOptions?.onPartialReply?.({ text: partialAnswer });
+        await vi.waitFor(() =>
+          expect(
+            editMessageTextCalls(harness.calls).some((call) => call.text.includes(partialAnswer)),
+          ).toBe(true),
+        );
+        await replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.deliver({ text: finalAnswer }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({
+      bot: harness.bot,
+      cfg: { channels: { telegram: { accounts: { default: { botToken: "123:test" } } } } },
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "repeated-plan-api-sequence" },
+      }),
+    });
+
+    const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(acknowledgment),
+    );
+    const planSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes("[~] Inspect files"),
+    );
+    const commentarySend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(commentary),
+    );
+    const finalPreviewSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(partialAnswerPrefix),
+    );
+    const partialPreviewEdits = editMessageTextCalls(harness.calls).filter((call) =>
+      call.text.includes(partialAnswer),
+    );
+    const secondPlanEdits = editMessageTextCalls(harness.calls).filter((call) =>
+      call.text.includes("[x] Inspect files"),
+    );
+    const workLogEdits = workLogEditCalls(harness.calls);
+    const finalEdits = editMessageTextCalls(harness.calls).filter((call) =>
+      call.text.includes(finalAnswer),
+    );
+
+    expect(acknowledgmentSend).toBeDefined();
+    expect(planSend).toBeDefined();
+    expect(commentarySend).toBeDefined();
+    expect(finalPreviewSend).toBeDefined();
+    expect(
+      new Set([acknowledgmentSend!.messageId, planSend!.messageId, commentarySend!.messageId]),
+    ).toHaveLength(3);
+    expect(secondPlanEdits).toEqual([
+      expect.objectContaining({
+        messageId: planSend!.messageId,
+        text: expect.stringContaining("[x] Inspect files"),
+      }),
+    ]);
+    expect(workLogEdits.length).toBeGreaterThan(0);
+    expect(new Set(workLogEdits.map((call) => call.messageId))).toEqual(
+      new Set([planSend!.messageId]),
+    );
+    expect(finalEdits).toEqual([
+      expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: finalAnswer }),
+    ]);
+    expect(partialPreviewEdits).toEqual([
+      expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: partialAnswer }),
+      expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: finalAnswer }),
+    ]);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes("[x] Inspect files")),
+    ).toHaveLength(0);
+    expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
+    ).toHaveLength(0);
+  });
+
   it("uses one mutable progress message, clears it, and sends final text once", async () => {
     const harness = createTelegramBotHarness();
     const finalAnswer =
