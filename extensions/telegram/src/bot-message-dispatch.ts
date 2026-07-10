@@ -1518,6 +1518,36 @@ export const dispatchTelegramMessage = async ({
     );
     return controller;
   };
+  const retainAnswerAcknowledgmentBeforePlan = async (callsite: string) => {
+    if (!answerLane.stream || !answerLane.hasStreamedMessage) {
+      return false;
+    }
+    const stream = answerLane.stream;
+    // A plan boundary is structurally different from ordinary commentary: the
+    // prompt requires a natural acknowledgment first, and that message must not
+    // be adopted and overwritten by the checklist. Materialize it before the
+    // plan controller takes ownership of a separate Telegram message.
+    const messageId = await stream.materialize?.();
+    if (typeof messageId !== "number") {
+      // Without a confirmed durable Telegram identity, preserve the established
+      // adoption fallback rather than risking a duplicate acknowledgment.
+      return false;
+    }
+    logTelegramDurableSendClassification({
+      reason: "progress",
+      callsite,
+      laneName: "answer",
+      messageId,
+      retained: true,
+      deleteOnCleanup: false,
+      sourceKind: "partial",
+    });
+    answerLane.stream = undefined;
+    resetDraftLaneState(answerLane);
+    activePreviewLifecycleByLane.answer = "complete";
+    retainPreviewOnCleanupByLane.answer = true;
+    return true;
+  };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
     options: { replace?: boolean; progressKind?: "generic" | "plan" } = {},
@@ -1533,6 +1563,9 @@ export const dispatchTelegramMessage = async ({
     // structural progress boundary must wait for them before it decides whether
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
+    if (options.progressKind === "plan") {
+      await retainAnswerAcknowledgmentBeforePlan("answer-acknowledgment-before-plan");
+    }
     const controller =
       (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??
       getProgressController();
@@ -2069,7 +2102,11 @@ export const dispatchTelegramMessage = async ({
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    if (forceNextAnswerFinalSend) {
+    // Work Log retention requires a separate final bubble, but an already-streamed
+    // answer preview is already that separate bubble. Force a new send only when
+    // there is no visible answer identity available to finalize in place.
+    const shouldForceFreshFinalSend = forceNextAnswerFinalSend && !answerLane.hasStreamedMessage;
+    if (shouldForceFreshFinalSend) {
       forceNextAnswerFinalSend = false;
       await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
       const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
@@ -2081,6 +2118,8 @@ export const dispatchTelegramMessage = async ({
       result = delivered ? "sent" : "skipped";
     } else {
       forceNextAnswerFinalSend = false;
+      // Preserve the visible Telegram message across finalization. Clearing it
+      // here would make the answer disappear before the replacement send lands.
       result = await deliverLaneText({
         laneName: "answer",
         text: preparedText,
