@@ -48,6 +48,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "video-frames",
         "jarvis-gui-control",
         "screen-record",
+        "find-food",
         "mcporter",
         "nano-banana-pro",
         "telegram-user",
@@ -146,7 +147,16 @@ describe("applyNonInteractiveSkillsConfig", () => {
       repaired.config.skills?.allowBundled?.indexOf("nano-banana-pro") ?? -1,
     );
     expect(repaired.config.skills?.allowBundled).toEqual(
-      expect.arrayContaining(["checkpoint", "goal-mode", "monitor-router", "jarvis-gui-control"]),
+      expect.arrayContaining([
+        "checkpoint",
+        "goal-mode",
+        "monitor-router",
+        "find-food",
+        "jarvis-gui-control",
+      ]),
+    );
+    expect(repaired.config.skills?.allowBundled?.indexOf("find-food")).toBe(
+      (repaired.config.skills?.allowBundled?.indexOf("goplaces") ?? 0) + 1,
     );
   });
 

@@ -47,6 +47,20 @@ function writeFakeTool(binDir: string, name: string, output: string) {
 }
 
 describe("scripts/consumer-capabilities-manifest.mjs", () => {
+  it("includes the bundled find-food skill with its consumer display name", () => {
+    const output = execFileSync(process.execPath, [manifestScript, path.join(root, "skills")], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+
+    expect(parsed.skills["find-food"]).toMatchObject({
+      files: 1,
+      displayName: "Find Something to Eat",
+    });
+    expect(parsed.skills["find-food"].description).toContain("what should I eat?");
+    expect(parsed.skills["find-food"].sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it("emits skill hashes and packaged managed tool version expectations", () => {
     const skillsRoot = makeTempRoot();
     writeSkill({
