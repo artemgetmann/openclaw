@@ -56,6 +56,14 @@ describe("find-food bundled skill", () => {
     // even when the runtime itself lives under the user's home directory.
     expect(prompt).toContain(skillPath);
 
+    const skillMarkdown = await fs.readFile(skillPath, "utf8");
+    expect(skillMarkdown).toContain("in-place Menu tab");
+    expect(skillMarkdown).toContain("readable menu photos");
+    expect(skillMarkdown).toContain("do not rely only");
+    expect(skillMarkdown).toContain("place metadata but no current menu");
+    expect(skillMarkdown).toContain("Distinguish the evidence source");
+    expect(skillMarkdown).toContain("opening hours, current prices");
+
     const report = buildWorkspaceSkillStatus(workspaceDir, { entries });
     const skill = report.skills.find((candidate) => candidate.name === "find-food");
     expect(skill?.displayName).toBe("Find Something to Eat");

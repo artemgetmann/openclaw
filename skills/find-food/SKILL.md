@@ -25,9 +25,13 @@ alternatives instead of a large option dump.
    cannot be derived safely.
 5. For place discovery, follow the bundled `goplaces` skill and use its managed
    `skills/goplaces/scripts/goplaces-search.sh` wrapper first when available.
-   Use current browser or menu evidence when opening hours, current prices,
-   availability, delivery fees, or item details matter. State when information
-   may be stale or incomplete.
+   For a specific Google Maps place or link, inspect its in-place Menu tab or
+   readable menu photos when prices or dish selection matter; do not rely only
+   on web snippets or Places metadata. Distinguish the evidence source and say
+   when an API result contains place metadata but no current menu. Use current
+   browser or menu evidence when opening hours, current prices, availability,
+   delivery fees, or item details matter. State when information may be stale
+   or incomplete.
 6. For menus or menu photos, extract only serious candidates, respect the
    user's constraints, and compare the likely real total. Include tax, service,
    delivery, packaging, and platform fees when visible; otherwise label the
