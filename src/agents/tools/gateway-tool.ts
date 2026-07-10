@@ -117,11 +117,11 @@ export function createGatewayTool(opts?: {
         }
         if (consumed.status === "expired") {
           throw new Error(
-            `The pending restart confirmation expired. Ask again: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" and record it with action="restart.request_confirmation".`,
+            `The pending restart confirmation expired. First call the gateway tool with action="restart.request_confirmation". Only after that action succeeds, ask exactly: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" Then end the turn and wait for the user's reply.`,
           );
         }
         throw new Error(
-          `Restart confirmation required for live chat sessions. Ask: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" then call gateway with action="restart.request_confirmation" for this session before attempting restart-capable actions.`,
+          `Restart confirmation required for live chat sessions. First call the gateway tool with action="restart.request_confirmation" for this session. Only after that action succeeds, ask exactly: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" Then end the turn and wait for the user's reply before attempting restart-capable actions.`,
         );
       };
       if (action === "restart.request_confirmation") {
