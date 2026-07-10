@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -56,33 +55,6 @@ function sanitizeMonitorUpdatePatch(patch: Record<string, unknown>): Record<stri
     }
   }
   return sanitized;
-}
-
-function withMonitorReceiptMarker(action: string, payload: unknown) {
-  const result = jsonResult(payload);
-  if (action !== "create" || !payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return result;
-  }
-  const payloadRecord = payload as Record<string, unknown>;
-  if (
-    !payloadRecord.disclosure ||
-    typeof payloadRecord.disclosure !== "object" ||
-    Array.isArray(payloadRecord.disclosure)
-  ) {
-    return result;
-  }
-
-  // Keep the marker out of the model-visible JSON while allowing the channel
-  // delivery layer to render the gateway-normalized disclosure deterministically.
-  const details = result.details;
-  if (details && typeof details === "object" && !Array.isArray(details)) {
-    Object.defineProperty(details, MONITOR_RECEIPT_DETAILS_KEY, {
-      configurable: true,
-      enumerable: false,
-      value: { disclosure: payloadRecord.disclosure },
-    });
-  }
-  return result;
 }
 
 const MonitorToolSchema = Type.Object(
@@ -254,7 +226,7 @@ For monitor-related user replies/status:
                 ? params.checkpoint
                 : undefined,
           });
-          return withMonitorReceiptMarker(action, createdMonitor);
+          return jsonResult(createdMonitor);
         }
         case "update": {
           const patch =

@@ -6,7 +6,8 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import { logTelegramProgressDebug } from "../infra/telegram-progress-debug.js";
-import { buildMonitorReceiptChannelData, readMonitorReceiptDetails } from "../monitor/receipt.js";
+import { buildMonitorReceiptChannelData } from "../monitor/receipt.js";
+import type { MonitorDisclosure } from "../monitor/types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -53,6 +54,20 @@ function isCronAddAction(args: unknown): boolean {
   }
   const action = (args as Record<string, unknown>).action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
+}
+
+function readMonitorDisclosureFromResult(value: unknown): MonitorDisclosure | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const details = (value as Record<string, unknown>).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return undefined;
+  }
+  const disclosure = (details as Record<string, unknown>).disclosure;
+  return disclosure && typeof disclosure === "object" && !Array.isArray(disclosure)
+    ? (disclosure as MonitorDisclosure)
+    : undefined;
 }
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
@@ -606,8 +621,13 @@ export async function handleToolExecutionEnd(
         })()
       : undefined;
   const monitorReceiptDisclosure =
-    !isToolError && toolName === "monitor"
-      ? readMonitorReceiptDetails(sanitizedResult)?.disclosure
+    !isToolError &&
+    toolName === "monitor" &&
+    startData?.args &&
+    typeof startData.args === "object" &&
+    !Array.isArray(startData.args) &&
+    (startData.args as Record<string, unknown>).action === "create"
+      ? readMonitorDisclosureFromResult(sanitizedResult)
       : undefined;
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
 

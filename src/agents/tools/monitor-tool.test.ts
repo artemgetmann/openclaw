@@ -62,39 +62,6 @@ describe("monitor tool", () => {
     );
   });
 
-  it("marks the normalized create disclosure for channel receipt delivery without changing model JSON", async () => {
-    const disclosure = {
-      purpose: "Watch support replies",
-      source: { type: "gmail", target: { threadId: "thread-1" } },
-      checkCadence: { kind: "every", everyMs: 300_000 },
-      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
-      expiryAt: null,
-      stopCondition: null,
-      autonomy: { level: "observe_only" },
-      actionPolicy: "notify_draft",
-    };
-    callGatewayToolMock.mockResolvedValueOnce({ monitorId: "monitor-1", disclosure });
-    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
-
-    const result = await tool.execute?.("call-receipt", {
-      action: "create",
-      instructions: disclosure.purpose,
-      sourceType: "gmail",
-      sourceTarget: disclosure.source.target,
-      cadence: disclosure.checkCadence,
-    });
-
-    expect(result).toBeDefined();
-    if (!result) {
-      throw new Error("monitor.create did not return a tool result");
-    }
-    expect(result.content).toEqual([
-      { type: "text", text: JSON.stringify({ monitorId: "monitor-1", disclosure }, null, 2) },
-    ]);
-    expect(Object.keys(result.details as object)).toEqual(["monitorId", "disclosure"]);
-    expect((result.details as Record<string, unknown>).__monitorReceipt).toEqual({ disclosure });
-  });
-
   it("adds announce mode to explicit bare origin delivery", async () => {
     const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
 

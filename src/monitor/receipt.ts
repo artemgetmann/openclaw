@@ -1,12 +1,6 @@
 import type { CronSchedule } from "../cron/types.js";
 import type { MonitorDisclosure } from "./types.js";
 
-export const MONITOR_RECEIPT_DETAILS_KEY = "__monitorReceipt";
-
-export type MonitorReceiptDetails = {
-  disclosure: MonitorDisclosure;
-};
-
 const MONITOR_RECEIPT_MARKER = "monitorReceipt";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -192,11 +186,4 @@ export function readMonitorReceiptDisclosure(channelData: unknown): MonitorDiscl
   const marker = asRecord(openclaw?.[MONITOR_RECEIPT_MARKER]);
   const disclosure = asRecord(marker?.disclosure);
   return disclosure ? (disclosure as unknown as MonitorDisclosure) : undefined;
-}
-
-export function readMonitorReceiptDetails(value: unknown): MonitorReceiptDetails | undefined {
-  const details = asRecord(asRecord(value)?.details);
-  const receipt = asRecord(details?.[MONITOR_RECEIPT_DETAILS_KEY]);
-  const disclosure = asRecord(receipt?.disclosure);
-  return disclosure ? { disclosure: disclosure as unknown as MonitorDisclosure } : undefined;
 }
