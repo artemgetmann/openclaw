@@ -228,6 +228,10 @@ function deleteMessageCalls(calls: readonly TelegramApiCall[]) {
   });
 }
 
+function workLogEditCalls(calls: readonly TelegramApiCall[]) {
+  return editMessageTextCalls(calls).filter((call) => call.text === "Work log");
+}
+
 describe("dispatchTelegramMessage progress API sequence", () => {
   beforeEach(() => {
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
@@ -237,6 +241,105 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     resolveStorePath.mockReset();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
+  });
+
+  it("keeps acknowledgment, plan, and streamed final on separate stable messages", async () => {
+    const harness = createTelegramBotHarness(6950);
+    const acknowledgment =
+      "I’ll inspect the package metadata first, then verify the temp-file round trip.";
+    const planText = "Plan updated\n- [x] Inspect files\n- [~] Run tests";
+    const partialAnswer = "Package metadata and the temp-file round trip are verified.";
+    const finalAnswer = `${partialAnswer} All three checks passed.`;
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: acknowledgment });
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes(acknowledgment)),
+          ).toBe(true),
+        );
+        await replyOptions?.onToolStart?.({ name: "update_plan", phase: "completed" });
+        await replyOptions?.onToolResult?.({
+          text: planText,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes("Plan updated")),
+          ).toBe(true),
+        );
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: partialAnswer });
+        await vi.waitFor(() =>
+          expect(
+            sendMessageCalls(harness.calls).some((call) => call.text.includes(partialAnswer)),
+          ).toBe(true),
+        );
+        await dispatcherOptions.deliver({ text: finalAnswer }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({
+      bot: harness.bot,
+      cfg: { channels: { telegram: { accounts: { default: { botToken: "123:test" } } } } },
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "ack-plan-final-api-sequence" },
+      }),
+    });
+
+    const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(acknowledgment),
+    );
+    const planSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes("Plan updated"),
+    );
+    const previewSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(partialAnswer),
+    );
+
+    expect(acknowledgmentSend).toBeDefined();
+    expect(planSend).toBeDefined();
+    expect(previewSend).toBeDefined();
+    // Assert Telegram API order and identity, not merely callback order: the
+    // acknowledgment remains visible, plan owns Work log, and final owns one ID.
+    expect(harness.calls).toEqual([
+      expect.objectContaining({
+        op: "sendMessage",
+        messageId: acknowledgmentSend!.messageId,
+        text: acknowledgment,
+      }),
+      expect.objectContaining({
+        op: "sendMessage",
+        messageId: planSend!.messageId,
+        text: expect.stringContaining("Plan updated"),
+      }),
+      expect.objectContaining({
+        op: "sendMessage",
+        messageId: previewSend!.messageId,
+        text: partialAnswer,
+      }),
+      expect.objectContaining({
+        op: "editMessageText",
+        messageId: planSend!.messageId,
+        text: "Work log",
+      }),
+      expect.objectContaining({
+        op: "editMessageText",
+        messageId: planSend!.messageId,
+        text: "Work log",
+      }),
+      expect.objectContaining({
+        op: "editMessageText",
+        messageId: previewSend!.messageId,
+        text: finalAnswer,
+      }),
+    ]);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
+    ).toHaveLength(0);
   });
 
   it("uses one mutable progress message, clears it, and sends final text once", async () => {
@@ -270,21 +373,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: expect.stringContaining("Opening"),
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: expect.stringContaining("reserved for examples"),
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
@@ -312,21 +403,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: commentary,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: finalAnswer,
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
@@ -376,21 +455,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
     expect(sendMessageCalls(harness.calls).map((call) => call.text)).not.toContain("Step");
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: firstCommentary,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: finalAnswer,
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
@@ -421,28 +488,15 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     expect(progressSend).toBeDefined();
     expect(finalSends).toHaveLength(1);
     expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
-    expect(harness.calls).toEqual([
-      expect.objectContaining({
-        op: "sendMessage",
-        messageId: progressSend!.messageId,
-        text: progressText,
-      }),
-      expect.objectContaining({
-        op: "deleteMessage",
-        messageId: progressSend!.messageId,
-      }),
-      expect.objectContaining({
-        op: "sendMessage",
-        text: finalAnswer,
-      }),
-    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(finalSends[0]?.messageId).not.toBe(progressSend?.messageId);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
 
-  it("still sends final text once when progress deletion fails", async () => {
+  it("still sends final text once after work log retention", async () => {
     const harness = createTelegramBotHarness();
-    harness.deleteMessage.mockRejectedValueOnce(new Error("delete failed"));
 
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Opening example.com" }, { kind: "block" });
@@ -455,59 +509,33 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     const finalSends = sendMessageCalls(harness.calls).filter((call) =>
       call.text.includes("Final answer after progress."),
     );
-    expect(harness.deleteMessage).toHaveBeenCalledTimes(1);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(harness.deleteMessage).not.toHaveBeenCalled();
     expect(finalSends).toHaveLength(1);
     expect(harness.sendVoice).not.toHaveBeenCalled();
     expect(harness.sendAudio).not.toHaveBeenCalled();
   });
 
-  it("does not hold the final answer hostage when progress cleanup hangs", async () => {
-    vi.useFakeTimers();
-    try {
-      const harness = createTelegramBotHarness();
-      let resolveDelete: ((value: boolean) => void) | undefined;
-      const stalledDelete = new Promise<boolean>((resolve) => {
-        resolveDelete = resolve;
-      });
-      harness.deleteMessage.mockImplementationOnce(async (chatId, messageId) => {
-        harness.calls.push({ op: "deleteMessage", chatId, messageId });
-        return stalledDelete;
-      });
+  it("sends final text after retaining progress as work log", async () => {
+    const harness = createTelegramBotHarness();
 
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "Opening example.com" }, { kind: "block" });
-        await dispatcherOptions.deliver(
-          { text: "Final answer after stalled progress cleanup." },
-          { kind: "final" },
-        );
-        return { queuedFinal: true };
-      });
-
-      const dispatchPromise = dispatchWithHarness({ bot: harness.bot });
-      await vi.waitFor(() => expect(harness.deleteMessage).toHaveBeenCalledTimes(1));
-
-      // Telegram cleanup is cosmetic. If delete/flush gets wedged, the durable
-      // final answer still has to move after the bounded cleanup window.
-      await vi.advanceTimersByTimeAsync(3_500);
-      await vi.waitFor(() =>
-        expect(
-          sendMessageCalls(harness.calls).filter((call) =>
-            call.text.includes("Final answer after stalled progress cleanup."),
-          ),
-        ).toHaveLength(1),
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Opening example.com" }, { kind: "block" });
+      await dispatcherOptions.deliver(
+        { text: "Final answer after retained work log." },
+        { kind: "final" },
       );
-      const sends = sendMessageCalls(harness.calls);
-      const progressSend = sends[0];
-      const finalSend = sends.find((call) =>
-        call.text.includes("Final answer after stalled progress cleanup."),
-      );
-      expect(finalSend?.messageId).not.toBe(progressSend?.messageId);
-      await expect(dispatchPromise).resolves.toBeUndefined();
+      return { queuedFinal: true };
+    });
 
-      resolveDelete?.(true);
-      await vi.runOnlyPendingTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
+    await dispatchWithHarness({ bot: harness.bot });
+
+    const sends = sendMessageCalls(harness.calls);
+    const progressSend = sends[0];
+    const finalSend = sends.find((call) =>
+      call.text.includes("Final answer after retained work log."),
+    );
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(finalSend?.messageId).not.toBe(progressSend?.messageId);
   });
 });
