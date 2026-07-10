@@ -308,6 +308,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not forward raw internal metadata");
   });
 
+  it("requires live-thread freshness before external outreach drafts and sends", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("external outreach/reply drafts");
+    expect(prompt).toContain("trackers, memory, docs");
+    expect(prompt).toContain("stale indexes");
+    expect(prompt).toContain("read the latest relevant thread/person first");
+    expect(prompt).toContain("quote the latest relevant inbound message text");
+    expect(prompt).toContain("new, already sent, optional, or do-not-send");
+    expect(prompt).toContain("Before any approved send, refresh the same live thread again");
+    expect(prompt).toContain(
+      "stop if newer relevant thread movement, inbound or outbound, changes or duplicates the reply",
+    );
+    expect(prompt).toContain("state that freshness is not verified");
+    expect(prompt).toContain(
+      "label any optional sketch as stale/tracker-based and not ready to send",
+    );
+    expect(prompt).not.toContain("wacli-recent-reply.sh");
+    expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
+  });
+
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

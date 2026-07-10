@@ -98,17 +98,16 @@ Email fallback policy
   configured account is the same mailbox the user intended.
 - For sends, never silently fall back to a different sender identity. If the
   same-mailbox identity is unclear, stop and ask the user which account to use.
-- Before sending a Gmail reply from a draft that sat for a meaningful amount of
-  time, re-read or re-search the thread/person first and check for newer
-  messages. Email is usually less volatile than chat, but stale drafts can still
-  answer the wrong state.
+- Before drafting a Gmail reply, re-read or re-search the thread/person first
+  and check for newer messages. Email is usually less volatile than chat, but
+  stale drafts can still answer the wrong state.
 - When presenting a Gmail thread context for a reply decision, include the exact
   full text of the latest relevant inbound email from the other person when it
   is available, then add a concise summary only if useful. Do not force the user
   to rely on a summary when the sender's actual wording matters.
-- If you draft and send in the same short flow, normal thread reading before the
-  draft is enough unless the user delayed approval, the thread is active, or the
-  last read is no longer trustworthy.
+- Before any approved Gmail send, refresh the same thread/person again. Stop if
+  newer relevant thread movement, inbound or outbound, changes or duplicates the
+  reply, even when the draft and approval happen in the same short flow.
 - If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
   report the blocker clearly and ask whether the user wants to reconnect Google.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
@@ -137,8 +136,8 @@ Gmail triage pattern
   what was excluded or only sampled.
 - Treat "needs reply" as an inference unless the thread context clearly shows
   the user is the next responder.
-- Before sending a Gmail reply, re-search or re-read the target thread/person if
-  approval was delayed, the thread is active, or the last read may be stale.
+- Before sending a Gmail reply, always re-search or re-read the target
+  thread/person and compare against the context used for the approved draft.
 
 Setup Routing
 
