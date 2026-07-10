@@ -15,6 +15,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "screen-record",
   "gog",
   "goplaces",
+  "find-food",
   "himalaya",
   "jarvis-gui-control",
   "peekaboo",
