@@ -140,6 +140,9 @@ describe("monitor gateway handlers", () => {
           cronJobId: string;
           trigger?: unknown;
           goal?: { id: string; objective: string };
+          disclosure?: unknown;
+          notificationPolicy?: unknown;
+          notificationState?: unknown;
         }
       | undefined;
     expect(monitor).toMatchObject({
@@ -160,6 +163,25 @@ describe("monitor gateway handlers", () => {
         },
       },
       goal: { id: "goal-1", objective: "Get the refund confirmed." },
+      notificationPolicy: {
+        mode: "change_aware",
+        unchangedNoticeAfterChecks: 3,
+        unchangedReminderIntervalMs: 43_200_000,
+      },
+      notificationState: { consecutiveUnchangedChecks: 0 },
+      disclosure: {
+        purpose: "Monitor Empower replies and draft the next response.",
+        source: {
+          type: "gmail",
+          target: { account: "me@example.com", threadId: "thread-1" },
+        },
+        checkCadence: { kind: "every", everyMs: 300_000 },
+        noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+        expiryAt: null,
+        stopCondition: null,
+        autonomy: { level: "observe_only" },
+        actionPolicy: "notify_draft",
+      },
     });
     expect(cronAdd).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -186,6 +208,8 @@ describe("monitor gateway handlers", () => {
         }),
         instructions: "Monitor Empower replies and draft the next response.",
         goal: { id: "goal-1", objective: "Get the refund confirmed." },
+        notificationPolicy: expect.objectContaining({ unchangedNoticeAfterChecks: 3 }),
+        notificationState: { consecutiveUnchangedChecks: 0 },
       }),
     );
     expect(cronUpdate).not.toHaveBeenCalled();
@@ -216,6 +240,71 @@ describe("monitor gateway handlers", () => {
       kind: "schedule",
       cadence: { kind: "every", everyMs: 300_000 },
     });
+  });
+
+  it("persists quiet-tick notification state and returns the gateway decision", async () => {
+    const invokeContext = createInvokeContext();
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "Watch the proof source.",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        sourceType: "synthetic",
+        sourceTarget: { source: "proof" },
+        cadence: { kind: "every", everyMs: 60_000 },
+      },
+      "req-quiet-create",
+    );
+    const created = invokeContext.respond.mock.calls[0]?.[1] as { monitorId: string } | undefined;
+    if (!created) {
+      throw new Error("monitor.create did not return a monitor");
+    }
+    const monitorId = created.monitorId;
+    invokeContext.respond.mockClear();
+
+    for (let check = 1; check <= 3; check += 1) {
+      await monitorHandlers["monitor.update"]({
+        params: { monitorId, patch: { notificationEvent: "unchanged" } },
+        respond: invokeContext.respond as never,
+        context: {
+          cronStorePath: invokeContext.cronStorePath,
+          cron: { update: invokeContext.cronUpdate },
+        } as never,
+        client: null,
+        req: { type: "req", id: `req-quiet-${check}`, method: "monitor.update" },
+        isWebchatConnect: () => false,
+      });
+    }
+
+    expect(invokeContext.respond.mock.calls.map((call) => call[1])).toMatchObject([
+      { notificationDecision: { shouldNotify: false, reason: "suppressed_unchanged" } },
+      { notificationDecision: { shouldNotify: false, reason: "suppressed_unchanged" } },
+      { notificationDecision: { shouldNotify: true, reason: "unchanged_milestone" } },
+    ]);
+    invokeContext.respond.mockClear();
+    await monitorHandlers["monitor.update"]({
+      params: { monitorId, patch: { notificationEvent: "deadline_passed" } },
+      respond: invokeContext.respond as never,
+      context: {
+        cronStorePath: invokeContext.cronStorePath,
+        cron: { update: invokeContext.cronUpdate },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-deadline", method: "monitor.update" },
+      isWebchatConnect: () => false,
+    });
+    expect(invokeContext.respond.mock.calls[0]?.[1]).toMatchObject({
+      notificationDecision: {
+        shouldNotify: true,
+        reason: "deadline_escalation",
+        nextAction: "request_approval",
+      },
+    });
+    const store = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(store.monitors[0]?.notificationState?.consecutiveUnchangedChecks).toBe(3);
   });
 
   it("returns the existing active monitor for duplicate normalized create requests", async () => {
@@ -458,6 +547,11 @@ describe("monitor gateway handlers", () => {
       sessionKey: originSessionKey,
       storePath: configState.sessionStorePath,
       objective: "Get the refund confirmed.",
+      autonomy: {
+        level: "act_within_scope",
+        allowedActions: ["send follow-ups within the agreed refund terms"],
+        approvalRequired: ["accept a lower refund"],
+      },
     });
 
     await invokeMonitorCreate(
@@ -475,12 +569,20 @@ describe("monitor gateway handlers", () => {
     );
 
     const monitor = invokeContext.respond.mock.calls[0]?.[1] as
-      | { goal?: { id: string; objective: string } }
+      | { goal?: { id: string; objective: string; autonomy?: unknown }; disclosure?: unknown }
       | undefined;
-    expect(monitor?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(monitor?.goal).toEqual({
+      id: goal.id,
+      objective: goal.objective,
+      autonomy: goal.autonomy,
+    });
+    expect(monitor?.disclosure).toMatchObject({
+      autonomy: { level: "act_within_scope" },
+      actionPolicy: "notify_draft",
+    });
     expect(seedMonitorSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        goal: { id: goal.id, objective: goal.objective },
+        goal: { id: goal.id, objective: goal.objective, autonomy: goal.autonomy },
         originSessionKey,
       }),
     );
@@ -708,7 +810,7 @@ describe("monitor gateway handlers", () => {
           trigger?: unknown;
         }
       | undefined;
-    expect(created?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(created?.goal).toMatchObject({ id: goal.id, objective: goal.objective });
     expect(created?.trigger).toEqual({
       kind: "hybrid",
       schedule: { cadence: { kind: "every", everyMs: 300_000 } },
@@ -822,7 +924,7 @@ describe("monitor gateway handlers", () => {
           trigger?: unknown;
         }
       | undefined;
-    expect(created?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(created?.goal).toMatchObject({ id: goal.id, objective: goal.objective });
     expect(created?.trigger).toEqual({
       kind: "hybrid",
       schedule: { cadence: { kind: "every", everyMs: 300_000 } },
@@ -924,7 +1026,7 @@ describe("monitor gateway handlers", () => {
           trigger?: unknown;
         }
       | undefined;
-    expect(created?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(created?.goal).toMatchObject({ id: goal.id, objective: goal.objective });
     expect(created?.trigger).toEqual({
       kind: "hybrid",
       schedule: { cadence: { kind: "every", everyMs: 300_000 } },
@@ -1178,7 +1280,7 @@ describe("monitor gateway handlers", () => {
       | undefined;
     expect(secondMonitor?.monitorId).toBe(firstMonitor?.monitorId);
     expect(secondMonitor?.cadence).toEqual({ kind: "every", everyMs: 300_000 });
-    expect(secondMonitor?.goal).toEqual({ id: goal.id, objective: goal.objective });
+    expect(secondMonitor?.goal).toMatchObject({ id: goal.id, objective: goal.objective });
     expect(secondMonitor?.trigger).toEqual({
       kind: "hybrid",
       schedule: { cadence: { kind: "every", everyMs: 300_000 } },
@@ -1196,7 +1298,7 @@ describe("monitor gateway handlers", () => {
     const monitorStore = await loadMonitorStore(
       resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
     );
-    expect(monitorStore.monitors[0]?.goal).toEqual({
+    expect(monitorStore.monitors[0]?.goal).toMatchObject({
       id: goal.id,
       objective: goal.objective,
     });

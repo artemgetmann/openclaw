@@ -38,7 +38,109 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("include the actual draft text");
     expect(message).toContain("only needs a status update");
     expect(message).toContain("goalObjective: Get the refund confirmed.");
+    expect(message).toContain("Goal autonomy: observe_only.");
+    expect(message).toContain("next unchanged check is 1");
+    expect(message).toContain("notificationDecision.shouldNotify");
+    expect(message).toContain("SLA or response deadline has passed");
     expect(message).toContain("Evaluate after this wake");
+  });
+
+  it("keeps delivery policy from escalating an observe-only bound goal", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-04-10T04:30:13.436Z",
+      wakeReason: "cron:test",
+      watchDeliveryConfigured: true,
+      monitor: {
+        monitorId: "monitor-observe",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-observe",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "74333133234289@lid" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+        goal: { id: "goal-1", objective: "Observe the negotiation." },
+        status: "active",
+        cronJobId: "cron-observe",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain("Goal autonomy: observe_only.");
+    expect(message).not.toContain("Watched-surface delivery is authorized");
+    expect(message).toContain("Default behavior is notify + draft to the origin chat");
+  });
+
+  it("executes explicitly allowed goal actions and asks only at recorded boundaries", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-04-10T04:30:13.436Z",
+      wakeReason: "cron:test",
+      monitor: {
+        monitorId: "monitor-act",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-act",
+        sourceType: "synthetic",
+        sourceTarget: { source: "proof" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_only",
+        goal: {
+          id: "goal-1",
+          objective: "Keep the vendor moving.",
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: ["send follow-ups under the agreed terms"],
+            approvalRequired: ["change price or scope"],
+          },
+        },
+        status: "active",
+        cronJobId: "cron-act",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain("Goal autonomy: act_within_scope.");
+    expect(message).toContain("Allowed actions: send follow-ups under the agreed terms");
+    expect(message).toContain("Approval required: change price or scope");
+    expect(message).toContain("Use normal tools and skills to execute allowed in-scope actions");
+  });
+
+  it("keeps act-within-scope autonomy when the delivery adapter is unavailable", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-04-10T04:30:13.436Z",
+      wakeReason: "cron:test",
+      watchDeliveryConfigured: false,
+      monitor: {
+        monitorId: "monitor-act-no-adapter",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-act-no-adapter",
+        sourceType: "custom-service",
+        sourceTarget: { thread: "ticket-1" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+        goal: {
+          id: "goal-1",
+          objective: "Keep the ticket moving.",
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: ["use the service skill to post approved follow-ups"],
+            approvalRequired: ["change the requested outcome"],
+          },
+        },
+        status: "active",
+        cronJobId: "cron-act-no-adapter",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain("Only the delivery adapter is unavailable");
+    expect(message).toContain("act_within_scope autonomy remains intact");
+    expect(message).toContain("Use an available normal tool or skill path");
+    expect(message).toContain("preserve every approval-required boundary");
   });
 
   it("preserves the reopened-conversation regression contract for WhatsApp-like checkpoints", () => {

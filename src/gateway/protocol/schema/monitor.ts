@@ -8,6 +8,45 @@ const MonitorActionPolicySchema = Type.Union([
   Type.Literal("auto_send"),
 ]);
 
+const MonitorAutonomySchema = Type.Object(
+  {
+    level: Type.Union([Type.Literal("observe_only"), Type.Literal("act_within_scope")]),
+    allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+    approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+  },
+  { additionalProperties: false },
+);
+
+const MonitorNotificationEventSchema = Type.Union([
+  Type.Literal("unchanged"),
+  Type.Literal("material_change"),
+  Type.Literal("completion"),
+  Type.Literal("user_input"),
+  Type.Literal("approval_required"),
+  Type.Literal("deadline_passed"),
+  Type.Literal("degraded"),
+]);
+
+const MonitorNotificationPolicySchema = Type.Object(
+  {
+    mode: Type.Literal("change_aware"),
+    unchangedNoticeAfterChecks: Type.Integer({ minimum: 1 }),
+    unchangedReminderIntervalMs: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+const MonitorNotificationStateSchema = Type.Object(
+  {
+    consecutiveUnchangedChecks: Type.Integer({ minimum: 0 }),
+    lastEvent: Type.Optional(MonitorNotificationEventSchema),
+    lastEventAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastNotificationAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastMaterialChangeAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 const MonitorStatusSchema = Type.Union([
   Type.Literal("active"),
   Type.Literal("degraded"),
@@ -88,6 +127,7 @@ const MonitorGoalSnapshotSchema = Type.Object(
   {
     id: NonEmptyString,
     objective: NonEmptyString,
+    autonomy: Type.Optional(MonitorAutonomySchema),
   },
   { additionalProperties: false },
 );
@@ -109,6 +149,32 @@ export const MonitorRecordSchema = Type.Object(
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: MonitorActionPolicySchema,
     goal: Type.Optional(MonitorGoalSnapshotSchema),
+    notificationPolicy: Type.Optional(MonitorNotificationPolicySchema),
+    notificationState: Type.Optional(MonitorNotificationStateSchema),
+    disclosure: Type.Optional(
+      Type.Object(
+        {
+          purpose: NonEmptyString,
+          source: Type.Object(
+            { type: NonEmptyString, target: LooseObjectSchema },
+            { additionalProperties: false },
+          ),
+          checkCadence: CronScheduleSchema,
+          noChangeCadence: Type.Object(
+            {
+              noticeAfterChecks: Type.Integer({ minimum: 1 }),
+              reminderIntervalMs: Type.Integer({ minimum: 1 }),
+            },
+            { additionalProperties: false },
+          ),
+          expiryAt: Type.Union([Type.String(), Type.Null()]),
+          stopCondition: Type.Union([Type.String(), Type.Null()]),
+          autonomy: MonitorAutonomySchema,
+          actionPolicy: MonitorActionPolicySchema,
+        },
+        { additionalProperties: false },
+      ),
+    ),
     status: MonitorStatusSchema,
     lastCheckpoint: Type.Optional(LooseObjectSchema),
     cronJobId: NonEmptyString,
@@ -143,6 +209,7 @@ export const MonitorCreateParamsSchema = Type.Object(
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(MonitorActionPolicySchema),
     goal: Type.Optional(MonitorGoalSnapshotSchema),
+    notificationPolicy: Type.Optional(MonitorNotificationPolicySchema),
     lastCheckpoint: Type.Optional(LooseObjectSchema),
   },
   { additionalProperties: false },
@@ -163,6 +230,8 @@ export const MonitorUpdateParamsSchema = Type.Object(
         stopCondition: Type.Optional(Type.String()),
         actionPolicy: Type.Optional(MonitorActionPolicySchema),
         goal: Type.Optional(MonitorGoalSnapshotSchema),
+        notificationPolicy: Type.Optional(MonitorNotificationPolicySchema),
+        notificationEvent: Type.Optional(MonitorNotificationEventSchema),
         status: Type.Optional(MonitorStatusSchema),
         lastCheckpoint: Type.Optional(LooseObjectSchema),
         lastWakeAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

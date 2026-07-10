@@ -5,6 +5,12 @@ import { resolveStorePath, updateSessionStore, type SessionEntry } from "../conf
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { buildMonitorAutonomyLines, buildMonitorNotificationLines } from "./prompt-contract.js";
+import type {
+  MonitorGoalSnapshot,
+  MonitorNotificationPolicy,
+  MonitorNotificationState,
+} from "./types.js";
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -27,7 +33,7 @@ function resolveTelegramUserChat(params: {
   );
 }
 
-function buildMonitorBootstrapPrompt(params: {
+export function buildMonitorBootstrapPrompt(params: {
   instructions: string;
   sourceType: string;
   sourceTarget: Record<string, unknown>;
@@ -35,7 +41,9 @@ function buildMonitorBootstrapPrompt(params: {
   stopCondition?: string;
   expiryAt?: string;
   actionPolicy: string;
-  goal?: { id: string; objective: string };
+  goal?: MonitorGoalSnapshot;
+  notificationPolicy?: MonitorNotificationPolicy;
+  notificationState?: MonitorNotificationState;
   watchDeliveryConfigured: boolean;
   originSessionKey: string;
   originDelivery?: CronDelivery;
@@ -71,9 +79,15 @@ function buildMonitorBootstrapPrompt(params: {
     ...(params.expiryAt?.trim() ? [`- expiryAt: ${params.expiryAt.trim()}`] : []),
     "",
     "Use normal OpenClaw tools and skills to fetch fresh source state on each wake.",
+    ...buildMonitorAutonomyLines(params.goal),
+    ...buildMonitorNotificationLines({
+      policy: params.notificationPolicy,
+      state: params.notificationState,
+    }),
     "Evaluate after each wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
-    ...(params.actionPolicy === "auto_send"
+    ...(params.actionPolicy === "auto_send" &&
+    (!params.goal || params.goal.autonomy?.level === "act_within_scope")
       ? telegramUserChat && params.watchDeliveryConfigured
         ? [
             `Telegram-as-me watched-surface delivery is authorized and configured for chat ${telegramUserChat}.`,
@@ -97,8 +111,16 @@ function buildMonitorBootstrapPrompt(params: {
             ]
           : [
               "auto_send was requested, but no watched-surface delivery target is configured.",
-              "Do not attempt autonomous delivery on the watched source until a watched-surface delivery target is configured.",
-              "Report the missing delivery target through the origin chat instead.",
+              ...(params.goal?.autonomy?.level === "act_within_scope"
+                ? [
+                    "Only the delivery adapter is unavailable; the goal's act_within_scope autonomy remains intact.",
+                    "Use an available normal tool or skill path for an allowed action when one exists, and preserve every approval-required boundary.",
+                    "Do not use the unavailable adapter. If no authorized normal path exists, report that specific gap through the origin chat.",
+                  ]
+                : [
+                    "Do not attempt autonomous delivery on the watched source until a watched-surface delivery target is configured.",
+                    "Report the missing delivery target through the origin chat instead.",
+                  ]),
             ]
       : [
           "Do not treat the watched source as the default delivery destination.",
@@ -124,7 +146,9 @@ export async function seedMonitorSession(params: {
   stopCondition?: string;
   expiryAt?: string;
   actionPolicy: string;
-  goal?: { id: string; objective: string };
+  goal?: MonitorGoalSnapshot;
+  notificationPolicy?: MonitorNotificationPolicy;
+  notificationState?: MonitorNotificationState;
   watchDeliveryConfigured: boolean;
   originSessionKey: string;
   originDelivery?: CronDelivery;
@@ -178,6 +202,8 @@ export async function seedMonitorSession(params: {
       expiryAt: params.expiryAt,
       actionPolicy: params.actionPolicy,
       goal: params.goal,
+      notificationPolicy: params.notificationPolicy,
+      notificationState: params.notificationState,
       watchDeliveryConfigured: params.watchDeliveryConfigured,
       originSessionKey: params.originSessionKey,
       originDelivery: params.originDelivery,

@@ -103,6 +103,9 @@ describe("monitor tool", () => {
     expect(tool.description).toContain("only reporting status");
     expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
     expect(tool.description).toContain("if there is an active goal");
+    expect(tool.description).toContain("exact check cadence");
+    expect(tool.description).toContain("successful unchanged checks 1-2 are silent");
+    expect(tool.description).toContain("actionPolicy controls delivery only");
   });
 
   it("passes explicit goal snapshots through monitor.create", async () => {
@@ -114,14 +117,30 @@ describe("monitor tool", () => {
       sourceType: "whatsapp",
       sourceTarget: { target: "+15551234567" },
       cadence: { kind: "every", everyMs: 300_000 },
-      goal: { id: "goal-1", objective: "Organize dinner between 7 and 8." },
+      goal: {
+        id: "goal-1",
+        objective: "Organize dinner between 7 and 8.",
+        autonomy: {
+          level: "act_within_scope",
+          allowedActions: ["confirm a time between 7 and 8"],
+          approvalRequired: ["accept another time"],
+        },
+      },
     });
 
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "monitor.create",
       expect.any(Object),
       expect.objectContaining({
-        goal: { id: "goal-1", objective: "Organize dinner between 7 and 8." },
+        goal: {
+          id: "goal-1",
+          objective: "Organize dinner between 7 and 8.",
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: ["confirm a time between 7 and 8"],
+            approvalRequired: ["accept another time"],
+          },
+        },
       }),
     );
   });
@@ -163,6 +182,21 @@ describe("monitor tool", () => {
         status: "completed",
         lastCheckpoint: { lastSeenMessageId: "msg-9" },
       },
+    });
+  });
+
+  it("passes notification events for gateway-owned quiet-tick state", async () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    await tool.execute?.("call-notification", {
+      action: "update",
+      monitorId: "monitor-1",
+      patch: { notificationEvent: "unchanged", notificationState: { forged: true } },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith("monitor.update", expect.any(Object), {
+      monitorId: "monitor-1",
+      patch: { notificationEvent: "unchanged" },
     });
   });
 
