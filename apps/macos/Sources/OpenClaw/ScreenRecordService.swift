@@ -39,7 +39,7 @@ final class ScreenRecordService {
         durationMs: Int?,
         fps: Double?,
         includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        outPath: String?) async throws -> (path: String, hasAudio: Bool, durationMs: Int, fps: Double)
     {
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
@@ -100,7 +100,11 @@ final class ScreenRecordService {
         }
 
         try await recorder.finish()
-        return (path: outURL.path, hasAudio: recorder.hasAudio)
+        // Return the clamped values that actually drove ScreenCaptureKit. The
+        // transport metadata must never repeat an impossible request (for
+        // example 240 seconds) after the native service recorded its 60-second
+        // maximum.
+        return (path: outURL.path, hasAudio: recorder.hasAudio, durationMs: durationMs, fps: fps)
     }
 
     private struct CapturePlan {

@@ -4,10 +4,25 @@ import OpenClawIPC
 import OpenClawKit
 
 actor MacNodeRuntime {
+    private struct ScreenRecordArtifact {
+        var url: URL
+        var byteLength: Int
+        var expiresAt: Date
+    }
+
+    // One decoded MiB becomes about 1.34 MiB of base64. Even though the gateway
+    // currently duplicates payload and payloadJSON in its response, a read stays
+    // comfortably below the 25 MiB WebSocket ceiling and bounds every memory copy.
+    private static let screenRecordChunkSize = 1024 * 1024
+    private static let defaultScreenRecordArtifactTTL: TimeInterval = 10 * 60
+
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
+    private let screenRecordArtifactTTL: TimeInterval
+    private let now: @Sendable () -> Date
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
+    private var screenRecordArtifacts: [String: ScreenRecordArtifact] = [:]
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
 
@@ -17,10 +32,14 @@ actor MacNodeRuntime {
         },
         browserProxyRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeBrowserProxy.shared.request(paramsJSON: paramsJSON)
-        })
+        },
+        screenRecordArtifactTTL: TimeInterval = MacNodeRuntime.defaultScreenRecordArtifactTTL,
+        now: @escaping @Sendable () -> Date = { Date() })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
+        self.screenRecordArtifactTTL = screenRecordArtifactTTL
+        self.now = now
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -319,58 +338,289 @@ actor MacNodeRuntime {
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
             MacNodeScreenRecordParams()
-        if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "INVALID_REQUEST: screen format must be mp4")
-        }
-        let windowId: UInt32?
-        if let rawWindowId = params.windowId {
-            guard rawWindowId >= 0 && rawWindowId <= Int(UInt32.max) else {
+        self.pruneExpiredScreenRecordArtifacts()
+
+        if params.operation == nil || params.operation == .capture {
+            if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
                 return Self.errorResponse(
                     req,
                     code: .invalidRequest,
-                    message: "INVALID_REQUEST: windowId must be between 0 and \(UInt32.max)")
+                    message: "INVALID_REQUEST: screen format must be mp4")
             }
-            windowId = UInt32(rawWindowId)
-        } else {
-            windowId = nil
+            let windowId: UInt32?
+            if let rawWindowId = params.windowId {
+                guard rawWindowId >= 0 && rawWindowId <= Int(UInt32.max) else {
+                    return Self.errorResponse(
+                        req,
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: windowId must be between 0 and \(UInt32.max)")
+                }
+                windowId = UInt32(rawWindowId)
+            } else {
+                windowId = nil
+            }
+
+            // Missing operation identifies an older CLI. Preserve its inline
+            // shape for symmetric rolling upgrades; explicit capture is the
+            // bounded path used by every new CLI.
+            if params.operation == nil {
+                return await self.handleLegacyInlineScreenRecord(req, params: params, windowId: windowId)
+            }
+            return await self.handleScreenRecordCapture(req, params: params, windowId: windowId)
         }
-        let services = await self.mainActorServices()
-        let res = try await services.recordScreen(
-            screenIndex: params.screenIndex,
-            appName: params.appName,
-            bundleId: params.bundleId,
-            windowId: windowId,
-            durationMs: params.durationMs,
-            fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
-        defer { try? FileManager().removeItem(atPath: res.path) }
-        let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
-        struct ScreenPayload: Encodable {
-            var format: String
-            var base64: String
-            var durationMs: Int?
-            var fps: Double?
-            var screenIndex: Int?
-            var appName: String?
-            var bundleId: String?
-            var windowId: Int?
-            var hasAudio: Bool
+
+        switch params.operation {
+        case .read?:
+            return self.handleScreenRecordRead(req, params: params)
+        case .cleanup?:
+            return self.handleScreenRecordCleanup(req, params: params)
+        case .capture?, nil:
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: invalid operation")
         }
-        let payload = try Self.encodePayload(ScreenPayload(
-            format: "mp4",
-            base64: data.base64EncodedString(),
-            durationMs: params.durationMs,
-            fps: params.fps,
-            screenIndex: params.screenIndex,
-            appName: params.appName,
-            bundleId: params.bundleId,
-            windowId: params.windowId,
-            hasAudio: res.hasAudio))
+    }
+
+    private func handleLegacyInlineScreenRecord(
+        _ req: BridgeInvokeRequest,
+        params: MacNodeScreenRecordParams,
+        windowId: UInt32?) async -> BridgeInvokeResponse
+    {
+        do {
+            let services = await self.mainActorServices()
+            let res = try await services.recordScreen(
+                screenIndex: params.screenIndex,
+                appName: params.appName,
+                bundleId: params.bundleId,
+                windowId: windowId,
+                durationMs: params.durationMs,
+                fps: params.fps,
+                includeAudio: params.includeAudio,
+                outPath: nil)
+            defer { try? FileManager().removeItem(atPath: res.path) }
+            let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+            struct LegacyPayload: Encodable {
+                var format: String
+                var base64: String
+                var durationMs: Int
+                var fps: Double
+                var screenIndex: Int?
+                var appName: String?
+                var bundleId: String?
+                var windowId: Int?
+                var hasAudio: Bool
+            }
+            let payload = try Self.encodePayload(LegacyPayload(
+                format: "mp4",
+                base64: data.base64EncodedString(),
+                durationMs: res.durationMs,
+                fps: res.fps,
+                screenIndex: params.screenIndex,
+                appName: params.appName,
+                bundleId: params.bundleId,
+                windowId: params.windowId,
+                hasAudio: res.hasAudio))
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SCREEN_RECORD_CAPTURE_FAILED: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleScreenRecordCapture(
+        _ req: BridgeInvokeRequest,
+        params: MacNodeScreenRecordParams,
+        windowId: UInt32?) async -> BridgeInvokeResponse
+    {
+        do {
+            let services = await self.mainActorServices()
+            let res = try await services.recordScreen(
+                screenIndex: params.screenIndex,
+                appName: params.appName,
+                bundleId: params.bundleId,
+                windowId: windowId,
+                durationMs: params.durationMs,
+                fps: params.fps,
+                includeAudio: params.includeAudio,
+                outPath: nil)
+            let url = URL(fileURLWithPath: res.path)
+            do {
+                let attributes = try FileManager().attributesOfItem(atPath: res.path)
+                guard let fileSize = attributes[.size] as? NSNumber, fileSize.intValue > 0 else {
+                    throw NSError(domain: "ScreenRecord", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "native recorder returned an empty artifact",
+                    ])
+                }
+                let artifactId = UUID().uuidString
+                let byteLength = fileSize.intValue
+                struct CapturePayload: Encodable {
+                    var format: String
+                    var artifactId: String
+                    var byteLength: Int
+                    var chunkSize: Int
+                    var durationMs: Int
+                    var fps: Double
+                    var screenIndex: Int?
+                    var appName: String?
+                    var bundleId: String?
+                    var windowId: Int?
+                    var hasAudio: Bool
+                }
+                let payload = try Self.encodePayload(CapturePayload(
+                    format: "mp4",
+                    artifactId: artifactId,
+                    byteLength: byteLength,
+                    chunkSize: Self.screenRecordChunkSize,
+                    durationMs: res.durationMs,
+                    fps: res.fps,
+                    screenIndex: params.screenIndex,
+                    appName: params.appName,
+                    bundleId: params.bundleId,
+                    windowId: params.windowId,
+                    hasAudio: res.hasAudio))
+
+                // Only the actor-owned dictionary maps the opaque UUID to a
+                // filesystem URL. Neither clients nor gateways can submit a path,
+                // so this protocol cannot be turned into an arbitrary-file reader.
+                let expiresAt = self.now().addingTimeInterval(self.screenRecordArtifactTTL)
+                self.screenRecordArtifacts[artifactId] = ScreenRecordArtifact(
+                    url: url,
+                    byteLength: byteLength,
+                    expiresAt: expiresAt)
+                self.scheduleScreenRecordArtifactExpiry(artifactId, expiresAt: expiresAt)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+            } catch {
+                // Once capture has produced a file, every failure before handle
+                // publication remains node-owned and must remove it immediately.
+                try? FileManager().removeItem(at: url)
+                throw error
+            }
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SCREEN_RECORD_CAPTURE_FAILED: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleScreenRecordRead(
+        _ req: BridgeInvokeRequest,
+        params: MacNodeScreenRecordParams) -> BridgeInvokeResponse
+    {
+        guard let artifactId = params.artifactId, let artifact = self.screenRecordArtifacts[artifactId] else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SCREEN_RECORD_TRANSFER_INVALID: unknown or expired artifact")
+        }
+        guard let offset = params.offset, offset >= 0, offset < artifact.byteLength else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SCREEN_RECORD_TRANSFER_INVALID: offset must reference artifact bytes")
+        }
+        guard let length = params.length, length > 0, length <= Self.screenRecordChunkSize else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SCREEN_RECORD_TRANSFER_INVALID: length must be between 1 and \(Self.screenRecordChunkSize)")
+        }
+
+        do {
+            let handle = try FileHandle(forReadingFrom: artifact.url)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: UInt64(offset))
+            let requestedLength = min(length, artifact.byteLength - offset)
+            let data = try handle.read(upToCount: requestedLength) ?? Data()
+            guard !data.isEmpty else {
+                throw NSError(domain: "ScreenRecord", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "artifact ended before its declared size",
+                ])
+            }
+            struct ChunkPayload: Encodable {
+                var offset: Int
+                var byteLength: Int
+                var base64: String
+                var eof: Bool
+            }
+            let payload = try Self.encodePayload(ChunkPayload(
+                offset: offset,
+                byteLength: data.count,
+                base64: data.base64EncodedString(),
+                eof: offset + data.count == artifact.byteLength))
+
+            // Active downloads renew the lease. The TTL exists for abandoned
+            // handles, not to race a slow but healthy remote transfer.
+            let expiresAt = self.now().addingTimeInterval(self.screenRecordArtifactTTL)
+            self.screenRecordArtifacts[artifactId]?.expiresAt = expiresAt
+            self.scheduleScreenRecordArtifactExpiry(artifactId, expiresAt: expiresAt)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SCREEN_RECORD_TRANSFER_FAILED: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleScreenRecordCleanup(
+        _ req: BridgeInvokeRequest,
+        params: MacNodeScreenRecordParams) -> BridgeInvokeResponse
+    {
+        guard let artifactId = params.artifactId, !artifactId.isEmpty else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SCREEN_RECORD_TRANSFER_INVALID: artifactId required")
+        }
+        let cleaned = self.removeScreenRecordArtifact(artifactId)
+        let payload = try? Self.encodePayload(["cleaned": cleaned])
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    @discardableResult
+    private func removeScreenRecordArtifact(_ artifactId: String) -> Bool {
+        guard let artifact = self.screenRecordArtifacts.removeValue(forKey: artifactId) else {
+            // Cleanup is intentionally idempotent so callers can retry after an
+            // uncertain disconnect without turning success into a new failure.
+            return false
+        }
+        try? FileManager().removeItem(at: artifact.url)
+        return true
+    }
+
+    private func pruneExpiredScreenRecordArtifacts() {
+        let now = self.now()
+        let expiredIds = self.screenRecordArtifacts.compactMap { artifactId, artifact in
+            artifact.expiresAt <= now ? artifactId : nil
+        }
+        for artifactId in expiredIds {
+            self.removeScreenRecordArtifact(artifactId)
+        }
+    }
+
+    private func scheduleScreenRecordArtifactExpiry(_ artifactId: String, expiresAt: Date) {
+        let delay = max(0, expiresAt.timeIntervalSince(self.now()))
+        Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            await self?.expireScreenRecordArtifactIfNeeded(artifactId)
+        }
+    }
+
+    private func expireScreenRecordArtifactIfNeeded(_ artifactId: String) {
+        guard let artifact = self.screenRecordArtifacts[artifactId] else {
+            return
+        }
+        if artifact.expiresAt > self.now() {
+            // Sleep can wake slightly early, or a read may have renewed the
+            // lease. Re-arm for the authoritative expiry instead of depending
+            // on another request (or a newer timer) to eventually prune it.
+            self.scheduleScreenRecordArtifactExpiry(artifactId, expiresAt: artifact.expiresAt)
+            return
+        }
+        self.removeScreenRecordArtifact(artifactId)
     }
 
     private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {

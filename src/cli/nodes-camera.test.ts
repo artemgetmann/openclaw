@@ -236,6 +236,10 @@ describe("nodes screen helpers", () => {
       hasAudio: true,
     });
     expect(payload.format).toBe("mp4");
+    expect("base64" in payload).toBe(true);
+    if (!("base64" in payload)) {
+      throw new Error("expected legacy inline screen.record payload");
+    }
     expect(payload.base64).toBe("Zm9v");
     expect(payload.durationMs).toBe(1000);
     expect(payload.fps).toBe(12);

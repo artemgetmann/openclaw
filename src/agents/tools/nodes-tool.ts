@@ -591,6 +591,12 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseScreenRecordPayload(raw?.payload);
+            if (!("base64" in payload)) {
+              // The agent tool keeps the legacy single-response contract. The
+              // dedicated CLI owns multi-request artifact transfer so model
+              // turns never absorb opaque handles or binary chunks.
+              throw new Error("screen.record artifact transfer requires the screen record CLI");
+            }
             const filePath =
               typeof params.outPath === "string" && params.outPath.trim()
                 ? params.outPath.trim()

@@ -18,6 +18,7 @@ import type { NodeListNode } from "./nodes-cli/types.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
+  transferScreenRecordArtifactToFile,
   writeScreenRecordToFile,
 } from "./nodes-screen.js";
 import { parseDurationMs } from "./parse-duration.js";
@@ -446,21 +447,55 @@ export async function recordScreenFromNode(
   const timeoutMs = opts.invokeTimeout
     ? Number.parseInt(String(opts.invokeTimeout), 10)
     : undefined;
-  const raw = await callGatewayCli(
-    "node.invoke",
-    opts,
-    buildNodeInvokeParams({
-      nodeId,
-      command: "screen.record",
-      params,
-      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
-    }),
-    { transportTimeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined },
-  );
-  const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-  const payload = parseScreenRecordPayload(res.payload);
+  const invokeScreenRecord = async (
+    operationParams: Record<string, unknown>,
+    useCaptureTimeout = false,
+  ): Promise<unknown> => {
+    const raw = await callGatewayCli(
+      "node.invoke",
+      opts,
+      buildNodeInvokeParams({
+        nodeId,
+        command: "screen.record",
+        params: operationParams,
+        timeoutMs: useCaptureTimeout && Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+      }),
+      {
+        transportTimeoutMs: useCaptureTimeout && Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+      },
+    );
+    const response = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
+    return response.payload;
+  };
+
+  let payload: ReturnType<typeof parseScreenRecordPayload>;
+  try {
+    // Unknown JSON fields are ignored by older Swift nodes, so adding the
+    // operation preserves rolling-upgrade compatibility: an old node still
+    // returns its legacy inline payload while a new node returns only metadata.
+    payload = parseScreenRecordPayload(
+      await invokeScreenRecord({ ...params, operation: "capture" }, true),
+    );
+  } catch (err) {
+    throw new Error(`screen recording capture failed: ${String(err)}`, { cause: err });
+  }
   const filePath = opts.out ?? screenRecordTempPath({ ext: payload.format || "mp4" });
-  const written = await writeScreenRecordToFile(filePath, payload.base64);
+
+  if ("base64" in payload) {
+    const written = await writeScreenRecordToFile(filePath, payload.base64);
+    return { path: written.path, payload, source: "node", inspected: false };
+  }
+
+  let written: { path: string; bytes: number };
+  try {
+    written = await transferScreenRecordArtifactToFile({
+      filePath,
+      artifact: payload,
+      invoke: invokeScreenRecord,
+    });
+  } catch (err) {
+    throw new Error(`screen recording transfer failed: ${String(err)}`, { cause: err });
+  }
   return { path: written.path, payload, source: "node", inspected: false };
 }
 

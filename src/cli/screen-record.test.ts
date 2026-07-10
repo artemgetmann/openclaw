@@ -1,5 +1,13 @@
 import { readFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  parseScreenRecordPayload,
+  transferScreenRecordArtifactToFile,
+  writeScreenRecordToFile,
+} from "./nodes-screen.js";
 import {
   buildNativeMacScreencapturePlan,
   buildScreenRecordParams,
@@ -432,5 +440,185 @@ describe("screen record CLI params", () => {
     expect(mediaSkill).toMatch(/ffprobe -v error/i);
     expect(mediaSkill).toMatch(/blackdetect=d=0\.2:pix_th=0\.10/i);
     expect(mediaSkill).toMatch(/review-contact\.png/i);
+  });
+});
+
+describe("screen record artifact transfer", () => {
+  async function makeOutputPath(name = "recording.mp4") {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-screen-record-test-"));
+    return { dir, out: path.join(dir, name) };
+  }
+
+  it("assembles a large artifact through bounded chunks and cleans up", async () => {
+    // This is deliberately above the measured ~9.37 MiB legacy ceiling, so
+    // the regression proves a formerly failing artifact never needs one frame.
+    const source = Buffer.alloc(10 * 1024 * 1024 + 73);
+    for (let index = 0; index < source.length; index += 1) {
+      source[index] = index % 251;
+    }
+    const { dir, out } = await makeOutputPath();
+    const artifact = parseScreenRecordPayload({
+      format: "mp4",
+      artifactId: "artifact_0123456789abcdef",
+      byteLength: source.length,
+      chunkSize: 1024 * 1024,
+      durationMs: 60_000,
+      fps: 6,
+      appName: "Telegram",
+      hasAudio: false,
+    });
+    expect("artifactId" in artifact).toBe(true);
+    if (!("artifactId" in artifact)) {
+      throw new Error("expected artifact payload");
+    }
+
+    const readSizes: number[] = [];
+    let cleanupCalls = 0;
+    await transferScreenRecordArtifactToFile({
+      filePath: out,
+      artifact,
+      invoke: async (params) => {
+        if (params.operation === "cleanup") {
+          cleanupCalls += 1;
+          return { cleaned: true };
+        }
+        const offset = params.offset as number;
+        const length = params.length as number;
+        readSizes.push(length);
+        const bytes = source.subarray(offset, offset + length);
+        const result = {
+          offset,
+          byteLength: bytes.length,
+          base64: bytes.toString("base64"),
+          eof: offset + bytes.length === source.length,
+        };
+        const payloadJSON = JSON.stringify(result);
+        expect(payloadJSON.length).toBeLessThan(1_500_000);
+        // node.invoke currently mirrors both parsed payload and payloadJSON in
+        // the gateway response. Prove even that duplicated envelope remains
+        // far below the 25 MiB WebSocket receiver limit for every chunk.
+        const gatewayEnvelope = JSON.stringify({
+          type: "res",
+          id: "synthetic-chunk-response",
+          ok: true,
+          payload: {
+            ok: true,
+            nodeId: "remote-node",
+            command: "screen.record",
+            payload: result,
+            payloadJSON,
+          },
+        });
+        expect(Buffer.byteLength(gatewayEnvelope)).toBeLessThan(25 * 1024 * 1024);
+        return result;
+      },
+    });
+
+    expect(await fs.readFile(out)).toEqual(source);
+    expect(readSizes).toEqual([...Array.from({ length: 10 }, () => 1024 * 1024), 73]);
+    expect(cleanupCalls).toBe(1);
+    expect((await fs.readdir(dir)).filter((entry) => entry.includes(".partial-"))).toEqual([]);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the final output intact and attempts cleanup when transfer fails", async () => {
+    const { dir, out } = await makeOutputPath();
+    await fs.writeFile(out, "previous-good-output");
+    let cleanupCalls = 0;
+    let readCalls = 0;
+
+    await expect(
+      transferScreenRecordArtifactToFile({
+        filePath: out,
+        artifact: {
+          format: "mp4",
+          artifactId: "artifact_failure_0123456789",
+          byteLength: 2 * 1024 * 1024,
+          chunkSize: 1024 * 1024,
+          durationMs: 60_000,
+        },
+        invoke: async (params) => {
+          if (params.operation === "cleanup") {
+            cleanupCalls += 1;
+            throw new Error("cleanup disconnected");
+          }
+          readCalls += 1;
+          if (readCalls === 1) {
+            const bytes = Buffer.alloc(1024 * 1024, 0xa5);
+            return {
+              offset: 0,
+              byteLength: bytes.length,
+              base64: bytes.toString("base64"),
+              eof: false,
+            };
+          }
+          throw new Error("chunk disconnected");
+        },
+      }),
+    ).rejects.toThrow("chunk disconnected");
+
+    expect(await fs.readFile(out, "utf8")).toBe("previous-good-output");
+    expect(readCalls).toBe(2);
+    expect(cleanupCalls).toBe(1);
+    expect((await fs.readdir(dir)).filter((entry) => entry.includes(".partial-"))).toEqual([]);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("rejects offset or EOF mismatches without publishing a corrupt file", async () => {
+    const { dir, out } = await makeOutputPath();
+    await expect(
+      transferScreenRecordArtifactToFile({
+        filePath: out,
+        artifact: {
+          format: "mp4",
+          artifactId: "artifact_mismatch_01234567",
+          byteLength: 8,
+          chunkSize: 8,
+        },
+        invoke: async (params) => {
+          if (params.operation === "cleanup") {
+            return { cleaned: true };
+          }
+          return {
+            offset: 1,
+            byteLength: 8,
+            base64: Buffer.alloc(8).toString("base64"),
+            eof: true,
+          };
+        },
+      }),
+    ).rejects.toThrow(/offset mismatch/i);
+    await expect(fs.stat(out)).rejects.toThrow();
+    expect((await fs.readdir(dir)).filter((entry) => entry.includes(".partial-"))).toEqual([]);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("retains legacy inline parsing and publishes it atomically", async () => {
+    const payload = parseScreenRecordPayload({
+      format: "mp4",
+      base64: Buffer.from("legacy-bytes").toString("base64"),
+      durationMs: 250,
+    });
+    expect("base64" in payload).toBe(true);
+    const { dir, out } = await makeOutputPath();
+    await fs.writeFile(out, "old");
+    if (!("base64" in payload)) {
+      throw new Error("expected inline payload");
+    }
+    await writeScreenRecordToFile(out, payload.base64);
+    expect(await fs.readFile(out, "utf8")).toBe("legacy-bytes");
+    expect((await fs.readdir(dir)).filter((entry) => entry.includes(".partial-"))).toEqual([]);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("rejects path-shaped artifact handles", () => {
+    expect(() =>
+      parseScreenRecordPayload({
+        format: "mp4",
+        artifactId: "/tmp/arbitrary.mp4",
+        byteLength: 42,
+        chunkSize: 1024,
+      }),
+    ).toThrow(/invalid screen\.record payload/i);
   });
 });
