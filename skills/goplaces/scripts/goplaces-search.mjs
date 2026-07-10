@@ -1,10 +1,46 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../../..");
+
+function resolveRuntimeRoot() {
+  const checkoutRoot = path.resolve(__dirname, "../../..");
+  const stateRuntimeRoot = process.env.OPENCLAW_STATE_DIR
+    ? path.join(process.env.OPENCLAW_STATE_DIR, "lib", "openclaw-bundled")
+    : undefined;
+  const packagedJarvisRuntimeRoot = path.join(
+    os.homedir(),
+    "Library",
+    "Application Support",
+    "Jarvis",
+    ".jarvis",
+    "lib",
+    "openclaw-bundled",
+  );
+
+  // A bundled skill may run from the repo, the product-skills mirror, or the
+  // shared personal mirror. Select the first layout that actually has runtime
+  // code instead of assuming the skill path is nested inside the checkout.
+  for (const candidate of [
+    process.env.OPENCLAW_GOPLACES_RUNTIME_ROOT,
+    checkoutRoot,
+    stateRuntimeRoot,
+    packagedJarvisRuntimeRoot,
+  ]) {
+    if (
+      candidate &&
+      (fs.existsSync(path.join(candidate, "dist", "index.js")) ||
+        fs.existsSync(path.join(candidate, "src", "index.ts")))
+    ) {
+      return candidate;
+    }
+  }
+
+  return checkoutRoot;
+}
 
 function usage() {
   console.error(`Usage:
@@ -61,8 +97,9 @@ function parseArgs(argv) {
 }
 
 async function importOpenClawRuntime() {
-  const distEntry = path.join(repoRoot, "dist", "index.js");
-  const sourceEntry = path.join(repoRoot, "src", "index.ts");
+  const runtimeRoot = resolveRuntimeRoot();
+  const distEntry = path.join(runtimeRoot, "dist", "index.js");
+  const sourceEntry = path.join(runtimeRoot, "src", "index.ts");
   const entry = fs.existsSync(distEntry) ? distEntry : sourceEntry;
   return await import(pathToFileURL(entry).href);
 }
