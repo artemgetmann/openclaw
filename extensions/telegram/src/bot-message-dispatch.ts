@@ -1590,10 +1590,15 @@ export const dispatchTelegramMessage = async ({
   const materializeNaturalProgressBesideActivePlan = async (
     progressText: string,
     callsite: string,
+    deliverDurably?: () => Promise<boolean>,
   ) => {
     const stream = answerLane.stream ?? ensureDraftLaneStream("answer");
     if (!stream) {
-      return false;
+      // Block-streaming/reasoning modes intentionally disable answer drafts.
+      // Natural assistant commentary still needs a separate identity beside the
+      // plan, so use the ordinary durable delivery path instead of contaminating
+      // the active plan controller or inventing an unavailable answer draft.
+      return (await deliverDurably?.()) ?? false;
     }
     // A structured plan owns the progress controller until final retention.
     // Natural commentary that arrives between plan snapshots therefore uses the
@@ -1608,7 +1613,11 @@ export const dispatchTelegramMessage = async ({
     answerLane.lastPartialText = progressText;
     answerLane.hasStreamedMessage = true;
     await stream.flush();
-    const messageId = await stream.materialize?.();
+    // An ambiguous first send can reach Telegram without returning a message
+    // ID. materialize() would send the same text again, so preserve the uncertain
+    // attempt as-is and never manufacture a duplicate commentary bubble.
+    const sendMayHaveLanded = stream.sendMayHaveLanded?.() === true;
+    const messageId = sendMayHaveLanded ? undefined : await stream.materialize?.();
     if (typeof messageId === "number") {
       logTelegramDurableSendClassification({
         reason: "progress",
@@ -1619,7 +1628,7 @@ export const dispatchTelegramMessage = async ({
         deleteOnCleanup: false,
         sourceKind: "block",
       });
-    } else {
+    } else if (!sendMayHaveLanded) {
       // Materialization can fail after an unconfirmed send. Never fall back to
       // the active plan controller here: preserving its identity is safer than
       // overwriting the checklist or duplicating an uncertain commentary send.
@@ -1640,7 +1649,12 @@ export const dispatchTelegramMessage = async ({
   };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
-    options: { replace?: boolean; progressKind?: "generic" | "plan" } = {},
+    options: {
+      replace?: boolean;
+      progressKind?: "generic" | "plan";
+      naturalCommentary?: boolean;
+      deliverNaturalCommentaryDurably?: () => Promise<boolean>;
+    } = {},
   ) => {
     if (!text) {
       return false;
@@ -1653,10 +1667,15 @@ export const dispatchTelegramMessage = async ({
     // structural progress boundary must wait for them before it decides whether
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
-    if (options.progressKind !== "plan" && activeProgressKind === "plan") {
+    if (
+      options.naturalCommentary === true &&
+      options.progressKind !== "plan" &&
+      activeProgressKind === "plan"
+    ) {
       const materializedBesidePlan = await materializeNaturalProgressBesideActivePlan(
         progressText,
         "plan-adjacent-natural-progress",
+        options.deliverNaturalCommentaryDurably,
       );
       if (materializedBesidePlan) {
         forceNextAnswerFinalSend = true;
@@ -2282,7 +2301,17 @@ export const dispatchTelegramMessage = async ({
     }
     pendingAmbiguousAnswerBlock = undefined;
     logVerbose(`telegram: routing phase-unknown answer block as progress callsite=${callsite}`);
-    await updateAnswerProgressFromBlock(renderTextWithToolProgress(pending.text));
+    const progressText = renderTextWithToolProgress(pending.text);
+    await updateAnswerProgressFromBlock(progressText, {
+      naturalCommentary: true,
+      deliverNaturalCommentaryDurably: () =>
+        sendPayload(applyTextToPayload(pending.payload, progressText), {
+          reason: "progress",
+          callsite: "plan-adjacent-buffered-commentary-send",
+          laneName: "answer",
+          infoKind: "block",
+        }),
+    });
   };
 
   const flushAmbiguousAnswerBlockAsFinal = async (callsite: string) => {
@@ -2514,7 +2543,21 @@ export const dispatchTelegramMessage = async ({
                     hasMedia,
                   });
                 } else {
-                  await updateAnswerProgressFromBlock(renderTextWithToolProgress(segment.text));
+                  const progressText = renderTextWithToolProgress(segment.text);
+                  await updateAnswerProgressFromBlock(progressText, {
+                    naturalCommentary: assistantPhase === "commentary",
+                    ...(assistantPhase === "commentary"
+                      ? {
+                          deliverNaturalCommentaryDurably: () =>
+                            sendPayload(applyTextToPayload(payload, progressText), {
+                              reason: "progress",
+                              callsite: "plan-adjacent-commentary-segment-send",
+                              laneName: "answer",
+                              infoKind: "block",
+                            }),
+                        }
+                      : {}),
+                  });
                 }
                 continue;
               }
@@ -2617,7 +2660,21 @@ export const dispatchTelegramMessage = async ({
                   hasMedia,
                 });
               } else {
-                await updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
+                const progressText = renderTextWithToolProgress(payload.text);
+                await updateAnswerProgressFromBlock(progressText, {
+                  naturalCommentary: assistantPhase === "commentary",
+                  ...(assistantPhase === "commentary"
+                    ? {
+                        deliverNaturalCommentaryDurably: () =>
+                          sendPayload(applyTextToPayload(payload, progressText), {
+                            reason: "progress",
+                            callsite: "plan-adjacent-commentary-send",
+                            laneName: "answer",
+                            infoKind: "block",
+                          }),
+                      }
+                    : {}),
+                });
               }
               return;
             }
