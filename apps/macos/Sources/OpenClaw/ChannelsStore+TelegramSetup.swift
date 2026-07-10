@@ -3,7 +3,7 @@ import Foundation
 
 extension ChannelsStore {
     static let consumerTelegramFirstTaskAccessApprovedStatus =
-        "Access approved. Now send any message to Jarvis in Telegram."
+        "Access approved. Now send any text message to Jarvis in Telegram."
 
     private static let consumerDefaultTelegramAccountId = "default"
     private static let consumerTelegramRuntimePluginAllowlist = [

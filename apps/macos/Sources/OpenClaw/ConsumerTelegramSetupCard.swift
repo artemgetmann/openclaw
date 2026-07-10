@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ConsumerTelegramSetupCardContent: View {
-    static let firstTaskInstruction = "Telegram connected. Send any message to Jarvis, then click Verify Telegram."
+    static let firstTaskInstruction = "Telegram connected. Send any text message to Jarvis, then click Verify Telegram."
 
     enum Presentation {
         case onboarding
@@ -345,6 +345,7 @@ struct ConsumerTelegramSetupCardContent: View {
         return normalized.contains("click verify first task")
             || normalized.contains("click verify telegram")
             || normalized.contains("send \"wake up my friend")
+            || normalized.contains("send any text message to jarvis")
             || normalized.contains("send any message to jarvis")
             || normalized.contains("send one message to jarvis")
             || normalized.contains("first task to approve sender access")
