@@ -531,7 +531,9 @@ export function buildAgentSystemPrompt(params: {
     availableTools.has("update_plan")
       ? [
           "## Planning",
-          "When a task has two or more meaningful steps, meaningful uncertainty, repo/code inspection plus a change, or a long-running external wait, call update_plan before the first non-trivial tool call.",
+          "When a task has two or more meaningful steps, meaningful uncertainty, repo/code inspection plus a change, or a long-running external wait, use update_plan to track the work.",
+          "On user-visible channels, first send one short natural-language status note that paraphrases what you are about to do and what comes next, then call update_plan before the first non-trivial tool call.",
+          "The status note should keep the user oriented about what you are doing now/next; avoid repeating the checklist verbatim.",
           "Keep update_plan current while working: mark completed steps, keep at most one in_progress step, and revise the checklist when the plan changes.",
           "Skip update_plan only for simple one-step tasks, tiny lookups, or immediate answers where a checklist would add noise.",
           "update_plan is not /goal and is not monitor persistence. Treat it as session-scoped progress unless the user explicitly approves durable plan-file behavior.",
