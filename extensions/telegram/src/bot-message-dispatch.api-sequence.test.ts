@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.js";
+import { buildMonitorReceiptChannelData } from "../../../src/monitor/receipt.js";
+import type { MonitorDisclosure } from "../../../src/monitor/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -237,6 +239,39 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     resolveStorePath.mockReset();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
+  });
+
+  it("delivers one deterministic monitor receipt before the natural final acknowledgement", async () => {
+    const harness = createTelegramBotHarness();
+    const disclosure = {
+      purpose: "Watch support replies",
+      source: { type: "gmail", target: { threadId: "thread-1" } },
+      checkCadence: { kind: "every", everyMs: 300_000 },
+      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+      expiryAt: null,
+      stopCondition: "support confirms resolution",
+      autonomy: { level: "observe_only" },
+      actionPolicy: "notify_draft",
+    } satisfies MonitorDisclosure;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          channelData: buildMonitorReceiptChannelData(disclosure),
+        });
+        await dispatcherOptions.deliver({ text: "Monitoring is set." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({ bot: harness.bot });
+
+    expect(sendMessageCalls(harness.calls).map((call) => call.text)).toEqual([
+      "<p>Monitoring support replies<br>Every 5 minutes · stop when support confirms resolution<br>I'll message when something changes. If not, after 3 checks, then every 12 hours.</p>",
+      "<p>Monitoring is set.</p>",
+    ]);
+    expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes("Every 5 minutes")),
+    ).toHaveLength(1);
   });
 
   it("uses one mutable progress message, clears it, and sends final text once", async () => {

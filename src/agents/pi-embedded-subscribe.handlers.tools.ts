@@ -6,6 +6,7 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import { logTelegramProgressDebug } from "../infra/telegram-progress-debug.js";
+import { buildMonitorReceiptChannelData, readMonitorReceiptDetails } from "../monitor/receipt.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -604,6 +605,10 @@ export async function handleToolExecutionEnd(
           return details ? formatUpdatePlanText(details) : undefined;
         })()
       : undefined;
+  const monitorReceiptDisclosure =
+    !isToolError && toolName === "monitor"
+      ? readMonitorReceiptDetails(sanitizedResult)?.disclosure
+      : undefined;
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
 
   // Commit messaging tool text on success, discard on error.
@@ -696,7 +701,18 @@ export async function handleToolExecutionEnd(
     error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
   });
 
-  if (planProgressMessage && ctx.params.onToolResult) {
+  if (monitorReceiptDisclosure && ctx.params.onToolResult) {
+    try {
+      // The channel receives only the trusted normalized disclosure. It can
+      // render a consumer receipt without exposing model-authored prose or
+      // making the final assistant answer carry a settings dump.
+      await ctx.params.onToolResult({
+        channelData: buildMonitorReceiptChannelData(monitorReceiptDisclosure),
+      });
+    } catch {
+      // ignore delivery failures
+    }
+  } else if (planProgressMessage && ctx.params.onToolResult) {
     try {
       await ctx.params.onToolResult({
         text: planProgressMessage,
