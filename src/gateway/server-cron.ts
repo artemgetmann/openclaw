@@ -7,7 +7,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
-import { getSessionGoal } from "../config/sessions/goals.js";
+import { getSessionGoal, recordSessionGoalContinuation } from "../config/sessions/goals.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
@@ -410,6 +410,18 @@ export function buildGatewayCronService(params: {
           summary: stopped.name ?? stopped.monitorId,
           stopJob: true,
         };
+      }
+      if (monitor.goal) {
+        // Count real bound-monitor wake activity on the user-facing goal. The
+        // helper refuses stale goal ids and non-active/terminal goal states.
+        await recordSessionGoalContinuation({
+          sessionKey: monitor.originSessionKey,
+          storePath: resolveStorePath(runtimeConfig.session?.store, {
+            agentId: monitor.agentId,
+          }),
+          expectedGoalId: monitor.goal.id,
+          now: nowMs,
+        });
       }
       const monitorExecution = resolveMonitorExecutionPlan({
         actionPolicy: monitor.actionPolicy,

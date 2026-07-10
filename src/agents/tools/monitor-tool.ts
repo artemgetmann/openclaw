@@ -21,6 +21,8 @@ const MONITOR_UPDATE_PATCH_KEYS = new Set([
   "stopCondition",
   "actionPolicy",
   "goal",
+  "notificationPolicy",
+  "notificationEvent",
   "status",
   "lastCheckpoint",
   "lastWakeAtMs",
@@ -71,12 +73,23 @@ const MonitorToolSchema = Type.Object(
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(stringEnum(MONITOR_ACTION_POLICIES)),
+    notificationPolicy: Type.Optional(Type.Object({}, { additionalProperties: true })),
     watchDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
     patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
     goal: Type.Optional(
       Type.Object({
         id: Type.String(),
         objective: Type.String(),
+        autonomy: Type.Optional(
+          Type.Object(
+            {
+              level: stringEnum(["observe_only", "act_within_scope"] as const),
+              allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+              approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+            },
+            { additionalProperties: false },
+          ),
+        ),
       }),
     ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
@@ -105,9 +118,14 @@ For monitor creation:
 - instructions should capture the actual monitoring task in plain language.
 - if there is an active goal, monitor.create will bind it automatically and use supported event adapters as wake triggers; pass goal only when carrying an explicit snapshot.
 - sourceType/sourceTarget identify what is being checked.
-- cadence is the cron schedule object for repeated wakes.
+- Jarvis must disclose the purpose/source, exact check cadence, no-change notice cadence, expiry, stop condition, and autonomy/action level when creating a monitor. monitor.create returns the normalized stored disclosure; use that returned contract instead of paraphrasing hidden defaults.
+- cadence is the cron schedule object for repeated wakes. Poll cadence is independent from notification cadence.
+- successful unchanged checks 1-2 are silent, check 3 produces one useful notice, then unchanged reminders are limited to once per 12 hours until a material change resets the sequence.
+- material change, completion, user input, approval requirements, and degradation notify immediately.
+- a passed SLA/response deadline must be reported as notificationEvent=deadline_passed; obey the gateway's nextAction instead of treating it as unchanged.
 - default actionPolicy is notify_draft.
-- use actionPolicy=auto_send only when the user authorized Jarvis to act on the watched surface and a watched-surface delivery target is available.
+- actionPolicy controls delivery only; it never grants or removes goal autonomy.
+- use actionPolicy=auto_send only when watched-surface delivery is available. Goal-bound in-scope actions come from goal.autonomy, not auto_send.
 - for auto_send, provide watchDelivery when sourceTarget alone does not resolve to the external conversation; green-zone replies go to that watched surface, while approval questions must go back to the origin chat.
 - default report route is the origin chat from the current session.
 
@@ -183,6 +201,12 @@ For monitor-related user replies/status:
               actionPolicy:
                 readStringParam(params, "actionPolicy") ??
                 ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
+              notificationPolicy:
+                params.notificationPolicy &&
+                typeof params.notificationPolicy === "object" &&
+                !Array.isArray(params.notificationPolicy)
+                  ? params.notificationPolicy
+                  : undefined,
               goal:
                 params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
                   ? params.goal

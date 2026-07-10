@@ -357,6 +357,10 @@ describe("buildGatewayCronService", () => {
 
   it("keeps goal tools available when a monitor wake is bound to an origin goal", async () => {
     const cfg = createCronConfig("server-cron-monitor-bound-goal-tools");
+    cfg.session = {
+      ...cfg.session,
+      store: path.join(path.dirname(cfg.cron!.store!), "sessions.json"),
+    };
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -366,6 +370,28 @@ describe("buildGatewayCronService", () => {
     });
     const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
     await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      cfg.session.store!,
+      JSON.stringify({
+        "agent:main:telegram:direct:user-1": {
+          sessionId: "origin-session",
+          updatedAt: 1,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-1",
+            objective: "Get the refund confirmed.",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 1,
+            tokenStart: 0,
+            tokenStartFresh: true,
+            tokensUsed: 0,
+            continuationTurns: 0,
+          },
+        },
+      }),
+      "utf-8",
+    );
     await fs.writeFile(
       monitorStorePath,
       JSON.stringify({
@@ -410,6 +436,8 @@ describe("buildGatewayCronService", () => {
           disableGoalTools: false,
         }),
       );
+      const sessions = JSON.parse(await fs.readFile(cfg.session.store!, "utf-8"));
+      expect(sessions["agent:main:telegram:direct:user-1"].goal.continuationTurns).toBe(1);
     } finally {
       state.cron.stop();
     }

@@ -2,11 +2,17 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { resolveSessionGoalAutonomy } from "../config/sessions/goals.js";
+import type { CronSchedule } from "../cron/types.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { CONFIG_DIR } from "../utils.js";
+import { resolveMonitorNotificationPolicy } from "./notifications.js";
 import type {
   MonitorCreateInput,
   MonitorActionPolicy,
+  MonitorDisclosure,
+  MonitorGoalSnapshot,
+  MonitorNotificationPolicy,
   MonitorRecord,
   MonitorSourceTarget,
   MonitorStoreFile,
@@ -176,7 +182,37 @@ export async function saveMonitorStore(storePath: string, store: MonitorStoreFil
   serializedStoreCache.set(storePath, json);
 }
 
+export function buildMonitorDisclosure(input: {
+  purpose?: string;
+  name?: string;
+  sourceType: string;
+  sourceTarget: MonitorSourceTarget;
+  cadence: CronSchedule;
+  expiryAt?: string;
+  stopCondition?: string;
+  actionPolicy: MonitorActionPolicy;
+  goal?: MonitorGoalSnapshot;
+  notificationPolicy?: MonitorNotificationPolicy;
+}): MonitorDisclosure {
+  const notificationPolicy = resolveMonitorNotificationPolicy(input.notificationPolicy);
+  return {
+    purpose: input.purpose?.trim() || input.name?.trim() || `${input.sourceType.trim()} monitor`,
+    source: { type: input.sourceType.trim(), target: input.sourceTarget },
+    checkCadence: input.cadence,
+    noChangeCadence: {
+      noticeAfterChecks: notificationPolicy.unchangedNoticeAfterChecks,
+      reminderIntervalMs: notificationPolicy.unchangedReminderIntervalMs,
+    },
+    expiryAt: input.expiryAt?.trim() || null,
+    stopCondition: input.stopCondition?.trim() || null,
+    autonomy: resolveSessionGoalAutonomy(input.goal),
+    actionPolicy: input.actionPolicy,
+  };
+}
+
 export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): MonitorRecord {
+  const actionPolicy = input.actionPolicy ?? "notify_draft";
+  const notificationPolicy = resolveMonitorNotificationPolicy(input.notificationPolicy);
   return {
     monitorId: input.monitorId ?? randomBytes(12).toString("hex"),
     agentId: input.agentId,
@@ -191,8 +227,11 @@ export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): M
     trigger: input.trigger ?? { kind: "schedule", cadence: input.cadence },
     ...(input.expiryAt?.trim() ? { expiryAt: input.expiryAt.trim() } : {}),
     ...(input.stopCondition?.trim() ? { stopCondition: input.stopCondition.trim() } : {}),
-    actionPolicy: input.actionPolicy ?? "notify_draft",
+    actionPolicy,
     ...(input.goal ? { goal: input.goal } : {}),
+    notificationPolicy,
+    notificationState: { consecutiveUnchangedChecks: 0 },
+    disclosure: buildMonitorDisclosure({ ...input, actionPolicy, notificationPolicy }),
     status: "active",
     ...(input.lastCheckpoint ? { lastCheckpoint: input.lastCheckpoint } : {}),
     cronJobId: input.cronJobId,

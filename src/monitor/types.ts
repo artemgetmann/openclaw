@@ -1,3 +1,4 @@
+import type { SessionGoalAutonomy } from "../config/sessions/types.js";
 import type { CronDelivery, CronSchedule } from "../cron/types.js";
 
 export type MonitorStatus = "active" | "degraded" | "stopped" | "completed" | "expired";
@@ -9,6 +10,43 @@ export function isTerminalMonitorStatus(status: MonitorStatus): boolean {
 }
 
 export type MonitorActionPolicy = "notify_draft" | "notify_only" | "auto_send";
+
+export type MonitorNotificationEvent =
+  | "unchanged"
+  | "material_change"
+  | "completion"
+  | "user_input"
+  | "approval_required"
+  | "deadline_passed"
+  | "degraded";
+
+export type MonitorNotificationPolicy = {
+  mode: "change_aware";
+  unchangedNoticeAfterChecks: number;
+  unchangedReminderIntervalMs: number;
+};
+
+export type MonitorNotificationState = {
+  consecutiveUnchangedChecks: number;
+  lastEvent?: MonitorNotificationEvent;
+  lastEventAtMs?: number;
+  lastNotificationAtMs?: number;
+  lastMaterialChangeAtMs?: number;
+};
+
+export type MonitorDisclosure = {
+  purpose: string;
+  source: { type: string; target: MonitorSourceTarget };
+  checkCadence: CronSchedule;
+  noChangeCadence: {
+    noticeAfterChecks: number;
+    reminderIntervalMs: number;
+  };
+  expiryAt: string | null;
+  stopCondition: string | null;
+  autonomy: SessionGoalAutonomy;
+  actionPolicy: MonitorActionPolicy;
+};
 
 export type MonitorCheckpoint = Record<string, unknown>;
 
@@ -58,6 +96,7 @@ export type MonitorEventEnvelope = {
 export type MonitorGoalSnapshot = {
   id: string;
   objective: string;
+  autonomy?: SessionGoalAutonomy;
 };
 
 export type MonitorRecord = {
@@ -76,6 +115,12 @@ export type MonitorRecord = {
   stopCondition?: string;
   actionPolicy: MonitorActionPolicy;
   goal?: MonitorGoalSnapshot;
+  /** Optional for legacy records; new records persist the normalized default. */
+  notificationPolicy?: MonitorNotificationPolicy;
+  /** Small bounded counter/timestamp state; never stores raw source evidence. */
+  notificationState?: MonitorNotificationState;
+  /** Optional for legacy records; monitor.create always returns it for new records. */
+  disclosure?: MonitorDisclosure;
   status: MonitorStatus;
   lastCheckpoint?: MonitorCheckpoint;
   cronJobId: string;
@@ -107,6 +152,8 @@ export type MonitorCreateInput = {
   stopCondition?: string;
   actionPolicy?: MonitorActionPolicy;
   goal?: MonitorGoalSnapshot;
+  purpose?: string;
+  notificationPolicy?: MonitorNotificationPolicy;
   lastCheckpoint?: MonitorCheckpoint;
   cronJobId: string;
 };
@@ -124,6 +171,9 @@ export type MonitorUpdatePatch = Partial<
     | "stopCondition"
     | "actionPolicy"
     | "goal"
+    | "notificationPolicy"
+    | "notificationState"
+    | "disclosure"
     | "status"
     | "lastCheckpoint"
     | "lastWakeAtMs"

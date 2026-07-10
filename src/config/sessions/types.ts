@@ -116,6 +116,15 @@ export type SessionGoalStatus =
   | "budget_limited"
   | "complete";
 
+export type SessionGoalAutonomy = {
+  /** Missing autonomy on legacy goals is intentionally interpreted as observe_only. */
+  level: "observe_only" | "act_within_scope";
+  /** Short, user-granted actions Jarvis may take without asking again. */
+  allowedActions?: string[];
+  /** Boundaries where Jarvis must stop and ask before acting. */
+  approvalRequired?: string[];
+};
+
 export type SessionGoal = {
   schemaVersion: 1;
   id: string;
@@ -128,6 +137,7 @@ export type SessionGoal = {
   tokensUsed: number;
   tokenBudget?: number;
   continuationTurns: number;
+  autonomy?: SessionGoalAutonomy;
   lastStatusNote?: string;
   pausedAt?: number;
   blockedAt?: number;
