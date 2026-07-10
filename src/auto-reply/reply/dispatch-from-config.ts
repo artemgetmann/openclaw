@@ -30,6 +30,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { readMonitorReceiptDisclosure } from "../../monitor/receipt.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -257,6 +258,10 @@ function isSourcePreviewToolPayload(payload: ReplyPayload): boolean {
     return false;
   }
   return (openclaw as { sourcePreview?: unknown }).sourcePreview === true;
+}
+
+function isMonitorReceiptToolPayload(payload: ReplyPayload): boolean {
+  return readMonitorReceiptDisclosure(payload.channelData) !== undefined;
 }
 
 const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE =
@@ -865,6 +870,11 @@ export async function dispatchReplyFromConfig(params: {
         // progress by the agent runner. Preserve that structural marker so
         // Telegram can route them through the mutable progress controller
         // instead of dropping them with internal tool/status chatter.
+        return payload;
+      }
+      if (isMonitorReceiptToolPayload(payload)) {
+        // Monitor receipts carry trusted channel data for downstream rendering
+        // and deterministic text for delivery paths that require a text body.
         return payload;
       }
       if (shouldSendToolSummaries) {

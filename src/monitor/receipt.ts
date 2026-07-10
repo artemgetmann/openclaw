@@ -3,10 +3,6 @@ import type { MonitorDisclosure } from "./types.js";
 
 export const MONITOR_RECEIPT_DETAILS_KEY = "__monitorReceipt";
 
-export type MonitorReceiptDetails = {
-  disclosure: MonitorDisclosure;
-};
-
 const MONITOR_RECEIPT_MARKER = "monitorReceipt";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -144,8 +140,14 @@ export function formatMonitorCadence(schedule: MonitorDisclosure["checkCadence"]
 
 function formatStopSummary(disclosure: MonitorDisclosure): string {
   const expiry = disclosure.expiryAt ? `until ${formatDate(disclosure.expiryAt)}` : undefined;
-  const stop = disclosure.stopCondition
-    ? `stop when ${sanitizeConsumerText(disclosure.stopCondition)}`
+  const stopCondition = disclosure.stopCondition
+    ? sanitizeConsumerText(disclosure.stopCondition).trim()
+    : "";
+  const directStopClause = stopCondition.match(/^(stop if|stop when|stop after)\b\s*(.*)$/i);
+  const stop = stopCondition
+    ? directStopClause
+      ? `${directStopClause[1]?.toLowerCase()}${directStopClause[2] ? ` ${directStopClause[2]}` : ""}`
+      : `stop when ${stopCondition}`
     : undefined;
   return [expiry, stop].filter(Boolean).join("; ") || "until you stop it";
 }
@@ -192,11 +194,4 @@ export function readMonitorReceiptDisclosure(channelData: unknown): MonitorDiscl
   const marker = asRecord(openclaw?.[MONITOR_RECEIPT_MARKER]);
   const disclosure = asRecord(marker?.disclosure);
   return disclosure ? (disclosure as unknown as MonitorDisclosure) : undefined;
-}
-
-export function readMonitorReceiptDetails(value: unknown): MonitorReceiptDetails | undefined {
-  const details = asRecord(asRecord(value)?.details);
-  const receipt = asRecord(details?.[MONITOR_RECEIPT_DETAILS_KEY]);
-  const disclosure = asRecord(receipt?.disclosure);
-  return disclosure ? { disclosure: disclosure as unknown as MonitorDisclosure } : undefined;
 }

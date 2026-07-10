@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 
 const { callGatewayToolMock, resolveAnnounceTargetMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(async (_method: string, _opts: unknown, params: unknown) => params),
@@ -62,7 +63,7 @@ describe("monitor tool", () => {
     );
   });
 
-  it("marks the normalized create disclosure for channel receipt delivery without changing model JSON", async () => {
+  it("preserves the enumerable create receipt marker through serialization without changing content", async () => {
     const disclosure = {
       purpose: "Watch support replies",
       source: { type: "gmail", target: { threadId: "thread-1" } },
@@ -76,7 +77,7 @@ describe("monitor tool", () => {
     callGatewayToolMock.mockResolvedValueOnce({ monitorId: "monitor-1", disclosure });
     const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
 
-    const result = await tool.execute?.("call-receipt", {
+    const result = await tool.execute?.("call-receipt-marker", {
       action: "create",
       instructions: disclosure.purpose,
       sourceType: "gmail",
@@ -88,11 +89,16 @@ describe("monitor tool", () => {
     if (!result) {
       throw new Error("monitor.create did not return a tool result");
     }
-    expect(result.content).toEqual([
-      { type: "text", text: JSON.stringify({ monitorId: "monitor-1", disclosure }, null, 2) },
+    const serializedResult = JSON.parse(JSON.stringify(result));
+    expect(serializedResult.content).toEqual(result.content);
+    expect(serializedResult.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({ monitorId: "monitor-1", disclosure }, null, 2),
+      },
     ]);
-    expect(Object.keys(result.details as object)).toEqual(["monitorId", "disclosure"]);
-    expect((result.details as Record<string, unknown>).__monitorReceipt).toEqual({ disclosure });
+    expect(serializedResult.details[MONITOR_RECEIPT_DETAILS_KEY]).toBe(true);
+    expect(serializedResult.details.disclosure).toEqual(disclosure);
   });
 
   it("adds announce mode to explicit bare origin delivery", async () => {

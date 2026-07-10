@@ -1,6 +1,10 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { buildMonitorReceiptChannelData, MONITOR_RECEIPT_DETAILS_KEY } from "../monitor/receipt.js";
+import {
+  buildMonitorReceiptChannelData,
+  formatMonitorReceipt,
+  MONITOR_RECEIPT_DETAILS_KEY,
+} from "../monitor/receipt.js";
 import type { MonitorDisclosure } from "../monitor/types.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import {
@@ -387,7 +391,7 @@ describe("handleToolExecutionEnd update_plan progress", () => {
 });
 
 describe("handleToolExecutionEnd monitor receipts", () => {
-  it("forwards only the normalized disclosure as a channel receipt marker", async () => {
+  it("emits a receipt after the serialized monitor.create result reaches the end event", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
@@ -401,24 +405,54 @@ describe("handleToolExecutionEnd monitor receipts", () => {
       autonomy: { level: "observe_only" },
       actionPolicy: "notify_draft",
     } satisfies MonitorDisclosure;
-    const details: Record<string, unknown> = {};
-    Object.defineProperty(details, MONITOR_RECEIPT_DETAILS_KEY, {
-      enumerable: false,
-      value: { disclosure },
-    });
+    const serializedResult = JSON.parse(
+      JSON.stringify({
+        content: [],
+        details: { monitorId: "monitor-1", disclosure, [MONITOR_RECEIPT_DETAILS_KEY]: true },
+      }),
+    );
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
       toolName: "monitor",
-      toolCallId: "tool-monitor-receipt",
+      toolCallId: "tool-monitor-create-receipt",
       isError: false,
-      result: { content: [], details },
+      result: serializedResult,
     });
 
     expect(onToolResult).toHaveBeenCalledWith({
+      text: formatMonitorReceipt(disclosure),
       channelData: buildMonitorReceiptChannelData(disclosure),
     });
+    expect(onToolResult.mock.calls[0]?.[0]?.text).toBe(formatMonitorReceipt(disclosure));
+    expect(onToolResult.mock.calls[0]?.[0]?.text).toBeTruthy();
     expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+  });
+
+  it("does not emit a receipt for an unmarked disclosure", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const disclosure = {
+      purpose: "Watch support replies",
+      source: { type: "gmail", target: { threadId: "thread-1" } },
+      checkCadence: { kind: "every", everyMs: 300_000 },
+      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+      expiryAt: null,
+      stopCondition: null,
+      autonomy: { level: "observe_only" },
+      actionPolicy: "notify_draft",
+    } satisfies MonitorDisclosure;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "monitor",
+      toolCallId: "tool-monitor-unmarked-receipt",
+      isError: false,
+      result: JSON.parse(JSON.stringify({ content: [], details: { disclosure } })),
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
   });
 });
 

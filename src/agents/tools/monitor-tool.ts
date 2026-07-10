@@ -58,33 +58,6 @@ function sanitizeMonitorUpdatePatch(patch: Record<string, unknown>): Record<stri
   return sanitized;
 }
 
-function withMonitorReceiptMarker(action: string, payload: unknown) {
-  const result = jsonResult(payload);
-  if (action !== "create" || !payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return result;
-  }
-  const payloadRecord = payload as Record<string, unknown>;
-  if (
-    !payloadRecord.disclosure ||
-    typeof payloadRecord.disclosure !== "object" ||
-    Array.isArray(payloadRecord.disclosure)
-  ) {
-    return result;
-  }
-
-  // Keep the marker out of the model-visible JSON while allowing the channel
-  // delivery layer to render the gateway-normalized disclosure deterministically.
-  const details = result.details;
-  if (details && typeof details === "object" && !Array.isArray(details)) {
-    Object.defineProperty(details, MONITOR_RECEIPT_DETAILS_KEY, {
-      configurable: true,
-      enumerable: false,
-      value: { disclosure: payloadRecord.disclosure },
-    });
-  }
-  return result;
-}
-
 const MonitorToolSchema = Type.Object(
   {
     action: stringEnum(MONITOR_ACTIONS),
@@ -254,7 +227,26 @@ For monitor-related user replies/status:
                 ? params.checkpoint
                 : undefined,
           });
-          return withMonitorReceiptMarker(action, createdMonitor);
+          const result = jsonResult(createdMonitor);
+          const payloadRecord =
+            createdMonitor && typeof createdMonitor === "object" && !Array.isArray(createdMonitor)
+              ? createdMonitor
+              : undefined;
+          const details =
+            result.details && typeof result.details === "object" && !Array.isArray(result.details)
+              ? (result.details as Record<string, unknown>)
+              : undefined;
+          if (
+            payloadRecord?.disclosure &&
+            typeof payloadRecord.disclosure === "object" &&
+            !Array.isArray(payloadRecord.disclosure) &&
+            details
+          ) {
+            // Keep the receipt signal enumerable so the agent core preserves it
+            // when it serializes and reconstructs the tool result.
+            details[MONITOR_RECEIPT_DETAILS_KEY] = true;
+          }
+          return result;
         }
         case "update": {
           const patch =

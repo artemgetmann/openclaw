@@ -57,6 +57,14 @@ function resolveStorePath(cronStorePath: string) {
   return resolveMonitorStorePath({ cronStorePath });
 }
 
+function resolveMonitorDisclosurePurpose(params: {
+  instructions: string;
+  name?: string;
+  existingName?: string;
+}): string {
+  return params.name?.trim() || params.existingName?.trim() || params.instructions;
+}
+
 function resolveGoalBoundEventTriggerKind(sourceType: string): MonitorEventTriggerKind | undefined {
   const normalized = sourceType.trim().toLowerCase();
   // Only default to adapters that exist today. Future listener adapters can add
@@ -641,7 +649,11 @@ export const monitorHandlers: GatewayRequestHandlers = {
           p.notificationPolicy ?? existingMonitor.notificationPolicy,
         );
         const disclosure = buildMonitorDisclosure({
-          purpose: p.instructions,
+          purpose: resolveMonitorDisclosurePurpose({
+            instructions: p.instructions,
+            name: p.name,
+            existingName: existingMonitor.name,
+          }),
           name: existingMonitor.name,
           sourceType: existingMonitor.sourceType,
           sourceTarget: existingMonitor.sourceTarget,
@@ -745,7 +757,10 @@ export const monitorHandlers: GatewayRequestHandlers = {
           stopCondition: p.stopCondition,
           actionPolicy: p.actionPolicy,
           goal,
-          purpose: p.instructions,
+          purpose: resolveMonitorDisclosurePurpose({
+            instructions: p.instructions,
+            name: p.name,
+          }),
           notificationPolicy: p.notificationPolicy,
           lastCheckpoint: p.lastCheckpoint,
           cronJobId: createdJob.id,
