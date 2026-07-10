@@ -1747,6 +1747,7 @@ export const dispatchTelegramMessage = async ({
       callsite?: string;
       laneName?: LaneName;
       infoKind?: string;
+      forceLegacyTextTransport?: boolean;
     },
   ) => {
     let normalizedPayload =
@@ -1837,6 +1838,7 @@ export const dispatchTelegramMessage = async ({
       isError: normalizedPayload.isError === true,
     });
     const shouldUseLegacyTextTransport =
+      classification?.forceLegacyTextTransport === true ||
       (durableReason === "final" && !hasMedia) ||
       isControlCommandReplyPayload(normalizedPayload) ||
       isCopySafeDraftReplyPayload(normalizedPayload);
@@ -1886,6 +1888,7 @@ export const dispatchTelegramMessage = async ({
           reason: "tool",
           callsite: "dispatch-monitor-receipt",
           infoKind: "tool",
+          forceLegacyTextTransport: true,
         },
       );
       return;

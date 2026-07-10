@@ -1,7 +1,10 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.js";
-import { buildMonitorReceiptChannelData } from "../../../src/monitor/receipt.js";
+import {
+  buildMonitorReceiptChannelData,
+  formatMonitorReceipt,
+} from "../../../src/monitor/receipt.js";
 import type { MonitorDisclosure } from "../../../src/monitor/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 
@@ -256,6 +259,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolResult?.({
+          text: formatMonitorReceipt(disclosure),
           channelData: buildMonitorReceiptChannelData(disclosure),
         });
         await dispatcherOptions.deliver({ text: "Monitoring is set." }, { kind: "final" });
@@ -265,13 +269,14 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     await dispatchWithHarness({ bot: harness.bot });
 
-    expect(sendMessageCalls(harness.calls).map((call) => call.text)).toEqual([
+    const sends = sendMessageCalls(harness.calls);
+    expect(sends.map((call) => call.text)).toEqual([
       "<p>Monitoring support replies<br>Every 5 minutes · stop when support confirms resolution<br>I'll message when something changes. If not, after 3 checks, then every 12 hours.</p>",
       "<p>Monitoring is set.</p>",
     ]);
-    expect(
-      sendMessageCalls(harness.calls).filter((call) => call.text.includes("Every 5 minutes")),
-    ).toHaveLength(1);
+    expect(sends[0]?.text).toBeTruthy();
+    expect(sends[0]?.text).toContain("Monitoring support replies");
+    expect(sends[1]?.text).toContain("Monitoring is set.");
   });
 
   it("uses one mutable progress message, clears it, and sends final text once", async () => {
