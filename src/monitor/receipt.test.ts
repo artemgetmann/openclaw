@@ -25,6 +25,16 @@ describe("monitor receipts", () => {
     );
   });
 
+  it.each([
+    ["Stop if support confirms resolution", "stop if support confirms resolution"],
+    ["Stop when support confirms resolution", "stop when support confirms resolution"],
+    ["Stop after three checks", "stop after three checks"],
+  ])("normalizes direct stop grammar from %s", (condition, expected) => {
+    expect(formatMonitorReceipt(disclosure({ stopCondition: condition }))).toContain(
+      `; ${expected}`,
+    );
+  });
+
   it("uses complete consumer cadence phrases and never exposes cron job wording", () => {
     const receipt = formatMonitorReceipt(
       disclosure({

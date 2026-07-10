@@ -140,8 +140,14 @@ export function formatMonitorCadence(schedule: MonitorDisclosure["checkCadence"]
 
 function formatStopSummary(disclosure: MonitorDisclosure): string {
   const expiry = disclosure.expiryAt ? `until ${formatDate(disclosure.expiryAt)}` : undefined;
-  const stop = disclosure.stopCondition
-    ? `stop when ${sanitizeConsumerText(disclosure.stopCondition)}`
+  const stopCondition = disclosure.stopCondition
+    ? sanitizeConsumerText(disclosure.stopCondition).trim()
+    : "";
+  const directStopClause = stopCondition.match(/^(stop if|stop when|stop after)\b\s*(.*)$/i);
+  const stop = stopCondition
+    ? directStopClause
+      ? `${directStopClause[1]?.toLowerCase()}${directStopClause[2] ? ` ${directStopClause[2]}` : ""}`
+      : `stop when ${stopCondition}`
     : undefined;
   return [expiry, stop].filter(Boolean).join("; ") || "until you stop it";
 }

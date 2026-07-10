@@ -107,6 +107,7 @@ describe("monitor gateway handlers", () => {
     await monitorHandlers["monitor.create"]({
       params: {
         instructions: "Monitor Empower replies and draft the next response.",
+        name: "Empower replies",
         agentId: "main",
         originSessionKey: "agent:main:telegram:direct:user-1",
         originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
@@ -170,7 +171,7 @@ describe("monitor gateway handlers", () => {
       },
       notificationState: { consecutiveUnchangedChecks: 0 },
       disclosure: {
-        purpose: "Monitor Empower replies and draft the next response.",
+        purpose: "Empower replies",
         source: {
           type: "gmail",
           target: { account: "me@example.com", threadId: "thread-1" },
@@ -337,13 +338,14 @@ describe("monitor gateway handlers", () => {
     );
 
     const firstMonitor = invokeContext.respond.mock.calls[0]?.[1] as
-      | { monitorId: string; cronJobId: string }
+      | { monitorId: string; cronJobId: string; disclosure?: { purpose?: string } }
       | undefined;
     const secondMonitor = invokeContext.respond.mock.calls[1]?.[1] as
-      | { monitorId: string; cronJobId: string }
+      | { monitorId: string; cronJobId: string; disclosure?: { purpose?: string } }
       | undefined;
     expect(firstMonitor?.monitorId).toBeTruthy();
     expect(secondMonitor).toEqual(firstMonitor);
+    expect(secondMonitor?.disclosure?.purpose).toBe("Customer reply");
     expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
     expect(seedMonitorSessionMock).toHaveBeenCalledTimes(1);
   });
