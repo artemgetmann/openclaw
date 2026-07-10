@@ -2,8 +2,10 @@ import AppKit
 import Foundation
 
 extension ChannelsStore {
+    static let consumerTelegramFirstTaskAccessApprovedStatus =
+        "Access approved. Now send any message to Jarvis in Telegram."
+
     private static let consumerDefaultTelegramAccountId = "default"
-    private static let consumerTelegramFirstTaskText = "Wake up my friend!"
     private static let consumerTelegramRuntimePluginAllowlist = [
         "telegram",
         "anthropic",
@@ -550,7 +552,7 @@ extension ChannelsStore {
         self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
         self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
         self.telegramSetupWaitingForDM = true
-        self.telegramSetupStatus = "Access approved. Now send \"\(Self.consumerTelegramFirstTaskText)\" to the bot in Telegram."
+        self.telegramSetupStatus = Self.consumerTelegramFirstTaskAccessApprovedStatus
         if await self.waitForConsumerTelegramFirstTaskActivityRefreshes(
             attempts: 45,
             delayNanoseconds: 1_000_000_000)
