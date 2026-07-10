@@ -176,8 +176,14 @@ describe("gateway server channels", () => {
   });
 
   test("channels.telegram.setup-replay is registered and reports missing setup token", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     expect(listGatewayMethods()).toContain("channels.telegram.setup-replay");
     await writeConfigFile({ channels: { telegram: {} } });
+
+    // Keep a worktree-local .env.local from overriding the intentionally empty token.
+    const cwdSpy = vi
+      .spyOn(process, "cwd")
+      .mockReturnValue(process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? "/tmp");
 
     const res = await rpcReq<{
       ok?: boolean;
@@ -193,7 +199,7 @@ describe("gateway server channels", () => {
         date: 1_700_000_000,
         text: "Wake up my friend",
       },
-    });
+    }).finally(() => cwdSpy.mockRestore());
 
     expect(res.ok).toBe(true);
     expect(res.error?.message).toBeUndefined();
@@ -236,6 +242,7 @@ describe("gateway server channels", () => {
     expect(res.payload).toMatchObject({
       replyStarted: true,
     });
+    expect(res.payload?.error).not.toContain("Bot not initialized!");
   });
 
   test("channels.telegram.setup-replay reads token saved after runtime snapshot initialization", async () => {

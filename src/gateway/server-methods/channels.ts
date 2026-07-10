@@ -446,6 +446,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
         config: cfg,
         runtime: defaultRuntime,
       });
+      // This standalone replay bot does not pass through polling or webhook
+      // startup, so grammY has not populated botInfo before handleUpdate.
+      await bot.init();
       await withTimeout(
         bot.handleUpdate(update as Parameters<typeof bot.handleUpdate>[0]),
         replayParams.timeoutMs,
