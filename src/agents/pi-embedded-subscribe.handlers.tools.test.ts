@@ -1,5 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { buildMonitorReceiptChannelData, MONITOR_RECEIPT_DETAILS_KEY } from "../monitor/receipt.js";
+import type { MonitorDisclosure } from "../monitor/types.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import {
   handleToolExecutionEnd,
@@ -381,6 +383,42 @@ describe("handleToolExecutionEnd update_plan progress", () => {
         },
       },
     });
+  });
+});
+
+describe("handleToolExecutionEnd monitor receipts", () => {
+  it("forwards only the normalized disclosure as a channel receipt marker", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const disclosure = {
+      purpose: "Watch support replies",
+      source: { type: "gmail", target: { threadId: "thread-1" } },
+      checkCadence: { kind: "every", everyMs: 300_000 },
+      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+      expiryAt: null,
+      stopCondition: null,
+      autonomy: { level: "observe_only" },
+      actionPolicy: "notify_draft",
+    } satisfies MonitorDisclosure;
+    const details: Record<string, unknown> = {};
+    Object.defineProperty(details, MONITOR_RECEIPT_DETAILS_KEY, {
+      enumerable: false,
+      value: { disclosure },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "monitor",
+      toolCallId: "tool-monitor-receipt",
+      isError: false,
+      result: { content: [], details },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      channelData: buildMonitorReceiptChannelData(disclosure),
+    });
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
   });
 });
 

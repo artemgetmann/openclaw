@@ -223,16 +223,16 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     label: "Cron",
     name: "cron",
     ownerOnly: true,
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
+    description: `Manage scheduled tasks, reminders, and wake events through the Gateway cron scheduler (status/list/add/update/remove/run/runs).
 
 CHOOSING CRON VS HEARTBEAT:
-- Prefer cron for reminders, exact scheduled tasks, and explicit scoped monitors (for example: watch an inbox, thread, or person until something happens).
+- Use reminder or scheduled task for one-time or generic schedules. Use monitor/monitoring for a watched inbox, thread, person, or condition until something changes. The internal scheduler remains cron-backed.
 - Prefer heartbeat only for broad, low-frequency ambient awareness that is already configured in HEARTBEAT.md.
 - For monitors, include a clear cadence, stop condition, and expiry/TTL in the job instructions when possible instead of creating an indefinite forever-job.
 - For channel-specific monitors, tell the agent to use the relevant skill/helper script for detection instead of improvising raw CLI discovery.
-- When a skill documents a default helper/check command for monitor detection, pin that exact command (or a tiny wrapper script around it) into the cron payload at creation time.
-- The waking cron job should execute deterministic monitor instructions, not rediscover chats/threads/commands from scratch on every run.
-- Generic monitor authoring pattern: resolve the detection command at creation time; if the monitor needs baseline/state comparison, write a tiny wrapper/check script immediately and have cron run that exact script.
+- When a skill documents a default helper/check command for monitor detection, pin that exact command (or a tiny wrapper script around it) into the scheduler payload at creation time.
+- The scheduler wake should execute deterministic monitor instructions, not rediscover chats/threads/commands from scratch on every run.
+- Generic monitor authoring pattern: resolve the detection command at creation time; if the monitor needs baseline/state comparison, write a tiny wrapper/check script immediately and have the scheduler run that exact script.
 - Bad monitor payloads say "figure out how to check this later" or improvise sync/list/search steps at wake time; good monitor payloads run a concrete command/script with pinned args and only branch on its output.
 - Example: a WhatsApp reply monitor should run "skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json" (or a wrapper around it), not raw "wacli sync --once" plus "wacli messages list --chat ..." as the default implementation.
 

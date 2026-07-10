@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
+import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -55,6 +56,33 @@ function sanitizeMonitorUpdatePatch(patch: Record<string, unknown>): Record<stri
     }
   }
   return sanitized;
+}
+
+function withMonitorReceiptMarker(action: string, payload: unknown) {
+  const result = jsonResult(payload);
+  if (action !== "create" || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return result;
+  }
+  const payloadRecord = payload as Record<string, unknown>;
+  if (
+    !payloadRecord.disclosure ||
+    typeof payloadRecord.disclosure !== "object" ||
+    Array.isArray(payloadRecord.disclosure)
+  ) {
+    return result;
+  }
+
+  // Keep the marker out of the model-visible JSON while allowing the channel
+  // delivery layer to render the gateway-normalized disclosure deterministically.
+  const details = result.details;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    Object.defineProperty(details, MONITOR_RECEIPT_DETAILS_KEY, {
+      configurable: true,
+      enumerable: false,
+      value: { disclosure: payloadRecord.disclosure },
+    });
+  }
+  return result;
 }
 
 const MonitorToolSchema = Type.Object(
@@ -129,6 +157,11 @@ For monitor creation:
 - for auto_send, provide watchDelivery when sourceTarget alone does not resolve to the external conversation; green-zone replies go to that watched surface, while approval questions must go back to the origin chat.
 - default report route is the origin chat from the current session.
 
+After a successful create:
+- Telegram renders a compact receipt from the normalized disclosure returned by monitor.create.
+- Do not repeat the cadence, expiry, stop condition, or notification promise in the final answer; acknowledge naturally and briefly.
+- Say monitor or monitoring to consumers. Never call a consumer monitor a cron job.
+
 For monitor-related user replies/status:
 - use the monitor-router skill for natural-language routing.
 - use list/get to inspect candidate monitors before acting.
@@ -180,51 +213,48 @@ For monitor-related user replies/status:
           if (!cadence || typeof cadence !== "object" || Array.isArray(cadence)) {
             throw new ToolInputError("cadence required");
           }
-          return jsonResult(
-            await callGatewayTool("monitor.create", gatewayOpts, {
-              instructions: readStringParam(params, "instructions", { required: true }),
-              agentId: resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg }),
-              name: readStringParam(params, "name"),
-              originSessionKey: agentSessionKey,
-              originDelivery,
-              sourceType: readStringParam(params, "sourceType", { required: true }),
-              sourceTarget,
-              cadence,
-              trigger:
-                params.trigger &&
-                typeof params.trigger === "object" &&
-                !Array.isArray(params.trigger)
-                  ? params.trigger
-                  : undefined,
-              expiryAt: readStringParam(params, "expiryAt"),
-              stopCondition: readStringParam(params, "stopCondition"),
-              actionPolicy:
-                readStringParam(params, "actionPolicy") ??
-                ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
-              notificationPolicy:
-                params.notificationPolicy &&
-                typeof params.notificationPolicy === "object" &&
-                !Array.isArray(params.notificationPolicy)
-                  ? params.notificationPolicy
-                  : undefined,
-              goal:
-                params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
-                  ? params.goal
-                  : undefined,
-              watchDelivery:
-                params.watchDelivery &&
-                typeof params.watchDelivery === "object" &&
-                !Array.isArray(params.watchDelivery)
-                  ? params.watchDelivery
-                  : undefined,
-              lastCheckpoint:
-                params.checkpoint &&
-                typeof params.checkpoint === "object" &&
-                !Array.isArray(params.checkpoint)
-                  ? params.checkpoint
-                  : undefined,
-            }),
-          );
+          const createdMonitor = await callGatewayTool("monitor.create", gatewayOpts, {
+            instructions: readStringParam(params, "instructions", { required: true }),
+            agentId: resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg }),
+            name: readStringParam(params, "name"),
+            originSessionKey: agentSessionKey,
+            originDelivery,
+            sourceType: readStringParam(params, "sourceType", { required: true }),
+            sourceTarget,
+            cadence,
+            trigger:
+              params.trigger && typeof params.trigger === "object" && !Array.isArray(params.trigger)
+                ? params.trigger
+                : undefined,
+            expiryAt: readStringParam(params, "expiryAt"),
+            stopCondition: readStringParam(params, "stopCondition"),
+            actionPolicy:
+              readStringParam(params, "actionPolicy") ??
+              ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
+            notificationPolicy:
+              params.notificationPolicy &&
+              typeof params.notificationPolicy === "object" &&
+              !Array.isArray(params.notificationPolicy)
+                ? params.notificationPolicy
+                : undefined,
+            goal:
+              params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
+                ? params.goal
+                : undefined,
+            watchDelivery:
+              params.watchDelivery &&
+              typeof params.watchDelivery === "object" &&
+              !Array.isArray(params.watchDelivery)
+                ? params.watchDelivery
+                : undefined,
+            lastCheckpoint:
+              params.checkpoint &&
+              typeof params.checkpoint === "object" &&
+              !Array.isArray(params.checkpoint)
+                ? params.checkpoint
+                : undefined,
+          });
+          return withMonitorReceiptMarker(action, createdMonitor);
         }
         case "update": {
           const patch =

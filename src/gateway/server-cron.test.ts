@@ -61,7 +61,7 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
-import { buildGatewayCronService } from "./server-cron.js";
+import { buildGatewayCronService, formatCronFailureMessage } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
   const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
@@ -82,6 +82,27 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+  });
+
+  it("uses monitor terminology for monitorWake failure destinations", () => {
+    expect(
+      formatCronFailureMessage(
+        {
+          name: "Watch support replies",
+          payload: { kind: "monitorWake", monitorId: "monitor-1" },
+        },
+        "source check timed out",
+      ),
+    ).toBe('Monitor "Watch support replies" failed: source check timed out');
+    expect(
+      formatCronFailureMessage(
+        {
+          name: "Daily report",
+          payload: { kind: "agentTurn", message: "send report" },
+        },
+        "provider unavailable",
+      ),
+    ).toBe('Cron job "Daily report" failed: provider unavailable');
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
