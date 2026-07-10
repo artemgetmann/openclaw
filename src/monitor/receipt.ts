@@ -1,6 +1,8 @@
 import type { CronSchedule } from "../cron/types.js";
 import type { MonitorDisclosure } from "./types.js";
 
+export const MONITOR_RECEIPT_DETAILS_KEY = "__monitorReceipt";
+
 const MONITOR_RECEIPT_MARKER = "monitorReceipt";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

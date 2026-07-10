@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
+import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -226,7 +227,26 @@ For monitor-related user replies/status:
                 ? params.checkpoint
                 : undefined,
           });
-          return jsonResult(createdMonitor);
+          const result = jsonResult(createdMonitor);
+          const payloadRecord =
+            createdMonitor && typeof createdMonitor === "object" && !Array.isArray(createdMonitor)
+              ? createdMonitor
+              : undefined;
+          const details =
+            result.details && typeof result.details === "object" && !Array.isArray(result.details)
+              ? (result.details as Record<string, unknown>)
+              : undefined;
+          if (
+            payloadRecord?.disclosure &&
+            typeof payloadRecord.disclosure === "object" &&
+            !Array.isArray(payloadRecord.disclosure) &&
+            details
+          ) {
+            // Keep the receipt signal enumerable so the agent core preserves it
+            // when it serializes and reconstructs the tool result.
+            details[MONITOR_RECEIPT_DETAILS_KEY] = true;
+          }
+          return result;
         }
         case "update": {
           const patch =

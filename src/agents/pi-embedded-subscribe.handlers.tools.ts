@@ -6,7 +6,11 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import { logTelegramProgressDebug } from "../infra/telegram-progress-debug.js";
-import { buildMonitorReceiptChannelData, formatMonitorReceipt } from "../monitor/receipt.js";
+import {
+  buildMonitorReceiptChannelData,
+  formatMonitorReceipt,
+  MONITOR_RECEIPT_DETAILS_KEY,
+} from "../monitor/receipt.js";
 import type { MonitorDisclosure } from "../monitor/types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -62,6 +66,9 @@ function readMonitorDisclosureFromResult(value: unknown): MonitorDisclosure | un
   }
   const details = (value as Record<string, unknown>).details;
   if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return undefined;
+  }
+  if ((details as Record<string, unknown>)[MONITOR_RECEIPT_DETAILS_KEY] !== true) {
     return undefined;
   }
   const disclosure = (details as Record<string, unknown>).disclosure;
@@ -621,12 +628,7 @@ export async function handleToolExecutionEnd(
         })()
       : undefined;
   const monitorReceiptDisclosure =
-    !isToolError &&
-    toolName === "monitor" &&
-    startData?.args &&
-    typeof startData.args === "object" &&
-    !Array.isArray(startData.args) &&
-    (startData.args as Record<string, unknown>).action === "create"
+    !isToolError && toolName === "monitor"
       ? readMonitorDisclosureFromResult(sanitizedResult)
       : undefined;
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
