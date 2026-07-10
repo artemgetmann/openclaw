@@ -113,6 +113,44 @@ describe("createTelegramProgressController", () => {
     expect(controller.messageId()).toBe(88);
   });
 
+  it("reopens the progress stream when acknowledgment materialization has no message id", async () => {
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockReturnValue(undefined),
+      previewMode: vi.fn().mockReturnValue("draft"),
+      previewRevision: vi.fn().mockReturnValue(1),
+      lastDeliveredText: vi.fn().mockReturnValue("I’ll inspect the files, then run tests."),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(undefined),
+      forceNewMessage: vi.fn(),
+      sendMayHaveLanded: vi.fn().mockReturnValue(false),
+    };
+    const controller = createTelegramProgressController({
+      api: {} as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      minInitialChars: 1,
+      stream: adoptedStream,
+      renderText: (text) => ({ text }),
+    });
+
+    controller.update("I’ll inspect the files, then run tests.");
+    await expect(controller.materialize()).resolves.toBeUndefined();
+    controller.replace("Plan updated\n- [~] Inspect files\n- [ ] Run tests");
+
+    // materialize() stops a Telegram draft even when it cannot return an ID.
+    // The replacement plan must therefore reopen a new preview generation.
+    expect(adoptedStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(adoptedStream.forceNewMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      adoptedStream.update.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
+    );
+    expect(adoptedStream.update).toHaveBeenLastCalledWith(
+      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Run tests",
+    );
+  });
+
   it("can discard pending progress edits before deleting the visible final-bound bubble", async () => {
     const adoptedStream = {
       update: vi.fn(),

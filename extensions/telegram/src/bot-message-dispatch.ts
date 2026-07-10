@@ -1525,8 +1525,11 @@ export const dispatchTelegramMessage = async ({
     // plan controller takes ownership of a separate Telegram message.
     const messageId = await stream.materialize?.();
     if (typeof messageId !== "number") {
-      // Without a confirmed durable Telegram identity, preserve the established
-      // adoption fallback rather than risking a duplicate acknowledgment.
+      // materialize() stops the stream even when Telegram cannot return an ID.
+      // Reopen it before the established adoption fallback turns this lane into
+      // plan progress; otherwise replace() targets a stopped generation and the
+      // checklist silently disappears.
+      stream.forceNewMessage();
       return false;
     }
     logTelegramDurableSendClassification({
@@ -1542,6 +1545,46 @@ export const dispatchTelegramMessage = async ({
     resetDraftLaneState(answerLane);
     activePreviewLifecycleByLane.answer = "complete";
     retainPreviewOnCleanupByLane.answer = true;
+    return true;
+  };
+  const retainProgressAcknowledgmentBeforePlan = async (callsite: string) => {
+    const controller = getActiveProgressController();
+    if (!controller || activeProgressKind !== "generic") {
+      return false;
+    }
+    // In the high-route provider path, natural commentary arrives through
+    // onBlockReply and therefore already owns the generic progress controller.
+    // A plan is a structural boundary: freeze that natural acknowledgment as-is
+    // and release controller ownership so the checklist starts a new message.
+    const messageId = await controller.materialize();
+    if (typeof messageId !== "number") {
+      // If Telegram cannot confirm the durable acknowledgment, retain the old
+      // replacement behavior. A duplicate acknowledgment is worse than losing
+      // the preferred split, and this keeps draft-transport fallback intact.
+      return false;
+    }
+    logTelegramDurableSendClassification({
+      reason: "progress",
+      callsite,
+      laneName: "answer",
+      messageId,
+      retained: true,
+      deleteOnCleanup: false,
+      sourceKind: "block",
+    });
+    if (activeTelegramProgressControllers.get(progressControllerKey) === controller) {
+      activeTelegramProgressControllers.delete(progressControllerKey);
+    }
+    if (progressController === controller) {
+      progressController = undefined;
+    }
+    activeProgressKind = undefined;
+    routeToolStatusPartialsToProgress = false;
+    // Some high-route providers emit the next assistant-message boundary only
+    // after its first answer delta. The acknowledgment is already detached, so
+    // consume that delayed boundary instead of rotating the visible final
+    // preview onto a replacement Telegram identity.
+    skipNextAnswerMessageStartRotation = true;
     return true;
   };
   const updateAnswerProgressFromBlock = async (
@@ -1560,7 +1603,12 @@ export const dispatchTelegramMessage = async ({
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
     if (options.progressKind === "plan") {
-      await retainAnswerAcknowledgmentBeforePlan("answer-acknowledgment-before-plan");
+      const retainedAnswerAcknowledgment = await retainAnswerAcknowledgmentBeforePlan(
+        "answer-acknowledgment-before-plan",
+      );
+      if (!retainedAnswerAcknowledgment) {
+        await retainProgressAcknowledgmentBeforePlan("progress-acknowledgment-before-plan");
+      }
     }
     const controller =
       (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??

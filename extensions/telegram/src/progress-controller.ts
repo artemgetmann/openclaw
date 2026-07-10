@@ -26,6 +26,7 @@ export type TelegramProgressController = {
   preview: (text: string) => void;
   replace: (text: string) => void;
   clear: (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => Promise<void>;
+  materialize: () => Promise<number | undefined>;
   retainAsWorkLog: (options?: { toolNames?: readonly string[] }) => Promise<
     | {
         retained: true;
@@ -230,6 +231,26 @@ export function createTelegramProgressController(params: {
       // that point the next durable message is the final answer, so deleting
       // the visible progress bubble beats faithfully rendering stale progress.
       await stream.clear({ waitForInFlight: options?.waitForInFlight });
+    },
+    materialize: async () => {
+      if (cleared || !hasProgress) {
+        return undefined;
+      }
+      // A natural acknowledgment can initially use the progress transport, but
+      // a later structured plan must not overwrite it. Flush and materialize
+      // the existing text unchanged; ownership moves to a fresh controller only
+      // after Telegram confirms this message has a durable identity.
+      await stream.flush();
+      const messageId = await stream.materialize?.();
+      if (typeof messageId !== "number") {
+        // materialize() stops the draft stream before it can discover that no
+        // durable ID is available. Reopen the same controller generation so the
+        // caller's established replacement fallback can still render the plan.
+        stream.forceNewMessage();
+        return undefined;
+      }
+      cleared = true;
+      return messageId;
     },
     retainAsWorkLog: async (options?: { toolNames?: readonly string[] }) => {
       if (cleared || !hasProgress) {

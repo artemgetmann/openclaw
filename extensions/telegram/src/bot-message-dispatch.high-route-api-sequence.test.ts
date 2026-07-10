@@ -327,6 +327,95 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     ]);
   });
 
+  it("retains commentary acknowledgment before plan and finalizes the later preview in place", async () => {
+    const harness = createTelegramBotHarness(7150);
+    const acknowledgment =
+      "I’m checking the package name, verifying the working directory, and doing a harmless Desktop file create/delete, then I’ll give you a tight confirmation.";
+    const planText =
+      "Plan updated\n- [~] Inspect package metadata\n- [ ] Verify the temp-file round trip";
+    const partialAnswer = "The package name and working directory are verified.";
+    const finalAnswer = `${partialAnswer} The harmless Desktop temp file was created and deleted.`;
+
+    getReplyFromConfig.mockImplementation(async (_ctx, opts?: GetReplyOptions) => {
+      // This is the live high-route provider order from message 55268: the
+      // natural acknowledgment is a commentary block, not an answer partial.
+      await opts?.onBlockReply?.({
+        text: acknowledgment,
+        channelData: { openclaw: { assistantPhase: "commentary" } },
+      });
+      await vi.waitFor(() =>
+        expect(
+          sendMessageCalls(harness.calls).some((call) => call.text.includes(acknowledgment)),
+        ).toBe(true),
+      );
+
+      await opts?.onToolStart?.({ name: "update_plan", phase: "start" });
+      await opts?.onToolResult?.({
+        text: planText,
+        channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+      });
+      await vi.waitFor(() =>
+        expect(
+          sendMessageCalls(harness.calls).some((call) => call.text.includes("Plan updated")),
+        ).toBe(true),
+      );
+
+      // Some providers stream the first post-tool answer delta before the
+      // delayed message-start callback. That callback must not rotate the
+      // already-visible final preview onto a second Telegram identity.
+      await opts?.onPartialReply?.({ text: partialAnswer });
+      await vi.waitFor(() =>
+        expect(
+          sendMessageCalls(harness.calls).some((call) => call.text.includes(partialAnswer)),
+        ).toBe(true),
+      );
+      await opts?.onAssistantMessageStart?.();
+      return { text: finalAnswer };
+    });
+
+    await dispatchWithHarness({
+      bot: harness.bot,
+      cfg: { channels: { telegram: { accounts: { default: { botToken: "123:test" } } } } },
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "high-route-ack-plan-final" },
+      }),
+    });
+
+    const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(acknowledgment),
+    );
+    const planSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes("Plan updated"),
+    );
+    const finalPreviewSend = sendMessageCalls(harness.calls).find((call) =>
+      call.text.includes(partialAnswer),
+    );
+    const workLogEdits = workLogEditCalls(harness.calls);
+    const finalEdits = harness.calls.filter(
+      (call): call is Extract<TelegramApiCall, { op: "editMessageText" }> =>
+        call.op === "editMessageText" && call.text.includes(finalAnswer),
+    );
+
+    expect(acknowledgmentSend).toBeDefined();
+    expect(planSend).toBeDefined();
+    expect(finalPreviewSend).toBeDefined();
+    expect(acknowledgmentSend!.messageId).not.toBe(planSend!.messageId);
+    expect(planSend!.messageId).not.toBe(finalPreviewSend!.messageId);
+    expect(workLogEdits.some((call) => call.messageId === planSend!.messageId)).toBe(true);
+    expect(finalEdits).toEqual([
+      expect.objectContaining({
+        messageId: finalPreviewSend!.messageId,
+        text: finalAnswer,
+      }),
+    ]);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
+    ).toHaveLength(0);
+    expect(harness.sendVoice).not.toHaveBeenCalled();
+    expect(harness.sendAudio).not.toHaveBeenCalled();
+  });
+
   it("keeps generic block-streaming commentary transient before the final answer", async () => {
     const harness = createTelegramBotHarness();
     const firstCommentary = "Checking the temp file state before I touch anything.";

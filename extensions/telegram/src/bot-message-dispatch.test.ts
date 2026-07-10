@@ -451,6 +451,51 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("keeps plan delivery usable when a progress acknowledgment cannot materialize", async () => {
+    const progressStream = createDraftStream();
+    progressStream.materialize.mockResolvedValue(undefined);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    const acknowledgment = "I’ll inspect the files first, then run the focused tests.";
+    const planText = "Plan updated\n- [~] Inspect files\n- [ ] Run tests";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await dispatcherOptions.deliver(
+          {
+            text: acknowledgment,
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+        await replyOptions?.onToolStart?.({ name: "update_plan" });
+        await replyOptions?.onToolResult?.({
+          text: planText,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "plan-materialize-fallback" },
+      }),
+      streamMode: "partial",
+      telegramCfg: { blockStreaming: true },
+    });
+
+    expect(progressStream.update).toHaveBeenCalledWith(acknowledgment);
+    expect(progressStream.materialize).toHaveBeenCalled();
+    expect(progressStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(progressStream.update).toHaveBeenCalledWith(
+      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Run tests",
+    );
+    expect(progressStream.forceNewMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      progressStream.update.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
   it("keeps final answer partials out of the plan progress bubble", async () => {
     const progressStream = createDraftStream(9005);
     const answerStream = createDraftStream(9105);
