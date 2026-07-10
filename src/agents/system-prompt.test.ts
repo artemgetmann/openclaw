@@ -893,7 +893,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["gateway"],
     });
     const armInstruction =
-      "you MUST first call the gateway tool with action `restart.request_confirmation`";
+      "when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`";
     const askInstruction =
       'Only after that tool call succeeds, ask exactly: "This will interrupt other tasks that you have running in other chats. Restart now?"';
 
@@ -901,6 +901,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt.indexOf(askInstruction)).toBeGreaterThan(prompt.indexOf(armInstruction));
     expect(prompt).toContain(
       "Never ask the restart confirmation question before the gateway tool successfully records the pending confirmation.",
+    );
+    expect(prompt).toContain(
+      "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again",
     );
     expect(prompt).toContain("Only proceed on a later user turn");
     expect(prompt).toContain("`/restart` remains the escape hatch");
@@ -912,6 +915,9 @@ describe("buildPendingRestartConfirmationPromptHint", () => {
     const hint = buildPendingRestartConfirmationPromptHint();
 
     expect(hint).toContain("A pending restart confirmation exists for this session.");
+    expect(hint).toContain(
+      "Do not call `restart.request_confirmation` again while this pending confirmation exists.",
+    );
     expect(hint).toContain("current user turn clearly confirms");
     expect(hint).toContain("Do not treat your own prior message");
   });
