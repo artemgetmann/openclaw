@@ -97,6 +97,19 @@ describe("gateway tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("describes arming restart confirmation before asking the user", () => {
+    const description = requireGatewayTool().description;
+    const armInstruction =
+      "Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation.";
+    const askInstruction =
+      "Only after that action succeeds, ask the confirmation question returned by the tool";
+
+    expect(description.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+    expect(description.indexOf(askInstruction)).toBeGreaterThan(
+      description.indexOf(armInstruction),
+    );
+  });
+
   it("schedules SIGUSR1 restart", async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
