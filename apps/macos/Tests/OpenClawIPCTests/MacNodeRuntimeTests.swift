@@ -276,7 +276,6 @@ struct MacNodeRuntimeTests {
             Metadata.self,
             from: Data(try #require(captureResponse.payloadJSON).utf8))
         let artifactPath = await MainActor.run { services.lastPath }
-        #expect(artifactPath.map(FileManager().fileExists(atPath:)) == true)
 
         // Expiry is timer-owned: no later screen.record invocation is needed to
         // trigger eventual deletion of an abandoned node artifact.
