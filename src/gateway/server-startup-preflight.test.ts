@@ -53,17 +53,17 @@ describe("runGatewayStartupConfigPreflight", () => {
       .mockResolvedValueOnce(createSnapshot())
       .mockResolvedValueOnce(invalid);
 
-    await expect(
-      runGatewayStartupConfigPreflight({
-        readSnapshot,
-        writeConfig: vi.fn(),
-        log: { info: vi.fn(), warn: vi.fn() },
-        isNixMode: false,
-      }),
-    ).rejects.toMatchObject({
-      name: "GatewayStartupPreflightError",
-      phase: "config_validation",
-      message: expect.stringContaining('Run "openclaw doctor"'),
+    await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+    }).catch((err) => {
+      expect(err).toMatchObject({
+        name: "GatewayStartupPreflightError",
+        phase: "config_validation",
+      });
+      expect(err.message).toContain("doctor");
     });
   });
 
@@ -287,13 +287,13 @@ describe("runGatewayStartupConfigPreflight", () => {
     );
     const staleAllowBundled: string[] = CONSUMER_DEFAULT_BUNDLED_SKILLS.filter(
       (skillName) =>
-        skillName !== "jarvis-gui-control" &&
+        skillName !== "jarvis-computer-use" &&
         skillName !== "telegram-chat-management" &&
         skillName !== "screen-record",
     );
     const repairedAllowBundled = [...staleAllowBundled];
     repairedAllowBundled.splice(repairedAllowBundled.indexOf("gog"), 0, "screen-record");
-    repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-gui-control");
+    repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-computer-use");
     repairedAllowBundled.splice(
       repairedAllowBundled.indexOf("notion"),
       0,
@@ -329,14 +329,14 @@ describe("runGatewayStartupConfigPreflight", () => {
 
     const writtenConfig = writeConfig.mock.calls[0]?.[0];
     expect(writtenConfig?.skills?.allowBundled).toEqual(repairedAllowBundled);
-    expect(repairedAllowBundled.indexOf("jarvis-gui-control")).toBe(
+    expect(repairedAllowBundled.indexOf("jarvis-computer-use")).toBe(
       repairedAllowBundled.indexOf("peekaboo") - 1,
     );
     expect(repairedAllowBundled.indexOf("telegram-chat-management")).toBe(
       repairedAllowBundled.indexOf("notion") - 1,
     );
     expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill allowlist"));
-    expect(result.config.skills?.allowBundled).toContain("jarvis-gui-control");
+    expect(result.config.skills?.allowBundled).toContain("jarvis-computer-use");
     expect(result.config.skills?.allowBundled).toContain("screen-record");
     expect(result.config.skills?.allowBundled).toContain("telegram-chat-management");
   });

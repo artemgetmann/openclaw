@@ -38,7 +38,7 @@ function parsePositiveIntegerOption(value: string | undefined, name: string): nu
 export function registerGuiBenchmarkCli(program: Command) {
   program
     .command("gui-benchmark")
-    .description("Experimental dev-only Jarvis GUI-control benchmark harness")
+    .description("Experimental dev-only Jarvis Computer Use benchmark harness")
     .requiredOption("--runtime <runtime>", "Runtime adapter: agent-desktop, open-computer-use")
     .option(
       "--runtime-command <path>",

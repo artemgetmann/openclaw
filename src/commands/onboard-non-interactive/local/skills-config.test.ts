@@ -46,7 +46,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "monitor-router",
         "media-editor",
         "video-frames",
-        "jarvis-gui-control",
+        "jarvis-computer-use",
         "screen-record",
         "find-food",
         "mcporter",
@@ -140,7 +140,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(repaired.changes).toEqual([
       expect.stringContaining("skills.allowBundled += checkpoint,goal-mode"),
     ]);
-    expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-gui-control")).toBe(
+    expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-computer-use")).toBe(
       (repaired.config.skills?.allowBundled?.indexOf("peekaboo") ?? 0) - 1,
     );
     expect(repaired.config.skills?.allowBundled?.indexOf("telegram-user")).toBeGreaterThan(
@@ -152,12 +152,23 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "goal-mode",
         "monitor-router",
         "find-food",
-        "jarvis-gui-control",
+        "jarvis-computer-use",
       ]),
     );
     expect(repaired.config.skills?.allowBundled?.indexOf("find-food")).toBe(
       (repaired.config.skills?.allowBundled?.indexOf("goplaces") ?? 0) + 1,
     );
+  });
+
+  it("renames legacy Jarvis GUI Control allowlist entries without widening custom allowlists", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["peekaboo", "jarvis-gui-control"] },
+    });
+
+    expect(repaired.changes).toEqual([
+      "skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use",
+    ]);
+    expect(repaired.config.skills?.allowBundled).toEqual(["peekaboo", "jarvis-computer-use"]);
   });
 
   it("does not repair custom bundled skill allowlists", () => {
@@ -192,10 +203,10 @@ describe("applyNonInteractiveSkillsConfig", () => {
       body: "# Monitor Router\n",
     });
     await writeSkill({
-      dir: path.join(bundledDir, "jarvis-gui-control"),
-      name: "jarvis-gui-control",
-      description: "Use for Jarvis macOS GUI-control tasks and GUI proof requests.",
-      body: "# Jarvis GUI Control\n",
+      dir: path.join(bundledDir, "jarvis-computer-use"),
+      name: "jarvis-computer-use",
+      description: "Use for Jarvis Computer Use tasks and GUI proof requests.",
+      body: "# Jarvis Computer Use\n",
     });
     await writeSkill({
       dir: path.join(bundledDir, "telegram-chat-management"),
@@ -214,7 +225,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
     expect(prompt).toContain("offer or run a durable goal");
     expect(prompt).toContain("Route monitor status questions");
-    expect(prompt).toContain("Jarvis macOS GUI-control tasks");
+    expect(prompt).toContain("Jarvis Computer Use tasks");
     expect(prompt).toContain("Manage Telegram chats, topics, threads");
   });
 });

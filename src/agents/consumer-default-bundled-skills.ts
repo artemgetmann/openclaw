@@ -17,7 +17,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "goplaces",
   "find-food",
   "himalaya",
-  "jarvis-gui-control",
+  "jarvis-computer-use",
   "peekaboo",
   "summarize",
   "weather",
@@ -37,12 +37,16 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "nano-pdf",
 ] as const;
 
+const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Record<string, string> = {
+  "jarvis-gui-control": "jarvis-computer-use",
+};
+
 export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): string[] {
   const existingAllowlist = config.skills?.allowBundled;
   if (existingAllowlist?.includes("__none__")) {
     return [...existingAllowlist];
   }
-  const allowlist = existingAllowlist ? [...existingAllowlist] : [];
+  const allowlist = normalizeLegacyBundledSkillNames(existingAllowlist ?? []);
   const allowed = new Set(allowlist);
 
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
@@ -66,17 +70,32 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     return { config, changes: [] };
   }
 
+  const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist);
+  const renameChanged = !sameStringArray(currentAllowlist, normalizedAllowlist);
   const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
-  const current = new Set(currentAllowlist);
-  const hasEnoughDefaultSkillsToLookGenerated = currentAllowlist.length >= 3;
+  const current = new Set(normalizedAllowlist);
+  const hasEnoughDefaultSkillsToLookGenerated = normalizedAllowlist.length >= 3;
   const looksLikeGeneratedConsumerDefault =
     hasEnoughDefaultSkillsToLookGenerated &&
-    currentAllowlist.every((skillName) => defaultSkills.has(skillName));
+    normalizedAllowlist.every((skillName) => defaultSkills.has(skillName));
+
   if (!looksLikeGeneratedConsumerDefault) {
-    return { config, changes: [] };
+    if (!renameChanged) {
+      return { config, changes: [] };
+    }
+    return {
+      config: {
+        ...config,
+        skills: {
+          ...config.skills,
+          allowBundled: normalizedAllowlist,
+        },
+      },
+      changes: ["skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use"],
+    };
   }
 
-  const nextAllowlist = [...currentAllowlist];
+  const nextAllowlist = [...normalizedAllowlist];
   const added: string[] = [];
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
     const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
@@ -88,8 +107,16 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     added.push(skillName);
   }
 
-  if (added.length === 0) {
+  if (added.length === 0 && !renameChanged) {
     return { config, changes: [] };
+  }
+
+  const changes = [];
+  if (renameChanged) {
+    changes.push("skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use");
+  }
+  if (added.length > 0) {
+    changes.push(`skills.allowBundled += ${added.join(",")}`);
   }
 
   return {
@@ -100,8 +127,26 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
         allowBundled: nextAllowlist,
       },
     },
-    changes: [`skills.allowBundled += ${added.join(",")}`],
+    changes,
   };
+}
+
+function normalizeLegacyBundledSkillNames(allowlist: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const skillName of allowlist) {
+    const nextName = LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES[skillName] ?? skillName;
+    if (seen.has(nextName)) {
+      continue;
+    }
+    normalized.push(nextName);
+    seen.add(nextName);
+  }
+  return normalized;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function insertBundledSkillInDefaultOrder(allowlist: string[], skillName: string) {

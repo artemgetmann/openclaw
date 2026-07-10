@@ -193,7 +193,7 @@ message history. Examples:
 - Did the user see two separate progress bubbles before final?
 - Did Telegram visually put voice before final?
 
-Use Jarvis GUI Control for app navigation or visible-state checks:
+Use Jarvis Computer Use for app navigation or visible-state checks:
 
 ```bash
 pnpm openclaw:local gui-control observe \
@@ -202,11 +202,11 @@ pnpm openclaw:local gui-control observe \
   --json
 ```
 
-Do not acquire `~/.codex/bin/cua-guard` for Jarvis GUI Control. That guard is
+Do not acquire `~/.codex/bin/cua-guard` for Jarvis Computer Use. That guard is
 only for the Codex-native Computer Use tool/plugin, not for the OpenClaw
 `gui-control --runtime open-computer-use` product path.
 
-If Jarvis GUI Control reports `ScreenCaptureKit -3811`, `Transport closed`,
+If Jarvis Computer Use reports `ScreenCaptureKit -3811`, `Transport closed`,
 `cgWindowNotFound`, or a stale/ambiguous element ref, stop and report the GUI
 proof blocker. Do not route around it with raw coordinates, AppleScript/JXA, or
 Codex-native Computer Use unless the user explicitly changes the proof path.

@@ -84,7 +84,7 @@ describe("compactSkillPaths", () => {
       "lib",
       "openclaw-bundled",
       "skills",
-      "jarvis-gui-control",
+      "jarvis-computer-use",
       "SKILL.md",
     );
     const entries: SkillEntry[] = [
@@ -101,7 +101,7 @@ describe("compactSkillPaths", () => {
       },
       {
         skill: {
-          name: "jarvis-gui-control",
+          name: "jarvis-computer-use",
           description: "Jarvis GUI control",
           filePath: bundledPath,
           baseDir: path.dirname(bundledPath),

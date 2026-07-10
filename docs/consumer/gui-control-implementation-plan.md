@@ -1,4 +1,4 @@
-# Jarvis GUI Control Implementation Plan
+# Jarvis Computer Use Implementation Plan
 
 Last updated: 2026-06-12
 Status: implementation spike, not exposed to consumers

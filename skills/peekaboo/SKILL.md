@@ -1,6 +1,6 @@
 ---
 name: peekaboo
-description: Capture/inspect macOS UI with the Peekaboo CLI. Use for screenshots, video/capture artifacts, diagnostics, explicit Peekaboo requests, or fallback after Jarvis GUI Control is unavailable; do not use as the default for Jarvis GUI-operation proof.
+description: Capture/inspect macOS UI with the Peekaboo CLI. Use for screenshots, video/capture artifacts, diagnostics, explicit Peekaboo requests, or fallback after Jarvis Computer Use is unavailable; do not use as the default for Jarvis GUI-operation proof.
 homepage: https://peekaboo.boo
 metadata:
   {
@@ -28,14 +28,14 @@ metadata:
 
 ## Routing Boundary
 
-For ordinary Jarvis GUI-operation requests, first use the `jarvis-gui-control`
+For ordinary Jarvis computer-use or GUI-operation requests, first use the `jarvis-computer-use`
 skill and the installed `openclaw gui-control` CLI. That path is the product
 GUI-control surface backed by OpenComputerUse.
 
 Use Peekaboo when the user asks for screenshots, screen recording/capture,
 visual artifacts, UI diagnostics, explicit Peekaboo behavior, or when
 `openclaw gui-control` is unavailable and the user accepts a fallback. Do not
-present a Peekaboo-only run as proof that Jarvis GUI Control used the intended
+present a Peekaboo-only run as proof that Jarvis Computer Use used the intended
 OpenComputerUse path.
 
 Peekaboo is a full macOS UI automation CLI: capture/inspect screens, target UI

@@ -3,7 +3,7 @@
 Use this when a change has a visual acceptance condition that terminal output
 cannot prove by itself.
 
-For OpenComputerUse-backed Jarvis GUI-control benchmark work, use
+For OpenComputerUse-backed Jarvis Computer Use benchmark work, use
 `docs/agent-guides/gui-control-ocu-stability.md` as the active checklist and
 methodology.
 
@@ -286,14 +286,14 @@ screenshots are useful for quick checks, but Peekaboo live capture can produce
 black frames even when native stills and video are usable. If you do use
 `peekaboo capture live --mode screen --duration <seconds> --video-out <path>
 --path <frames-dir> --json`, inspect the contact sheet before trusting it. Do
-not treat Peekaboo-only output as Jarvis GUI Control proof.
+not treat Peekaboo-only output as Jarvis Computer Use proof.
 
-For GUI operation, use Jarvis GUI Control:
+For GUI operation, use Jarvis Computer Use:
 
 ```bash
 pnpm openclaw:local gui-control observe --runtime open-computer-use --app Telegram --json
 ```
 
-Do not acquire `~/.codex/bin/cua-guard` for Jarvis GUI Control. That guard is
+Do not acquire `~/.codex/bin/cua-guard` for Jarvis Computer Use. That guard is
 only for Codex-native Computer Use, and a Codex lease failure must not be
-reported as a Jarvis GUI Control blocker.
+reported as a Jarvis Computer Use blocker.
