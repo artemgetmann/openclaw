@@ -1071,15 +1071,27 @@ export async function dispatchReplyFromConfig(params: {
       logInfo(
         `telegram: block-stream final text ready; finalizing block preview before tts textLength=${blockFinalTextForDelivery.length}`,
       );
-      await dispatcher.finalizeBlockReply?.();
+      const finalizedBlockAnswerText = await dispatcher.finalizeBlockReply?.();
+      // Telegram removes acknowledged progress from the accumulated block
+      // transcript while finalizing the visible answer. Use that exact accepted
+      // text for voice synthesis; the raw transcript can still contain every
+      // acknowledgment and progress update from the turn.
+      const blockFinalTextForTts =
+        typeof finalizedBlockAnswerText === "string" && finalizedBlockAnswerText.trim()
+          ? finalizedBlockAnswerText.trim()
+          : blockFinalTextForDelivery;
+      const blockFinalCaptionText =
+        typeof finalizedBlockAnswerText === "string" && finalizedBlockAnswerText.trim()
+          ? finalizedBlockAnswerText.trim()
+          : visibleDurableBlockFinalText;
       logInfo(
-        `telegram: block-stream final preview finalized before tts textLength=${blockFinalTextForDelivery.length}`,
+        `telegram: block-stream final preview finalized before tts textLength=${blockFinalTextForTts.length}`,
       );
       const ttsAttemptStartedAt = Date.now();
       logInfo(
-        `tts: final supplement synthesis start path=block-stream textLength=${blockFinalTextForDelivery.length} channel=${ttsChannel ?? "unknown"}`,
+        `tts: final supplement synthesis start path=block-stream textLength=${blockFinalTextForTts.length} channel=${ttsChannel ?? "unknown"}`,
       );
-      const ttsReply = await maybeApplyAutomaticTts({ text: blockFinalTextForDelivery }, "final");
+      const ttsReply = await maybeApplyAutomaticTts({ text: blockFinalTextForTts }, "final");
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsPayload = {
@@ -1088,7 +1100,7 @@ export async function dispatchReplyFromConfig(params: {
           // from the final bubble. Telegram snippets must describe the visible
           // final answer, not an earlier progress draft or speech-only variant.
           text: shouldCaptionFinalTtsSupplement
-            ? buildFinalTtsCaptionPreview(visibleDurableBlockFinalText)
+            ? buildFinalTtsCaptionPreview(blockFinalCaptionText)
             : undefined,
         };
         const ttsSupplement = sanitizeTelegramVisiblePayload(
@@ -1119,7 +1131,7 @@ export async function dispatchReplyFromConfig(params: {
           queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
         }
         logInfo(
-          `tts: final supplement media send queued path=block-stream textLength=${durableBlockFinalText.trim().length}`,
+          `tts: final supplement media send queued path=block-stream textLength=${blockFinalTextForTts.length}`,
         );
       } else if (
         shouldCaptionFinalTtsSupplement &&
