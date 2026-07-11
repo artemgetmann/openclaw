@@ -31,6 +31,10 @@ import type {
 import { danger, logVerbose } from "../../../src/globals.js";
 import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
+import {
+  formatMonitorReceipt,
+  readMonitorReceiptDisclosure,
+} from "../../../src/monitor/receipt.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
@@ -1743,6 +1747,7 @@ export const dispatchTelegramMessage = async ({
       callsite?: string;
       laneName?: LaneName;
       infoKind?: string;
+      forceLegacyTextTransport?: boolean;
     },
   ) => {
     let normalizedPayload =
@@ -1833,6 +1838,7 @@ export const dispatchTelegramMessage = async ({
       isError: normalizedPayload.isError === true,
     });
     const shouldUseLegacyTextTransport =
+      classification?.forceLegacyTextTransport === true ||
       (durableReason === "final" && !hasMedia) ||
       isControlCommandReplyPayload(normalizedPayload) ||
       isCopySafeDraftReplyPayload(normalizedPayload);
@@ -1872,6 +1878,21 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
+    const monitorReceiptDisclosure = readMonitorReceiptDisclosure(payload.channelData);
+    if (monitorReceiptDisclosure) {
+      // monitor.create supplies a trusted normalized disclosure marker. Render
+      // that contract here so the receipt cannot drift with model prose.
+      await sendPayload(
+        { text: formatMonitorReceipt(monitorReceiptDisclosure) },
+        {
+          reason: "tool",
+          callsite: "dispatch-monitor-receipt",
+          infoKind: "tool",
+          forceLegacyTextTransport: true,
+        },
+      );
+      return;
+    }
     if (isTextOnlyOpenClawSourcePreview(payload)) {
       // Same-chat message-tool progress is model-authored working state. Render
       // it through the mutable progress controller so it never becomes durable

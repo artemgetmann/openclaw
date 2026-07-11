@@ -19,6 +19,7 @@ import {
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -52,6 +53,14 @@ export type GatewayCronState = {
 };
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
+
+export function formatCronFailureMessage(
+  job: Pick<CronJob, "name" | "payload">,
+  error?: string,
+): string {
+  const label = job.payload.kind === "monitorWake" ? "Monitor" : "Cron job";
+  return `${label} "${job.name}" failed: ${error ?? "unknown error"}`;
+}
 
 function trimToOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -631,7 +640,7 @@ export function buildGatewayCronService(params: {
               (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
 
             if (!isBestEffort) {
-              const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
+              const failureMessage = formatCronFailureMessage(job, evt.error);
               const failurePayload = {
                 jobId: job.id,
                 jobName: job.name,

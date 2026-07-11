@@ -227,6 +227,45 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("uses monitor terminology for generic monitor wake failures", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const runMonitorJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "source check timed out",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      runMonitorJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "Watch support replies",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "session:agent:main:monitor:monitor-1",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "monitorWake", monitorId: "monitor-1" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Monitor "Watch support replies" failed before it could complete. I\'ll retry on the next scheduled check.',
+      }),
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("alerts once and disables orphaned monitorWake jobs when the monitor record is missing", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);

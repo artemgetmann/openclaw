@@ -6,6 +6,12 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import { logTelegramProgressDebug } from "../infra/telegram-progress-debug.js";
+import {
+  buildMonitorReceiptChannelData,
+  formatMonitorReceipt,
+  MONITOR_RECEIPT_DETAILS_KEY,
+} from "../monitor/receipt.js";
+import type { MonitorDisclosure } from "../monitor/types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -52,6 +58,23 @@ function isCronAddAction(args: unknown): boolean {
   }
   const action = (args as Record<string, unknown>).action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
+}
+
+function readMonitorDisclosureFromResult(value: unknown): MonitorDisclosure | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const details = (value as Record<string, unknown>).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return undefined;
+  }
+  if ((details as Record<string, unknown>)[MONITOR_RECEIPT_DETAILS_KEY] !== true) {
+    return undefined;
+  }
+  const disclosure = (details as Record<string, unknown>).disclosure;
+  return disclosure && typeof disclosure === "object" && !Array.isArray(disclosure)
+    ? (disclosure as MonitorDisclosure)
+    : undefined;
 }
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
@@ -604,6 +627,10 @@ export async function handleToolExecutionEnd(
           return details ? formatUpdatePlanText(details) : undefined;
         })()
       : undefined;
+  const monitorReceiptDisclosure =
+    !isToolError && toolName === "monitor"
+      ? readMonitorDisclosureFromResult(sanitizedResult)
+      : undefined;
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
 
   // Commit messaging tool text on success, discard on error.
@@ -696,7 +723,19 @@ export async function handleToolExecutionEnd(
     error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
   });
 
-  if (planProgressMessage && ctx.params.onToolResult) {
+  if (monitorReceiptDisclosure && ctx.params.onToolResult) {
+    try {
+      // The channel receives only the trusted normalized disclosure. It can
+      // render a consumer receipt without exposing model-authored prose or
+      // making the final assistant answer carry a settings dump.
+      await ctx.params.onToolResult({
+        text: formatMonitorReceipt(monitorReceiptDisclosure),
+        channelData: buildMonitorReceiptChannelData(monitorReceiptDisclosure),
+      });
+    } catch {
+      // ignore delivery failures
+    }
+  } else if (planProgressMessage && ctx.params.onToolResult) {
     try {
       await ctx.params.onToolResult({
         text: planProgressMessage,
