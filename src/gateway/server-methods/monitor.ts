@@ -863,6 +863,9 @@ export const monitorHandlers: GatewayRequestHandlers = {
         current,
         {
           ...recordPatch,
+          ...(notificationEvent === "completion" && recordPatch.status === undefined
+            ? { status: "completed" }
+            : {}),
           ...(notificationDecision ? { notificationState: notificationDecision.state } : {}),
         },
         nowMs,

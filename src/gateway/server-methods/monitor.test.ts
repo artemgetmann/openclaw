@@ -2106,4 +2106,70 @@ describe("monitor gateway handlers", () => {
     expect(call?.[0]).toBe(true);
     expect((call?.[1] as { status?: string } | undefined)?.status).toBe("completed");
   });
+
+  it("treats a completion notification as a terminal monitor transition", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+    const storeDir = path.dirname(cronStorePath);
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "monitors.json"),
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-notification-complete",
+            agentId: "main",
+            originSessionKey: "agent:main:main",
+            monitorSessionKey: "agent:main:monitor:monitor-notification-complete",
+            sourceType: "whatsapp",
+            sourceTarget: { accountId: "personal", target: "+15551234567" },
+            cadence: { kind: "every", everyMs: 300_000 },
+            actionPolicy: "notify_draft",
+            status: "active",
+            cronJobId: "cron-notification-complete",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    await monitorHandlers["monitor.update"]({
+      params: {
+        monitorId: "monitor-notification-complete",
+        patch: {
+          notificationEvent: "completion",
+          lastCheckpoint: { evidence: "reply-confirmed" },
+        },
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-notification-complete", method: "monitor.update" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(cronUpdate).toHaveBeenCalledWith("cron-notification-complete", { enabled: false });
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      status: "completed",
+      lastCheckpoint: { evidence: "reply-confirmed" },
+      notificationState: { lastEvent: "completion" },
+      notificationDecision: { shouldNotify: true, reason: "immediate_event" },
+    });
+
+    const store = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    expect(store.monitors[0]).toMatchObject({
+      status: "completed",
+      notificationState: { lastEvent: "completion" },
+    });
+  });
 });
