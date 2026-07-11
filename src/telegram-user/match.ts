@@ -46,12 +46,12 @@ export function matchTelegramUserMessage(
     }
   }
 
+  const contains = params.contains ?? "";
   const text = message.text.trim();
-  if (!text) {
+  if (!text && (!message.media_kind || contains)) {
     return { matched: false, reason: "empty_text" };
   }
 
-  const contains = params.contains ?? "";
   if (contains && !text.includes(contains)) {
     return { matched: false, reason: "text_mismatch" };
   }
@@ -76,6 +76,15 @@ export function matchTelegramUserMessage(
     matched: false,
     reason: `thread_mismatch:${String(resolveTelegramUserThreadAnchor(message))}`,
   };
+}
+
+export function shouldRecheckTelegramUserWaitCandidate(
+  reason: TelegramUserWaitMatchReason,
+): boolean {
+  // Telegram can expose a just-created media message before its media metadata
+  // is hydrated. Re-read only that transient shape; all other mismatches are
+  // stable for the lifetime of a bounded wait.
+  return reason === "empty_text";
 }
 
 export function appendIgnoredTelegramUserCandidate(
