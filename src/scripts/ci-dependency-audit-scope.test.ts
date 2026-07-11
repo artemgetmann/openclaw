@@ -269,8 +269,7 @@ describe("shouldRunAuditForChangedPaths", () => {
         }),
       ).toEqual({
         shouldRun: false,
-        reason:
-          "pnpm-lock.yaml changed patch metadata only and the resolved production package inventory is unchanged",
+        reason: "pnpm-lock.yaml changed patch metadata only; registry package data is unchanged",
       });
     } finally {
       process.chdir(cwd);
@@ -329,7 +328,7 @@ describe("shouldRunAuditForChangedPaths", () => {
     try {
       expect(shouldRunAuditForChangedPaths(["pnpm-lock.yaml"], { base, head: "HEAD" })).toEqual({
         shouldRun: true,
-        reason: "pnpm-lock.yaml changed the resolved production package inventory",
+        reason: "pnpm-lock.yaml changed beyond patch metadata",
       });
     } finally {
       process.chdir(cwd);
@@ -359,7 +358,7 @@ describe("shouldRunAuditForChangedPaths", () => {
     try {
       expect(shouldRunAuditForChangedPaths(["pnpm-lock.yaml"], { base, head: "HEAD" })).toEqual({
         shouldRun: true,
-        reason: "pnpm-lock.yaml changed the resolved production package inventory",
+        reason: "pnpm-lock.yaml changed beyond patch metadata",
       });
     } finally {
       process.chdir(cwd);

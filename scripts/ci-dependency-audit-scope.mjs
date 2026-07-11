@@ -1,15 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { parse as parseYaml } from "yaml";
 
 const LOCKFILE_OR_WORKSPACE_RE = /^(pnpm-lock\.yaml|pnpm-workspace\.yaml)$/;
 const PACKAGE_JSON_RE =
   /^(package\.json|ui\/package\.json|extensions\/[^/]+\/package\.json|packages\/[^/]+\/package\.json)$/;
-const PRODUCTION_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 const PATCH_HASH_QUALIFIER_RE = /\(patch_hash=[^)]+\)/g;
-const LOCAL_DEPENDENCY_REFERENCE_RE = /^(file:|link:|workspace:)/;
-const NORMALIZED_LOCKFILE_IGNORED_FIELDS = new Set(["patchedDependencies"]);
-const NORMALIZED_LOCKFILE_GRAPH_FIELDS = new Set(["importers", "packages", "snapshots"]);
 
 // These fields can change what package managers install, resolve, bundle, or
 // execute as package dependency metadata. Other package.json metadata, such as
@@ -51,255 +46,55 @@ function parseJson(raw) {
   }
 }
 
-function parseLockfile(raw) {
-  try {
-    const parsed = parseYaml(raw);
-    return isPlainObject(parsed) ? parsed : null;
-  } catch {
+function normalizeLockfilePatchMetadata(raw) {
+  const normalizedNewlines = raw.replaceAll("\r\n", "\n");
+  // Fail closed before normalization. This script runs before dependency
+  // installation in the secrets job, so it deliberately uses structural
+  // markers from pnpm's deterministic lock format instead of a YAML package.
+  if (
+    !normalizedNewlines.startsWith("lockfileVersion:") ||
+    !normalizedNewlines.includes("\nimporters:\n") ||
+    !normalizedNewlines.includes("\npackages:\n") ||
+    !normalizedNewlines.includes("\nsnapshots:\n")
+  ) {
     return null;
   }
-}
 
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function stripPatchHashQualifiers(value) {
-  return value.replaceAll(PATCH_HASH_QUALIFIER_RE, "");
-}
-
-function isLocalDependencyReference(reference) {
-  return LOCAL_DEPENDENCY_REFERENCE_RE.test(reference);
-}
-
-function dependencyEntryToReference(entry) {
-  if (typeof entry === "string") {
-    return entry;
-  }
-  if (isPlainObject(entry) && typeof entry.version === "string") {
-    return entry.version;
-  }
-  return null;
-}
-
-function dependencyReferenceToSnapshotLocator(dependencyName, reference) {
-  const normalizedReference = stripPatchHashQualifiers(reference);
-  if (isLocalDependencyReference(normalizedReference)) {
-    return normalizedReference;
-  }
-  // pnpm stores aliased scoped packages and git/tarball resolutions as the
-  // resolved package locator, not under the dependency's alias name.
-  const referenceWithoutPeers = normalizedReference.split("(", 1)[0] ?? normalizedReference;
-  if (referenceWithoutPeers.includes("@")) {
-    return normalizedReference;
-  }
-  if (normalizedReference.startsWith(`${dependencyName}@`)) {
-    return normalizedReference;
-  }
-  return `${dependencyName}@${normalizedReference}`;
-}
-
-function snapshotLocatorToPackageKey(locator) {
-  return stripPatchHashQualifiers(locator).split("(")[0] ?? "";
-}
-
-function normalizeDependencyMap(dependencies) {
-  if (dependencies === undefined) {
-    return {};
-  }
-  if (!isPlainObject(dependencies)) {
-    return null;
-  }
-  return Object.fromEntries(
-    Object.entries(dependencies)
-      .map(([dependencyName, dependencyEntry]) => {
-        const reference = dependencyEntryToReference(dependencyEntry);
-        if (reference === null) {
-          return null;
-        }
-        return [dependencyName, dependencyReferenceToSnapshotLocator(dependencyName, reference)];
-      })
-      .filter(Boolean)
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-}
-
-function normalizeSnapshotEntry(snapshotEntry) {
-  if (!isPlainObject(snapshotEntry)) {
-    return null;
-  }
-  const normalizedEntry = stableJson(snapshotEntry);
-  for (const dependencyField of PRODUCTION_DEPENDENCY_FIELDS) {
-    const normalizedDependencies = normalizeDependencyMap(snapshotEntry[dependencyField]);
-    if (normalizedDependencies === null) {
-      return null;
-    }
-    if (Object.keys(normalizedDependencies).length > 0) {
-      normalizedEntry[dependencyField] = normalizedDependencies;
-    } else {
-      delete normalizedEntry[dependencyField];
-    }
-  }
-  return normalizedEntry;
-}
-
-function buildNormalizedProductionLockfile(lockfile) {
-  const importers = lockfile.importers;
-  const packages = lockfile.packages;
-  const snapshots = lockfile.snapshots;
-  if (!isPlainObject(importers) || !isPlainObject(packages) || !isPlainObject(snapshots)) {
-    return {
-      ok: false,
-      reason: "pnpm-lock.yaml is missing importers, packages, or snapshots",
-    };
-  }
-
-  const normalizedImporters = {};
-  const reachablePackageEntries = {};
-  const reachableSnapshotEntries = {};
-  const resolvedProductionInventory = new Set();
-  const pendingLocators = [];
-  const snapshotKeysByNormalizedLocator = new Map();
-
-  for (const snapshotKey of Object.keys(snapshots)) {
-    const normalizedLocator = stripPatchHashQualifiers(snapshotKey);
-    if (snapshotKeysByNormalizedLocator.has(normalizedLocator)) {
-      return {
-        ok: false,
-        reason: `pnpm-lock.yaml has ambiguous normalized snapshot ${normalizedLocator}`,
-      };
-    }
-    snapshotKeysByNormalizedLocator.set(normalizedLocator, snapshotKey);
-  }
-
-  for (const [importerName, importerEntry] of Object.entries(importers)) {
-    if (!isPlainObject(importerEntry)) {
-      return { ok: false, reason: `pnpm-lock.yaml importer ${importerName} is malformed` };
-    }
-
-    const normalizedImporterDependencies = {};
-    for (const dependencyField of PRODUCTION_DEPENDENCY_FIELDS) {
-      const normalizedDependencies = normalizeDependencyMap(importerEntry[dependencyField]);
-      if (normalizedDependencies === null) {
-        return {
-          ok: false,
-          reason: `pnpm-lock.yaml importer ${importerName} has malformed ${dependencyField}`,
-        };
-      }
-      if (Object.keys(normalizedDependencies).length > 0) {
-        normalizedImporterDependencies[dependencyField] = normalizedDependencies;
-      }
-      for (const locator of Object.values(normalizedDependencies)) {
-        if (!isLocalDependencyReference(locator)) {
-          pendingLocators.push(locator);
-        }
-      }
-    }
-
-    normalizedImporters[importerName] = normalizedImporterDependencies;
-  }
-
-  const visitedLocators = new Set();
-  while (pendingLocators.length > 0) {
-    const locator = pendingLocators.pop();
-    if (!locator || visitedLocators.has(locator)) {
+  const lines = normalizedNewlines.split("\n");
+  const normalized = [];
+  let skippingTopLevelPatchBlock = false;
+  for (const line of lines) {
+    if (line === "patchedDependencies:") {
+      skippingTopLevelPatchBlock = true;
       continue;
     }
-    visitedLocators.add(locator);
-
-    const packageKey = snapshotLocatorToPackageKey(locator);
-    if (!packageKey) {
-      return { ok: false, reason: `pnpm-lock.yaml locator ${locator} could not be normalized` };
-    }
-
-    const packageEntry = packages[packageKey];
-    const snapshotKey = snapshotKeysByNormalizedLocator.get(locator);
-    const snapshotEntry = snapshotKey ? snapshots[snapshotKey] : undefined;
-    if (!isPlainObject(packageEntry) || !isPlainObject(snapshotEntry)) {
-      return {
-        ok: false,
-        reason: `pnpm-lock.yaml could not resolve ${locator} from the production dependency graph`,
-      };
-    }
-
-    resolvedProductionInventory.add(packageKey);
-    reachablePackageEntries[packageKey] = stableJson(packageEntry);
-
-    const normalizedSnapshotEntry = normalizeSnapshotEntry(snapshotEntry);
-    if (normalizedSnapshotEntry === null) {
-      return { ok: false, reason: `pnpm-lock.yaml snapshot ${locator} is malformed` };
-    }
-    // Store by the normalized locator so adding or refreshing a pnpm patch hash
-    // cannot look like a registry package/version change.
-    reachableSnapshotEntries[locator] = normalizedSnapshotEntry;
-
-    for (const dependencyField of PRODUCTION_DEPENDENCY_FIELDS) {
-      for (const dependencyLocator of Object.values(
-        normalizedSnapshotEntry[dependencyField] ?? {},
-      )) {
-        if (!isLocalDependencyReference(dependencyLocator)) {
-          pendingLocators.push(dependencyLocator);
-        }
+    if (skippingTopLevelPatchBlock) {
+      if (line.length === 0 || /^\s/u.test(line)) {
+        continue;
       }
+      skippingTopLevelPatchBlock = false;
+    }
+    // Blank-line and trailing-space churn has no dependency audit meaning.
+    // Removing it also keeps deletion of the patch block's separator neutral.
+    const normalizedLine = line.replaceAll(PATCH_HASH_QUALIFIER_RE, "").trimEnd();
+    if (normalizedLine.length > 0) {
+      normalized.push(normalizedLine);
     }
   }
-
-  // Security invariant: registry audit can only speak to the registry-resolved
-  // production graph. We intentionally ignore pnpm's patch hash/path metadata
-  // so patch-only lockfile churn does not inherit unrelated advisory debt, but
-  // we keep every other reachable production metadata field fail-closed.
-  const normalizedTopLevel = Object.fromEntries(
-    Object.entries(lockfile)
-      .filter(
-        ([key]) =>
-          !NORMALIZED_LOCKFILE_GRAPH_FIELDS.has(key) &&
-          !NORMALIZED_LOCKFILE_IGNORED_FIELDS.has(key),
-      )
-      .map(([key, value]) => [key, stableJson(value)]),
-  );
-
-  return {
-    ok: true,
-    normalizedLockfile: stableJson({
-      topLevel: normalizedTopLevel,
-      importers: normalizedImporters,
-      packages: reachablePackageEntries,
-      snapshots: reachableSnapshotEntries,
-    }),
-    resolvedProductionInventory: [...resolvedProductionInventory].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
-  };
+  return normalized.join("\n");
 }
 
 export function compareProductionLockfileAuditView(beforeRaw, afterRaw) {
-  const beforeLockfile = parseLockfile(beforeRaw);
-  const afterLockfile = parseLockfile(afterRaw);
-  if (beforeLockfile === null || afterLockfile === null) {
+  const beforeNormalized = normalizeLockfilePatchMetadata(beforeRaw);
+  const afterNormalized = normalizeLockfilePatchMetadata(afterRaw);
+  if (beforeNormalized === null || afterNormalized === null) {
     return { comparable: false, reason: "pnpm-lock.yaml could not be parsed" };
   }
-
-  const beforeNormalized = buildNormalizedProductionLockfile(beforeLockfile);
-  if (!beforeNormalized.ok) {
-    return { comparable: false, reason: beforeNormalized.reason };
-  }
-
-  const afterNormalized = buildNormalizedProductionLockfile(afterLockfile);
-  if (!afterNormalized.ok) {
-    return { comparable: false, reason: afterNormalized.reason };
-  }
-
-  const inventoryChanged =
-    JSON.stringify(beforeNormalized.resolvedProductionInventory) !==
-    JSON.stringify(afterNormalized.resolvedProductionInventory);
-  const normalizedLockfileChanged =
-    JSON.stringify(beforeNormalized.normalizedLockfile) !==
-    JSON.stringify(afterNormalized.normalizedLockfile);
-
+  const changed = beforeNormalized !== afterNormalized;
   return {
     comparable: true,
-    inventoryChanged,
-    normalizedLockfileChanged,
+    inventoryChanged: changed,
+    normalizedLockfileChanged: changed,
   };
 }
 
@@ -340,7 +135,11 @@ export function packageJsonHasAuditRelevantChange(beforePackage, afterPackage) {
 function packageJsonHasNonPatchAuditRelevantChange(beforePackage, afterPackage) {
   const withoutPatchedDependencies = (packageJson) => {
     const normalized = structuredClone(packageJson);
-    if (isPlainObject(normalized?.pnpm)) {
+    if (
+      normalized?.pnpm &&
+      typeof normalized.pnpm === "object" &&
+      !Array.isArray(normalized.pnpm)
+    ) {
       delete normalized.pnpm.patchedDependencies;
       if (Object.keys(normalized.pnpm).length === 0) {
         delete normalized.pnpm;
@@ -348,7 +147,6 @@ function packageJsonHasNonPatchAuditRelevantChange(beforePackage, afterPackage) 
     }
     return normalized;
   };
-
   return packageJsonHasAuditRelevantChange(
     withoutPatchedDependencies(beforePackage),
     withoutPatchedDependencies(afterPackage),
@@ -372,7 +170,6 @@ export function shouldRunAuditForChangedPaths(changedPaths, { base = "", head = 
   if (auditScopePaths.length === 0) {
     return { shouldRun: false, reason: "no dependency audit scope paths changed" };
   }
-
   if (auditScopePaths.includes("pnpm-workspace.yaml")) {
     return { shouldRun: true, reason: "pnpm-workspace.yaml changed" };
   }
@@ -384,24 +181,13 @@ export function shouldRunAuditForChangedPaths(changedPaths, { base = "", head = 
     if (beforeRaw === null || afterRaw === null) {
       return { shouldRun: true, reason: "pnpm-lock.yaml was added or removed" };
     }
-
     const comparison = compareProductionLockfileAuditView(beforeRaw, afterRaw);
     if (!comparison.comparable) {
       return { shouldRun: true, reason: comparison.reason };
     }
-    if (comparison.inventoryChanged) {
-      return {
-        shouldRun: true,
-        reason: "pnpm-lock.yaml changed the resolved production package inventory",
-      };
-    }
     if (comparison.normalizedLockfileChanged) {
-      return {
-        shouldRun: true,
-        reason: "pnpm-lock.yaml changed reachable production lock metadata beyond patch hashes",
-      };
+      return { shouldRun: true, reason: "pnpm-lock.yaml changed beyond patch metadata" };
     }
-
     skippedPatchOnlyLockfileChange = true;
   }
 
@@ -411,18 +197,11 @@ export function shouldRunAuditForChangedPaths(changedPaths, { base = "", head = 
     if (beforeRaw === null || afterRaw === null) {
       return { shouldRun: true, reason: `${filePath} was added or removed` };
     }
-
     const beforePackage = parseJson(beforeRaw);
     const afterPackage = parseJson(afterRaw);
     if (beforePackage === null || afterPackage === null) {
       return { shouldRun: true, reason: `${filePath} could not be parsed` };
     }
-
-    // A pnpm patch declaration changes install behavior, but registry audit
-    // cannot inspect local patch code. Only suppress that declaration when the
-    // lockfile comparison above independently proved the resolved production
-    // graph identical after removing patch metadata. Every other manifest
-    // change remains audit-relevant and fails closed.
     const hasRelevantChange = skippedPatchOnlyLockfileChange
       ? packageJsonHasNonPatchAuditRelevantChange(beforePackage, afterPackage)
       : packageJsonHasAuditRelevantChange(beforePackage, afterPackage);
@@ -434,19 +213,16 @@ export function shouldRunAuditForChangedPaths(changedPaths, { base = "", head = 
   if (skippedPatchOnlyLockfileChange) {
     return {
       shouldRun: false,
-      reason:
-        "pnpm-lock.yaml changed patch metadata only and the resolved production package inventory is unchanged",
+      reason: "pnpm-lock.yaml changed patch metadata only; registry package data is unchanged",
     };
   }
-
   return { shouldRun: false, reason: "package.json changes are script or metadata only" };
 }
 
 function writeGitHubOutput(shouldRun, outputPath = process.env.GITHUB_OUTPUT) {
-  if (!outputPath) {
-    return;
+  if (outputPath) {
+    appendFileSync(outputPath, `run_dependency_audit=${shouldRun}\n`, "utf8");
   }
-  appendFileSync(outputPath, `run_dependency_audit=${shouldRun}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -460,9 +236,7 @@ function parseArgs(argv) {
     if (argv[i] === "--base") {
       args.base = argv[i + 1] ?? "";
       i += 1;
-      continue;
-    }
-    if (argv[i] === "--head") {
+    } else if (argv[i] === "--head") {
       args.head = argv[i + 1] ?? "HEAD";
       i += 1;
     }
@@ -473,8 +247,7 @@ function parseArgs(argv) {
 if (isDirectRun()) {
   const args = parseArgs(process.argv.slice(2));
   try {
-    const changedPaths = listChangedPaths(args.base, args.head);
-    const result = shouldRunAuditForChangedPaths(changedPaths, args);
+    const result = shouldRunAuditForChangedPaths(listChangedPaths(args.base, args.head), args);
     console.log(result.reason);
     writeGitHubOutput(result.shouldRun);
   } catch (error) {
