@@ -55,6 +55,17 @@ async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void>
         INSERT INTO chats (jid, kind, name, last_message_ts) VALUES
           ('6281238581815@s.whatsapp.net', 'dm', 'GYMNASIUM BALI', 1775039816),
           ('235317080666280@lid', 'unknown', 'GYMNASIUM BALI', 1775039860);
+        INSERT INTO contacts (
+          jid, phone, push_name, full_name, first_name, business_name, updated_at
+        ) VALUES (
+          '235317080666280@lid',
+          '6281238581815',
+          'GYMNASIUM BALI',
+          NULL,
+          NULL,
+          NULL,
+          1775039860
+        );
         INSERT INTO messages (
           chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text, media_type, media_caption
         ) VALUES
@@ -188,6 +199,47 @@ describe("findLatestInboundReplyAcrossResolvedChats", () => {
       expect(unrelated.latestInboundReply).toBeNull();
       expect(intended.latestInboundReply?.msgId).toBe("2AD18CD208AFC0C4B1A0");
       expect(intended.latestInboundReply?.chatJid).toBe("971552857036@s.whatsapp.net");
+    });
+  });
+
+  it("rejects a same-name opaque LID without a phone identity mapping", async () => {
+    await withTempDb(async (dbPath) => {
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec(`
+          INSERT INTO chats (jid, kind, name, last_message_ts) VALUES
+            ('999999999999999@lid', 'unknown', 'GYMNASIUM BALI', 1775039900);
+          INSERT INTO messages (
+            chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text, media_type, media_caption
+          ) VALUES (
+            '999999999999999@lid',
+            'GYMNASIUM BALI',
+            'unrelated-lid-inbound',
+            '999999999999999:1@lid',
+            'GYMNASIUM BALI',
+            1775039900,
+            0,
+            'Unrelated reply',
+            'Unrelated reply',
+            NULL,
+            NULL
+          );
+        `);
+      } finally {
+        db.close();
+      }
+
+      const result = findLatestInboundReplyAcrossResolvedChats({
+        dbPath,
+        target: "6281238581815@s.whatsapp.net",
+      });
+
+      expect(result.candidates.map((candidate) => candidate.jid)).not.toContain(
+        "999999999999999@lid",
+      );
+      expect(result.latestInboundReply?.msgId).toBe("inbound-1");
+      expect(result.latestInboundReply?.chatJid).toBe("235317080666280@lid");
     });
   });
 });

@@ -368,27 +368,19 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       addIdentityName(row.senderName);
     }
 
-    // Name-based expansion is intentionally DB-backed only. It may reconcile
-    // one phone-backed identity with an opaque @lid sibling, but a display name
-    // shared by multiple phone identities is not an identity key. Expanding an
-    // ambiguous name would let one monitor claim another phone chat's reply.
+    // A shared display name is not identity evidence. Name expansion may only
+    // add a candidate when that candidate's canonical JID or stored contact
+    // phone positively maps back to the target phone. This preserves opaque
+    // @lid reconciliation without letting unknown-phone LIDs claim replies.
     for (const name of identityNames) {
       const matchingJids = nameIndex.get(name) ?? new Set<string>();
-      const phoneIdentityCount = new Set(
-        [...matchingJids]
-          .map((jid) => {
-            const canonicalPhone = extractPhoneDigitsFromJid(jid);
-            if (canonicalPhone) {
-              return canonicalPhone;
-            }
-            return normalizeDigits(contacts.find((contact) => contact.jid === jid)?.phone);
-          })
-          .filter((phone): phone is string => phone !== null),
-      ).size;
-      if (phoneIdentityCount > 1) {
-        continue;
-      }
       for (const jid of matchingJids) {
+        const candidatePhone =
+          extractPhoneDigitsFromJid(jid) ??
+          normalizeDigits(contacts.find((contact) => contact.jid === jid)?.phone);
+        if (!seedPhone || candidatePhone !== seedPhone) {
+          continue;
+        }
         addCandidate(jid, "matching-name");
       }
     }
