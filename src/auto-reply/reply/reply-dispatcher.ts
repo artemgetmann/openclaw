@@ -63,7 +63,7 @@ export type ReplyDispatcherOptions = {
    * mutable previews use this to clean transient progress immediately after the
    * durable block text is flushed, before slower supplements such as TTS run.
    */
-  onBlockReplyFinalized?: () => Promise<void> | void;
+  onBlockReplyFinalized?: () => Promise<string | void> | string | void;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
 };
@@ -88,7 +88,7 @@ export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
-  finalizeBlockReply?: () => Promise<void>;
+  finalizeBlockReply?: () => Promise<string | void>;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
@@ -226,7 +226,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       // Preserve the no-flash contract: cleanup hooks must run only after every
       // queued block send has settled, so the durable text is visible first.
       await sendChain;
-      await options.onBlockReplyFinalized?.();
+      return await options.onBlockReplyFinalized?.();
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
