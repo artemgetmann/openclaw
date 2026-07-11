@@ -64,6 +64,24 @@ const AUTH_LOCK_FILE = "active-auth.lock";
 const MACOS_LOCKF_PATH = "/usr/bin/lockf";
 const AUTH_WORKER_START_TIMEOUT_MS = 30_000;
 const AUTH_WORKER_START_POLL_MS = 50;
+const LOCK_READY_FILE = "lock-ready";
+const VERIFICATION_FILE = "auth-list.json";
+// This program is static by design. Every path and user-derived gog value is
+// passed as a distinct argv item below and consumed through quoted positional
+// parameters; never interpolate those values into shell source or use eval.
+const MACOS_LOCKED_AUTH_SCRIPT = `
+ready_path=$1
+verification_path=$2
+verification_timeout=$3
+shift 3
+: > "$ready_path" || exit 70
+"$@"
+auth_code=$?
+if [ "$auth_code" -ne 0 ]; then
+  exit "$auth_code"
+fi
+GOG_KEYRING_OPEN_TIMEOUT="$verification_timeout" gog auth list --json > "$verification_path"
+`;
 export const DEFAULT_CONSUMER_GOOGLE_SERVICES = "gmail,calendar,drive,contacts,docs,sheets";
 export const AUTH_KEYRING_OPEN_TIMEOUT = "10m";
 export const VERIFICATION_KEYRING_OPEN_TIMEOUT = "15s";
@@ -290,7 +308,32 @@ export function resolveAuthWorkerLaunch(params: {
   } as const;
 }
 
-export function spawnAuthWorkerProcess(params: {
+export function resolveGogAuthOperationCommand(params: {
+  platform?: NodeJS.Platform;
+  readyPath: string;
+  verificationPath: string;
+  verificationTimeout: string;
+  gogArgs: string[];
+}) {
+  if ((params.platform ?? process.platform) !== "darwin") {
+    return { command: "gog", args: params.gogArgs };
+  }
+  return {
+    command: "/bin/sh",
+    args: [
+      "-c",
+      MACOS_LOCKED_AUTH_SCRIPT,
+      "openclaw-gog-auth",
+      params.readyPath,
+      params.verificationPath,
+      params.verificationTimeout,
+      "gog",
+      ...params.gogArgs,
+    ],
+  };
+}
+
+export function spawnAuthOperationProcess(params: {
   platform?: NodeJS.Platform;
   lockPath: string;
   command: string;
@@ -301,6 +344,18 @@ export function spawnAuthWorkerProcess(params: {
   return {
     child: spawnChild(launch.command, launch.args, params.options ?? {}) as ChildProcess,
     usesMacosLock: launch.usesMacosLock,
+  };
+}
+
+export function authOperationStatusPids(
+  usesMacosLock: boolean,
+  operationPid: number | undefined,
+  workerPid: number,
+) {
+  return {
+    pid: usesMacosLock ? null : (operationPid ?? null),
+    workerPid,
+    lockPid: usesMacosLock ? (operationPid ?? null) : null,
   };
 }
 
@@ -509,7 +564,7 @@ async function stopProcessGroup(groupLeaderPid: number | undefined) {
   if (!groupLeaderPid || groupLeaderPid <= 0) {
     return true;
   }
-  const signalGroup = (signal: NodeJS.Signals) => {
+  const signalGroup = (signal: NodeJS.Signals | 0) => {
     try {
       process.kill(-groupLeaderPid, signal);
       return true;
@@ -520,11 +575,18 @@ async function stopProcessGroup(groupLeaderPid: number | undefined) {
   if (!signalGroup("SIGTERM")) {
     return true;
   }
-  await sleep(100);
-  // A failed startup handshake must not orphan the lockf command child. Kill
-  // the detached process group, not only the lockf parent, before returning.
-  signalGroup("SIGKILL");
-  return true;
+  for (let attempt = 0; attempt < 20 && signalGroup(0); attempt += 1) {
+    await sleep(50);
+  }
+  if (signalGroup(0)) {
+    // Kill the detached process group, not only its leader, so gog cannot
+    // outlive an explicit stop or failed startup handshake.
+    signalGroup("SIGKILL");
+    for (let attempt = 0; attempt < 20 && signalGroup(0); attempt += 1) {
+      await sleep(50);
+    }
+  }
+  return !signalGroup(0);
 }
 
 async function readAuthList() {
@@ -571,6 +633,10 @@ function servicesSatisfied(requestedServicesCsv: string, accountServices: string
 
 async function verifyAuthorizedAccount(email: string, services: string) {
   const authList = await readAuthList();
+  return authListContainsAccount(authList, email, services);
+}
+
+function authListContainsAccount(authList: GogAuthListOutput, email: string, services: string) {
   return (
     authList.accounts?.some(
       (account) =>
@@ -609,8 +675,9 @@ async function commandStart(flags: Map<string, string | boolean>) {
     lockPid: null,
   });
 
-  // On macOS, lockf executes Node only after acquiring the persistent lock
-  // inode. Other platforms retain the prior direct detached worker path.
+  // The detached Node process supervises status only. On macOS it acquires the
+  // actual auth-operation lock inside runWorker, so supervisor death cannot
+  // release ownership while gog is still alive.
   const workerArgs = [
     "--import",
     "tsx",
@@ -634,30 +701,39 @@ async function commandStart(flags: Map<string, string | boolean>) {
   if (forceConsent) {
     workerArgs.push("--force-consent");
   }
-  const launch = spawnAuthWorkerProcess({
-    lockPath: path.join(SESSIONS_ROOT, AUTH_LOCK_FILE),
-    command: process.execPath,
-    args: workerArgs,
-    options: {
-      detached: true,
-      stdio: "ignore",
-    },
+  const worker = spawnChild(process.execPath, workerArgs, {
+    detached: true,
+    stdio: "ignore",
   });
-  const worker = launch.child;
   if (!worker.pid) {
     throw new Error("Google auth worker did not start");
   }
   await writeStatus(sessionDir, {
-    lockPid: launch.usesMacosLock ? worker.pid : null,
-    workerPid: launch.usesMacosLock ? null : worker.pid,
+    lockPid: null,
+    workerPid: worker.pid,
   });
 
   try {
-    const status = await waitForAuthWorkerStart(sessionId, worker, launch.usesMacosLock);
+    const status = await waitForAuthWorkerStart(sessionId, worker);
     worker.unref();
     console.log(JSON.stringify(status, null, 2));
   } catch (error) {
-    await stopProcessGroup(worker.pid);
+    // A controlled startup failure is cancellation, unlike an unexpected
+    // supervisor crash. Stop any published locked operation group explicitly
+    // before stopping the supervisor and clearing its PIDs.
+    let lockedOperationStopped = true;
+    try {
+      const failedStatus = await readStatus(sessionId);
+      lockedOperationStopped = await stopProcessGroup(failedStatus.lockPid ?? undefined);
+    } catch {
+      // The worker may have failed before publishing operation ownership.
+    }
+    const supervisorStopped = await stopProcessGroup(worker.pid);
+    if (!lockedOperationStopped || !supervisorStopped) {
+      throw new Error(
+        "Google setup is still stopping. Wait a moment and use stop before starting another setup.",
+      );
+    }
     const reason = error instanceof Error ? error.message : String(error);
     const contended = reason.includes("already in progress");
     await writeStatus(sessionDir, {
@@ -676,11 +752,7 @@ async function commandStart(flags: Map<string, string | boolean>) {
   }
 }
 
-async function waitForAuthWorkerStart(
-  sessionId: string,
-  launchProcess: ChildProcess,
-  usesMacosLock: boolean,
-) {
+async function waitForAuthWorkerStart(sessionId: string, launchProcess: ChildProcess) {
   let spawnError: Error | null = null;
   launchProcess.once("error", (error) => {
     spawnError = error;
@@ -689,7 +761,7 @@ async function waitForAuthWorkerStart(
     readStatus: () => readStatus(sessionId),
     getSpawnError: () => spawnError,
     getExitCode: () => launchProcess.exitCode,
-    usesMacosLock,
+    usesMacosLock: false,
   });
 }
 
@@ -717,6 +789,13 @@ export async function waitForAuthWorkerReadiness<
       throw spawnError;
     }
     const status = await params.readStatus();
+    if (status.phase === "error" || status.phase === "stopped") {
+      throw new Error(
+        "message" in status && typeof status.message === "string"
+          ? status.message
+          : "Google auth worker stopped before reporting ready state",
+      );
+    }
     if (status.workerPid && status.phase !== "starting") {
       return status;
     }
@@ -736,6 +815,36 @@ export async function waitForAuthWorkerReadiness<
   }
 }
 
+async function waitForMacosAuthLock(
+  lockProcess: ChildProcess,
+  readyPath: string,
+  getSpawnError: () => Error | null,
+) {
+  const deadline = Date.now() + AUTH_WORKER_START_TIMEOUT_MS;
+  for (;;) {
+    const spawnError = getSpawnError();
+    if (spawnError) {
+      throw spawnError;
+    }
+    try {
+      await fsp.access(readyPath);
+      return true;
+    } catch {
+      // The shell creates this file only after lockf has acquired ownership.
+    }
+    if (lockProcess.exitCode !== null) {
+      if (lockProcess.exitCode === 75) {
+        return false;
+      }
+      throw new Error(`Google auth lock process exited ${String(lockProcess.exitCode)}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Google auth lock process did not report ownership in time");
+    }
+    await sleep(AUTH_WORKER_START_POLL_MS);
+  }
+}
+
 async function runWorker(flags: Map<string, string | boolean>) {
   const sessionId = requireFlag(flags, "--session");
   const email = requireFlag(flags, "--email");
@@ -746,6 +855,8 @@ async function runWorker(flags: Map<string, string | boolean>) {
   const forceConsent = boolFlag(flags, "--force-consent");
   const sessionDir = sessionDirFor(sessionId);
   const logPath = path.join(sessionDir, LOG_FILE);
+  const lockReadyPath = path.join(sessionDir, LOCK_READY_FILE);
+  const verificationPath = path.join(sessionDir, VERIFICATION_FILE);
 
   const args = ["auth", "add", email, "--services", services, "--timeout", timeout];
   if (client) {
@@ -758,12 +869,38 @@ async function runWorker(flags: Map<string, string | boolean>) {
     args.push("--force-consent");
   }
 
-  // Keep a structured status file so the agent can truthfully say "I opened the
-  // browser" and later poll for completion instead of guessing from one reply.
-  const child = spawnChild("gog", args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    env: gogSubprocessEnv("auth"),
+  await Promise.all([
+    fsp.rm(lockReadyPath, { force: true }),
+    fsp.rm(verificationPath, { force: true }),
+  ]);
+  const verificationTimeout =
+    gogSubprocessEnv("verification").GOG_KEYRING_OPEN_TIMEOUT ?? VERIFICATION_KEYRING_OPEN_TIMEOUT;
+  const operation = resolveGogAuthOperationCommand({
+    readyPath: lockReadyPath,
+    verificationPath,
+    verificationTimeout,
+    gogArgs: args,
   });
+  const launch = spawnAuthOperationProcess({
+    lockPath: path.join(SESSIONS_ROOT, AUTH_LOCK_FILE),
+    command: operation.command,
+    args: operation.args,
+    options: {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: gogSubprocessEnv("auth"),
+    },
+  });
+  const child = launch.child;
+  let childSpawnError: Error | null = null;
+  child.once("error", (error) => {
+    childSpawnError = error;
+  });
+  const childResult = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    },
+  );
   let lastErrorText = "";
   const stdoutLines: string[] = [];
   const stderrLines: string[] = [];
@@ -771,11 +908,32 @@ async function runWorker(flags: Map<string, string | boolean>) {
   let authorizationReady = false;
 
   await writeStatus(sessionDir, {
-    phase: "waiting_for_browser",
-    message: "Opening the Google consent flow in the default browser on this device…",
-    pid: child.pid,
-    workerPid: process.pid,
+    phase: launch.usesMacosLock ? "starting" : "waiting_for_browser",
+    message: launch.usesMacosLock
+      ? "Waiting for the active Google setup slot on this Mac…"
+      : "Opening the Google consent flow in the default browser on this device…",
+    ...authOperationStatusPids(launch.usesMacosLock, child.pid, process.pid),
   });
+
+  if (launch.usesMacosLock) {
+    const acquired = await waitForMacosAuthLock(child, lockReadyPath, () => childSpawnError);
+    if (!acquired) {
+      await writeStatus(sessionDir, {
+        phase: "error",
+        message: "Another Google setup is already in progress on this Mac.",
+        pid: null,
+        workerPid: null,
+        lockPid: null,
+        diagnosticKind: "auth_unknown",
+        nextStep: "Continue or stop the existing Google setup before retrying.",
+      });
+      return 1;
+    }
+    await writeStatus(sessionDir, {
+      phase: "waiting_for_browser",
+      message: "Opening the Google consent flow in the default browser on this device…",
+    });
+  }
 
   const consumeChunk = async (chunk: string, source: "stdout" | "stderr") => {
     const lines = chunk
@@ -829,16 +987,20 @@ async function runWorker(flags: Map<string, string | boolean>) {
     });
   }, 2000);
 
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      child.on("close", (code, signal) => resolve({ code, signal }));
-    },
-  );
+  const result = await childResult;
   clearTimeout(authorizingTimer);
 
   if (result.code === 0) {
     try {
-      const authorized = await verifyAuthorizedAccount(email, services);
+      // macOS verification ran inside the same lockf command, so another setup
+      // cannot start between credential storage and the read-only auth check.
+      const authorized = launch.usesMacosLock
+        ? authListContainsAccount(
+            JSON.parse(await fsp.readFile(verificationPath, "utf8")) as GogAuthListOutput,
+            email,
+            services,
+          )
+        : await verifyAuthorizedAccount(email, services);
       if (!authorized) {
         const classified = classifyGoogleAuthFailure({
           combinedText: combinedErrorText({ lastErrorText, stdoutLines, stderrLines }),
@@ -1011,11 +1173,12 @@ async function commandReopen(flags: Map<string, string | boolean>) {
 async function commandStop(flags: Map<string, string | boolean>) {
   const sessionId = requireFlag(flags, "--session");
   const status = await readStatus(sessionId);
-  // Stop the gog child first, then its supervising worker. Ownership is only
-  // released once both have had a chance to exit, avoiding overlapping prompts.
+  // On macOS the lockf process group contains the shell plus gog. Stop that
+  // whole group before the Node supervisor so explicit cancellation cannot
+  // orphan gog and release ownership early. Other platforms stop direct gog.
+  const killedLock = await stopProcessGroup(status.lockPid ?? undefined);
   const killedChild = await stopProcess(status.pid ?? undefined);
   const killedWorker = await stopProcess(status.workerPid ?? undefined);
-  const killedLock = await stopProcess(status.lockPid ?? undefined);
   if (!killedChild || !killedWorker || !killedLock) {
     throw new Error(
       "Google setup is still stopping. Wait a moment and retry stop before starting a new setup.",

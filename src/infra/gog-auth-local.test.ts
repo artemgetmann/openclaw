@@ -1,15 +1,18 @@
+import { spawn as spawnChild } from "node:child_process";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AUTH_KEYRING_OPEN_TIMEOUT,
+  authOperationStatusPids,
   classifyGoogleAuthFailure,
   DEFAULT_CONSUMER_GOOGLE_SERVICES,
   gogSubprocessEnv,
   reserveAuthSessionDirectory,
   resolveAuthWorkerLaunch,
-  spawnAuthWorkerProcess,
+  resolveGogAuthOperationCommand,
+  spawnAuthOperationProcess,
   VERIFICATION_KEYRING_OPEN_TIMEOUT,
   waitForAuthWorkerReadiness,
 } from "../../skills/gog/scripts/gog-auth-local.ts";
@@ -168,6 +171,40 @@ describe("gog auth local helper", () => {
     });
   });
 
+  it("distinguishes supervisor, locked group, and direct gog PIDs", () => {
+    expect(authOperationStatusPids(true, 52_001, 52_002)).toEqual({
+      pid: null,
+      workerPid: 52_002,
+      lockPid: 52_001,
+    });
+    expect(authOperationStatusPids(false, 52_003, 52_004)).toEqual({
+      pid: 52_003,
+      workerPid: 52_004,
+      lockPid: null,
+    });
+  });
+
+  it("passes user-derived gog values as argv instead of shell source", () => {
+    const hostileEmail = 'demo@example.com"; touch /tmp/not-allowed; #';
+    const operation = resolveGogAuthOperationCommand({
+      platform: "darwin",
+      readyPath: "/tmp/ready path",
+      verificationPath: "/tmp/verification path",
+      verificationTimeout: "15s",
+      gogArgs: ["auth", "add", hostileEmail, "--services", "gmail,calendar"],
+    });
+
+    expect(operation.command).toBe("/bin/sh");
+    expect(operation.args[1]).not.toContain(hostileEmail);
+    expect(operation.args.slice(-5)).toEqual([
+      "auth",
+      "add",
+      hostileEmail,
+      "--services",
+      "gmail,calendar",
+    ]);
+  });
+
   it("allows healthy worker readiness beyond the old two-second window", async () => {
     let now = 0;
     let polls = 0;
@@ -217,7 +254,7 @@ describe("gog auth local helper", () => {
     async () => {
       const rootDir = await temporaryRoot();
       const lockPath = path.join(rootDir, "active-auth.lock");
-      const holder = spawnAuthWorkerProcess({
+      const holder = spawnAuthOperationProcess({
         platform: "darwin",
         lockPath,
         command: "/bin/sh",
@@ -230,7 +267,7 @@ describe("gog auth local helper", () => {
       });
       const originalInode = (await fsp.stat(lockPath)).ino;
 
-      const contender = spawnAuthWorkerProcess({
+      const contender = spawnAuthOperationProcess({
         platform: "darwin",
         lockPath,
         command: "/usr/bin/true",
@@ -250,7 +287,7 @@ describe("gog auth local helper", () => {
       process.kill(-(holder.pid ?? 0), "SIGKILL");
       await holderClosed;
 
-      const replacement = spawnAuthWorkerProcess({
+      const replacement = spawnAuthOperationProcess({
         platform: "darwin",
         lockPath,
         command: "/usr/bin/true",
@@ -262,6 +299,149 @@ describe("gog auth local helper", () => {
       });
       expect(replacementCode).toBe(0);
       expect((await fsp.stat(lockPath)).ino).toBe(originalInode);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "keeps normal auth and verification inside one successful lock command",
+    async () => {
+      const rootDir = await temporaryRoot();
+      const fakeGogPath = path.join(rootDir, "gog");
+      const readyPath = path.join(rootDir, "ready");
+      const verificationPath = path.join(rootDir, "verification.json");
+      await fsp.writeFile(
+        fakeGogPath,
+        `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "list" ]; then
+  printf '{"accounts":[{"email":"demo@example.com","services":["gmail"]}]}'
+fi
+exit 0
+`,
+        { mode: 0o755 },
+      );
+      const operation = resolveGogAuthOperationCommand({
+        platform: "darwin",
+        readyPath,
+        verificationPath,
+        verificationTimeout: "15s",
+        gogArgs: ["auth", "add", "demo@example.com", "--services", "gmail"],
+      });
+      const child = spawnAuthOperationProcess({
+        platform: "darwin",
+        lockPath: path.join(rootDir, "active-auth.lock"),
+        command: operation.command,
+        args: operation.args,
+        options: {
+          stdio: "ignore",
+          env: { ...process.env, PATH: `${rootDir}:${process.env.PATH ?? ""}` },
+        },
+      }).child;
+      const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+
+      expect(code).toBe(0);
+      await expect(fsp.access(readyPath)).resolves.toBeUndefined();
+      expect(JSON.parse(await fsp.readFile(verificationPath, "utf8"))).toEqual({
+        accounts: [{ email: "demo@example.com", services: ["gmail"] }],
+      });
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "keeps the auth lock after its Node-like supervisor is killed",
+    async () => {
+      const rootDir = await temporaryRoot();
+      const lockPath = path.join(rootDir, "active-auth.lock");
+      const readyPath = path.join(rootDir, "fake-gog-ready");
+      const lockPidPath = path.join(rootDir, "lock-pid");
+      const holderLaunch = resolveAuthWorkerLaunch({
+        platform: "darwin",
+        lockPath,
+        command: "/bin/sh",
+        args: ["-c", 'printf ready > "$1"; while :; do sleep 1; done', "fake-gog", readyPath],
+      });
+      const supervisorScript = `
+        const { spawn } = require("node:child_process");
+        const fs = require("node:fs");
+        const launch = JSON.parse(process.argv[1]);
+        const child = spawn(launch.command, launch.args, { detached: true, stdio: "ignore" });
+        if (!child.pid) process.exit(2);
+        fs.writeFileSync(process.argv[2], String(child.pid));
+        setInterval(() => {}, 1000);
+      `;
+      const supervisor = spawnChild(
+        process.execPath,
+        ["-e", supervisorScript, JSON.stringify(holderLaunch), lockPidPath],
+        { stdio: "ignore" },
+      );
+      let lockPid: number | undefined;
+      try {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          try {
+            lockPid = Number.parseInt(await fsp.readFile(lockPidPath, "utf8"), 10);
+            await fsp.access(readyPath);
+            break;
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        }
+        expect(lockPid).toBeTypeOf("number");
+        const originalInode = (await fsp.stat(lockPath)).ino;
+
+        const supervisorClosed = new Promise<void>((resolve) =>
+          supervisor.once("close", () => resolve()),
+        );
+        expect(supervisor.pid).toBeTypeOf("number");
+        process.kill(supervisor.pid ?? 0, "SIGKILL");
+        await supervisorClosed;
+
+        const contender = spawnAuthOperationProcess({
+          platform: "darwin",
+          lockPath,
+          command: "/usr/bin/true",
+          args: [],
+          options: { stdio: "ignore" },
+        }).child;
+        const contenderCode = await new Promise<number | null>((resolve) =>
+          contender.once("close", resolve),
+        );
+        expect(contenderCode).toBe(75);
+        expect((await fsp.stat(lockPath)).ino).toBe(originalInode);
+
+        process.kill(-(lockPid ?? 0), "SIGKILL");
+        let replacementCode: number | null = 75;
+        for (let attempt = 0; attempt < 100 && replacementCode === 75; attempt += 1) {
+          const replacement = spawnAuthOperationProcess({
+            platform: "darwin",
+            lockPath,
+            command: "/usr/bin/true",
+            args: [],
+            options: { stdio: "ignore" },
+          }).child;
+          replacementCode = await new Promise<number | null>((resolve) =>
+            replacement.once("close", resolve),
+          );
+          if (replacementCode === 75) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        }
+        expect(replacementCode).toBe(0);
+        expect((await fsp.stat(lockPath)).ino).toBe(originalInode);
+      } finally {
+        if (supervisor.pid) {
+          try {
+            process.kill(supervisor.pid, "SIGKILL");
+          } catch {
+            // Already stopped by the test.
+          }
+        }
+        if (lockPid) {
+          try {
+            process.kill(-lockPid, "SIGKILL");
+          } catch {
+            // Already stopped by the test.
+          }
+        }
+      }
     },
   );
 
