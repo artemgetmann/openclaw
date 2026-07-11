@@ -177,8 +177,8 @@ function createTelegramBotHarness(startMessageId = 7000) {
     });
     return true;
   });
-  const sendVoice = vi.fn();
-  const sendAudio = vi.fn();
+  const sendVoice = vi.fn(async () => ({ message_id: nextMessageId++ }));
+  const sendAudio = vi.fn(async () => ({ message_id: nextMessageId++ }));
 
   const bot = {
     api: {
@@ -572,6 +572,73 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     expect(
       sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
     ).toHaveLength(0);
+  });
+
+  it("streams explicitly phased final partials beside an active Work log on one stable ID", async () => {
+    const harness = createTelegramBotHarness(7050);
+    const planText = "Plan updated\n- [x] Inspect lifecycle\n- [~] Verify ordered delivery";
+    const commentary =
+      "The lifecycle boundary is confirmed; I’m checking final delivery ordering now.";
+    const finalPrefix =
+      "The final answer now starts streaming as soon as the runtime marks the assistant message as final.";
+    const finalMiddle = `${finalPrefix} ${"Each cumulative snapshot keeps the same Telegram message identity. ".repeat(10).trim()}`;
+    const finalAnswer = `${finalMiddle} Work log collapse and voice delivery remain independent.`;
+    const finalPhase = { openclaw: { assistantPhase: "final_answer" } };
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: planText,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: commentary,
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+
+        await replyOptions?.onPartialReply?.({ text: finalPrefix, channelData: finalPhase });
+        await replyOptions?.onPartialReply?.({ text: finalMiddle, channelData: finalPhase });
+        await dispatcherOptions.deliver(
+          { text: finalAnswer, channelData: finalPhase },
+          { kind: "block" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({
+      bot: harness.bot,
+      cfg: { channels: { telegram: { accounts: { default: { botToken: "123:test" } } } } },
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "explicit-final-partial-stream" },
+      }),
+    });
+
+    const sends = sendMessageCalls(harness.calls);
+    const workLogSend = sends.find((call) => call.text.includes("Inspect lifecycle"));
+    const finalSend = sends.find((call) => call.text === finalPrefix);
+    const finalEdits = editMessageTextCalls(harness.calls).filter(
+      (call) => call.text === finalMiddle || call.text === finalAnswer,
+    );
+
+    expect(workLogSend).toBeDefined();
+    expect(finalSend).toBeDefined();
+    expect(finalSend!.messageId).not.toBe(workLogSend!.messageId);
+    expect(finalEdits).toEqual([
+      expect.objectContaining({ messageId: finalSend!.messageId, text: finalMiddle }),
+      expect.objectContaining({ messageId: finalSend!.messageId, text: finalAnswer }),
+    ]);
+    expect(workLogEditCalls(harness.calls)).not.toHaveLength(0);
+    expect(
+      workLogEditCalls(harness.calls).every((call) => call.messageId === workLogSend!.messageId),
+    ).toBe(true);
+    expect(sendMessageCalls(harness.calls).filter((call) => call.text === commentary)).toHaveLength(
+      0,
+    );
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
   });
 
   it("buffers raw plan-adjacent commentary partials without transient send-delete churn", async () => {

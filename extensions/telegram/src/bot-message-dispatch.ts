@@ -2674,13 +2674,11 @@ export const dispatchTelegramMessage = async ({
                 enqueueDraftLaneEvent(async () => {
                   sawAssistantPartial = true;
                   if (resolveOpenClawAssistantPhase(payload) === "final_answer") {
-                    const retainResult = await beginFinalAnswerPhase("before-final-answer-partial");
-                    if (retainResult === "retained") {
-                      // The real final payload follows through the dispatcher.
-                      // Do not create an intermediate answer preview after the
-                      // Work Log has already been frozen.
-                      return;
-                    }
+                    // Freeze the Work Log before opening the answer lane, then
+                    // stream this structurally final snapshot immediately. The
+                    // later final/block payload edits the same answer identity;
+                    // it no longer needs to materialize the whole buffered text.
+                    await beginFinalAnswerPhase("before-final-answer-partial");
                   }
                   await ingestDraftLaneSegments(payload.text);
                 })

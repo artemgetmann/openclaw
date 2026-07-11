@@ -81,6 +81,46 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     });
   });
 
+  it("carries explicit final phase metadata into cumulative partial replies", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+    const textSignature = JSON.stringify({
+      v: 1,
+      id: "msg_streaming_final",
+      phase: "final_answer",
+    });
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onPartialReply,
+    });
+
+    // A signed message start is the provider's earliest structural phase
+    // boundary. Every cumulative snapshot from that message must retain it.
+    emit({
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "", textSignature }],
+      } as AssistantMessage,
+    });
+    emitAssistantTextDelta({ emit, delta: "The verified result" });
+    emitAssistantTextDelta({ emit, delta: " streams immediately." });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply.mock.calls.map(([payload]) => payload)).toEqual([
+      expect.objectContaining({
+        text: "The verified result",
+        channelData: { openclaw: { assistantPhase: "final_answer" } },
+      }),
+      expect.objectContaining({
+        text: "The verified result streams immediately.",
+        channelData: { openclaw: { assistantPhase: "final_answer" } },
+      }),
+    ]);
+  });
+
   it("keeps phase metadata when text streams before the signed message end", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness({
       deferPhaseUnknownBlockReplies: true,
