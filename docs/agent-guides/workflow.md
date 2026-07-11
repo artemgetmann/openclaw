@@ -15,7 +15,7 @@
 ## Two-clone default
 
 - Default model:
-  - `~/Programming_Projects/openclaw` is the sacred runtime home clone for fork `main`
+  - `~/Programming_Projects/openclaw` is the sacred source-control and break-glass runtime anchor for fork `main`
   - `~/Programming_Projects/openclaw-consumer` is legacy/emergency fallback only
 - Those sacred home clones replace durable worktrees as the default branch homes.
 - Sacred home clones are pull-only runtime anchors:
@@ -35,13 +35,23 @@
 - Mark the PR ready only after validation is complete.
 - Merge only when the task and repo policy allow it.
 
-## Shared main runtime rule
+## Daily Jarvis and shared developer runtime rules
 
-- The default shared main bot runtime is sacred. It must run from the sacred home clone at `~/Programming_Projects/openclaw` with `main` checked out.
+- Artem's daily Jarvis must run as `ai.jarvis.gateway` from the package-seeded
+  runtime under `~/Library/Application Support/Jarvis/.jarvis`. This managed
+  package lane is the founder-dogfood steady state.
+- `ai.openclaw.gateway` from `~/Programming_Projects/openclaw` is the shared
+  developer/source-checkout lane. The sacred clone remains its canonical owner,
+  but this service is not the normal daily Jarvis runtime.
 - Feature worktrees must not own or boot the default shared runtime, even temporarily.
 - If you need to test unmerged code against Telegram/WhatsApp, use one of these paths:
   - isolated tester bot/runtime with explicit profile or config isolation
-  - merge to `main`, fast-forward the sacred home clone, then restart the shared runtime from there
+  - merge to `main`, fast-forward the sacred home clone, then restart the shared
+    developer runtime from there
+- Using sacred `main` to hotfix the daily `ai.jarvis.gateway` payload is an
+  explicit break-glass action. It must remain visibly distinct from
+  `jarvis-managed-bundle` package provenance and be replaced by a package-seeded
+  runtime after the incident.
 - Do not treat "the gateway happens to be pointing at my worktree right now" as acceptable state. That is runtime ownership drift, not a testing strategy.
 - Verify who owns the running gateway before any live test:
   - `pnpm openclaw gateway status`
@@ -83,8 +93,10 @@
 9. Give a next-step handoff before stopping, especially if the PR is still
    draft, waiting for review, waiting for CI, or not deployed to runtime yet.
 10. Merge if the task and policy allow it.
-11. If the merged change needs live runtime behavior, ship it from the sacred
-    home clone and prove the runtime separately from PR merge state.
+11. If the merged change needs live runtime behavior, choose the lane explicitly:
+    keep daily Jarvis on the managed package/app-support runtime; use sacred
+    `main` for the shared developer service or an approved break-glass hotfix
+    only. Prove runtime provenance separately from PR merge state.
 12. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
 13. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
 
