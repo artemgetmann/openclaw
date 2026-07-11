@@ -117,6 +117,12 @@ commit_matches() {
   [[ "${expected}" == "${actual}"* || "${actual}" == "${expected}"* ]]
 }
 
+runtime_source_is_protectable() {
+  local runtime_source="$1"
+  [[ "${runtime_source}" == "jarvis-managed-bundle" || \
+    "${runtime_source}" == "jarvis-break-glass-hotfix" ]]
+}
+
 pid_for_label() {
   local labels="$1"
   local label="$2"
@@ -231,7 +237,8 @@ prove_live_runtime_commit() {
   config_path="$(identity_field "${line}" "configPath" || true)"
 
   [[ "${service_label}" == "${JARVIS_LABEL}" ]] || die "live serviceLabel=${service_label:-missing}, expected ${JARVIS_LABEL}"
-  [[ "${runtime_source}" == "jarvis-managed-bundle" ]] || die "live runtimeSource=${runtime_source:-missing}, expected jarvis-managed-bundle"
+  runtime_source_is_protectable "${runtime_source}" || \
+    die "live runtimeSource=${runtime_source:-missing}, expected jarvis-managed-bundle or jarvis-break-glass-hotfix"
   [[ "${state_dir}" == "${JARVIS_STATE_DIR}" ]] || die "live stateDir=${state_dir:-missing}, expected ${JARVIS_STATE_DIR}"
   [[ "${config_path}" == "${JARVIS_CONFIG_PATH}" ]] || die "live configPath=${config_path:-missing}, expected ${JARVIS_CONFIG_PATH}"
   [[ -n "${live_commit}" ]] || die "Jarvis gateway log did not print runtimeCommit"
@@ -304,7 +311,8 @@ prove_status_health() {
   )"
 
   [[ "${service_label}" == "ai.jarvis.gateway" ]] || die "live serviceLabel=${service_label:-missing}, expected ai.jarvis.gateway"
-  [[ "${runtime_source}" == "jarvis-managed-bundle" ]] || die "live runtimeSource=${runtime_source:-missing}, expected jarvis-managed-bundle"
+  runtime_source_is_protectable "${runtime_source}" || \
+    die "live runtimeSource=${runtime_source:-missing}, expected jarvis-managed-bundle or jarvis-break-glass-hotfix"
   [[ -n "${status_commit}" ]] || die "Jarvis status proof did not print runtimeCommit"
   commit_matches "${expected_commit}" "${status_commit}" || \
     die "Jarvis status runtimeCommit=${status_commit:-missing}, expected ${expected_commit}"

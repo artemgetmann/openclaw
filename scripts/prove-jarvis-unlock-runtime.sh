@@ -432,7 +432,11 @@ assert_status_probe() {
   service_label="$("$JQ_BIN" -r '.runtimeFingerprint.serviceLabel // empty' "$status_file")"
   runtime_source="$("$JQ_BIN" -r '.runtimeFingerprint.runtimeSource // empty' "$status_file")"
   [[ "$service_label" == "$JARVIS_LABEL" ]] || return 1
-  [[ "$runtime_source" == "jarvis-managed-bundle" ]] || return 1
+  # Unlock preflight proves Jarvis ownership and RPC health, not package
+  # provenance. An explicitly labelled break-glass payload is still the same
+  # app-support service; the stricter packaged-runtime proof rejects it.
+  [[ "$runtime_source" == "jarvis-managed-bundle" || \
+    "$runtime_source" == "jarvis-break-glass-hotfix" ]] || return 1
   [[ "$rpc_ok" == "true" ]] || return 1
   [[ "$healthy" == "true" ]] || return 1
 }

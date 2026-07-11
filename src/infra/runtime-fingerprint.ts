@@ -24,6 +24,7 @@ export type RuntimeFingerprint = {
   runtimeSource?:
     | "sacred-main-checkout"
     | "jarvis-managed-bundle"
+    | "jarvis-break-glass-hotfix"
     | "isolated-test-worktree"
     | "source-checkout"
     | "unknown";
@@ -59,6 +60,8 @@ export function resolveRuntimeFingerprint(
     { ...env, OPENCLAW_VERSION: undefined, OPENCLAW_SERVICE_VERSION: undefined },
     "unknown",
   );
+  const runtimeCommit =
+    resolveCommitHash({ cwd: worktree, env, moduleUrl: params.moduleUrl }) ?? undefined;
 
   return {
     branch: resolveBranchName(worktree),
@@ -69,9 +72,8 @@ export function resolveRuntimeFingerprint(
     runtimePackageVersion,
     appProductVersion: resolveAppProductVersion(env),
     launchServiceVersion: firstNonEmpty(env.OPENCLAW_SERVICE_VERSION),
-    runtimeCommit:
-      resolveCommitHash({ cwd: worktree, env, moduleUrl: params.moduleUrl }) ?? undefined,
-    runtimeSource: classifyRuntimeSource({ worktree, env }),
+    runtimeCommit,
+    runtimeSource: classifyRuntimeSource({ worktree, stateDir, runtimeCommit, env }),
     guiCapabilities: resolveRuntimeGuiCapabilities(worktree),
     openClawVersion: resolveRuntimeServiceVersion(env),
   };
@@ -219,6 +221,8 @@ function resolveAppProductVersion(env: NodeJS.ProcessEnv): string | undefined {
 
 function classifyRuntimeSource(params: {
   worktree: string;
+  stateDir: string;
+  runtimeCommit?: string;
   env: NodeJS.ProcessEnv;
 }): RuntimeFingerprint["runtimeSource"] {
   const normalizedWorktree = path.resolve(params.worktree);
@@ -233,12 +237,72 @@ function classifyRuntimeSource(params: {
     ) ||
     normalizedWorktree.includes(`${path.sep}.jarvis${path.sep}lib${path.sep}openclaw-bundled`)
   ) {
-    return "jarvis-managed-bundle";
+    return classifyJarvisAppSupportRuntime(params);
   }
   if (normalizedWorktree.includes(`${path.sep}.worktrees${path.sep}`)) {
     return "isolated-test-worktree";
   }
   return normalizedWorktree ? "source-checkout" : "unknown";
+}
+
+type JarvisRuntimeManifest = {
+  gitCommit?: unknown;
+};
+
+function classifyJarvisAppSupportRuntime(params: {
+  stateDir: string;
+  runtimeCommit?: string;
+}): RuntimeFingerprint["runtimeSource"] {
+  const runtimeCommit = gitCommitString(params.runtimeCommit);
+  if (!runtimeCommit) {
+    // A managed path without a running revision is only a location claim. It
+    // cannot prove which payload the app seeded, so old or damaged installs
+    // deliberately fail closed instead of inheriting packaged provenance.
+    return "unknown";
+  }
+
+  const manifest = readJsonMetadata<JarvisRuntimeManifest>(
+    path.join(params.stateDir, ".consumer-bundled-runtime.json"),
+  );
+  const manifestCommit = gitCommitString(manifest?.gitCommit);
+  if (!manifestCommit) {
+    return "unknown";
+  }
+
+  if (commitsMatch(manifestCommit, runtimeCommit)) {
+    // The installed manifest is the app's seed receipt. Matching it to the
+    // executable payload is the minimum evidence required for managed-bundle
+    // provenance; the Application Support path alone is never enough.
+    return "jarvis-managed-bundle";
+  }
+
+  // Even before the operator writes a protection marker, a payload that does
+  // not match the app seed receipt is an emergency/source-refresh state. The
+  // proof script reads the optional protection marker for a more specific
+  // diagnostic, but neither state may claim managed-package provenance.
+  return "jarvis-break-glass-hotfix";
+}
+
+function readJsonMetadata<T>(filePath: string): T | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function gitCommitString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return /^[0-9a-f]{7,40}$/.test(normalized) ? normalized : undefined;
+}
+
+function commitsMatch(left: string, right: string): boolean {
+  const normalizedLeft = left.trim().toLowerCase();
+  const normalizedRight = right.trim().toLowerCase();
+  return normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft);
 }
 
 function resolveBranchName(searchDir: string): string {
