@@ -1494,6 +1494,14 @@ export const dispatchTelegramMessage = async ({
     if (!controller) {
       return undefined;
     }
+    // The answer draft already rendered the natural acknowledgment before it
+    // was adopted. Seed the controller's ordered history with that visible
+    // text so the subsequent plan update edits this same message into a Work
+    // log containing the acknowledgment instead of overwriting it.
+    const adoptedText = (stream.lastDeliveredText?.() ?? answerLane.lastPartialText).trim();
+    if (adoptedText) {
+      controller.update(adoptedText);
+    }
     // The first assistant deltas are speculative. If later structure proves
     // they were progress/commentary, keep the same Telegram bubble and let the
     // progress controller edit/clear it. Deleting here creates the churn users
@@ -1518,146 +1526,11 @@ export const dispatchTelegramMessage = async ({
     );
     return controller;
   };
-  const retainAnswerAcknowledgmentBeforePlan = async (callsite: string) => {
-    if (!answerLane.stream || !answerLane.hasStreamedMessage) {
-      return false;
-    }
-    const stream = answerLane.stream;
-    // A plan boundary is structurally different from ordinary commentary: the
-    // prompt requires a natural acknowledgment first, and that message must not
-    // be adopted and overwritten by the checklist. Materialize it before the
-    // plan controller takes ownership of a separate Telegram message.
-    const messageId = await stream.materialize?.();
-    if (typeof messageId !== "number") {
-      // materialize() stops the stream even when Telegram cannot return an ID.
-      // Reopen it before the established adoption fallback turns this lane into
-      // plan progress; otherwise replace() targets a stopped generation and the
-      // checklist silently disappears.
-      stream.forceNewMessage();
-      return false;
-    }
-    logTelegramDurableSendClassification({
-      reason: "progress",
-      callsite,
-      laneName: "answer",
-      messageId,
-      retained: true,
-      deleteOnCleanup: false,
-      sourceKind: "partial",
-    });
-    answerLane.stream = undefined;
-    resetDraftLaneState(answerLane);
-    activePreviewLifecycleByLane.answer = "complete";
-    retainPreviewOnCleanupByLane.answer = true;
-    return true;
-  };
-  const retainProgressAcknowledgmentBeforePlan = async (callsite: string) => {
-    const controller = getActiveProgressController();
-    if (!controller || activeProgressKind !== "generic") {
-      return false;
-    }
-    // In the high-route provider path, natural commentary arrives through
-    // onBlockReply and therefore already owns the generic progress controller.
-    // A plan is a structural boundary: freeze that natural acknowledgment as-is
-    // and release controller ownership so the checklist starts a new message.
-    const messageId = await controller.materialize();
-    if (typeof messageId !== "number") {
-      // If Telegram cannot confirm the durable acknowledgment, retain the old
-      // replacement behavior. A duplicate acknowledgment is worse than losing
-      // the preferred split, and this keeps draft-transport fallback intact.
-      return false;
-    }
-    logTelegramDurableSendClassification({
-      reason: "progress",
-      callsite,
-      laneName: "answer",
-      messageId,
-      retained: true,
-      deleteOnCleanup: false,
-      sourceKind: "block",
-    });
-    if (activeTelegramProgressControllers.get(progressControllerKey) === controller) {
-      activeTelegramProgressControllers.delete(progressControllerKey);
-    }
-    if (progressController === controller) {
-      progressController = undefined;
-    }
-    activeProgressKind = undefined;
-    routeToolStatusPartialsToProgress = false;
-    // Some high-route providers emit the next assistant-message boundary only
-    // after its first answer delta. The acknowledgment is already detached, so
-    // consume that delayed boundary instead of rotating the visible final
-    // preview onto a replacement Telegram identity.
-    skipNextAnswerMessageStartRotation = true;
-    return true;
-  };
-  const materializeNaturalProgressBesideActivePlan = async (
-    progressText: string,
-    callsite: string,
-    deliverDurably?: () => Promise<boolean>,
-  ) => {
-    const stream = answerLane.stream ?? ensureDraftLaneStream("answer");
-    if (!stream) {
-      // Block-streaming/reasoning modes intentionally disable answer drafts.
-      // Natural assistant commentary still needs a separate identity beside the
-      // plan, so use the ordinary durable delivery path instead of contaminating
-      // the active plan controller or inventing an unavailable answer draft.
-      return (await deliverDurably?.()) ?? false;
-    }
-    // A structured plan owns the progress controller until final retention.
-    // Natural commentary that arrives between plan snapshots therefore uses the
-    // answer lane as a separate durable message instead of appending to, or
-    // stealing ownership from, the plan's Telegram identity.
-    setDraftDurableSendClassification("answer", {
-      reason: "progress",
-      callsite,
-      sourceKind: "block",
-    });
-    stream.update(progressText);
-    answerLane.lastPartialText = progressText;
-    answerLane.hasStreamedMessage = true;
-    await stream.flush();
-    // An ambiguous first send can reach Telegram without returning a message
-    // ID. materialize() would send the same text again, so preserve the uncertain
-    // attempt as-is and never manufacture a duplicate commentary bubble.
-    const sendMayHaveLanded = stream.sendMayHaveLanded?.() === true;
-    const messageId = sendMayHaveLanded ? undefined : await stream.materialize?.();
-    if (typeof messageId === "number") {
-      logTelegramDurableSendClassification({
-        reason: "progress",
-        callsite: `${callsite}-retain`,
-        laneName: "answer",
-        messageId,
-        retained: true,
-        deleteOnCleanup: false,
-        sourceKind: "block",
-      });
-    } else if (!sendMayHaveLanded) {
-      // Materialization can fail after an unconfirmed send. Never fall back to
-      // the active plan controller here: preserving its identity is safer than
-      // overwriting the checklist or duplicating an uncertain commentary send.
-      stream.forceNewMessage();
-    }
-    answerLane.stream = undefined;
-    resetDraftLaneState(answerLane);
-    // The durable commentary is detached now; lifecycle state describes the
-    // empty active lane, not that archived message. Keeping this `complete`
-    // would make every pre-boundary final delta pre-rotate the answer lane.
-    activePreviewLifecycleByLane.answer = "transient";
-    retainPreviewOnCleanupByLane.answer = false;
-    // Providers may emit the next final delta before its assistant-message
-    // boundary. This helper already detached the commentary, so consume that
-    // delayed boundary instead of rotating the newly visible final preview.
-    skipNextAnswerMessageStartRotation = true;
-    return true;
-  };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
     options: {
-      replace?: boolean;
       progressKind?: "generic" | "plan";
       naturalCommentary?: boolean;
-      deliverNaturalCommentaryDurably?: () => Promise<boolean>;
     } = {},
   ) => {
     if (!text) {
@@ -1671,37 +1544,17 @@ export const dispatchTelegramMessage = async ({
     // structural progress boundary must wait for them before it decides whether
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
-    if (
-      options.naturalCommentary === true &&
-      options.progressKind !== "plan" &&
-      activeProgressKind === "plan"
-    ) {
-      const materializedBesidePlan = await materializeNaturalProgressBesideActivePlan(
-        progressText,
-        "plan-adjacent-natural-progress",
-        options.deliverNaturalCommentaryDurably,
-      );
-      if (materializedBesidePlan) {
-        forceNextAnswerFinalSend = true;
-        recordTransientProgressPreviewText(progressText);
-        return true;
-      }
-    }
-    if (options.progressKind === "plan") {
-      const retainedAnswerAcknowledgment = await retainAnswerAcknowledgmentBeforePlan(
-        "answer-acknowledgment-before-plan",
-      );
-      if (!retainedAnswerAcknowledgment) {
-        await retainProgressAcknowledgmentBeforePlan("progress-acknowledgment-before-plan");
-      }
-    }
     const controller =
       (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??
       getProgressController();
     if (!controller) {
       return false;
     }
-    activeProgressKind = options.progressKind ?? (options.replace ? "plan" : "generic");
+    if (options.progressKind === "plan") {
+      activeProgressKind = "plan";
+    } else if (!activeProgressKind) {
+      activeProgressKind = "generic";
+    }
     // Progress owns the transient bubble. The final answer must be sent as its
     // own durable message if no later answer stream appears. When a later
     // answer stream does appear, final delivery may safely finalize that active
@@ -1717,10 +1570,17 @@ export const dispatchTelegramMessage = async ({
       previewTransport: progressPreviewTransport,
       callsite: "update-answer-progress-from-block",
     });
-    if (options.replace) {
-      controller.replace(progressText);
+    if (options.progressKind === "plan") {
+      controller.updatePlan(progressText);
     } else {
       controller.update(progressText);
+    }
+    if (options.progressKind === "plan" || options.naturalCommentary === true) {
+      // Providers may report the next assistant-message boundary after the
+      // first final delta. The answer lane is currently empty because all
+      // pre-final commentary belongs to Work log, so consume that delayed
+      // boundary instead of rotating the new final preview onto another ID.
+      skipNextAnswerMessageStartRotation = true;
     }
     return true;
   };
@@ -2061,7 +1921,6 @@ export const dispatchTelegramMessage = async ({
       // Telegram text and never reaches TTS as a tool result.
       const progressKind = resolveOpenClawProgressKind(payload) === "plan" ? "plan" : "generic";
       await updateAnswerProgressFromBlock(payload.text, {
-        replace: progressKind === "plan",
         progressKind,
       });
       return;
@@ -2325,13 +2184,6 @@ export const dispatchTelegramMessage = async ({
     const progressText = renderTextWithToolProgress(pending.text);
     await updateAnswerProgressFromBlock(progressText, {
       naturalCommentary: true,
-      deliverNaturalCommentaryDurably: () =>
-        sendPayload(applyTextToPayload(pending.payload, progressText), {
-          reason: "progress",
-          callsite: "plan-adjacent-buffered-commentary-send",
-          laneName: "answer",
-          infoKind: "block",
-        }),
     });
   };
 
@@ -2567,17 +2419,6 @@ export const dispatchTelegramMessage = async ({
                   const progressText = renderTextWithToolProgress(segment.text);
                   await updateAnswerProgressFromBlock(progressText, {
                     naturalCommentary: assistantPhase === "commentary",
-                    ...(assistantPhase === "commentary"
-                      ? {
-                          deliverNaturalCommentaryDurably: () =>
-                            sendPayload(applyTextToPayload(payload, progressText), {
-                              reason: "progress",
-                              callsite: "plan-adjacent-commentary-segment-send",
-                              laneName: "answer",
-                              infoKind: "block",
-                            }),
-                        }
-                      : {}),
                   });
                 }
                 continue;
@@ -2684,17 +2525,6 @@ export const dispatchTelegramMessage = async ({
                 const progressText = renderTextWithToolProgress(payload.text);
                 await updateAnswerProgressFromBlock(progressText, {
                   naturalCommentary: assistantPhase === "commentary",
-                  ...(assistantPhase === "commentary"
-                    ? {
-                        deliverNaturalCommentaryDurably: () =>
-                          sendPayload(applyTextToPayload(payload, progressText), {
-                            reason: "progress",
-                            callsite: "plan-adjacent-commentary-send",
-                            laneName: "answer",
-                            infoKind: "block",
-                          }),
-                      }
-                    : {}),
                 });
               }
               return;

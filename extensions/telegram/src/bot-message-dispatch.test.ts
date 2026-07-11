@@ -435,11 +435,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(progressStream.update).toHaveBeenNthCalledWith(
       1,
-      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
+      "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
     );
     expect(progressStream.update).toHaveBeenNthCalledWith(
       2,
-      "Plan updated\n\n- [x] Inspect files\n\n- [x] Render checklist\n\n- [~] Run tests",
+      "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
     );
     expect(progressStream.update).toHaveBeenCalledWith("Work log");
     expect(progressStream.update).toHaveBeenCalledTimes(3);
@@ -451,7 +451,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("keeps plan delivery usable when a progress acknowledgment cannot materialize", async () => {
+  it("folds a progress acknowledgment into the plan without materializing a second message", async () => {
     const progressStream = createDraftStream();
     progressStream.materialize.mockResolvedValue(undefined);
     createTelegramDraftStream.mockReturnValue(progressStream);
@@ -486,13 +486,10 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
 
     expect(progressStream.update).toHaveBeenCalledWith(acknowledgment);
-    expect(progressStream.materialize).toHaveBeenCalled();
-    expect(progressStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(progressStream.materialize).toHaveBeenCalledTimes(1);
+    expect(progressStream.forceNewMessage).not.toHaveBeenCalled();
     expect(progressStream.update).toHaveBeenCalledWith(
-      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Run tests",
-    );
-    expect(progressStream.forceNewMessage.mock.invocationCallOrder[0]).toBeLessThan(
-      progressStream.update.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
+      `${acknowledgment}\n\nPlan updated\n- [~] Inspect files\n- [ ] Run tests`,
     );
   });
 
@@ -527,7 +524,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(progressStream.update).toHaveBeenCalledWith(
-      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Write temp report\n\n- [ ] Summarize",
+      "Plan updated\n- [~] Inspect files\n- [ ] Write temp report\n- [ ] Summarize",
     );
     expect(progressStream.update).not.toHaveBeenCalledWith(finalText);
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
@@ -671,7 +668,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(answerStream.update).toHaveBeenCalledWith("Inspecting the workspace state.");
     expect(answerStream.update).toHaveBeenCalledWith(
-      "Checking the current branch and recent edits.",
+      "Inspecting the workspace state.\n\nChecking the current branch and recent edits.",
     );
     expect(answerStream.update).toHaveBeenCalledWith("Work log");
     expect(answerStream.clear).not.toHaveBeenCalled();
@@ -736,7 +733,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
     expect(speculativeAnswerStream.update).toHaveBeenCalledWith(
-      "Checking the current branch and recent edits.",
+      "Inspecting the workspace state.\n\nChecking the current branch and recent edits.",
     );
     expect(speculativeAnswerStream.forceNewMessage).not.toHaveBeenCalled();
     expect(finalAnswerStream.update).toHaveBeenCalledWith(

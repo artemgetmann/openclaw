@@ -327,7 +327,7 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     ]);
   });
 
-  it("retains commentary acknowledgment before plan and finalizes the later preview in place", async () => {
+  it("folds commentary acknowledgment into Work log and finalizes the later preview in place", async () => {
     const harness = createTelegramBotHarness(7150);
     const acknowledgment =
       "I’m checking the package name, verifying the working directory, and doing a harmless Desktop file create/delete, then I’ll give you a tight confirmation.";
@@ -356,7 +356,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
       });
       await vi.waitFor(() =>
         expect(
-          sendMessageCalls(harness.calls).some((call) => call.text.includes("Plan updated")),
+          harness.calls.some(
+            (call) => call.op === "editMessageText" && call.text.includes("Plan updated"),
+          ),
         ).toBe(true),
       );
 
@@ -384,8 +386,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
       call.text.includes(acknowledgment),
     );
-    const planSend = sendMessageCalls(harness.calls).find((call) =>
-      call.text.includes("Plan updated"),
+    const planEdit = harness.calls.find(
+      (call): call is Extract<TelegramApiCall, { op: "editMessageText" }> =>
+        call.op === "editMessageText" && call.text.includes("Plan updated"),
     );
     const finalPreviewSend = sendMessageCalls(harness.calls).find((call) =>
       call.text.includes(partialAnswer),
@@ -397,11 +400,14 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     );
 
     expect(acknowledgmentSend).toBeDefined();
-    expect(planSend).toBeDefined();
+    expect(planEdit).toBeDefined();
     expect(finalPreviewSend).toBeDefined();
-    expect(acknowledgmentSend!.messageId).not.toBe(planSend!.messageId);
-    expect(planSend!.messageId).not.toBe(finalPreviewSend!.messageId);
-    expect(workLogEdits.some((call) => call.messageId === planSend!.messageId)).toBe(true);
+    expect(planEdit!.messageId).toBe(acknowledgmentSend!.messageId);
+    expect(planEdit!.text).toMatch(/I’m checking.*Plan updated/s);
+    expect(acknowledgmentSend!.messageId).not.toBe(finalPreviewSend!.messageId);
+    expect(workLogEdits.some((call) => call.messageId === acknowledgmentSend!.messageId)).toBe(
+      true,
+    );
     expect(finalEdits).toEqual([
       expect.objectContaining({
         messageId: finalPreviewSend!.messageId,

@@ -54,6 +54,21 @@ describe("telegram work log", () => {
     });
   });
 
+  it("pins acknowledgment and plan when long histories trim middle progress", () => {
+    const acknowledgment = "I’ll inspect the package first, then run the checks.";
+    const plan = "Plan updated\n- [~] Inspect package\n- [ ] Run checks";
+    const updates = Array.from({ length: 14 }, (_, index) => `Progress ${index + 1}`);
+    const entry = registerTelegramWorkLog({
+      progressEntries: [acknowledgment, plan, ...updates],
+      now: 1000,
+    });
+
+    expect(entry?.progressEntries).toHaveLength(12);
+    expect(entry?.progressEntries.slice(0, 2)).toEqual([acknowledgment, plan]);
+    expect(entry?.progressEntries.at(-1)).toBe("Progress 14");
+    expect(entry?.progressEntries).not.toContain("Progress 1");
+  });
+
   it("expires old entries and builds mutable Telegram reply markup", () => {
     const entry = registerTelegramWorkLog({
       progressEntries: ["Checking state"],

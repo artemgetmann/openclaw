@@ -127,10 +127,9 @@ function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMes
   };
 }
 
-function createTelegramBotHarness(startMessageId = 7000, options?: { failSendTextOnce?: string }) {
+function createTelegramBotHarness(startMessageId = 7000) {
   const calls: TelegramApiCall[] = [];
   let nextMessageId = startMessageId;
-  let didFailMatchingSend = false;
   const sendMessage = vi.fn(
     async (
       chatId: string | number,
@@ -145,14 +144,6 @@ function createTelegramBotHarness(startMessageId = 7000, options?: { failSendTex
         messageId,
         params,
       });
-      if (
-        !didFailMatchingSend &&
-        options?.failSendTextOnce &&
-        text.includes(options.failSendTextOnce)
-      ) {
-        didFailMatchingSend = true;
-        throw new Error("timeout after Telegram may have accepted sendMessage");
-      }
       return { message_id: messageId };
     },
   );
@@ -292,7 +283,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     expect(sends[1]?.text).toContain("Monitoring is set.");
   });
 
-  it("keeps acknowledgment, plan, and streamed final on separate stable messages", async () => {
+  it("folds acknowledgment and plan into one Work log while final keeps its own identity", async () => {
     const harness = createTelegramBotHarness(6950);
     const acknowledgment =
       "I’ll inspect the package metadata first, then verify the temp-file round trip.";
@@ -315,7 +306,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         });
         await vi.waitFor(() =>
           expect(
-            sendMessageCalls(harness.calls).some((call) => call.text.includes("Plan updated")),
+            editMessageTextCalls(harness.calls).some((call) => call.text.includes("Plan updated")),
           ).toBe(true),
         );
         await replyOptions?.onAssistantMessageStart?.();
@@ -341,7 +332,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
       call.text.includes(acknowledgment),
     );
-    const planSend = sendMessageCalls(harness.calls).find((call) =>
+    const planEdit = editMessageTextCalls(harness.calls).find((call) =>
       call.text.includes("Plan updated"),
     );
     const previewSend = sendMessageCalls(harness.calls).find((call) =>
@@ -349,10 +340,19 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     );
 
     expect(acknowledgmentSend).toBeDefined();
-    expect(planSend).toBeDefined();
+    expect(planEdit).toBeDefined();
     expect(previewSend).toBeDefined();
-    // Assert Telegram API order and identity, not merely callback order: the
-    // acknowledgment remains visible, plan owns Work log, and final owns one ID.
+    // Assert the product contract at Telegram API level: the first natural
+    // acknowledgment becomes the Work log in place, while final text owns a
+    // separate preview identity that is finalized by edit.
+    expect(planEdit).toEqual(
+      expect.objectContaining({
+        messageId: acknowledgmentSend!.messageId,
+        text: expect.stringMatching(
+          new RegExp(`${acknowledgment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*Plan updated`, "s"),
+        ),
+      }),
+    );
     expect(harness.calls).toEqual([
       expect.objectContaining({
         op: "sendMessage",
@@ -360,9 +360,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         text: acknowledgment,
       }),
       expect.objectContaining({
-        op: "sendMessage",
-        messageId: planSend!.messageId,
-        text: expect.stringContaining("Plan updated"),
+        op: "editMessageText",
+        messageId: acknowledgmentSend!.messageId,
+        text: expect.stringMatching(/I’ll inspect.*Plan updated/s),
       }),
       expect.objectContaining({
         op: "sendMessage",
@@ -371,12 +371,12 @@ describe("dispatchTelegramMessage progress API sequence", () => {
       }),
       expect.objectContaining({
         op: "editMessageText",
-        messageId: planSend!.messageId,
+        messageId: acknowledgmentSend!.messageId,
         text: "Work log",
       }),
       expect.objectContaining({
         op: "editMessageText",
-        messageId: planSend!.messageId,
+        messageId: acknowledgmentSend!.messageId,
         text: "Work log",
       }),
       expect.objectContaining({
@@ -391,7 +391,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     ).toHaveLength(0);
   });
 
-  it("keeps repeated plans on one Work log across separate natural commentary", async () => {
+  it("keeps repeated plans and natural commentary inside one Work log", async () => {
     const harness = createTelegramBotHarness(6970);
     const acknowledgment =
       "I’ll inspect the package metadata first, then verify the temp-file round trip.";
@@ -418,7 +418,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         });
         await vi.waitFor(() =>
           expect(
-            sendMessageCalls(harness.calls).some((call) => call.text.includes("[~] Inspect files")),
+            editMessageTextCalls(harness.calls).some((call) =>
+              call.text.includes("[~] Inspect files"),
+            ),
           ).toBe(true),
         );
 
@@ -431,7 +433,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         );
         await vi.waitFor(() =>
           expect(
-            sendMessageCalls(harness.calls).some((call) => call.text.includes(commentary)),
+            editMessageTextCalls(harness.calls).some((call) => call.text.includes(commentary)),
           ).toBe(true),
         );
 
@@ -479,10 +481,10 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
       call.text.includes(acknowledgment),
     );
-    const planSend = sendMessageCalls(harness.calls).find((call) =>
+    const firstPlanEdit = editMessageTextCalls(harness.calls).find((call) =>
       call.text.includes("[~] Inspect files"),
     );
-    const commentarySend = sendMessageCalls(harness.calls).find((call) =>
+    const commentaryEdit = editMessageTextCalls(harness.calls).find((call) =>
       call.text.includes(commentary),
     );
     const finalPreviewSend = sendMessageCalls(harness.calls).find((call) =>
@@ -500,21 +502,21 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     );
 
     expect(acknowledgmentSend).toBeDefined();
-    expect(planSend).toBeDefined();
-    expect(commentarySend).toBeDefined();
+    expect(firstPlanEdit).toBeDefined();
+    expect(commentaryEdit).toBeDefined();
     expect(finalPreviewSend).toBeDefined();
-    expect(
-      new Set([acknowledgmentSend!.messageId, planSend!.messageId, commentarySend!.messageId]),
-    ).toHaveLength(3);
+    expect(firstPlanEdit!.messageId).toBe(acknowledgmentSend!.messageId);
+    expect(commentaryEdit!.messageId).toBe(acknowledgmentSend!.messageId);
+    expect(commentaryEdit!.text).toMatch(/I’ll inspect.*Plan updated.*package name is confirmed/s);
     expect(secondPlanEdits).toEqual([
       expect.objectContaining({
-        messageId: planSend!.messageId,
+        messageId: acknowledgmentSend!.messageId,
         text: expect.stringContaining("[x] Inspect files"),
       }),
     ]);
     expect(workLogEdits.length).toBeGreaterThan(0);
     expect(new Set(workLogEdits.map((call) => call.messageId))).toEqual(
-      new Set([planSend!.messageId]),
+      new Set([acknowledgmentSend!.messageId]),
     );
     expect(finalEdits).toEqual([
       expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: finalAnswer }),
@@ -528,13 +530,16 @@ describe("dispatchTelegramMessage progress API sequence", () => {
       sendMessageCalls(harness.calls).filter((call) => call.text.includes("[x] Inspect files")),
     ).toHaveLength(0);
     expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes(commentary)),
+    ).toHaveLength(0);
+    expect(
       sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
     ).toHaveLength(0);
   });
 
-  it("does not resend plan-adjacent commentary after an ambiguous preview send", async () => {
+  it("keeps plan-adjacent commentary inside the existing Work log", async () => {
     const commentary = "The package name is confirmed; I’m checking the temp file next.";
-    const harness = createTelegramBotHarness(6980, { failSendTextOnce: commentary });
+    const harness = createTelegramBotHarness(6980);
     const firstPlan = "Plan updated\n- [~] Inspect files\n- [ ] Run checks";
     const secondPlan = "Plan updated\n- [x] Inspect files\n- [~] Run checks";
 
@@ -580,16 +585,20 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     const commentaryAttempts = sendMessageCalls(harness.calls).filter((call) =>
       call.text.includes(commentary),
     );
+    const commentaryEdits = editMessageTextCalls(harness.calls).filter((call) =>
+      call.text.includes(commentary),
+    );
     const secondPlanEdits = editMessageTextCalls(harness.calls).filter((call) =>
       call.text.includes("[x] Inspect files"),
     );
     expect(planSend).toBeDefined();
-    expect(commentaryAttempts).toHaveLength(1);
+    expect(commentaryAttempts).toHaveLength(0);
+    expect(commentaryEdits).toEqual([expect.objectContaining({ messageId: planSend!.messageId })]);
     expect(secondPlanEdits).toEqual([expect.objectContaining({ messageId: planSend!.messageId })]);
     expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
   });
 
-  it("keeps block-streaming commentary separate while repeated plans retain one identity", async () => {
+  it("keeps block-streaming acknowledgment, plans, and commentary on one Work log identity", async () => {
     const harness = createTelegramBotHarness(6990);
     const acknowledgment = "I’ll inspect the files first, then run the checks.";
     const firstPlan = "Plan updated\n- [~] Inspect files\n- [ ] Run checks";
@@ -644,24 +653,24 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     const acknowledgmentSend = sendMessageCalls(harness.calls).find((call) =>
       call.text.includes(acknowledgment),
     );
-    const planSend = sendMessageCalls(harness.calls).find((call) =>
-      call.text.includes("[~] Inspect files"),
-    );
-    const commentarySend = sendMessageCalls(harness.calls).find((call) =>
+    const commentaryEdit = editMessageTextCalls(harness.calls).find((call) =>
       call.text.includes(commentary),
     );
-    expect(acknowledgmentSend).toBeDefined();
-    expect(planSend).toBeDefined();
-    expect(commentarySend).toBeDefined();
-    expect(
-      new Set([acknowledgmentSend!.messageId, planSend!.messageId, commentarySend!.messageId]),
-    ).toHaveLength(3);
-    expect(
-      editMessageTextCalls(harness.calls).filter((call) => call.text.includes("[x] Inspect files")),
-    ).toEqual([expect.objectContaining({ messageId: planSend!.messageId })]);
-    expect(new Set(workLogEditCalls(harness.calls).map((call) => call.messageId))).toEqual(
-      new Set([planSend!.messageId]),
+    const latestPlanEdit = editMessageTextCalls(harness.calls).find((call) =>
+      call.text.includes("[x] Inspect files"),
     );
+    expect(acknowledgmentSend).toBeDefined();
+    expect(commentaryEdit).toBeDefined();
+    expect(latestPlanEdit).toBeDefined();
+    expect(commentaryEdit!.messageId).toBe(acknowledgmentSend!.messageId);
+    expect(latestPlanEdit!.messageId).toBe(acknowledgmentSend!.messageId);
+    expect(latestPlanEdit!.text).toMatch(/I’ll inspect.*Plan updated.*package is confirmed/s);
+    expect(new Set(workLogEditCalls(harness.calls).map((call) => call.messageId))).toEqual(
+      new Set([acknowledgmentSend!.messageId]),
+    );
+    expect(
+      sendMessageCalls(harness.calls).filter((call) => call.text.includes(commentary)),
+    ).toHaveLength(0);
     expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
   });
 

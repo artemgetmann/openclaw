@@ -87,7 +87,18 @@ function normalizeProgressEntries(entries: readonly string[]): string[] {
     seen.add(key);
     normalized.push(entry);
   }
-  return normalized.slice(-MAX_PROGRESS_ENTRIES);
+  if (normalized.length <= MAX_PROGRESS_ENTRIES) {
+    return normalized;
+  }
+  // The Work log contract pins its opening context: acknowledgment first and,
+  // when present, the plan second. Trim middle history before sacrificing
+  // those entries, while still preserving the newest progress updates.
+  const pinned = normalized.slice(0, 2);
+  const recent = normalized.slice(-(MAX_PROGRESS_ENTRIES - pinned.length));
+  return [...pinned, ...recent.filter((entry) => !pinned.includes(entry))].slice(
+    0,
+    MAX_PROGRESS_ENTRIES,
+  );
 }
 
 function formatToolName(rawName: string): string {
