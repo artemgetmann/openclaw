@@ -29,6 +29,8 @@ import { logInfo } from "../logger.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { resolveOpenAiNonModelEnvApiKey } from "../openai/auth-split.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { resolveEdgeSpeechSegments, stitchEdgeAudio } from "./edge-multilingual.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
@@ -63,6 +65,7 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const EDGE_SEGMENT_CONCURRENCY = 3;
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -135,6 +138,8 @@ export type ResolvedTtsConfig = {
     lang: string;
     outputFormat: string;
     outputFormatConfigured: boolean;
+    voiceConfigured: boolean;
+    langConfigured: boolean;
     pitch?: string;
     rate?: string;
     volume?: string;
@@ -371,6 +376,8 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       lang: raw.edge?.lang?.trim() || DEFAULT_EDGE_LANG,
       outputFormat: edgeOutputFormat || DEFAULT_EDGE_OUTPUT_FORMAT,
       outputFormatConfigured: Boolean(edgeOutputFormat),
+      voiceConfigured: Boolean(raw.edge?.voice?.trim()),
+      langConfigured: Boolean(raw.edge?.lang?.trim()),
       pitch: raw.edge?.pitch?.trim() || undefined,
       rate: raw.edge?.rate?.trim() || undefined,
       volume: raw.edge?.volume?.trim() || undefined,
@@ -687,15 +694,38 @@ export async function textToSpeech(params: {
         const attemptEdgeTts = async (outputFormat: string) => {
           const extension = inferEdgeExtension(outputFormat);
           const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
-          await edgeTTS({
-            text: params.text,
-            outputPath: audioPath,
-            config: {
-              ...config.edge,
-              outputFormat,
-            },
-            timeoutMs: config.timeoutMs,
+          const segments = resolveEdgeSpeechSegments(params.text, config.edge);
+          // Assign paths before launching work so completion timing cannot
+          // change the order consumed by the audio stitcher.
+          const segmentPaths = segments.map((_, index) =>
+            segments.length === 1
+              ? audioPath
+              : path.join(tempDir, `voice-${Date.now()}-${index}${extension}`),
+          );
+          const synthesis = await runTasksWithConcurrency({
+            limit: EDGE_SEGMENT_CONCURRENCY,
+            errorMode: "stop",
+            tasks: segments.map((segment, index) => async () => {
+              const segmentPath = segments.length === 1 ? audioPath : segmentPaths[index];
+              await edgeTTS({
+                text: segment.text,
+                outputPath: segmentPath,
+                config: {
+                  ...config.edge,
+                  voice: segment.voice,
+                  lang: segment.lang,
+                  outputFormat,
+                },
+                timeoutMs: config.timeoutMs,
+              });
+            }),
           });
+          if (synthesis.hasError) {
+            throw synthesis.firstError;
+          }
+          if (segmentPaths.length > 1) {
+            await stitchEdgeAudio({ segmentPaths, outputPath: audioPath, outputFormat });
+          }
           return { audioPath, outputFormat };
         };
 
