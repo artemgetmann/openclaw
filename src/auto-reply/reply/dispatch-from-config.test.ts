@@ -1016,7 +1016,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("voices an inbound audio turn even when typed-message TTS is off", async () => {
+  it("does not voice an inbound audio turn after an explicit session /tts off", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     sessionStoreMocks.currentEntry = {
@@ -1042,13 +1042,46 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         kind: "final",
         inboundAudio: true,
-        ttsAuto: "inbound",
+        ttsAuto: "off",
         payload: { text: "Final voice response." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final voice response." });
+  });
+
+  it("voices an inbound audio turn when no explicit session TTS mode exists", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {};
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      MediaType: "audio/ogg",
+      SessionKey: "agent:main:telegram:direct:voice-in-default",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(
+        async () => ({ text: "Default voice response." }) satisfies ReplyPayload,
+      ),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: true,
+        ttsAuto: "inbound",
+        payload: { text: "Default voice response." },
       }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "Final voice response.",
+        text: "Default voice response.",
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
       }),

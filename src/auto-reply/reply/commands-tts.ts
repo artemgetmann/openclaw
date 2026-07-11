@@ -4,19 +4,20 @@ import {
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
-  isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsApiKey,
+  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
   setSummarizationEnabled,
-  setTtsEnabled,
+  setTtsAutoMode,
   setTtsMaxLength,
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
 import type { ReplyPayload } from "../types.js";
+import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type ParsedTtsCommand = {
@@ -46,8 +47,10 @@ function ttsUsage(): ReplyPayload {
     text:
       `🔊 **TTS (Text-to-Speech) Help**\n\n` +
       `**Commands:**\n` +
-      `• /tts on — Enable automatic TTS for replies\n` +
-      `• /tts off — Disable TTS\n` +
+      `• /tts on | always — Voice every reply\n` +
+      `• /tts inbound — Voice replies to voice/audio messages\n` +
+      `• /tts tagged — Voice only explicitly tagged replies\n` +
+      `• /tts off — Disable all synthesized voice replies\n` +
       `• /tts status — Show current settings\n` +
       `• /tts provider [name] — View/change provider\n` +
       `• /tts limit [number] — View/change text limit\n` +
@@ -66,6 +69,20 @@ function ttsUsage(): ReplyPayload {
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
+}
+
+async function persistSessionTtsAuto(
+  params: Parameters<CommandHandler>[0],
+  mode: "always" | "inbound" | "tagged" | "off",
+): Promise<void> {
+  // The user-facing toggle must update the active session as well as the
+  // durable preference. Session overrides win during final-reply synthesis,
+  // so leaving a stale `always` value would make `/tts off` appear temporary.
+  if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
+    return;
+  }
+  params.sessionEntry.ttsAuto = mode;
+  await persistSessionEntry(params);
 }
 
 export const handleTtsCommands: CommandHandler = async (params, allowTextCommands) => {
@@ -93,14 +110,22 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false, reply: ttsUsage() };
   }
 
-  if (action === "on") {
-    setTtsEnabled(prefsPath, true);
-    return { shouldContinue: false, reply: { text: "🔊 TTS enabled." } };
-  }
-
-  if (action === "off") {
-    setTtsEnabled(prefsPath, false);
-    return { shouldContinue: false, reply: { text: "🔇 TTS disabled." } };
+  if (["on", "always", "inbound", "tagged", "off"].includes(action)) {
+    // `/tts on` remains the friendly alias for the documented `always` mode.
+    // Persisting the exact mode in both stores makes mode changes immediate
+    // and restart-safe for the active conversation.
+    const mode = action === "on" ? "always" : (action as "always" | "inbound" | "tagged" | "off");
+    setTtsAutoMode(prefsPath, mode);
+    await persistSessionTtsAuto(params, mode);
+    const text =
+      mode === "off"
+        ? "🔇 TTS disabled. Voice messages will still be transcribed."
+        : mode === "always"
+          ? "🔊 TTS enabled for every reply."
+          : mode === "inbound"
+            ? "🔊 TTS enabled for replies to voice/audio messages."
+            : "🔊 TTS enabled for explicitly tagged replies.";
+    return { shouldContinue: false, reply: { text } };
   }
 
   if (action === "audio") {
@@ -247,7 +272,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "status") {
-    const enabled = isTtsEnabled(config, prefsPath);
+    const autoMode = resolveTtsAutoMode({
+      config,
+      prefsPath,
+      sessionAuto: params.sessionEntry?.ttsAuto,
+    });
+    const enabled = autoMode !== "off";
     const provider = getTtsProvider(config, prefsPath);
     const hasKey = isTtsProviderConfigured(config, provider);
     const maxLength = getTtsMaxLength(prefsPath);
@@ -256,6 +286,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const lines = [
       "📊 TTS status",
       `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
+      `Mode: ${autoMode}`,
       `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
       `Text limit: ${maxLength} chars`,
       `Auto-summary: ${summarize ? "on" : "off"}`,
