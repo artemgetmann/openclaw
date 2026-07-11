@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AUTH_KEYRING_OPEN_TIMEOUT,
   authOperationStatusPids,
+  authWorkerTerminalExitCode,
   classifyGoogleAuthFailure,
   DEFAULT_CONSUMER_GOOGLE_SERVICES,
   gogSubprocessEnv,
@@ -228,6 +229,42 @@ describe("gog auth local helper", () => {
 
     expect(now).toBe(3_000);
     expect(status).toEqual({ phase: "waiting_for_browser", workerPid: 42_001 });
+  });
+
+  it("accepts first-poll authorization after the worker clears its PID", async () => {
+    const authorized = {
+      phase: "authorized",
+      workerPid: null,
+      message: "Google Workspace is connected.",
+    };
+    const status = await waitForAuthWorkerReadiness({
+      readStatus: async () => authorized,
+      getSpawnError: () => null,
+      getExitCode: () => 0,
+      usesMacosLock: false,
+    });
+
+    expect(status).toBe(authorized);
+    expect(authWorkerTerminalExitCode(status.phase)).toBe(0);
+  });
+
+  it("returns the classified terminal error without replacing its status", async () => {
+    const classifiedError = {
+      phase: "error",
+      workerPid: null,
+      diagnosticKind: "keychain_approval_needed",
+      nextStep: "Choose Always Allow.",
+    };
+    const status = await waitForAuthWorkerReadiness({
+      readStatus: async () => classifiedError,
+      getSpawnError: () => null,
+      getExitCode: () => 1,
+      usesMacosLock: false,
+    });
+
+    expect(status).toBe(classifiedError);
+    expect(status.nextStep).toBe("Choose Always Allow.");
+    expect(authWorkerTerminalExitCode(status.phase)).toBe(1);
   });
 
   it("keeps the worker readiness deadline bounded", async () => {

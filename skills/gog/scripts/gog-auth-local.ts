@@ -717,6 +717,10 @@ async function commandStart(flags: Map<string, string | boolean>) {
     const status = await waitForAuthWorkerStart(sessionId, worker);
     worker.unref();
     console.log(JSON.stringify(status, null, 2));
+    const terminalExitCode = authWorkerTerminalExitCode(status.phase);
+    if (terminalExitCode !== null) {
+      process.exitCode = terminalExitCode;
+    }
   } catch (error) {
     // A controlled startup failure is cancellation, unlike an unexpected
     // supervisor crash. Stop any published locked operation group explicitly
@@ -789,12 +793,11 @@ export async function waitForAuthWorkerReadiness<
       throw spawnError;
     }
     const status = await params.readStatus();
-    if (status.phase === "error" || status.phase === "stopped") {
-      throw new Error(
-        "message" in status && typeof status.message === "string"
-          ? status.message
-          : "Google auth worker stopped before reporting ready state",
-      );
+    // Terminal status is authoritative even after the worker deliberately
+    // clears its PID. Return the exact snapshot so commandStart cannot replace
+    // a fast success or a classified failure with generic startup noise.
+    if (authWorkerTerminalExitCode(status.phase) !== null) {
+      return status;
     }
     if (status.workerPid && status.phase !== "starting") {
       return status;
@@ -813,6 +816,16 @@ export async function waitForAuthWorkerReadiness<
     }
     await sleepFor(Math.min(pollIntervalMs, remainingMs));
   }
+}
+
+export function authWorkerTerminalExitCode(phase: string) {
+  if (phase === "authorized") {
+    return 0;
+  }
+  if (phase === "error" || phase === "stopped") {
+    return 1;
+  }
+  return null;
 }
 
 async function waitForMacosAuthLock(
