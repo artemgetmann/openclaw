@@ -286,17 +286,6 @@ export function classifyGoogleAuthFailure(params: {
   const combined = params.combinedText.trim();
   const normalized = combined.toLowerCase();
 
-  if (params.exitedSuccessfullyWithoutVerification) {
-    return {
-      diagnosticKind: "callback_missed",
-      message:
-        `Google consent finished, but OpenClaw could not confirm the local callback for ${params.email}. ` +
-        "This usually means the browser handoff expired or completed too late.",
-      nextStep:
-        "Reopen the Google approval flow and finish the consent step immediately in the same browser window.",
-    };
-  }
-
   if (
     textIncludesAny(normalized, [
       "no oauth client credentials",
@@ -413,6 +402,20 @@ export function classifyGoogleAuthFailure(params: {
         "OpenClaw could not hand off the Google approval flow cleanly to the browser on this Mac.",
       nextStep:
         "Retry the Google connection. If the browser still does not appear, reopen the stored auth URL manually.",
+    };
+  }
+
+  // A successful auth-add exit followed by failed verification is only a
+  // callback fallback. Provider evidence above is more specific and must win,
+  // especially a bounded Keychain verification timeout.
+  if (params.exitedSuccessfullyWithoutVerification) {
+    return {
+      diagnosticKind: "callback_missed",
+      message:
+        `Google consent finished, but OpenClaw could not confirm the local callback for ${params.email}. ` +
+        "This usually means the browser handoff expired or completed too late.",
+      nextStep:
+        "Reopen the Google approval flow and finish the consent step immediately in the same browser window.",
     };
   }
 

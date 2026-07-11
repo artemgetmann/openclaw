@@ -82,6 +82,19 @@ describe("gog auth local helper", () => {
     expect(result.nextStep).toContain("Always Allow");
   });
 
+  it("keeps Keychain timeout evidence ahead of the missing-verification fallback", () => {
+    const result = classifyGoogleAuthFailure({
+      combinedText: "keyring open timeout while waiting for macOS Keychain interaction",
+      email: "demo@example.com",
+      hasAuthUrl: true,
+      exitedSuccessfullyWithoutVerification: true,
+    });
+
+    expect(result.diagnosticKind).toBe("keychain_approval_needed");
+    expect(result.nextStep).toContain("Always Allow");
+    expect(result.nextStep).not.toContain("Reopen");
+  });
+
   it.runIf(process.platform === "darwin")(
     "keeps one stable lock inode across contention and crashed-owner recovery",
     async () => {
