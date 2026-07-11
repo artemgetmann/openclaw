@@ -11,6 +11,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { ackDurableFollowup } from "./durable-store.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -127,6 +128,9 @@ export function scheduleFollowupDrain(
             enqueuedAt: Date.now(),
             ...routing,
           });
+          // The collected turn represents every snapshotted item. Only remove
+          // their records after the agent turn and reply routing both return.
+          await Promise.all(items.map((item) => ackDurableFollowup(item.durableId)));
           queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);
@@ -151,6 +155,7 @@ export function scheduleFollowupDrain(
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
               });
+              await ackDurableFollowup(item.durableId);
             }))
           ) {
             break;
@@ -159,7 +164,12 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+        if (
+          !(await drainNextQueueItem(queue.items, async (item) => {
+            await runFollowup(item);
+            await ackDurableFollowup(item.durableId);
+          }))
+        ) {
           break;
         }
       }

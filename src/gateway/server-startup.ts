@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { restoreDurableFollowupRuns } from "../auto-reply/reply/queue.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -203,6 +204,17 @@ export async function startGatewaySidecars(params: {
     }
   } else {
     logPhase("internal hook loading skipped");
+  }
+
+  try {
+    const restoredFollowups = await restoreDurableFollowupRuns();
+    if (restoredFollowups > 0) {
+      logPhase(`restored ${restoredFollowups} durable followup(s)`);
+    }
+  } catch (err) {
+    // Channel startup may continue, but its transport cursor must not advance
+    // for new busy-session messages unless their own durable write succeeds.
+    params.log.warn(`durable followup recovery failed: ${String(err)}`);
   }
 
   // Launch configured channels so gateway replies via the surface the message came from.

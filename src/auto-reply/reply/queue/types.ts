@@ -21,6 +21,11 @@ export type QueueSettings = {
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
+  /**
+   * Disk record backing this item. It is intentionally optional because
+   * steering and test-only queues may remain process-local.
+   */
+  durableId?: string;
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;

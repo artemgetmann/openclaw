@@ -4,8 +4,10 @@ export type { ClearSessionQueueResult } from "./queue/cleanup.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
 export {
   enqueueFollowupRun,
+  enqueueFollowupRunDurable,
   getFollowupQueueDepth,
   resetRecentQueuedMessageIdDedupe,
+  restoreDurableFollowupRuns,
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings.js";
 export { clearFollowupQueue } from "./queue/state.js";
