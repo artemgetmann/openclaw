@@ -495,13 +495,19 @@ export function buildGatewayCronService(params: {
             currentMonitor,
             runtimeConfig,
           );
-          const nextStatus = shouldStopForGoalCompletion
-            ? "stopped"
-            : result.status === "error"
-              ? "degraded"
-              : result.status === "ok"
-                ? "active"
-                : currentMonitor.status;
+          // The monitor agent may have persisted a terminal checkpoint/status
+          // (and disabled this cron job) during the wake. Preserve that newer
+          // durable decision instead of deriving "active" from the runner's
+          // successful return value and resurrecting a completed monitor.
+          const nextStatus = isTerminalMonitorStatus(currentMonitor.status)
+            ? currentMonitor.status
+            : shouldStopForGoalCompletion
+              ? "stopped"
+              : result.status === "error"
+                ? "degraded"
+                : result.status === "ok"
+                  ? "active"
+                  : currentMonitor.status;
           const updated = updateMonitorRecord(
             currentMonitor,
             {
