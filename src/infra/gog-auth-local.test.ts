@@ -140,6 +140,32 @@ describe("gog auth local helper", () => {
     }
   });
 
+  it("recovers a live but expired owner after its bounded auth window", async () => {
+    const rootDir = await temporaryRoot();
+    let now = Date.parse("2026-07-11T00:00:00.000Z");
+    await acquireAuthOperationLock({
+      rootDir,
+      sessionId: "expired-session",
+      ownerPid: 10_001,
+      now: () => now,
+      isProcessRunning: () => true,
+      staleAfterMs: 1_000,
+    });
+
+    now += 1_001;
+    const recovered = await acquireAuthOperationLock({
+      rootDir,
+      sessionId: "replacement-session",
+      ownerPid: 10_002,
+      now: () => now,
+      isProcessRunning: () => true,
+    });
+    expect(recovered.acquired).toBe(true);
+    if (recovered.acquired) {
+      await recovered.release();
+    }
+  });
+
   it("sets bounded Keychain waits and preserves a deliberate override", () => {
     expect(gogSubprocessEnv("auth", {}).GOG_KEYRING_OPEN_TIMEOUT).toBe(AUTH_KEYRING_OPEN_TIMEOUT);
     expect(gogSubprocessEnv("verification", {}).GOG_KEYRING_OPEN_TIMEOUT).toBe(

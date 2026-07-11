@@ -70,6 +70,7 @@ type AuthLockMetadata = {
   sessionId: string;
   ownerPid: number;
   acquiredAt: string;
+  expiresAt: string;
   token: string;
 };
 
@@ -275,6 +276,7 @@ async function readAuthLockMetadata(lockDir: string): Promise<AuthLockMetadata |
       !parsed.sessionId ||
       typeof parsed.ownerPid !== "number" ||
       typeof parsed.acquiredAt !== "string" ||
+      typeof parsed.expiresAt !== "string" ||
       typeof parsed.token !== "string" ||
       !parsed.token
     ) {
@@ -341,12 +343,14 @@ export async function acquireAuthOperationLock(params: {
 
   for (;;) {
     const token = randomUUID();
-    const acquiredAt = new Date(now()).toISOString();
+    const acquiredAtMs = now();
+    const acquiredAt = new Date(acquiredAtMs).toISOString();
     const candidateDir = path.join(params.rootDir, `.auth-lock-candidate-${token}`);
     const metadata: AuthLockMetadata = {
       sessionId: params.sessionId,
       ownerPid: params.ownerPid,
       acquiredAt,
+      expiresAt: new Date(acquiredAtMs + staleAfterMs).toISOString(),
       token,
     };
     await fsp.mkdir(candidateDir);
@@ -385,8 +389,8 @@ export async function acquireAuthOperationLock(params: {
     }
 
     const active = await readAuthLockMetadata(lockDir);
-    const acquiredAtMs = active ? Date.parse(active.acquiredAt) : Number.NaN;
-    const oldEnough = !Number.isFinite(acquiredAtMs) || now() - acquiredAtMs >= staleAfterMs;
+    const expiresAtMs = active ? Date.parse(active.expiresAt) : Number.NaN;
+    const oldEnough = !Number.isFinite(expiresAtMs) || now() >= expiresAtMs;
     const ownerAlive = active ? isProcessRunning(active.ownerPid) : false;
     if (active && ownerAlive && !oldEnough) {
       return {
@@ -677,6 +681,9 @@ async function commandStart(flags: Map<string, string | boolean>) {
     rootDir: SESSIONS_ROOT,
     sessionId,
     ownerPid: process.pid,
+    // Match lock expiry to the caller's bounded OAuth wait. This preserves a
+    // deliberate longer timeout without letting crashed ownership live forever.
+    staleAfterMs: parseDurationMs(timeout, 10 * 60_000) + 5 * 60_000,
   });
   if (!operationLock.acquired) {
     throw new Error(
