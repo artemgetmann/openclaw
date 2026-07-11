@@ -65,6 +65,46 @@ function resolveMonitorDisclosurePurpose(params: {
   return params.name?.trim() || params.existingName?.trim() || params.instructions;
 }
 
+function normalizeMonitorCreateSource(params: {
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+}): { sourceType: string; sourceTarget: Record<string, unknown> } {
+  const normalizedType = params.sourceType.trim().toLowerCase();
+  const isTelegramUserSource =
+    normalizedType === "telegram-user" ||
+    normalizedType === "telegram_user_session" ||
+    normalizedType === "telegram-user-session";
+  if (!isTelegramUserSource) {
+    return params;
+  }
+
+  const sourceTarget = { ...params.sourceTarget };
+  if (sourceTarget.afterId === undefined && sourceTarget.afterMessageId !== undefined) {
+    sourceTarget.afterId = sourceTarget.afterMessageId;
+  }
+  delete sourceTarget.afterMessageId;
+  return { sourceType: "telegram-user", sourceTarget };
+}
+
+function normalizeMonitorCreateTrigger(
+  trigger: MonitorTrigger | undefined,
+  sourceType: string,
+): MonitorTrigger | undefined {
+  if (!trigger || sourceType !== "telegram-user" || trigger.kind === "schedule") {
+    return trigger;
+  }
+  const eventTrigger = trigger.kind === "hybrid" ? trigger.event : trigger;
+  const matchSourceType = eventTrigger.match?.sourceType?.trim().toLowerCase();
+  if (matchSourceType !== "telegram_user_session" && matchSourceType !== "telegram-user-session") {
+    return trigger;
+  }
+  const normalizedEvent = {
+    ...eventTrigger,
+    match: { ...eventTrigger.match, sourceType: "telegram-user" },
+  };
+  return trigger.kind === "hybrid" ? { ...trigger, event: normalizedEvent } : normalizedEvent;
+}
+
 function resolveGoalBoundEventTriggerKind(sourceType: string): MonitorEventTriggerKind | undefined {
   const normalized = sourceType.trim().toLowerCase();
   // Only default to adapters that exist today. Future listener adapters can add
@@ -585,7 +625,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const rawParams = params as {
       instructions: string;
       agentId: string;
       name?: string;
@@ -602,6 +642,13 @@ export const monitorHandlers: GatewayRequestHandlers = {
       goal?: MonitorGoalSnapshot;
       notificationPolicy?: MonitorNotificationPolicy;
       lastCheckpoint?: Record<string, unknown>;
+    };
+    const normalizedSource = normalizeMonitorCreateSource(rawParams);
+    const p = {
+      ...rawParams,
+      sourceType: normalizedSource.sourceType,
+      sourceTarget: normalizedSource.sourceTarget,
+      trigger: normalizeMonitorCreateTrigger(rawParams.trigger, normalizedSource.sourceType),
     };
     const storePath = resolveStorePath(context.cronStorePath);
     await withMonitorStoreWriteLock(storePath, async () => {

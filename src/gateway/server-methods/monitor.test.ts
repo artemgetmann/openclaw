@@ -907,13 +907,30 @@ describe("monitor gateway handlers", () => {
         name: "Telegram reply wait",
         originSessionKey,
         originDelivery: { mode: "announce", channel: "telegram", to: "user-telegram-goal" },
-        sourceType: "telegram-user",
+        sourceType: "telegram_user_session",
         sourceTarget: {
           accountId: "personal",
           chat: "@jarvis_tester_1_bot",
+          afterMessageId: 55536,
           threadAnchor: "7001",
         },
         cadence: { kind: "every", everyMs: 300_000 },
+        trigger: {
+          kind: "hybrid",
+          schedule: { cadence: { kind: "every", everyMs: 300_000 } },
+          event: {
+            kind: "local_listener",
+            match: {
+              sourceType: "telegram_user_session",
+              sourceTarget: {
+                accountId: "personal",
+                chat: "@jarvis_tester_1_bot",
+                threadAnchor: "7001",
+              },
+              eventTypes: ["message.created"],
+            },
+          },
+        },
       },
       "req-goal-telegram-trigger-bind",
     );
@@ -923,10 +940,21 @@ describe("monitor gateway handlers", () => {
           monitorId: string;
           cronJobId: string;
           goal?: { id: string; objective: string };
+          sourceType?: string;
+          sourceTarget?: Record<string, unknown>;
           trigger?: unknown;
         }
       | undefined;
     expect(created?.goal).toMatchObject({ id: goal.id, objective: goal.objective });
+    expect(created).toMatchObject({
+      sourceType: "telegram-user",
+      sourceTarget: {
+        accountId: "personal",
+        chat: "@jarvis_tester_1_bot",
+        afterId: 55536,
+        threadAnchor: "7001",
+      },
+    });
     expect(created?.trigger).toEqual({
       kind: "hybrid",
       schedule: { cadence: { kind: "every", everyMs: 300_000 } },
