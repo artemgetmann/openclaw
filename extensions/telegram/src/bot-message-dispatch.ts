@@ -806,6 +806,10 @@ export const dispatchTelegramMessage = async ({
   let retainedAnswerProgressPreviewText = "";
   let retainedAnswerProgressFromExplicitBoundary = false;
   let forceNextAnswerFinalSend = false;
+  // The generic block/TTS pipeline needs the exact text Telegram accepted as
+  // final after removing retained progress. Keep that channel-authoritative
+  // value separate from the resolver's accumulated block transcript.
+  let lastPreparedFinalAnswerText = "";
   const transientProgressPreviewTexts: string[] = [];
   const transientProgressPreviewKeys = new Set<string>();
   let draftLaneEventQueue = Promise.resolve();
@@ -1287,6 +1291,7 @@ export const dispatchTelegramMessage = async ({
     ) {
       await materializeAnswerProgressBeforeFinal();
     }
+    lastPreparedFinalAnswerText = prepared.text;
     return prepared.text;
   };
   const updateActiveProgressPreviewFromPartial = (text: string, callsite: string) => {
@@ -1506,7 +1511,11 @@ export const dispatchTelegramMessage = async ({
     // was adopted. Seed the controller's ordered history with that visible
     // text so the subsequent plan update edits this same message into a Work
     // log containing the acknowledgment instead of overwriting it.
-    const adoptedText = (stream.lastDeliveredText?.() ?? answerLane.lastPartialText).trim();
+    // The transport can deliver a speculative first delta (for example just
+    // "I") before the lane receives the complete acknowledgment snapshot.
+    // Work log history must use the newest logical snapshot, not that older
+    // transport artifact, or both fragments become permanent ordered entries.
+    const adoptedText = answerLane.lastPartialText.trim();
     if (adoptedText) {
       controller.update(adoptedText);
     }
@@ -2275,9 +2284,10 @@ export const dispatchTelegramMessage = async ({
           if (sawAssistantPartial) {
             pendingAmbiguousAnswerBlock = undefined;
             logVerbose("telegram: dropped phase-unknown block buffer after assistant partials");
-            return;
+            return lastPreparedFinalAnswerText || undefined;
           }
           await flushAmbiguousAnswerBlockAsFinal("after-block-stream-final");
+          return lastPreparedFinalAnswerText || undefined;
         },
         deliver: async (payload, info) => {
           try {

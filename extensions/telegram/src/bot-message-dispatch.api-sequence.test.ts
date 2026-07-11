@@ -2,6 +2,11 @@ import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import {
+  __testing as workLogTesting,
+  getTelegramWorkLog,
+  renderTelegramWorkLog,
+} from "./work-log.js";
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
@@ -239,6 +244,7 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     logVerbose.mockReset();
     recordChannelActivity.mockReset();
     resolveStorePath.mockReset();
+    workLogTesting.resetTelegramWorkLogsForTests();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
   });
@@ -344,6 +350,52 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     expect(
       sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
     ).toHaveLength(0);
+  });
+
+  it("retains the complete acknowledgment instead of a one-character transport snapshot", async () => {
+    const harness = createTelegramBotHarness(6970);
+    const acknowledgment = "I’ll inspect the files first, then run the focused checks.";
+    const planText = "Plan updated\n- [~] Inspect files\n- [ ] Run checks";
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Reproduce the live ordering: fast-first transport sends one delta,
+        // then the lane receives the complete accumulated acknowledgment.
+        await replyOptions?.onPartialReply?.({ text: "I" });
+        await vi.waitFor(() =>
+          expect(sendMessageCalls(harness.calls).some((call) => call.text === "I")).toBe(true),
+        );
+        await replyOptions?.onPartialReply?.({ text: acknowledgment });
+        await replyOptions?.onToolStart?.({ name: "update_plan", phase: "completed" });
+        await replyOptions?.onToolResult?.({
+          text: planText,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await dispatcherOptions.deliver({ text: "Focused checks passed." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({ bot: harness.bot });
+
+    const workLog = getTelegramWorkLog("1");
+    expect(workLog).toBeDefined();
+    expect(renderTelegramWorkLog(workLog!, true).text).toBe(
+      `Work log\n\n${acknowledgment}\n\n${planText}`,
+    );
+    expect(renderTelegramWorkLog(workLog!, true).text).not.toMatch(/^Work log\n\nI\n\n/m);
+
+    const oneCharacterSendIndex = harness.calls.findIndex(
+      (call) => call.op === "sendMessage" && call.text === "I",
+    );
+    const collapsedWorkLogEditIndex = harness.calls.findIndex(
+      (call) => call.op === "editMessageText" && call.text === "Work log",
+    );
+    const finalSendIndex = harness.calls.findIndex(
+      (call) => call.op === "sendMessage" && call.text.includes("Focused checks passed."),
+    );
+    expect(oneCharacterSendIndex).toBeLessThan(collapsedWorkLogEditIndex);
+    expect(collapsedWorkLogEditIndex).toBeLessThan(finalSendIndex);
   });
 
   it("keeps repeated plans and natural commentary inside one Work log", async () => {

@@ -1835,6 +1835,61 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("synthesizes a block-stream TTS supplement from the exact finalized answer only", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const acknowledgment = "I’ll inspect the live path first.";
+    const progress = "The gateway ledger confirms the preview ordering.";
+    const finalText = "The final answer contains only the verified result.";
+    // Telegram is authoritative here: its finalizer removes retained progress
+    // from the accumulated block transcript before voice synthesis begins.
+    (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mockResolvedValueOnce(finalText);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: acknowledgment });
+      await opts?.onBlockReply?.({ text: progress });
+      await opts?.onBlockReply?.({ text: finalText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const finalTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls.filter(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCalls).toHaveLength(1);
+    expect(finalTtsCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: finalText,
+      }),
+    );
+    const supplementText = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[1]?.[0]?.text;
+    expect(supplementText).toBe(finalText);
+    expect(supplementText).not.toContain(acknowledgment);
+    expect(supplementText).not.toContain(progress);
+  });
+
   it("keeps structured Telegram final text intact when persisted TTS is on", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
