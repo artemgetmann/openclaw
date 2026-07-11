@@ -920,6 +920,7 @@ poll_app_notarization_only() {
   receipt_path="$(app_notary_receipt_path)"
   if [[ -f "$receipt_path" ]]; then
     submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+    submission_id="$(jarvis_release_normalize_optional_metadata_value "$submission_id")"
     artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
     staple_app="$(receipt_value "$receipt_path" "NOTARY_STAPLE_APP_PATH")"
   else
@@ -928,6 +929,7 @@ poll_app_notarization_only() {
     # from the saved submission ID and rewrite the receipt after notarytool info.
     echo "🧾 App notarization receipt missing; recovering poll metadata from $RELEASE_MANIFEST_PATH"
     submission_id="$(manifest_value "JARVIS_APP_NOTARY_SUBMISSION_ID")"
+    submission_id="$(jarvis_release_normalize_optional_metadata_value "$submission_id")"
     artifact="$NOTARY_ZIP"
     staple_app="$APP_PATH"
   fi
@@ -996,6 +998,7 @@ poll_dmg_notarization_only() {
   receipt_path="$(dmg_notary_receipt_path)"
   if [[ -f "$receipt_path" ]]; then
     submission_id="$(receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+    submission_id="$(jarvis_release_normalize_optional_metadata_value "$submission_id")"
     artifact="$(receipt_value "$receipt_path" "NOTARY_ARTIFACT")"
   else
     # Unlike the app upload zip, the DMG itself must exist when Accepted so
@@ -1003,6 +1006,7 @@ poll_dmg_notarization_only() {
     # only when the local DMG artifact is still present.
     echo "🧾 DMG notarization receipt missing; recovering poll metadata from $RELEASE_MANIFEST_PATH"
     submission_id="$(manifest_value "JARVIS_DMG_NOTARY_SUBMISSION_ID")"
+    submission_id="$(jarvis_release_normalize_optional_metadata_value "$submission_id")"
     artifact="$DMG"
   fi
   if [[ -z "$submission_id" ]]; then
