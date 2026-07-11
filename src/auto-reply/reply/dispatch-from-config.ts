@@ -473,14 +473,14 @@ export async function dispatchReplyFromConfig(params: {
       : telegramTtsCommandAction === "off"
         ? "off"
         : undefined;
-  // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
-  // as-is, but let inbound audio override typed-message modes like `off` or
-  // `tagged` without writing a new preference.
+  // Voice-in gets voice-out for this turn when the user has not chosen an
+  // explicit session mode. `/tts off` is a hard output opt-out and must not be
+  // overridden by inbound audio; transcription and model input are unaffected.
   const turnTtsAuto = commandTtsAuto
     ? commandTtsAuto
     : isControlCommandReply && !isTelegramTtsControlCommand
       ? "off"
-      : inboundAudio && sessionTtsAuto !== "always"
+      : inboundAudio && sessionTtsAuto === undefined
         ? "inbound"
         : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();

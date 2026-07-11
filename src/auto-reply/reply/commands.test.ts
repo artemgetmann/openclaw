@@ -2098,4 +2098,70 @@ describe("handleCommands /tts", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("TTS status");
   });
+
+  it("persists /tts off over an active session TTS override", async () => {
+    const storePath = path.join(testWorkspaceDir, "sessions-tts-off.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+      messages: { tts: { prefsPath: path.join(testWorkspaceDir, "tts-session-off.json") } },
+    } as OpenClawConfig;
+    const params = buildParams("/tts off", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "123",
+    });
+    const sessionEntry = {
+      sessionId: "session-tts-off",
+      updatedAt: Date.now(),
+      ttsAuto: "always" as const,
+    };
+    params.sessionEntry = sessionEntry;
+    params.sessionStore = {
+      [params.sessionKey]: sessionEntry,
+    };
+    params.storePath = storePath;
+    await fs.writeFile(storePath, JSON.stringify(params.sessionStore), "utf-8");
+
+    const result = await handleCommands(params);
+    const persistedStore = await readJsonFile<Record<string, { ttsAuto?: string }>>(storePath);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("TTS disabled");
+    expect(params.sessionEntry.ttsAuto).toBe("off");
+    expect(params.sessionStore[params.sessionKey]?.ttsAuto).toBe("off");
+    expect(persistedStore[params.sessionKey]?.ttsAuto).toBe("off");
+  });
+
+  it.each([
+    { command: "/tts on", expected: "always" },
+    { command: "/tts always", expected: "always" },
+    { command: "/tts inbound", expected: "inbound" },
+    { command: "/tts tagged", expected: "tagged" },
+  ] as const)("persists $command as session mode $expected", async ({ command, expected }) => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+      messages: { tts: { prefsPath: path.join(testWorkspaceDir, `tts-${expected}.json`) } },
+    } as OpenClawConfig;
+    const params = buildParams(command, cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "123",
+    });
+    params.sessionEntry = {
+      sessionId: `session-tts-${expected}`,
+      updatedAt: Date.now(),
+      ttsAuto: "off",
+    };
+    params.sessionStore = {
+      [params.sessionKey]: params.sessionEntry,
+    };
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(params.sessionEntry.ttsAuto).toBe(expected);
+    expect(params.sessionStore[params.sessionKey]?.ttsAuto).toBe(expected);
+  });
 });
