@@ -290,9 +290,13 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
 
     const rawTarget = params.target.trim();
     const explicitJid = rawTarget.includes("@") ? rawTarget : null;
-    const seedPhone = normalizeDigits(
-      explicitJid ? extractPhoneDigitsFromJid(explicitJid) : rawTarget,
-    );
+    // Explicit opaque LIDs do not encode a phone in the JID. Resolve their
+    // stored contact phone so identity matching works in both directions while
+    // still requiring positive DB evidence.
+    const seedPhone = explicitJid
+      ? (extractPhoneDigitsFromJid(explicitJid) ??
+        normalizeDigits(contacts.find((contact) => contact.jid === explicitJid)?.phone))
+      : normalizeDigits(rawTarget);
     const seedJids = new Set<string>();
     if (explicitJid) {
       seedJids.add(explicitJid);

@@ -242,4 +242,33 @@ describe("findLatestInboundReplyAcrossResolvedChats", () => {
       expect(result.latestInboundReply?.chatJid).toBe("235317080666280@lid");
     });
   });
+
+  it("resolves a mapped explicit LID back to its phone JID without admitting unmapped namesakes", async () => {
+    await withTempDb(async (dbPath) => {
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec(`
+          INSERT INTO chats (jid, kind, name, last_message_ts) VALUES
+            ('999999999999999@lid', 'unknown', 'GYMNASIUM BALI', 1775039900);
+        `);
+      } finally {
+        db.close();
+      }
+
+      const result = findLatestInboundReplyAcrossResolvedChats({
+        dbPath,
+        target: "235317080666280@lid",
+      });
+
+      expect(result.seedPhones).toEqual(["6281238581815"]);
+      expect(result.candidates.map((candidate) => candidate.jid)).toEqual([
+        "235317080666280@lid",
+        "6281238581815@s.whatsapp.net",
+      ]);
+      expect(result.candidates.map((candidate) => candidate.jid)).not.toContain(
+        "999999999999999@lid",
+      );
+    });
+  });
 });
