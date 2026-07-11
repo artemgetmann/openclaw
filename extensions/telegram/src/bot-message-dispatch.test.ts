@@ -309,7 +309,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   it("starts final-looking partials in a separate answer bubble after transient progress", async () => {
     const progressStream = createDraftStream(9010);
     const answerStream = createDraftStream(9011);
-    createTelegramDraftStream.mockReturnValueOnce(progressStream);
+    createTelegramDraftStream.mockReturnValueOnce(progressStream).mockReturnValueOnce(answerStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({
@@ -354,7 +354,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
     expect(progressStream.update).toHaveBeenCalledWith(
       "I'll inspect browser support, write a report, and clean up the temp file.",
     );
@@ -369,20 +369,18 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(progressStream.flush).toHaveBeenCalledTimes(1);
     expect(progressStream.clear).not.toHaveBeenCalled();
     expect(progressStream.materialize.mock.invocationCallOrder[0]).toBeLessThan(
-      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      answerStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(answerStream.update).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        richMessages: false,
-        replies: [
-          expect.objectContaining({
-            text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
-          }),
-        ],
-      }),
+    expect(answerStream.update).toHaveBeenCalledWith(
+      "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
     );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9011,
+      "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+      expect.objectContaining({ richMessages: false }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("routes sourcePreview tool text through transient progress", async () => {
@@ -1635,40 +1633,46 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("sends visible final text before a media-only voice supplement in the same thread", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        {
-          text: "Final answer.",
+  it("finalizes an explicitly phased partial before a media-only voice supplement", async () => {
+    const answerStream = createDraftStream(111);
+    createTelegramDraftStream.mockReturnValue(answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Final answer",
           channelData: { openclaw: { assistantPhase: "final_answer" } },
-        },
-        { kind: "final" },
-      );
-      await dispatcherOptions.deliver(
-        {
-          mediaUrl: "file:///tmp/final-voice.ogg",
-          audioAsVoice: true,
-        },
-        { kind: "final" },
-      );
-      return { queuedFinal: true };
-    });
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Final answer.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            mediaUrl: "file:///tmp/final-voice.ogg",
+            audioAsVoice: true,
+            channelData: { openclaw: { finalTtsSupplement: true } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(deliverReplies).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        thread: { id: 777, scope: "dm" },
-        replies: [expect.objectContaining({ text: "Final answer." })],
-      }),
-    );
-    expect(deliverReplies.mock.calls[0]?.[0]).toEqual(
+    expect(answerStream.update).toHaveBeenCalledWith("Final answer");
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      111,
+      "Final answer.",
       expect.objectContaining({ richMessages: false }),
     );
-    expect(deliverReplies).toHaveBeenNthCalledWith(
-      2,
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
         replies: [
@@ -1678,6 +1682,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           }),
         ],
       }),
+    );
+    expect(editMessageTelegram.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 

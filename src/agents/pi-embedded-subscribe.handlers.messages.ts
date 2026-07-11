@@ -312,10 +312,19 @@ export function handleMessageUpdate(
       });
       ctx.state.emittedAssistantUpdate = true;
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
-        void ctx.params.onPartialReply({
-          text: cleanedText,
-          mediaUrls: hasMedia ? mediaUrls : undefined,
-        });
+        // The provider can identify commentary vs. final-answer messages before
+        // the cumulative text snapshot reaches channel delivery. Preserve that
+        // structural phase here; dropping it forces channels to buffer the full
+        // answer until the later block/final callback proves what the text was.
+        void ctx.params.onPartialReply(
+          withAssistantPhaseChannelData(
+            {
+              text: cleanedText,
+              mediaUrls: hasMedia ? mediaUrls : undefined,
+            },
+            ctx.state.currentAssistantPhase,
+          ),
+        );
       }
     }
   }
