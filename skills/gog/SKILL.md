@@ -152,15 +152,17 @@ Setup Routing
   unless they explicitly want a narrower scope.
 - For local consumer OAuth setup, use
   `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`
-  and its resumable polling flow. The helper serializes auth across sessions,
-  bounds Keychain waits, and launches `gog auth add` on this Mac in the
+  and its resumable polling flow. On macOS, the helper serializes auth across
+  sessions, bounds Keychain waits, and launches `gog auth add` in the
   background so the Google consent screen can open while you keep chatting.
+  Other platforms use a direct background worker and do not provide the macOS
+  single-flight guarantee.
 - Do not start `gog auth setup`, `gog auth add`, `gog auth list`, or another
   helper session in parallel with an active helper session. Continue, wait,
   reopen, or stop the existing session so macOS shows at most one Keychain
   approval prompt.
 - If the helper is unavailable or blocked, report that setup is blocked instead
-  of bypassing its single-flight protection with a direct auth command.
+  of bypassing its macOS single-flight protection with a direct auth command.
 - Prefer opening the real Google consent tab in Google Chrome when available.
   If Chrome handoff is not available, fall back to the default browser instead
   of stalling on auth errors.

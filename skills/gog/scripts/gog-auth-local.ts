@@ -76,7 +76,7 @@ function usage() {
   gog-auth-local.sh stop --session <id>
 
 Notes:
-  - start launches gog auth add in the background on this Mac so the browser flow can open locally.
+  - start launches gog auth add in the background so the browser flow can open locally.
   - wait blocks until the auth session finishes and verifies the account with gog auth list.
   - reopen opens the stored Google consent URL again when the browser handoff was missed.
   - stop terminates the helper if the user abandons the OAuth screen.`);
@@ -269,23 +269,37 @@ function defaultIsProcessRunning(pid: number) {
   }
 }
 
-/**
- * Run a worker under macOS' kernel-backed advisory lock. `-k` is essential:
- * the lock file inode remains stable forever, so no stale-owner cleanup can
- * rename or delete a replacement owner's pathname. The kernel releases the
- * lock when lockf or its command exits, including crashes and forced stops.
- */
-export function spawnWithAuthOperationLock(params: {
+export function resolveAuthWorkerLaunch(params: {
+  platform?: NodeJS.Platform;
+  lockPath: string;
+  command: string;
+  args: string[];
+}) {
+  if ((params.platform ?? process.platform) !== "darwin") {
+    return { command: params.command, args: params.args, usesMacosLock: false } as const;
+  }
+  // `-k` keeps one stable inode, so no stale-owner cleanup can rename or
+  // delete a replacement owner's pathname. The kernel releases ownership on
+  // normal exit, crash, or forced stop.
+  return {
+    command: MACOS_LOCKF_PATH,
+    args: ["-s", "-t", "0", "-k", params.lockPath, params.command, ...params.args],
+    usesMacosLock: true,
+  } as const;
+}
+
+export function spawnAuthWorkerProcess(params: {
+  platform?: NodeJS.Platform;
   lockPath: string;
   command: string;
   args: string[];
   options?: SpawnOptions;
-}): ChildProcess {
-  return spawnChild(
-    MACOS_LOCKF_PATH,
-    ["-s", "-t", "0", "-k", params.lockPath, params.command, ...params.args],
-    params.options ?? {},
-  ) as ChildProcess;
+}): { child: ChildProcess; usesMacosLock: boolean } {
+  const launch = resolveAuthWorkerLaunch(params);
+  return {
+    child: spawnChild(launch.command, launch.args, params.options ?? {}) as ChildProcess,
+    usesMacosLock: launch.usesMacosLock,
+  };
 }
 
 function combinedErrorText(params: {
@@ -428,8 +442,7 @@ export function classifyGoogleAuthFailure(params: {
   ) {
     return {
       diagnosticKind: "browser_handoff_failed",
-      message:
-        "OpenClaw could not hand off the Google approval flow cleanly to the browser on this Mac.",
+      message: "OpenClaw could not hand off the Google approval flow cleanly to the local browser.",
       nextStep:
         "Retry the Google connection. If the browser still does not appear, reopen the stored auth URL manually.",
     };
@@ -594,9 +607,8 @@ async function commandStart(flags: Map<string, string | boolean>) {
     lockPid: null,
   });
 
-  // lockf executes the Node worker only after acquiring the persistent lock
-  // inode. A losing concurrent start exits before it can spawn gog or display
-  // a Keychain prompt.
+  // On macOS, lockf executes Node only after acquiring the persistent lock
+  // inode. Other platforms retain the prior direct detached worker path.
   const workerArgs = [
     "--import",
     "tsx",
@@ -620,7 +632,7 @@ async function commandStart(flags: Map<string, string | boolean>) {
   if (forceConsent) {
     workerArgs.push("--force-consent");
   }
-  const worker = spawnWithAuthOperationLock({
+  const launch = spawnAuthWorkerProcess({
     lockPath: path.join(SESSIONS_ROOT, AUTH_LOCK_FILE),
     command: process.execPath,
     args: workerArgs,
@@ -629,13 +641,17 @@ async function commandStart(flags: Map<string, string | boolean>) {
       stdio: "ignore",
     },
   });
+  const worker = launch.child;
   if (!worker.pid) {
-    throw new Error("Google auth lock worker did not start");
+    throw new Error("Google auth worker did not start");
   }
-  await writeStatus(sessionDir, { lockPid: worker.pid });
+  await writeStatus(sessionDir, {
+    lockPid: launch.usesMacosLock ? worker.pid : null,
+    workerPid: launch.usesMacosLock ? null : worker.pid,
+  });
 
   try {
-    const status = await waitForAuthWorkerStart(sessionId, worker);
+    const status = await waitForAuthWorkerStart(sessionId, worker, launch.usesMacosLock);
     worker.unref();
     console.log(JSON.stringify(status, null, 2));
   } catch (error) {
@@ -646,7 +662,7 @@ async function commandStart(flags: Map<string, string | boolean>) {
       phase: "error",
       message: contended
         ? "Another Google setup is already in progress on this Mac."
-        : "Google setup could not start safely on this Mac.",
+        : "Google setup could not start safely on this device.",
       workerPid: null,
       lockPid: null,
       diagnosticKind: "auth_unknown",
@@ -658,9 +674,13 @@ async function commandStart(flags: Map<string, string | boolean>) {
   }
 }
 
-async function waitForAuthWorkerStart(sessionId: string, lockProcess: ChildProcess) {
+async function waitForAuthWorkerStart(
+  sessionId: string,
+  launchProcess: ChildProcess,
+  usesMacosLock: boolean,
+) {
   let spawnError: Error | null = null;
-  lockProcess.once("error", (error) => {
+  launchProcess.once("error", (error) => {
     spawnError = error;
   });
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -668,14 +688,14 @@ async function waitForAuthWorkerStart(sessionId: string, lockProcess: ChildProce
       throw spawnError;
     }
     const status = await readStatus(sessionId);
-    if (status.workerPid) {
+    if (status.workerPid && status.phase !== "starting") {
       return status;
     }
-    if (lockProcess.exitCode !== null) {
+    if (launchProcess.exitCode !== null) {
       throw new Error(
-        lockProcess.exitCode === 75
+        usesMacosLock && launchProcess.exitCode === 75
           ? "Google setup is already in progress. Continue that setup instead of starting another."
-          : `Google auth lock worker exited ${String(lockProcess.exitCode)}`,
+          : `Google auth worker exited ${String(launchProcess.exitCode)}`,
       );
     }
     await sleep(50);
@@ -719,7 +739,7 @@ async function runWorker(flags: Map<string, string | boolean>) {
 
   await writeStatus(sessionDir, {
     phase: "waiting_for_browser",
-    message: "Opening the Google consent flow in the default browser on this Mac…",
+    message: "Opening the Google consent flow in the default browser on this device…",
     pid: child.pid,
     workerPid: process.pid,
   });
@@ -741,7 +761,7 @@ async function runWorker(flags: Map<string, string | boolean>) {
         await writeStatus(sessionDir, {
           phase: "waiting_for_browser",
           message:
-            "I opened the Google consent flow in the default browser on this Mac. Google may require sign-in, Touch ID, passkey approval, or 2FA there before I can continue.",
+            "I opened the Google consent flow in the default browser on this device. Google may require sign-in, biometric approval, a passkey, or 2FA there before I can continue.",
         });
       }
       if (!authUrl && AUTH_URL_RE.test(line)) {
@@ -749,7 +769,7 @@ async function runWorker(flags: Map<string, string | boolean>) {
         await writeStatus(sessionDir, {
           authUrl,
           message:
-            "I opened the Google consent flow in the default browser on this Mac. If the browser did not appear, use the authUrl from this session. Google may still require a manual sign-in or biometric step in the browser.",
+            "I opened the Google consent flow in the default browser on this device. If the browser did not appear, use the authUrl from this session. Google may still require a manual sign-in or biometric step in the browser.",
         });
         continue;
       }
@@ -772,7 +792,7 @@ async function runWorker(flags: Map<string, string | boolean>) {
     void writeStatus(sessionDir, {
       phase: "authorizing",
       message:
-        "Google auth is waiting for the browser consent step to finish on this Mac. Complete any Google password, Touch ID, passkey, or 2FA prompt there and I will resume automatically.",
+        "Google auth is waiting for the browser consent step to finish on this device. Complete any Google password, biometric, passkey, or 2FA prompt there and I will resume automatically.",
     });
   }, 2000);
 
@@ -903,7 +923,7 @@ async function commandWait(flags: Map<string, string | boolean>) {
         message: `Google auth is still in progress for ${status.email}.`,
         nextStep: status.authUrl
           ? "Finish the Google approval in the browser. If that page expired or disappeared, reopen the saved auth URL and complete it immediately."
-          : "Finish the Google approval in the browser on this Mac.",
+          : "Finish the Google approval in the local browser.",
       });
       console.log(JSON.stringify(timeoutStatus, null, 2));
       process.exit(2);
@@ -944,12 +964,12 @@ async function commandReopen(flags: Map<string, string | boolean>) {
   const next = await writeStatus(sessionDirFor(sessionId), {
     phase: opened ? "waiting_for_browser" : status.phase,
     message: opened
-      ? "Reopened the Google approval page in Google Chrome on this Mac. Finish the consent step immediately there."
+      ? "Reopened the Google approval page in the local browser. Finish the consent step immediately there."
       : "OpenClaw could not reopen the Google approval page automatically.",
     diagnosticKind: opened ? "callback_missed" : "browser_handoff_failed",
     nextStep: opened
       ? "Complete the Google approval in that browser window now so the local callback does not expire again."
-      : `Open this URL manually in the browser on this Mac: ${authUrl}`,
+      : `Open this URL manually in the local browser: ${authUrl}`,
   });
   console.log(JSON.stringify(next, null, 2));
   process.exit(opened ? 0 : 1);

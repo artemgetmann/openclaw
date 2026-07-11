@@ -8,7 +8,8 @@ import {
   DEFAULT_CONSUMER_GOOGLE_SERVICES,
   gogSubprocessEnv,
   reserveAuthSessionDirectory,
-  spawnWithAuthOperationLock,
+  resolveAuthWorkerLaunch,
+  spawnAuthWorkerProcess,
   VERIFICATION_KEYRING_OPEN_TIMEOUT,
 } from "../../skills/gog/scripts/gog-auth-local.ts";
 
@@ -135,29 +136,62 @@ describe("gog auth local helper", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
   });
 
+  it("launches the requested worker directly outside macOS", () => {
+    const launch = resolveAuthWorkerLaunch({
+      platform: "linux",
+      lockPath: "/tmp/ignored.lock",
+      command: "/usr/bin/node",
+      args: ["worker.js", "--session", "demo"],
+    });
+
+    expect(launch).toEqual({
+      command: "/usr/bin/node",
+      args: ["worker.js", "--session", "demo"],
+      usesMacosLock: false,
+    });
+    expect(launch.command).not.toBe("/usr/bin/lockf");
+  });
+
+  it("wraps the requested worker with persistent lockf ownership on macOS", () => {
+    const launch = resolveAuthWorkerLaunch({
+      platform: "darwin",
+      lockPath: "/tmp/auth.lock",
+      command: "/usr/bin/node",
+      args: ["worker.js"],
+    });
+
+    expect(launch).toEqual({
+      command: "/usr/bin/lockf",
+      args: ["-s", "-t", "0", "-k", "/tmp/auth.lock", "/usr/bin/node", "worker.js"],
+      usesMacosLock: true,
+    });
+  });
+
   it.runIf(process.platform === "darwin")(
     "keeps one stable lock inode across contention and crashed-owner recovery",
     async () => {
       const rootDir = await temporaryRoot();
       const lockPath = path.join(rootDir, "active-auth.lock");
-      const holder = spawnWithAuthOperationLock({
+      const holder = spawnAuthWorkerProcess({
+        platform: "darwin",
         lockPath,
         command: "/bin/sh",
         args: ["-c", 'printf "ready\\n"; while :; do sleep 1; done'],
         options: { detached: true, stdio: ["ignore", "pipe", "ignore"] },
-      });
+      }).child;
       await new Promise<void>((resolve, reject) => {
         holder.once("error", reject);
         holder.stdout?.once("data", () => resolve());
       });
       const originalInode = (await fsp.stat(lockPath)).ino;
 
-      const contender = spawnWithAuthOperationLock({
+      const contender = spawnAuthWorkerProcess({
+        platform: "darwin",
         lockPath,
         command: "/usr/bin/true",
         args: [],
         options: { stdio: "ignore" },
-      });
+      }).child;
       const contenderCode = await new Promise<number | null>((resolve) => {
         contender.once("close", resolve);
       });
@@ -171,12 +205,13 @@ describe("gog auth local helper", () => {
       process.kill(-(holder.pid ?? 0), "SIGKILL");
       await holderClosed;
 
-      const replacement = spawnWithAuthOperationLock({
+      const replacement = spawnAuthWorkerProcess({
+        platform: "darwin",
         lockPath,
         command: "/usr/bin/true",
         args: [],
         options: { stdio: "ignore" },
-      });
+      }).child;
       const replacementCode = await new Promise<number | null>((resolve) => {
         replacement.once("close", resolve);
       });

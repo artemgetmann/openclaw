@@ -171,8 +171,9 @@ explicitly ask for the CLI path.
   corrupt-token recovery, and global `--readonly` / `GOG_READONLY=1`.
 - Route consumer Google auth through
   `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`.
-  Its single-flight lock prevents multiple setup sessions from producing
-  overlapping Google or macOS Keychain prompts.
+  On macOS, its single-flight lock prevents multiple setup sessions from
+  producing overlapping Google or Keychain prompts. Other platforms use a
+  direct background worker, so do not claim cross-session serialization there.
 - Prefer opening the real auth tab in Google Chrome when the runtime can do so.
   If Chrome is unavailable, use the default browser rather than dumping raw
   terminal instructions back to the user.
@@ -180,7 +181,7 @@ explicitly ask for the CLI path.
   not bypass the guard with direct `gog auth setup`, `gog auth add`, or
   `gog auth list` calls while setup is active.
 - If the local runtime can launch the flow itself, say that explicitly:
-  "I opened the Google consent flow in the browser on this Mac. Finish the
+  "I opened the Google consent flow in the local browser. Finish the
   Google approval there."
 - Say the secure step out loud: Google may require password entry, Touch ID,
   passkey approval, or 2FA in the browser, and the user may need to complete
