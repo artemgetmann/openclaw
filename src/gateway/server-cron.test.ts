@@ -760,6 +760,81 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("preserves a completion persisted during the wake and keeps cron disabled", async () => {
+    const cfg = createCronConfig("server-cron-monitor-preserve-completion");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    let jobId = "";
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      const store = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      store.monitors[0] = {
+        ...store.monitors[0],
+        status: "completed",
+        lastCheckpoint: { evaluation: "done", evidence: "reply-confirmed" },
+        updatedAtMs: 2,
+      };
+      await fs.writeFile(monitorStorePath, JSON.stringify(store), "utf-8");
+      // This mirrors monitor.update's terminal transition: the persisted
+      // completion owns the cron lifecycle before the wake runner returns.
+      await state.cron.update(jobId, { enabled: false });
+      return { status: "ok" as const, summary: "done" };
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake preserve completion",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:agent:main:monitor:monitor-preserve-completion",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-preserve-completion" },
+      });
+      jobId = job.id;
+      await fs.writeFile(
+        monitorStorePath,
+        JSON.stringify({
+          version: 1,
+          monitors: [
+            {
+              monitorId: "monitor-preserve-completion",
+              agentId: "main",
+              originSessionKey: "agent:main:main",
+              monitorSessionKey: "agent:main:monitor:monitor-preserve-completion",
+              sourceType: "synthetic",
+              sourceTarget: { source: "proof" },
+              cadence: { kind: "every", everyMs: 60_000 },
+              actionPolicy: "notify_draft",
+              status: "active",
+              cronJobId: job.id,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      await state.cron.run(job.id, "force");
+
+      const store = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      expect(store.monitors[0]).toMatchObject({
+        status: "completed",
+        lastWakeStatus: "completed",
+        lastCheckpoint: { evaluation: "done", evidence: "reply-confirmed" },
+      });
+      expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("stops a monitor when its bound origin goal is completed during the wake", async () => {
     const cfg = createCronConfig("server-cron-monitor-stops-on-goal-complete");
     cfg.session = {
