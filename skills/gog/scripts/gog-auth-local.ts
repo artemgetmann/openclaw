@@ -1,4 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -36,6 +37,7 @@ type SessionStatus = {
   logPath: string;
   pid?: number | null;
   workerPid?: number | null;
+  lockPid?: number | null;
   authorized?: boolean;
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
@@ -58,34 +60,12 @@ const __filename = fileURLToPath(import.meta.url);
 const SESSIONS_ROOT = path.join(os.tmpdir(), "openclaw-gog-auth");
 const STATUS_FILE = "status.json";
 const LOG_FILE = "gog-auth.log";
-const AUTH_LOCK_DIR = "active-auth.lock";
-const AUTH_LOCK_METADATA_FILE = "owner.json";
-const AUTH_LOCK_STALE_AFTER_MS = 15 * 60_000;
+const AUTH_LOCK_FILE = "active-auth.lock";
+const MACOS_LOCKF_PATH = "/usr/bin/lockf";
 export const DEFAULT_CONSUMER_GOOGLE_SERVICES = "gmail,calendar,drive,contacts,docs,sheets";
 export const AUTH_KEYRING_OPEN_TIMEOUT = "10m";
 export const VERIFICATION_KEYRING_OPEN_TIMEOUT = "15s";
 const AUTH_URL_RE = /^https:\/\/accounts\.google\.com\/o\/oauth2\/auth\?/;
-
-type AuthLockMetadata = {
-  sessionId: string;
-  ownerPid: number;
-  acquiredAt: string;
-  expiresAt: string;
-  token: string;
-};
-
-export type AuthOperationLock =
-  | {
-      acquired: true;
-      sessionId: string;
-      transfer: (ownerPid: number) => Promise<void>;
-      release: () => Promise<void>;
-    }
-  | {
-      acquired: false;
-      activeSessionId: string;
-      acquiredAt: string;
-    };
 
 function usage() {
   console.error(`Usage:
@@ -174,6 +154,7 @@ async function writeStatus(sessionDir: string, patch: Partial<SessionStatus>) {
     workerPid: Object.hasOwn(patch, "workerPid")
       ? (patch.workerPid ?? null)
       : (current?.workerPid ?? null),
+    lockPid: Object.hasOwn(patch, "lockPid") ? (patch.lockPid ?? null) : (current?.lockPid ?? null),
     authorized: patch.authorized ?? current?.authorized,
     exitCode: Object.hasOwn(patch, "exitCode")
       ? (patch.exitCode ?? null)
@@ -246,14 +227,6 @@ export function gogSubprocessEnv(
   };
 }
 
-function authLockDirFor(rootDir: string) {
-  return path.join(rootDir, AUTH_LOCK_DIR);
-}
-
-function authLockMetadataPath(lockDir: string) {
-  return path.join(lockDir, AUTH_LOCK_METADATA_FILE);
-}
-
 function defaultIsProcessRunning(pid: number) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
@@ -266,152 +239,23 @@ function defaultIsProcessRunning(pid: number) {
   }
 }
 
-async function readAuthLockMetadata(lockDir: string): Promise<AuthLockMetadata | null> {
-  try {
-    const parsed = JSON.parse(
-      await fsp.readFile(authLockMetadataPath(lockDir), "utf8"),
-    ) as Partial<AuthLockMetadata>;
-    if (
-      typeof parsed.sessionId !== "string" ||
-      !parsed.sessionId ||
-      typeof parsed.ownerPid !== "number" ||
-      typeof parsed.acquiredAt !== "string" ||
-      typeof parsed.expiresAt !== "string" ||
-      typeof parsed.token !== "string" ||
-      !parsed.token
-    ) {
-      return null;
-    }
-    return parsed as AuthLockMetadata;
-  } catch {
-    return null;
-  }
-}
-
-async function writeAuthLockMetadata(lockDir: string, metadata: AuthLockMetadata) {
-  const temporaryPath = path.join(lockDir, `.owner-${randomUUID()}.json`);
-  await fsp.writeFile(temporaryPath, JSON.stringify(metadata, null, 2), "utf8");
-  await fsp.rename(temporaryPath, authLockMetadataPath(lockDir));
-}
-
-async function releaseAuthOperationLock(params: {
-  rootDir: string;
-  sessionId: string;
-  token?: string;
-}) {
-  const lockDir = authLockDirFor(params.rootDir);
-  const current = await readAuthLockMetadata(lockDir);
-  // Session and token checks prevent a delayed old worker from removing a lock
-  // that a newer session reclaimed after the old process died.
-  if (
-    !current ||
-    current.sessionId !== params.sessionId ||
-    (params.token && current.token !== params.token)
-  ) {
-    return false;
-  }
-  const retiredDir = `${lockDir}.released-${randomUUID()}`;
-  try {
-    await fsp.rename(lockDir, retiredDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-  await fsp.rm(retiredDir, { recursive: true, force: true });
-  return true;
-}
-
 /**
- * Publish a fully-written lock directory with one atomic rename. Contenders
- * can therefore never mistake a just-created but still-empty lock for stale.
+ * Run a worker under macOS' kernel-backed advisory lock. `-k` is essential:
+ * the lock file inode remains stable forever, so no stale-owner cleanup can
+ * rename or delete a replacement owner's pathname. The kernel releases the
+ * lock when lockf or its command exits, including crashes and forced stops.
  */
-export async function acquireAuthOperationLock(params: {
-  rootDir: string;
-  sessionId: string;
-  ownerPid: number;
-  now?: () => number;
-  isProcessRunning?: (pid: number) => boolean;
-  staleAfterMs?: number;
-}): Promise<AuthOperationLock> {
-  const now = params.now ?? Date.now;
-  const isProcessRunning = params.isProcessRunning ?? defaultIsProcessRunning;
-  const staleAfterMs = params.staleAfterMs ?? AUTH_LOCK_STALE_AFTER_MS;
-  const lockDir = authLockDirFor(params.rootDir);
-  await fsp.mkdir(params.rootDir, { recursive: true });
-
-  for (;;) {
-    const token = randomUUID();
-    const acquiredAtMs = now();
-    const acquiredAt = new Date(acquiredAtMs).toISOString();
-    const candidateDir = path.join(params.rootDir, `.auth-lock-candidate-${token}`);
-    const metadata: AuthLockMetadata = {
-      sessionId: params.sessionId,
-      ownerPid: params.ownerPid,
-      acquiredAt,
-      expiresAt: new Date(acquiredAtMs + staleAfterMs).toISOString(),
-      token,
-    };
-    await fsp.mkdir(candidateDir);
-    await fsp.writeFile(
-      authLockMetadataPath(candidateDir),
-      JSON.stringify(metadata, null, 2),
-      "utf8",
-    );
-
-    try {
-      await fsp.rename(candidateDir, lockDir);
-      return {
-        acquired: true,
-        sessionId: params.sessionId,
-        transfer: async (ownerPid: number) => {
-          const current = await readAuthLockMetadata(lockDir);
-          if (!current || current.token !== token || current.sessionId !== params.sessionId) {
-            throw new Error("Google auth ownership changed before the worker started");
-          }
-          await writeAuthLockMetadata(lockDir, { ...current, ownerPid });
-        },
-        release: async () => {
-          await releaseAuthOperationLock({
-            rootDir: params.rootDir,
-            sessionId: params.sessionId,
-            token,
-          });
-        },
-      };
-    } catch (error) {
-      await fsp.rm(candidateDir, { recursive: true, force: true });
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST" && code !== "ENOTEMPTY") {
-        throw error;
-      }
-    }
-
-    const active = await readAuthLockMetadata(lockDir);
-    const expiresAtMs = active ? Date.parse(active.expiresAt) : Number.NaN;
-    const oldEnough = !Number.isFinite(expiresAtMs) || now() >= expiresAtMs;
-    const ownerAlive = active ? isProcessRunning(active.ownerPid) : false;
-    if (active && ownerAlive && !oldEnough) {
-      return {
-        acquired: false,
-        activeSessionId: active.sessionId,
-        acquiredAt: active.acquiredAt,
-      };
-    }
-
-    // Atomically retire stale ownership. If another contender wins this rename,
-    // loop and inspect the winner instead of allowing two auth workers through.
-    const staleDir = `${lockDir}.stale-${randomUUID()}`;
-    try {
-      await fsp.rename(lockDir, staleDir);
-      await fsp.rm(staleDir, { recursive: true, force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
+export function spawnWithAuthOperationLock(params: {
+  lockPath: string;
+  command: string;
+  args: string[];
+  options?: SpawnOptions;
+}): ChildProcess {
+  return spawnChild(
+    MACOS_LOCKF_PATH,
+    ["-s", "-t", "0", "-k", params.lockPath, params.command, ...params.args],
+    params.options ?? {},
+  ) as ChildProcess;
 }
 
 function combinedErrorText(params: {
@@ -613,6 +457,28 @@ async function stopProcess(pid: number | undefined) {
   return !defaultIsProcessRunning(pid);
 }
 
+async function stopProcessGroup(groupLeaderPid: number | undefined) {
+  if (!groupLeaderPid || groupLeaderPid <= 0) {
+    return true;
+  }
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-groupLeaderPid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!signalGroup("SIGTERM")) {
+    return true;
+  }
+  await sleep(100);
+  // A failed startup handshake must not orphan the lockf command child. Kill
+  // the detached process group, not only the lockf parent, before returning.
+  signalGroup("SIGKILL");
+  return true;
+}
+
 async function readAuthList() {
   const child = spawnChild("gog", ["auth", "list", "--json"], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -677,94 +543,111 @@ async function commandStart(flags: Map<string, string | boolean>) {
   const forceConsent = boolFlag(flags, "--force-consent");
 
   await ensureSessionsRoot();
-  const operationLock = await acquireAuthOperationLock({
-    rootDir: SESSIONS_ROOT,
+  await fsp.mkdir(sessionDir, { recursive: true });
+  const logPath = path.join(sessionDir, LOG_FILE);
+  await fsp.writeFile(logPath, "", "utf8");
+  await writeStatus(sessionDir, {
     sessionId,
-    ownerPid: process.pid,
-    // Match lock expiry to the caller's bounded OAuth wait. This preserves a
-    // deliberate longer timeout without letting crashed ownership live forever.
-    staleAfterMs: parseDurationMs(timeout, 10 * 60_000) + 5 * 60_000,
+    phase: "starting",
+    message: "Starting Google auth helper…",
+    sessionDir,
+    email,
+    services,
+    client,
+    readonly,
+    forceConsent,
+    logPath,
+    workerPid: null,
+    lockPid: null,
   });
-  if (!operationLock.acquired) {
-    throw new Error(
-      `Google setup is already in progress in session ${operationLock.activeSessionId}. Continue that session instead of starting another.`,
-    );
+
+  // lockf executes the Node worker only after acquiring the persistent lock
+  // inode. A losing concurrent start exits before it can spawn gog or display
+  // a Keychain prompt.
+  const workerArgs = [
+    "--import",
+    "tsx",
+    __filename,
+    "worker",
+    "--session",
+    sessionId,
+    "--email",
+    email,
+    "--services",
+    services,
+    "--timeout",
+    timeout,
+  ];
+  if (client) {
+    workerArgs.push("--client", client);
   }
-
-  try {
-    await fsp.mkdir(sessionDir, { recursive: true });
-    const logPath = path.join(sessionDir, LOG_FILE);
-    await fsp.writeFile(logPath, "", "utf8");
-    await writeStatus(sessionDir, {
-      sessionId,
-      phase: "starting",
-      message: "Starting Google auth helper…",
-      sessionDir,
-      email,
-      services,
-      client,
-      readonly,
-      forceConsent,
-      logPath,
-      workerPid: process.pid,
-    });
-
-    // Launch a detached worker so the bot can keep chatting while the human
-    // finishes the Google consent screen in the local browser.
-    const workerArgs = [
-      "--import",
-      "tsx",
-      __filename,
-      "worker",
-      "--session",
-      sessionId,
-      "--email",
-      email,
-      "--services",
-      services,
-      "--timeout",
-      timeout,
-      "--lock-token",
-      await getAuthLockToken(SESSIONS_ROOT, sessionId),
-    ];
-    if (client) {
-      workerArgs.push("--client", client);
-    }
-    if (readonly) {
-      workerArgs.push("--readonly");
-    }
-    if (forceConsent) {
-      workerArgs.push("--force-consent");
-    }
-    const worker = spawnChild(process.execPath, workerArgs, {
+  if (readonly) {
+    workerArgs.push("--readonly");
+  }
+  if (forceConsent) {
+    workerArgs.push("--force-consent");
+  }
+  const worker = spawnWithAuthOperationLock({
+    lockPath: path.join(SESSIONS_ROOT, AUTH_LOCK_FILE),
+    command: process.execPath,
+    args: workerArgs,
+    options: {
       detached: true,
       stdio: "ignore",
-    });
-    worker.unref();
-    if (!worker.pid) {
-      throw new Error("Google auth worker did not start");
-    }
-    await operationLock.transfer(worker.pid);
+    },
+  });
+  if (!worker.pid) {
+    throw new Error("Google auth lock worker did not start");
+  }
+  await writeStatus(sessionDir, { lockPid: worker.pid });
 
-    const status = await writeStatus(sessionDir, {
-      phase: "waiting_for_browser",
-      message:
-        "Starting Google auth in the background. The default browser should open on this Mac.",
-      workerPid: worker.pid,
-    });
+  try {
+    const status = await waitForAuthWorkerStart(sessionId, worker);
+    worker.unref();
     console.log(JSON.stringify(status, null, 2));
   } catch (error) {
-    await operationLock.release();
+    await stopProcessGroup(worker.pid);
+    const reason = error instanceof Error ? error.message : String(error);
+    const contended = reason.includes("already in progress");
+    await writeStatus(sessionDir, {
+      phase: "error",
+      message: contended
+        ? "Another Google setup is already in progress on this Mac."
+        : "Google setup could not start safely on this Mac.",
+      workerPid: null,
+      lockPid: null,
+      diagnosticKind: "auth_unknown",
+      nextStep: contended
+        ? "Continue or stop the existing Google setup before retrying."
+        : "Retry Google setup. If this repeats, update or reinstall the Jarvis app.",
+    });
     throw error;
   }
 }
 
-async function getAuthLockToken(rootDir: string, sessionId: string) {
-  const metadata = await readAuthLockMetadata(authLockDirFor(rootDir));
-  if (!metadata || metadata.sessionId !== sessionId) {
-    throw new Error("Google auth ownership disappeared before the worker started");
+async function waitForAuthWorkerStart(sessionId: string, lockProcess: ChildProcess) {
+  let spawnError: Error | null = null;
+  lockProcess.once("error", (error) => {
+    spawnError = error;
+  });
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (spawnError) {
+      throw spawnError;
+    }
+    const status = await readStatus(sessionId);
+    if (status.workerPid) {
+      return status;
+    }
+    if (lockProcess.exitCode !== null) {
+      throw new Error(
+        lockProcess.exitCode === 75
+          ? "Google setup is already in progress. Continue that setup instead of starting another."
+          : `Google auth lock worker exited ${String(lockProcess.exitCode)}`,
+      );
+    }
+    await sleep(50);
   }
-  return metadata.token;
+  throw new Error("Google auth worker did not report ready state in time");
 }
 
 async function runWorker(flags: Map<string, string | boolean>) {
@@ -884,6 +767,8 @@ async function runWorker(flags: Map<string, string | boolean>) {
           exitCode: result.code,
           signal: result.signal,
           pid: null,
+          workerPid: null,
+          lockPid: null,
           error: classified.nextStep,
           diagnosticKind: classified.diagnosticKind,
           nextStep: classified.nextStep,
@@ -899,6 +784,8 @@ async function runWorker(flags: Map<string, string | boolean>) {
         exitCode: result.code,
         signal: result.signal,
         pid: null,
+        workerPid: null,
+        lockPid: null,
         error: null,
         diagnosticKind: null,
         nextStep: null,
@@ -921,6 +808,8 @@ async function runWorker(flags: Map<string, string | boolean>) {
         exitCode: result.code,
         signal: result.signal,
         pid: null,
+        workerPid: null,
+        lockPid: null,
         error: error instanceof Error ? error.message : String(error),
         diagnosticKind: classified.diagnosticKind,
         nextStep: classified.nextStep,
@@ -947,6 +836,8 @@ async function runWorker(flags: Map<string, string | boolean>) {
     exitCode: result.code,
     signal: result.signal,
     pid: null,
+    workerPid: null,
+    lockPid: null,
     error: stopped
       ? null
       : (classified?.nextStep ?? (lastErrorText || `gog auth add exited ${String(result.code)}`)),
@@ -956,24 +847,9 @@ async function runWorker(flags: Map<string, string | boolean>) {
   return stopped ? 0 : 1;
 }
 
-async function commandWorker(flags: Map<string, string | boolean>) {
-  const sessionId = requireFlag(flags, "--session");
-  const lockToken = requireFlag(flags, "--lock-token");
-  try {
-    return await runWorker(flags);
-  } finally {
-    // Every normal worker exit, including an unexpected exception, gives up
-    // ownership. SIGKILL/crash recovery is handled by PID-aware stale reclaim.
-    await releaseAuthOperationLock({ rootDir: SESSIONS_ROOT, sessionId, token: lockToken });
-  }
-}
-
 async function commandStatus(flags: Map<string, string | boolean>) {
   const sessionId = requireFlag(flags, "--session");
   const status = await readStatus(sessionId);
-  if (status.phase === "authorized" || status.phase === "error" || status.phase === "stopped") {
-    await releaseAuthOperationLock({ rootDir: SESSIONS_ROOT, sessionId });
-  }
   console.log(JSON.stringify(status, null, 2));
 }
 
@@ -985,7 +861,6 @@ async function commandWait(flags: Map<string, string | boolean>) {
   for (;;) {
     const status = await readStatus(sessionId);
     if (status.phase === "authorized" || status.phase === "error" || status.phase === "stopped") {
-      await releaseAuthOperationLock({ rootDir: SESSIONS_ROOT, sessionId });
       console.log(JSON.stringify(status, null, 2));
       process.exit(status.phase === "authorized" ? 0 : 1);
     }
@@ -1054,12 +929,12 @@ async function commandStop(flags: Map<string, string | boolean>) {
   // released once both have had a chance to exit, avoiding overlapping prompts.
   const killedChild = await stopProcess(status.pid ?? undefined);
   const killedWorker = await stopProcess(status.workerPid ?? undefined);
-  if (!killedChild || !killedWorker) {
+  const killedLock = await stopProcess(status.lockPid ?? undefined);
+  if (!killedChild || !killedWorker || !killedLock) {
     throw new Error(
       "Google setup is still stopping. Wait a moment and retry stop before starting a new setup.",
     );
   }
-  await releaseAuthOperationLock({ rootDir: SESSIONS_ROOT, sessionId });
   const next = await writeStatus(sessionDirFor(sessionId), {
     phase: "stopped",
     message:
@@ -1067,6 +942,8 @@ async function commandStop(flags: Map<string, string | boolean>) {
         ? "Stopped Google auth helper."
         : "Google auth helper was already stopped.",
     pid: null,
+    workerPid: null,
+    lockPid: null,
   });
   console.log(JSON.stringify(next, null, 2));
 }
@@ -1078,7 +955,7 @@ async function main() {
       await commandStart(flags);
       return;
     case "worker":
-      process.exitCode = await commandWorker(flags);
+      process.exitCode = await runWorker(flags);
       return;
     case "status":
       await commandStatus(flags);

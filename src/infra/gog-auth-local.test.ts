@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  acquireAuthOperationLock,
   AUTH_KEYRING_OPEN_TIMEOUT,
   classifyGoogleAuthFailure,
   DEFAULT_CONSUMER_GOOGLE_SERVICES,
   gogSubprocessEnv,
+  spawnWithAuthOperationLock,
   VERIFICATION_KEYRING_OPEN_TIMEOUT,
 } from "../../skills/gog/scripts/gog-auth-local.ts";
 
@@ -82,89 +82,55 @@ describe("gog auth local helper", () => {
     expect(result.nextStep).toContain("Always Allow");
   });
 
-  it("allows only one cross-process auth owner at a time", async () => {
-    const rootDir = await temporaryRoot();
-    const contenders = await Promise.all(
-      Array.from({ length: 8 }, (_, index) =>
-        acquireAuthOperationLock({
-          rootDir,
-          sessionId: `session-${index}`,
-          ownerPid: 10_000 + index,
-          isProcessRunning: () => true,
-        }),
-      ),
-    );
+  it.runIf(process.platform === "darwin")(
+    "keeps one stable lock inode across contention and crashed-owner recovery",
+    async () => {
+      const rootDir = await temporaryRoot();
+      const lockPath = path.join(rootDir, "active-auth.lock");
+      const holder = spawnWithAuthOperationLock({
+        lockPath,
+        command: "/bin/sh",
+        args: ["-c", 'printf "ready\\n"; while :; do sleep 1; done'],
+        options: { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+      });
+      await new Promise<void>((resolve, reject) => {
+        holder.once("error", reject);
+        holder.stdout?.once("data", () => resolve());
+      });
+      const originalInode = (await fsp.stat(lockPath)).ino;
 
-    const winners = contenders.filter((result) => result.acquired);
-    const blocked = contenders.filter((result) => !result.acquired);
-    expect(winners).toHaveLength(1);
-    expect(blocked).toHaveLength(7);
-    expect(new Set(blocked.map((result) => result.activeSessionId))).toEqual(
-      new Set([winners[0]?.sessionId]),
-    );
-    await winners[0]?.release();
-  });
+      const contender = spawnWithAuthOperationLock({
+        lockPath,
+        command: "/usr/bin/true",
+        args: [],
+        options: { stdio: "ignore" },
+      });
+      const contenderCode = await new Promise<number | null>((resolve) => {
+        contender.once("close", resolve);
+      });
+      expect(contenderCode).toBe(75);
+      expect((await fsp.stat(lockPath)).ino).toBe(originalInode);
 
-  it("recovers ownership when the previous worker is stale", async () => {
-    const rootDir = await temporaryRoot();
-    const first = await acquireAuthOperationLock({
-      rootDir,
-      sessionId: "stale-session",
-      ownerPid: 10_001,
-      isProcessRunning: () => true,
-    });
-    expect(first.acquired).toBe(true);
+      // A forced process-group exit models a stale/crashed auth worker. lockf
+      // releases in the kernel; no observer renames or deletes the pathname.
+      const holderClosed = new Promise<void>((resolve) => holder.once("close", () => resolve()));
+      expect(holder.pid).toBeTypeOf("number");
+      process.kill(-(holder.pid ?? 0), "SIGKILL");
+      await holderClosed;
 
-    const recovered = await acquireAuthOperationLock({
-      rootDir,
-      sessionId: "replacement-session",
-      ownerPid: 10_002,
-      isProcessRunning: () => false,
-    });
-    expect(recovered.acquired).toBe(true);
-    expect(recovered.acquired && recovered.sessionId).toBe("replacement-session");
-
-    // A late release from the stale owner must not delete replacement ownership.
-    if (first.acquired) {
-      await first.release();
-    }
-    const stillBlocked = await acquireAuthOperationLock({
-      rootDir,
-      sessionId: "third-session",
-      ownerPid: 10_003,
-      isProcessRunning: () => true,
-    });
-    expect(stillBlocked.acquired).toBe(false);
-    if (recovered.acquired) {
-      await recovered.release();
-    }
-  });
-
-  it("recovers a live but expired owner after its bounded auth window", async () => {
-    const rootDir = await temporaryRoot();
-    let now = Date.parse("2026-07-11T00:00:00.000Z");
-    await acquireAuthOperationLock({
-      rootDir,
-      sessionId: "expired-session",
-      ownerPid: 10_001,
-      now: () => now,
-      isProcessRunning: () => true,
-      staleAfterMs: 1_000,
-    });
-
-    now += 1_001;
-    const recovered = await acquireAuthOperationLock({
-      rootDir,
-      sessionId: "replacement-session",
-      ownerPid: 10_002,
-      now: () => now,
-      isProcessRunning: () => true,
-    });
-    expect(recovered.acquired).toBe(true);
-    if (recovered.acquired) {
-      await recovered.release();
-    }
-  });
+      const replacement = spawnWithAuthOperationLock({
+        lockPath,
+        command: "/usr/bin/true",
+        args: [],
+        options: { stdio: "ignore" },
+      });
+      const replacementCode = await new Promise<number | null>((resolve) => {
+        replacement.once("close", resolve);
+      });
+      expect(replacementCode).toBe(0);
+      expect((await fsp.stat(lockPath)).ino).toBe(originalInode);
+    },
+  );
 
   it("sets bounded Keychain waits and preserves a deliberate override", () => {
     expect(gogSubprocessEnv("auth", {}).GOG_KEYRING_OPEN_TIMEOUT).toBe(AUTH_KEYRING_OPEN_TIMEOUT);
