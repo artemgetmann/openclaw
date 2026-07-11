@@ -311,11 +311,6 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         );
         await replyOptions?.onAssistantMessageStart?.();
         await replyOptions?.onPartialReply?.({ text: partialAnswer });
-        await vi.waitFor(() =>
-          expect(
-            sendMessageCalls(harness.calls).some((call) => call.text.includes(partialAnswer)),
-          ).toBe(true),
-        );
         await dispatcherOptions.deliver({ text: finalAnswer }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -451,19 +446,10 @@ describe("dispatchTelegramMessage progress API sequence", () => {
         );
         // Providers can stream cumulative final snapshots before a delayed
         // assistant-message boundary, or omit that callback entirely. Both
-        // snapshots must keep one answer identity after commentary detaches.
+        // snapshots stay buffered until the final boundary proves they belong
+        // to the answer, then keep one answer identity after commentary detaches.
         await replyOptions?.onPartialReply?.({ text: partialAnswerPrefix });
-        await vi.waitFor(() =>
-          expect(
-            sendMessageCalls(harness.calls).some((call) => call.text.includes(partialAnswerPrefix)),
-          ).toBe(true),
-        );
         await replyOptions?.onPartialReply?.({ text: partialAnswer });
-        await vi.waitFor(() =>
-          expect(
-            editMessageTextCalls(harness.calls).some((call) => call.text.includes(partialAnswer)),
-          ).toBe(true),
-        );
         await replyOptions?.onAssistantMessageStart?.();
         await dispatcherOptions.deliver({ text: finalAnswer }, { kind: "final" });
         return { queuedFinal: true };
@@ -522,7 +508,6 @@ describe("dispatchTelegramMessage progress API sequence", () => {
       expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: finalAnswer }),
     ]);
     expect(partialPreviewEdits).toEqual([
-      expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: partialAnswer }),
       expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: finalAnswer }),
     ]);
     expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
@@ -535,6 +520,82 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     expect(
       sendMessageCalls(harness.calls).filter((call) => call.text.includes(finalAnswer)),
     ).toHaveLength(0);
+  });
+
+  it("buffers raw plan-adjacent commentary partials without transient send-delete churn", async () => {
+    const harness = createTelegramBotHarness(6990);
+    const planText = "Plan updated\n- [~] Inspect the lifecycle\n- [ ] Report the result";
+    const commentaryPrefix = "I found the dispatch boundary";
+    const commentary =
+      "I found the dispatch boundary; I’m checking the ordered callbacks before wrapping up.";
+    const finalPrefix = "The callback order is verified.";
+    const finalAnswer = `${finalPrefix} Commentary stayed in Work log and the final kept one message ID.`;
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: planText,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+
+        // Raw provider snapshots arrive before their authoritative phased
+        // commentary block. None may allocate an answer preview while the plan
+        // Work log is active.
+        await replyOptions?.onPartialReply?.({ text: commentaryPrefix });
+        await replyOptions?.onPartialReply?.({ text: commentary });
+        await dispatcherOptions.deliver(
+          {
+            text: commentary,
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+
+        // A later raw snapshot is proven to be the final prefix by the final
+        // boundary. It should materialize once and then be edited in place.
+        await replyOptions?.onPartialReply?.({ text: finalPrefix });
+        await dispatcherOptions.deliver(
+          {
+            text: finalAnswer,
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "block" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({
+      bot: harness.bot,
+      cfg: { channels: { telegram: { accounts: { default: { botToken: "123:test" } } } } },
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "plan-partial-commentary-buffer" },
+      }),
+    });
+
+    const sends = sendMessageCalls(harness.calls);
+    const progressSend = sends.find((call) => call.text.includes("Inspect the lifecycle"));
+    const finalPreviewSend = sends.find((call) => call.text === finalPrefix);
+    const standaloneCommentarySends = sends.filter(
+      (call) => call.text === commentaryPrefix || call.text === commentary,
+    );
+    const finalEdits = editMessageTextCalls(harness.calls).filter((call) =>
+      call.text.includes(finalAnswer),
+    );
+
+    expect(progressSend).toBeDefined();
+    expect(standaloneCommentarySends).toHaveLength(0);
+    expect(sends).toHaveLength(2);
+    expect(finalPreviewSend).toBeDefined();
+    expect(finalPreviewSend!.messageId).not.toBe(progressSend!.messageId);
+    expect(finalEdits).toEqual([
+      expect.objectContaining({ messageId: finalPreviewSend!.messageId, text: finalAnswer }),
+    ]);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
+    expect(workLogEditCalls(harness.calls).length).toBeGreaterThan(0);
+    expect(
+      workLogEditCalls(harness.calls).every((call) => call.messageId === progressSend!.messageId),
+    ).toBe(true);
   });
 
   it("keeps plan-adjacent commentary inside the existing Work log", async () => {

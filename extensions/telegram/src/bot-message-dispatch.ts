@@ -825,6 +825,11 @@ export const dispatchTelegramMessage = async ({
   // bubble. Without this, every natural "Browser is up..." style update starts
   // a fresh answer preview that can survive as a stale Telegram message.
   let routeToolStatusPartialsToProgress = false;
+  // A structured plan makes the next phase-less answer delta ambiguous: it can
+  // be either natural commentary that will shortly arrive as an explicitly
+  // phased block, or the prefix of the final answer. Do not allocate a Telegram
+  // answer message until a structural callback resolves that ambiguity.
+  let pendingAnswerPartialDuringPlan: string | undefined;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(async () => {
@@ -1332,6 +1337,13 @@ export const dispatchTelegramMessage = async ({
     if (previewText === lane.lastPartialText) {
       return;
     }
+    if (lane === answerLane && activeProgressKind === "plan" && getActiveProgressController()) {
+      pendingAnswerPartialDuringPlan = previewText;
+      logVerbose(
+        `telegram: buffered phase-unknown answer partial while plan progress is active length=${previewText.length}`,
+      );
+      return;
+    }
     // Some providers briefly emit a shorter prefix snapshot (for example
     // "Sure." -> "Sure" -> "Sure."). Keep the longer preview to avoid
     // visible punctuation flicker.
@@ -1544,6 +1556,11 @@ export const dispatchTelegramMessage = async ({
     // structural progress boundary must wait for them before it decides whether
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
+    // This explicit progress/commentary boundary classifies any raw partial
+    // immediately before it as progress. Drop the candidate after the queue is
+    // idle so fire-and-forget provider callbacks cannot repopulate it behind
+    // this boundary. No Telegram preview exists, so no delete is required.
+    pendingAnswerPartialDuringPlan = undefined;
     const controller =
       (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??
       getProgressController();
@@ -2058,6 +2075,35 @@ export const dispatchTelegramMessage = async ({
     previewButtons?: TelegramInlineButtons;
     hasMedia?: boolean;
   }) => {
+    const pendingPlanPartial = pendingAnswerPartialDuringPlan;
+    pendingAnswerPartialDuringPlan = undefined;
+    if (pendingPlanPartial) {
+      const normalizedPendingPartial =
+        normalizeAdjacentProgressBoundaries(pendingPlanPartial).trim();
+      const normalizedFinalText = normalizeAdjacentProgressBoundaries(text).trim();
+      if (normalizedPendingPartial && normalizedFinalText.startsWith(normalizedPendingPartial)) {
+        // The final boundary proves the buffered raw snapshot was an answer
+        // prefix. Materialize it only now, then finalize that same Telegram ID
+        // below. This preserves streaming identity without ever exposing a
+        // speculative commentary bubble that later needs deletion.
+        const stream = ensureDraftLaneStream("answer");
+        if (stream) {
+          setDraftDurableSendClassification("answer", {
+            reason: "final",
+            callsite: "plan-buffered-answer-partial-materialize",
+            sourceKind: "partial",
+          });
+          answerLane.lastPartialText = pendingPlanPartial;
+          answerLane.hasStreamedMessage = true;
+          stream.update(pendingPlanPartial);
+          await stream.flush();
+        }
+      } else {
+        logVerbose(
+          "telegram: discarded buffered plan-adjacent partial that was not a final prefix",
+        );
+      }
+    }
     const preparedText = await prepareFinalAnswerText(text, {
       hasMedia,
       isError: payload.isError,
