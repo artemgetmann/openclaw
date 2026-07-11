@@ -150,20 +150,19 @@ Setup Routing
   `gmail,calendar,drive,contacts,docs,sheets`.
 - Do not default to Drive-only or make the user come back later for Calendar
   unless they explicitly want a narrower scope.
-- For local browser OAuth, prefer a direct safe-bin invocation first:
-  `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`.
-  `gog` can open the browser itself on this Mac, and that path avoids repo-local
-  helper allowlist problems.
-- If `gog --version` reports v0.31.0 or newer, `gog auth setup` is the better
-  first guided path than reconstructing the older flow by hand.
-- If repo-local helper execution is denied, fall back to direct `gog auth add`
-  instead of telling the user to use Terminal or detouring to a node.
-- For local consumer OAuth setup, prefer
+- For local consumer OAuth setup, use
   `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`
-  when the runtime allows repo-local helper scripts and you need resumable
-  polling across turns. It launches `gog auth add` on this Mac in the
-  background so the Google consent screen can open in the local browser while
-  you keep chatting.
+  and its resumable polling flow. On macOS, the helper serializes auth across
+  sessions, bounds Keychain waits, and launches `gog auth add` in the
+  background so the Google consent screen can open while you keep chatting.
+  Other platforms use a direct background worker and do not provide the macOS
+  single-flight guarantee.
+- Do not start `gog auth setup`, `gog auth add`, `gog auth list`, or another
+  helper session in parallel with an active helper session. Continue, wait,
+  reopen, or stop the existing session so macOS shows at most one Keychain
+  approval prompt.
+- If the helper is unavailable or blocked, report that setup is blocked instead
+  of bypassing its macOS single-flight protection with a direct auth command.
 - Prefer opening the real Google consent tab in Google Chrome when available.
   If Chrome handoff is not available, fall back to the default browser instead
   of stalling on auth errors.
@@ -185,16 +184,20 @@ Setup Routing
   account added as a test user, required API not enabled, missed localhost
   callback handoff, local Keychain approval still pending, or a corrupt token
   that v0.31.0+ can recover from automatically.
+- When Keychain approval times out, tell the user to unlock the Mac, retry once,
+  enter their Mac login password in the single macOS Keychain prompt, and choose
+  Always Allow. Never capture, store, type, or bypass that password.
 - Once auth completes, verify with `gog auth list` before moving into Gmail,
   Calendar, Drive, Docs, Sheets, or Contacts actions.
 - Treat successful auth as a resume point. After `gog auth list` or another
   read-only probe succeeds, continue the user’s original Gmail/Calendar/Drive
   task automatically instead of asking them to restate it.
 
-Setup (once)
+Setup (terminal-only reference)
 
-- Current preferred path on `gog` v0.31.0 or newer:
-  `gog auth setup`
+- Consumer/Jarvis setup must use the guarded helper above. The raw commands here
+  are only for a user who explicitly requested an unguarded terminal workflow;
+  never run them beside an active helper session.
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
