@@ -1,0 +1,21 @@
+diff --git a/dist/providers/openai-responses-shared.js b/dist/providers/openai-responses-shared.js
+index 2fa9586f51bca41ab65d4a6a514776088d5a60bd..1837a34bb0f0bd56bfafb4b786a634704fdf1d4f 100644
+--- a/dist/providers/openai-responses-shared.js
++++ b/dist/providers/openai-responses-shared.js
+@@ -227,7 +227,15 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             }
+             else if (item.type === "message") {
+                 currentItem = item;
+-                currentBlock = { type: "text", text: "" };
++                // OpenAI identifies commentary versus final-answer items on
++                // output_item.added, before any text delta arrives. Preserve
++                // that structural phase immediately so channel adapters can
++                // route the stream without waiting for output_item.done.
++                currentBlock = {
++                    type: "text",
++                    text: "",
++                    textSignature: encodeTextSignatureV1(item.id, item.phase ?? undefined),
++                };
+                 output.content.push(currentBlock);
+                 stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+             }

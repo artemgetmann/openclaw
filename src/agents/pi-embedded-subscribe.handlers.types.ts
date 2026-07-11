@@ -58,6 +58,8 @@ export type EmbeddedPiSubscribeState = {
   lastAssistantTextNormalized?: string;
   lastAssistantTextTrimmed?: string;
   currentAssistantPhase?: "commentary" | "final_answer";
+  /** Content block currently feeding phase-local partial streaming state. */
+  activeAssistantContentIndex?: number;
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
@@ -109,6 +111,7 @@ export type EmbeddedPiSubscribeContext = {
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
+  resetAssistantContentState: (contentIndex: number) => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;
   finalizeAssistantTexts: (args: {

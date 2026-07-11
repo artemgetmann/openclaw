@@ -810,6 +810,10 @@ export const dispatchTelegramMessage = async ({
   let retainedAnswerProgressPreviewText = "";
   let retainedAnswerProgressFromExplicitBoundary = false;
   let forceNextAnswerFinalSend = false;
+  // The generic block/TTS pipeline needs the exact text Telegram accepted as
+  // final after removing retained progress. Keep that channel-authoritative
+  // value separate from the resolver's accumulated block transcript.
+  let lastPreparedFinalAnswerText = "";
   const transientProgressPreviewTexts: string[] = [];
   const transientProgressPreviewKeys = new Set<string>();
   let draftLaneEventQueue = Promise.resolve();
@@ -825,6 +829,11 @@ export const dispatchTelegramMessage = async ({
   // bubble. Without this, every natural "Browser is up..." style update starts
   // a fresh answer preview that can survive as a stale Telegram message.
   let routeToolStatusPartialsToProgress = false;
+  // A structured plan makes the next phase-less answer delta ambiguous: it can
+  // be either natural commentary that will shortly arrive as an explicitly
+  // phased block, or the prefix of the final answer. Do not allocate a Telegram
+  // answer message until a structural callback resolves that ambiguity.
+  let pendingAnswerPartialDuringPlan: string | undefined;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(async () => {
@@ -1286,6 +1295,7 @@ export const dispatchTelegramMessage = async ({
     ) {
       await materializeAnswerProgressBeforeFinal();
     }
+    lastPreparedFinalAnswerText = prepared.text;
     return prepared.text;
   };
   const updateActiveProgressPreviewFromPartial = (text: string, callsite: string) => {
@@ -1330,6 +1340,13 @@ export const dispatchTelegramMessage = async ({
           : (lane.stream?.previewMode?.() ?? "unknown"),
     });
     if (previewText === lane.lastPartialText) {
+      return;
+    }
+    if (lane === answerLane && activeProgressKind === "plan" && getActiveProgressController()) {
+      pendingAnswerPartialDuringPlan = previewText;
+      logVerbose(
+        `telegram: buffered phase-unknown answer partial while plan progress is active length=${previewText.length}`,
+      );
       return;
     }
     // Some providers briefly emit a shorter prefix snapshot (for example
@@ -1494,6 +1511,18 @@ export const dispatchTelegramMessage = async ({
     if (!controller) {
       return undefined;
     }
+    // The answer draft already rendered the natural acknowledgment before it
+    // was adopted. Seed the controller's ordered history with that visible
+    // text so the subsequent plan update edits this same message into a Work
+    // log containing the acknowledgment instead of overwriting it.
+    // The transport can deliver a speculative first delta (for example just
+    // "I") before the lane receives the complete acknowledgment snapshot.
+    // Work log history must use the newest logical snapshot, not that older
+    // transport artifact, or both fragments become permanent ordered entries.
+    const adoptedText = answerLane.lastPartialText.trim();
+    if (adoptedText) {
+      controller.update(adoptedText);
+    }
     // The first assistant deltas are speculative. If later structure proves
     // they were progress/commentary, keep the same Telegram bubble and let the
     // progress controller edit/clear it. Deleting here creates the churn users
@@ -1520,7 +1549,10 @@ export const dispatchTelegramMessage = async ({
   };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
-    options: { replace?: boolean; progressKind?: "generic" | "plan" } = {},
+    options: {
+      progressKind?: "generic" | "plan";
+      naturalCommentary?: boolean;
+    } = {},
   ) => {
     if (!text) {
       return false;
@@ -1533,13 +1565,22 @@ export const dispatchTelegramMessage = async ({
     // structural progress boundary must wait for them before it decides whether
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
+    // This explicit progress/commentary boundary classifies any raw partial
+    // immediately before it as progress. Drop the candidate after the queue is
+    // idle so fire-and-forget provider callbacks cannot repopulate it behind
+    // this boundary. No Telegram preview exists, so no delete is required.
+    pendingAnswerPartialDuringPlan = undefined;
     const controller =
       (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??
       getProgressController();
     if (!controller) {
       return false;
     }
-    activeProgressKind = options.progressKind ?? (options.replace ? "plan" : "generic");
+    if (options.progressKind === "plan") {
+      activeProgressKind = "plan";
+    } else if (!activeProgressKind) {
+      activeProgressKind = "generic";
+    }
     // Progress owns the transient bubble. The final answer must be sent as its
     // own durable message if no later answer stream appears. When a later
     // answer stream does appear, final delivery may safely finalize that active
@@ -1555,10 +1596,17 @@ export const dispatchTelegramMessage = async ({
       previewTransport: progressPreviewTransport,
       callsite: "update-answer-progress-from-block",
     });
-    if (options.replace) {
-      controller.replace(progressText);
+    if (options.progressKind === "plan") {
+      controller.updatePlan(progressText);
     } else {
       controller.update(progressText);
+    }
+    if (options.progressKind === "plan" || options.naturalCommentary === true) {
+      // Providers may report the next assistant-message boundary after the
+      // first final delta. The answer lane is currently empty because all
+      // pre-final commentary belongs to Work log, so consume that delayed
+      // boundary instead of rotating the new final preview onto another ID.
+      skipNextAnswerMessageStartRotation = true;
     }
     return true;
   };
@@ -1899,7 +1947,6 @@ export const dispatchTelegramMessage = async ({
       // Telegram text and never reaches TTS as a tool result.
       const progressKind = resolveOpenClawProgressKind(payload) === "plan" ? "plan" : "generic";
       await updateAnswerProgressFromBlock(payload.text, {
-        replace: progressKind === "plan",
         progressKind,
       });
       return;
@@ -2037,6 +2084,35 @@ export const dispatchTelegramMessage = async ({
     previewButtons?: TelegramInlineButtons;
     hasMedia?: boolean;
   }) => {
+    const pendingPlanPartial = pendingAnswerPartialDuringPlan;
+    pendingAnswerPartialDuringPlan = undefined;
+    if (pendingPlanPartial) {
+      const normalizedPendingPartial =
+        normalizeAdjacentProgressBoundaries(pendingPlanPartial).trim();
+      const normalizedFinalText = normalizeAdjacentProgressBoundaries(text).trim();
+      if (normalizedPendingPartial && normalizedFinalText.startsWith(normalizedPendingPartial)) {
+        // The final boundary proves the buffered raw snapshot was an answer
+        // prefix. Materialize it only now, then finalize that same Telegram ID
+        // below. This preserves streaming identity without ever exposing a
+        // speculative commentary bubble that later needs deletion.
+        const stream = ensureDraftLaneStream("answer");
+        if (stream) {
+          setDraftDurableSendClassification("answer", {
+            reason: "final",
+            callsite: "plan-buffered-answer-partial-materialize",
+            sourceKind: "partial",
+          });
+          answerLane.lastPartialText = pendingPlanPartial;
+          answerLane.hasStreamedMessage = true;
+          stream.update(pendingPlanPartial);
+          await stream.flush();
+        }
+      } else {
+        logVerbose(
+          "telegram: discarded buffered plan-adjacent partial that was not a final prefix",
+        );
+      }
+    }
     const preparedText = await prepareFinalAnswerText(text, {
       hasMedia,
       isError: payload.isError,
@@ -2069,7 +2145,11 @@ export const dispatchTelegramMessage = async ({
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    if (forceNextAnswerFinalSend) {
+    // Work Log retention requires a separate final bubble, but an already-streamed
+    // answer preview is already that separate bubble. Force a new send only when
+    // there is no visible answer identity available to finalize in place.
+    const shouldForceFreshFinalSend = forceNextAnswerFinalSend && !answerLane.hasStreamedMessage;
+    if (shouldForceFreshFinalSend) {
       forceNextAnswerFinalSend = false;
       await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
       const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
@@ -2081,6 +2161,8 @@ export const dispatchTelegramMessage = async ({
       result = delivered ? "sent" : "skipped";
     } else {
       forceNextAnswerFinalSend = false;
+      // Preserve the visible Telegram message across finalization. Clearing it
+      // here would make the answer disappear before the replacement send lands.
       result = await deliverLaneText({
         laneName: "answer",
         text: preparedText,
@@ -2154,7 +2236,10 @@ export const dispatchTelegramMessage = async ({
     }
     pendingAmbiguousAnswerBlock = undefined;
     logVerbose(`telegram: routing phase-unknown answer block as progress callsite=${callsite}`);
-    await updateAnswerProgressFromBlock(renderTextWithToolProgress(pending.text));
+    const progressText = renderTextWithToolProgress(pending.text);
+    await updateAnswerProgressFromBlock(progressText, {
+      naturalCommentary: true,
+    });
   };
 
   const flushAmbiguousAnswerBlockAsFinal = async (callsite: string) => {
@@ -2220,9 +2305,10 @@ export const dispatchTelegramMessage = async ({
           if (sawAssistantPartial) {
             pendingAmbiguousAnswerBlock = undefined;
             logVerbose("telegram: dropped phase-unknown block buffer after assistant partials");
-            return;
+            return lastPreparedFinalAnswerText || undefined;
           }
           await flushAmbiguousAnswerBlockAsFinal("after-block-stream-final");
+          return lastPreparedFinalAnswerText || undefined;
         },
         deliver: async (payload, info) => {
           try {
@@ -2386,7 +2472,10 @@ export const dispatchTelegramMessage = async ({
                     hasMedia,
                   });
                 } else {
-                  await updateAnswerProgressFromBlock(renderTextWithToolProgress(segment.text));
+                  const progressText = renderTextWithToolProgress(segment.text);
+                  await updateAnswerProgressFromBlock(progressText, {
+                    naturalCommentary: assistantPhase === "commentary",
+                  });
                 }
                 continue;
               }
@@ -2489,7 +2578,10 @@ export const dispatchTelegramMessage = async ({
                   hasMedia,
                 });
               } else {
-                await updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
+                const progressText = renderTextWithToolProgress(payload.text);
+                await updateAnswerProgressFromBlock(progressText, {
+                  naturalCommentary: assistantPhase === "commentary",
+                });
               }
               return;
             }
@@ -2582,13 +2674,11 @@ export const dispatchTelegramMessage = async ({
                 enqueueDraftLaneEvent(async () => {
                   sawAssistantPartial = true;
                   if (resolveOpenClawAssistantPhase(payload) === "final_answer") {
-                    const retainResult = await beginFinalAnswerPhase("before-final-answer-partial");
-                    if (retainResult === "retained") {
-                      // The real final payload follows through the dispatcher.
-                      // Do not create an intermediate answer preview after the
-                      // Work Log has already been frozen.
-                      return;
-                    }
+                    // Freeze the Work Log before opening the answer lane, then
+                    // stream this structurally final snapshot immediately. The
+                    // later final/block payload edits the same answer identity;
+                    // it no longer needs to materialize the whole buffered text.
+                    await beginFinalAnswerPhase("before-final-answer-partial");
                   }
                   await ingestDraftLaneSegments(payload.text);
                 })

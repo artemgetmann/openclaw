@@ -413,6 +413,7 @@ export async function runAgentTurnWithFallback(params: {
                                 return;
                               }
                               await params.opts.onPartialReply({
+                                ...payload,
                                 text: textForTyping,
                                 mediaUrls: payload.mediaUrls,
                               });
@@ -578,6 +579,7 @@ export async function runAgentTurnWithFallback(params: {
                     return;
                   }
                   await params.opts.onPartialReply({
+                    ...payload,
                     text: textForTyping,
                     mediaUrls: payload.mediaUrls,
                   });

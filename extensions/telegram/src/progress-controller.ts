@@ -24,8 +24,9 @@ const PROGRESS_RENDER_HEADROOM_CHARS = 64;
 export type TelegramProgressController = {
   update: (text: string) => void;
   preview: (text: string) => void;
-  replace: (text: string) => void;
+  updatePlan: (text: string) => void;
   clear: (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => Promise<void>;
+  materialize: () => Promise<number | undefined>;
   retainAsWorkLog: (options?: { toolNames?: readonly string[] }) => Promise<
     | {
         retained: true;
@@ -99,6 +100,7 @@ export function createTelegramProgressController(params: {
   let lastRenderedProgressText = "";
   const progressEntries: string[] = [];
   const progressEntryKeys = new Set<string>();
+  let planEntryIndex: number | undefined;
 
   const normalizeProgressEntryKey = (entry: string) => entry.replace(/\s+/g, " ").trim();
 
@@ -123,6 +125,39 @@ export function createTelegramProgressController(params: {
     return didAppend;
   };
 
+  const upsertPlanEntry = (text: string) => {
+    // A plan is one logical Work log entry even though its checklist spans
+    // multiple lines. Preserve its original position after the acknowledgment,
+    // then replace only that slot as update_plan publishes newer snapshots.
+    const planText = text
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (!planText) {
+      return false;
+    }
+    const nextKey = normalizeProgressEntryKey(planText);
+    if (planEntryIndex == null) {
+      planEntryIndex = progressEntries.length;
+      progressEntries.push(planText);
+      progressEntryKeys.add(nextKey);
+      return true;
+    }
+    const previousPlan = progressEntries[planEntryIndex];
+    if (previousPlan === planText) {
+      return false;
+    }
+    if (previousPlan) {
+      progressEntryKeys.delete(normalizeProgressEntryKey(previousPlan));
+    }
+    progressEntries[planEntryIndex] = planText;
+    progressEntryKeys.add(nextKey);
+    return true;
+  };
+
   const renderProgressHistory = (previewText?: string) => {
     const previewEntry = previewText?.trim();
     const entries = previewEntry ? [...progressEntries, previewEntry] : progressEntries;
@@ -132,9 +167,34 @@ export function createTelegramProgressController(params: {
     }
 
     const latestEntry = entries[entries.length - 1] ?? "";
-    const retained: string[] = [
-      latestEntry.length > maxProgressChars ? latestEntry.slice(0, maxProgressChars) : latestEntry,
-    ];
+    const truncateEntry = (entry: string) => {
+      if (entry.length <= maxProgressChars) {
+        return entry;
+      }
+      const lines = entry.split("\n").filter(Boolean);
+      if (lines.length <= 1) {
+        return entry.slice(0, maxProgressChars);
+      }
+      // For a multiline plan snapshot, keep its label plus the newest rows.
+      // The newest checklist state is more useful than an arbitrary prefix.
+      const firstLine = lines[0] ?? "";
+      const retained = [lines.at(-1) ?? ""];
+      for (let index = lines.length - 2; index > 0; index -= 1) {
+        const candidate = [firstLine, lines[index], ...retained].join("\n");
+        if (candidate.length > maxProgressChars) {
+          continue;
+        }
+        retained.unshift(lines[index]);
+      }
+      const result = [firstLine, ...retained].join("\n");
+      if (result.length <= maxProgressChars) {
+        return result;
+      }
+      const tailBudget = Math.max(0, maxProgressChars - firstLine.length - 1);
+      const lastLine = retained.at(-1) ?? "";
+      return `${firstLine}\n${lastLine.slice(-tailBudget)}`.slice(0, maxProgressChars);
+    };
+    const retained: string[] = [truncateEntry(latestEntry)];
     for (let index = entries.length - 2; index >= 0; index -= 1) {
       const candidate = [entries[index], ...retained].join(PROGRESS_ENTRY_SEPARATOR);
       // This text is shown directly in Telegram previews/drafts. Do not add a
@@ -193,7 +253,7 @@ export function createTelegramProgressController(params: {
       lastRenderedProgressText = previewProgressText;
       stream.update(previewProgressText);
     },
-    replace: (text: string) => {
+    updatePlan: (text: string) => {
       if (cleared) {
         return;
       }
@@ -201,19 +261,16 @@ export function createTelegramProgressController(params: {
       if (!progressText) {
         return;
       }
-      // Replacement snapshots, such as plan checklists, become the new progress
-      // baseline. Later append-style updates must not resurrect pre-snapshot
-      // history from progressEntries.
-      progressEntries.length = 0;
-      progressEntryKeys.clear();
-      appendProgressEntries(progressText);
-      const replacementProgressText = renderProgressHistory();
-      if (!replacementProgressText) {
+      if (!upsertPlanEntry(progressText)) {
+        return;
+      }
+      const cumulativeProgressText = renderProgressHistory();
+      if (!cumulativeProgressText) {
         return;
       }
       hasProgress = true;
-      lastRenderedProgressText = replacementProgressText;
-      stream.update(replacementProgressText);
+      lastRenderedProgressText = cumulativeProgressText;
+      stream.update(cumulativeProgressText);
     },
     clear: async (options?: { flushBeforeDelete?: boolean; waitForInFlight?: boolean }) => {
       if (cleared) {
@@ -231,12 +288,36 @@ export function createTelegramProgressController(params: {
       // the visible progress bubble beats faithfully rendering stale progress.
       await stream.clear({ waitForInFlight: options?.waitForInFlight });
     },
+    materialize: async () => {
+      if (cleared || !hasProgress) {
+        return undefined;
+      }
+      // A natural acknowledgment can initially use the progress transport, but
+      // a later structured plan must not overwrite it. Flush and materialize
+      // the existing text unchanged; ownership moves to a fresh controller only
+      // after Telegram confirms this message has a durable identity.
+      await stream.flush();
+      const messageId = await stream.materialize?.();
+      if (typeof messageId !== "number") {
+        // materialize() stops the draft stream before it can discover that no
+        // durable ID is available. Reopen the same controller generation so the
+        // caller's established replacement fallback can still render the plan.
+        stream.forceNewMessage();
+        return undefined;
+      }
+      cleared = true;
+      return messageId;
+    },
     retainAsWorkLog: async (options?: { toolNames?: readonly string[] }) => {
       if (cleared || !hasProgress) {
         return { retained: false };
       }
       const workLog = registerTelegramWorkLog({
         progressEntries: readProgressEntriesForWorkLog(),
+        // Persist the real structured plan slot only when this controller
+        // actually tracked one. Without that metadata, a generic second update
+        // would get pinned and could evict fresher progress from Work log.
+        pinnedPlanEntry: planEntryIndex != null ? progressEntries[planEntryIndex] : undefined,
         toolNames: options?.toolNames,
       });
       if (!workLog) {
