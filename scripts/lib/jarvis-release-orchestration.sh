@@ -19,6 +19,25 @@ jarvis_release_receipt_value() {
   /usr/bin/sed -n "s/^${key}=//p" "$receipt_path" | /usr/bin/head -n 1
 }
 
+jarvis_release_normalize_optional_metadata_value() {
+  local value="$1"
+  local unquoted="$value"
+
+  # Empty values written with printf %q can be persisted as '' and become
+  # backslash-escaped again when a later manifest rewrite preserves them.
+  # Treat quote/backslash-only representations as empty without evaluating
+  # operator-controlled metadata as shell code.
+  unquoted="${unquoted//\\/}"
+  unquoted="${unquoted//\'/}"
+  unquoted="${unquoted//\"/}"
+  if [[ -z "$unquoted" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  printf '%s\n' "$value"
+}
+
 jarvis_release_manifest_path() {
   local root_dir="$1"
   printf '%s\n' "${OPENCLAW_JARVIS_RELEASE_MANIFEST:-$root_dir/dist/jarvis-release-manifest.env}"
@@ -54,7 +73,9 @@ jarvis_release_status_from_receipt_or_manifest() {
     return 0
   fi
 
-  jarvis_release_receipt_value "$manifest_path" "$manifest_key"
+  jarvis_release_normalize_optional_metadata_value "$(
+    jarvis_release_receipt_value "$manifest_path" "$manifest_key"
+  )"
 }
 
 jarvis_release_submission_from_receipt_or_manifest() {
@@ -64,12 +85,15 @@ jarvis_release_submission_from_receipt_or_manifest() {
   local submission_id
 
   submission_id="$(jarvis_release_receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID")"
+  submission_id="$(jarvis_release_normalize_optional_metadata_value "$submission_id")"
   if [[ -n "$submission_id" ]]; then
     printf '%s\n' "$submission_id"
     return 0
   fi
 
-  jarvis_release_receipt_value "$manifest_path" "$manifest_key"
+  jarvis_release_normalize_optional_metadata_value "$(
+    jarvis_release_receipt_value "$manifest_path" "$manifest_key"
+  )"
 }
 
 jarvis_release_next_phase() {
