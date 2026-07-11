@@ -62,6 +62,8 @@ const STATUS_FILE = "status.json";
 const LOG_FILE = "gog-auth.log";
 const AUTH_LOCK_FILE = "active-auth.lock";
 const MACOS_LOCKF_PATH = "/usr/bin/lockf";
+const AUTH_WORKER_START_TIMEOUT_MS = 30_000;
+const AUTH_WORKER_START_POLL_MS = 50;
 export const DEFAULT_CONSUMER_GOOGLE_SERVICES = "gmail,calendar,drive,contacts,docs,sheets";
 export const AUTH_KEYRING_OPEN_TIMEOUT = "10m";
 export const VERIFICATION_KEYRING_OPEN_TIMEOUT = "15s";
@@ -683,24 +685,55 @@ async function waitForAuthWorkerStart(
   launchProcess.once("error", (error) => {
     spawnError = error;
   });
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  return waitForAuthWorkerReadiness({
+    readStatus: () => readStatus(sessionId),
+    getSpawnError: () => spawnError,
+    getExitCode: () => launchProcess.exitCode,
+    usesMacosLock,
+  });
+}
+
+export async function waitForAuthWorkerReadiness<
+  T extends { workerPid?: number | null; phase: string },
+>(params: {
+  readStatus: () => Promise<T>;
+  getSpawnError: () => Error | null;
+  getExitCode: () => number | null;
+  usesMacosLock: boolean;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<T> {
+  const timeoutMs = params.timeoutMs ?? AUTH_WORKER_START_TIMEOUT_MS;
+  const pollIntervalMs = params.pollIntervalMs ?? AUTH_WORKER_START_POLL_MS;
+  const now = params.now ?? Date.now;
+  const sleepFor = params.sleep ?? sleep;
+  const deadline = now() + timeoutMs;
+
+  for (;;) {
+    const spawnError = params.getSpawnError();
     if (spawnError) {
       throw spawnError;
     }
-    const status = await readStatus(sessionId);
+    const status = await params.readStatus();
     if (status.workerPid && status.phase !== "starting") {
       return status;
     }
-    if (launchProcess.exitCode !== null) {
+    const exitCode = params.getExitCode();
+    if (exitCode !== null) {
       throw new Error(
-        usesMacosLock && launchProcess.exitCode === 75
+        params.usesMacosLock && exitCode === 75
           ? "Google setup is already in progress. Continue that setup instead of starting another."
-          : `Google auth worker exited ${String(launchProcess.exitCode)}`,
+          : `Google auth worker exited ${String(exitCode)}`,
       );
     }
-    await sleep(50);
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      throw new Error("Google auth worker did not report ready state in time");
+    }
+    await sleepFor(Math.min(pollIntervalMs, remainingMs));
   }
-  throw new Error("Google auth worker did not report ready state in time");
 }
 
 async function runWorker(flags: Map<string, string | boolean>) {

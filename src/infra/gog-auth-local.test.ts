@@ -11,6 +11,7 @@ import {
   resolveAuthWorkerLaunch,
   spawnAuthWorkerProcess,
   VERIFICATION_KEYRING_OPEN_TIMEOUT,
+  waitForAuthWorkerReadiness,
 } from "../../skills/gog/scripts/gog-auth-local.ts";
 
 describe("gog auth local helper", () => {
@@ -165,6 +166,50 @@ describe("gog auth local helper", () => {
       args: ["-s", "-t", "0", "-k", "/tmp/auth.lock", "/usr/bin/node", "worker.js"],
       usesMacosLock: true,
     });
+  });
+
+  it("allows healthy worker readiness beyond the old two-second window", async () => {
+    let now = 0;
+    let polls = 0;
+    const status = await waitForAuthWorkerReadiness({
+      readStatus: async () => {
+        polls += 1;
+        return polls >= 4
+          ? { phase: "waiting_for_browser", workerPid: 42_001 }
+          : { phase: "starting", workerPid: null };
+      },
+      getSpawnError: () => null,
+      getExitCode: () => null,
+      usesMacosLock: true,
+      timeoutMs: 30_000,
+      pollIntervalMs: 1_000,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+
+    expect(now).toBe(3_000);
+    expect(status).toEqual({ phase: "waiting_for_browser", workerPid: 42_001 });
+  });
+
+  it("keeps the worker readiness deadline bounded", async () => {
+    let now = 0;
+    await expect(
+      waitForAuthWorkerReadiness({
+        readStatus: async () => ({ phase: "starting", workerPid: null }),
+        getSpawnError: () => null,
+        getExitCode: () => null,
+        usesMacosLock: false,
+        timeoutMs: 3_000,
+        pollIntervalMs: 1_000,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      }),
+    ).rejects.toThrow("did not report ready state in time");
+    expect(now).toBe(3_000);
   });
 
   it.runIf(process.platform === "darwin")(
