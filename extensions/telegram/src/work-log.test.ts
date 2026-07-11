@@ -60,6 +60,7 @@ describe("telegram work log", () => {
     const updates = Array.from({ length: 14 }, (_, index) => `Progress ${index + 1}`);
     const entry = registerTelegramWorkLog({
       progressEntries: [acknowledgment, plan, ...updates],
+      pinnedPlanEntry: plan,
       now: 1000,
     });
 
@@ -67,6 +68,21 @@ describe("telegram work log", () => {
     expect(entry?.progressEntries.slice(0, 2)).toEqual([acknowledgment, plan]);
     expect(entry?.progressEntries.at(-1)).toBe("Progress 14");
     expect(entry?.progressEntries).not.toContain("Progress 1");
+  });
+
+  it("does not pin a generic second entry when long histories trim middle progress", () => {
+    const acknowledgment = "I’ll inspect the package first, then run the checks.";
+    const genericProgress = "Checking the temp-file cleanup next.";
+    const updates = Array.from({ length: 14 }, (_, index) => `Progress ${index + 1}`);
+    const entry = registerTelegramWorkLog({
+      progressEntries: [acknowledgment, genericProgress, ...updates],
+      now: 1000,
+    });
+
+    expect(entry?.progressEntries).toHaveLength(12);
+    expect(entry?.progressEntries[0]).toBe(acknowledgment);
+    expect(entry?.progressEntries).not.toContain(genericProgress);
+    expect(entry?.progressEntries.slice(-2)).toEqual(["Progress 13", "Progress 14"]);
   });
 
   it("expires old entries and builds mutable Telegram reply markup", () => {

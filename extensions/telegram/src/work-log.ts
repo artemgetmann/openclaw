@@ -72,7 +72,27 @@ function normalizeProgressEntry(input: string, maxChars: number): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
-function normalizeProgressEntries(entries: readonly string[]): string[] {
+function isStructuredPlanEntry(entry: string | undefined): boolean {
+  if (!entry) {
+    return false;
+  }
+  const lines = entry
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  // Only pin a second entry when it is actually the structured checklist slot.
+  // Generic progress in position two must be trimmable so newer updates win.
+  return (
+    lines.length >= 2 &&
+    /^plan updated$/i.test(lines[0] ?? "") &&
+    lines.slice(1).every((line) => /^-\s*\[[ x~]\]/i.test(line))
+  );
+}
+
+function normalizeProgressEntries(
+  entries: readonly string[],
+  options?: { pinnedPlanEntry?: string },
+): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const rawEntry of entries) {
@@ -90,10 +110,23 @@ function normalizeProgressEntries(entries: readonly string[]): string[] {
   if (normalized.length <= MAX_PROGRESS_ENTRIES) {
     return normalized;
   }
-  // The Work log contract pins its opening context: acknowledgment first and,
-  // when present, the plan second. Trim middle history before sacrificing
-  // those entries, while still preserving the newest progress updates.
-  const pinned = normalized.slice(0, 2);
+  // The Work log contract always preserves the opening acknowledgment. Preserve
+  // the plan slot only when the caller can identify a real structured plan; a
+  // generic second update should not crowd out newer progress.
+  const pinned = [normalized[0]].filter((entry): entry is string => Boolean(entry));
+  const normalizedPlanEntry = normalizeProgressEntry(
+    options?.pinnedPlanEntry ?? "",
+    MAX_PROGRESS_ENTRY_CHARS,
+  );
+  const planEntry =
+    isStructuredPlanEntry(normalizedPlanEntry) &&
+    normalized.includes(normalizedPlanEntry) &&
+    !pinned.includes(normalizedPlanEntry)
+      ? normalizedPlanEntry
+      : undefined;
+  if (planEntry) {
+    pinned.push(planEntry);
+  }
   const recent = normalized.slice(-(MAX_PROGRESS_ENTRIES - pinned.length));
   return [...pinned, ...recent.filter((entry) => !pinned.includes(entry))].slice(
     0,
@@ -164,10 +197,13 @@ function workLogButtons(entry: TelegramWorkLogEntry, expanded: boolean): Telegra
 
 export function registerTelegramWorkLog(params: {
   progressEntries: readonly string[];
+  pinnedPlanEntry?: string;
   toolNames?: readonly string[];
   now?: number;
 }): TelegramWorkLogEntry | undefined {
-  const progressEntries = normalizeProgressEntries(params.progressEntries);
+  const progressEntries = normalizeProgressEntries(params.progressEntries, {
+    pinnedPlanEntry: params.pinnedPlanEntry,
+  });
   if (progressEntries.length === 0) {
     return undefined;
   }

@@ -281,8 +281,12 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     const sends = sendMessageCalls(harness.calls);
     expect(sends.map((call) => call.text)).toEqual([
-      "<p>Monitoring support replies<br>Every 5 minutes · stop when support confirms resolution<br>I'll message when something changes. If not, after 3 checks, then every 12 hours.</p>",
-      "<p>Monitoring is set.</p>",
+      [
+        "Monitoring support replies",
+        "Every 5 minutes · stop when support confirms resolution",
+        "I'll message when something changes. If not, after 3 checks, then every 12 hours.",
+      ].join("\n"),
+      "Monitoring is set.",
     ]);
     expect(sends[0]?.text).toBeTruthy();
     expect(sends[0]?.text).toContain("Monitoring support replies");

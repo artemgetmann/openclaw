@@ -314,6 +314,10 @@ export function createTelegramProgressController(params: {
       }
       const workLog = registerTelegramWorkLog({
         progressEntries: readProgressEntriesForWorkLog(),
+        // Persist the real structured plan slot only when this controller
+        // actually tracked one. Without that metadata, a generic second update
+        // would get pinned and could evict fresher progress from Work log.
+        pinnedPlanEntry: planEntryIndex != null ? progressEntries[planEntryIndex] : undefined,
         toolNames: options?.toolNames,
       });
       if (!workLog) {
