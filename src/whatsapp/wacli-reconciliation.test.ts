@@ -143,4 +143,51 @@ describe("findLatestInboundReplyAcrossResolvedChats", () => {
       expect(result.latestInboundReply?.effectiveText).toBe("Sent image");
     });
   });
+
+  it("does not let a same-name phone target claim another monitor target's inbound reply", async () => {
+    await withTempDb(async (dbPath) => {
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec(`
+          INSERT INTO chats (jid, kind, name, last_message_ts) VALUES
+            ('9718004488@s.whatsapp.net', 'dm', 'Artem', 1775039816),
+            ('971552857036@s.whatsapp.net', 'dm', 'Artem', 1775039860);
+          INSERT INTO messages (
+            chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text, media_type, media_caption
+          ) VALUES (
+            '971552857036@s.whatsapp.net',
+            'Artem',
+            '2AD18CD208AFC0C4B1A0',
+            '971552857036@s.whatsapp.net',
+            'Artem',
+            1775039860,
+            0,
+            'Reply for the intended monitor',
+            'Reply for the intended monitor',
+            NULL,
+            NULL
+          );
+        `);
+      } finally {
+        db.close();
+      }
+
+      const unrelated = findLatestInboundReplyAcrossResolvedChats({
+        dbPath,
+        target: "+9718004488",
+      });
+      const intended = findLatestInboundReplyAcrossResolvedChats({
+        dbPath,
+        target: "+971552857036",
+      });
+
+      expect(unrelated.candidates.map((candidate) => candidate.jid)).toEqual([
+        "9718004488@s.whatsapp.net",
+      ]);
+      expect(unrelated.latestInboundReply).toBeNull();
+      expect(intended.latestInboundReply?.msgId).toBe("2AD18CD208AFC0C4B1A0");
+      expect(intended.latestInboundReply?.chatJid).toBe("971552857036@s.whatsapp.net");
+    });
+  });
 });
