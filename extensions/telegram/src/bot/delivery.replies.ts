@@ -87,8 +87,13 @@ function buildChunkTextResolver(params: {
   textLimit: number;
   chunkMode: ChunkMode;
   tableMode?: MarkdownTableMode;
+  richMessages?: boolean;
   copySafeBlockquotes?: boolean;
 }): ChunkTextFn {
+  // The shared Markdown IR reserves "block" for native rich tables. Every
+  // legacy renderer, including the rare empty-chunk recovery path, must use
+  // copyable code blocks instead.
+  const legacyTableMode = params.tableMode === "block" ? "code" : params.tableMode;
   return (markdown: string) => {
     const markdownChunks =
       params.chunkMode === "newline"
@@ -96,7 +101,11 @@ function buildChunkTextResolver(params: {
         : [markdown];
     const chunks: ReturnType<typeof markdownToTelegramChunks> = [];
     for (const chunk of markdownChunks) {
-      if (params.tableMode === "block") {
+      // Native rich block tags are valid only for sendRichMessage. Once a final
+      // is pinned to legacy sendMessage, keep the entire chunk on the legacy
+      // formatter so rich-only <p>/<ol>/<ul>/<table> tags cannot leak across
+      // the transport boundary and trigger Telegram's plain-text fallback.
+      if (params.richMessages !== false && params.tableMode === "block") {
         chunks.push(
           ...splitTelegramRichMessageTextChunks({
             text: chunk,
@@ -111,14 +120,14 @@ function buildChunkTextResolver(params: {
         continue;
       }
       const nested = markdownToTelegramChunks(chunk, params.textLimit, {
-        tableMode: params.tableMode,
+        tableMode: legacyTableMode,
         copySafeBlockquotes: params.copySafeBlockquotes,
       });
       if (!nested.length && chunk) {
         chunks.push({
           html: wrapFileReferencesInHtml(
             markdownToTelegramHtml(chunk, {
-              tableMode: params.tableMode,
+              tableMode: legacyTableMode,
               wrapFileRefs: false,
               copySafeBlockquotes: params.copySafeBlockquotes,
             }),
@@ -670,6 +679,7 @@ export async function deliverReplies(params: {
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
+    richMessages: params.richMessages,
     copySafeBlockquotes: params.copySafeBlockquotes,
   });
   for (const originalReply of params.replies) {
