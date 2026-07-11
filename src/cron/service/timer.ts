@@ -265,8 +265,9 @@ function emitFailureAlert(
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
+  const jobLabel = params.job.payload.kind === "monitorWake" ? "Monitor" : "Cron job";
   const text = [
-    `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
+    `${jobLabel} "${safeJobName}" failed ${params.consecutiveErrors} times`,
     `Last error: ${truncatedError}`,
   ].join("\n");
 
@@ -349,7 +350,9 @@ function emitImplicitDeliveryFailureAlert(
       ? `Monitor degraded: auth expired; re-auth required. I will retry after re-auth.`
       : isMissingMonitor
         ? `Monitor degraded: monitor record is missing, so I stopped the orphaned schedule.`
-        : `Cron job "${safeJobName}" failed before it could complete. I'll retry on the next scheduled run.`;
+        : isMonitorWake
+          ? `Monitor "${safeJobName}" failed before it could complete. I'll retry on the next scheduled check.`
+          : `Cron job "${safeJobName}" failed before it could complete. I'll retry on the next scheduled run.`;
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps

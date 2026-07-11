@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { discoverTelegramUserRuntimeEnv } from "../telegram-user/runtime-env.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
@@ -14,10 +15,17 @@ function withTelegramUserBase(command: Command) {
 }
 
 function runTelegramUserCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
+  return runCommandWithRuntime(
+    defaultRuntime,
+    async () => {
+      await discoverTelegramUserRuntimeEnv();
+      await action();
+    },
+    (err) => {
+      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.exit(1);
+    },
+  );
 }
 
 export function registerTelegramUserCli(program: Command) {

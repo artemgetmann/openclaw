@@ -30,6 +30,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { readMonitorReceiptDisclosure } from "../../monitor/receipt.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -259,6 +260,10 @@ function isSourcePreviewToolPayload(payload: ReplyPayload): boolean {
   return (openclaw as { sourcePreview?: unknown }).sourcePreview === true;
 }
 
+function isMonitorReceiptToolPayload(payload: ReplyPayload): boolean {
+  return readMonitorReceiptDisclosure(payload.channelData) !== undefined;
+}
+
 const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE =
   /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 
@@ -468,14 +473,14 @@ export async function dispatchReplyFromConfig(params: {
       : telegramTtsCommandAction === "off"
         ? "off"
         : undefined;
-  // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
-  // as-is, but let inbound audio override typed-message modes like `off` or
-  // `tagged` without writing a new preference.
+  // Voice-in gets voice-out for this turn when the user has not chosen an
+  // explicit session mode. `/tts off` is a hard output opt-out and must not be
+  // overridden by inbound audio; transcription and model input are unaffected.
   const turnTtsAuto = commandTtsAuto
     ? commandTtsAuto
     : isControlCommandReply && !isTelegramTtsControlCommand
       ? "off"
-      : inboundAudio && sessionTtsAuto !== "always"
+      : inboundAudio && sessionTtsAuto === undefined
         ? "inbound"
         : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();
@@ -865,6 +870,11 @@ export async function dispatchReplyFromConfig(params: {
         // progress by the agent runner. Preserve that structural marker so
         // Telegram can route them through the mutable progress controller
         // instead of dropping them with internal tool/status chatter.
+        return payload;
+      }
+      if (isMonitorReceiptToolPayload(payload)) {
+        // Monitor receipts carry trusted channel data for downstream rendering
+        // and deterministic text for delivery paths that require a text body.
         return payload;
       }
       if (shouldSendToolSummaries) {

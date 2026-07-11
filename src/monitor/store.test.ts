@@ -62,6 +62,26 @@ describe("monitor store identity", () => {
     });
   });
 
+  it("keeps the short disclosure purpose separate from execution instructions", () => {
+    const monitor = createMonitorRecord(
+      {
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:short-purpose",
+        name: "Customer reply",
+        purpose: "Customer reply",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        cronJobId: "cron-short-purpose",
+      },
+      100,
+    );
+
+    expect(monitor.name).toBe("Customer reply");
+    expect(monitor.disclosure?.purpose).toBe("Customer reply");
+  });
+
   it("discloses missing expiry and stop condition explicitly", () => {
     const monitor = createMonitorRecord(
       {

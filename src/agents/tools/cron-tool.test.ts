@@ -112,10 +112,15 @@ describe("cron tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
-  it("documents cron as the default for reminders and explicit monitors", () => {
+  it("documents consumer terminology for reminders and explicit monitors", () => {
     const tool = createCronTool();
-    expect(tool.description).toContain("Prefer cron for reminders, exact scheduled tasks");
-    expect(tool.description).toContain("watch an inbox, thread, or person until something happens");
+    expect(tool.description).toContain(
+      "Use reminder or scheduled task for one-time or generic schedules",
+    );
+    expect(tool.description).toContain(
+      "Use monitor/monitoring for a watched inbox, thread, person, or condition until something changes",
+    );
+    expect(tool.description).toContain("internal scheduler remains cron-backed");
     expect(tool.description).toContain("cadence, stop condition, and expiry/TTL");
     expect(tool.description).toContain("use the relevant skill/helper script for detection");
     expect(tool.description).toContain("pin that exact command");
@@ -126,6 +131,7 @@ describe("cron tool", () => {
     expect(tool.description).toContain(
       "Prefer heartbeat only for broad, low-frequency ambient awareness",
     );
+    expect(tool.description).not.toContain("call a consumer-facing monitor a cron job");
   });
 
   it.each([

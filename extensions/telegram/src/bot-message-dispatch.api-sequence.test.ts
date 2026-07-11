@@ -1,6 +1,11 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.js";
+import {
+  buildMonitorReceiptChannelData,
+  formatMonitorReceipt,
+} from "../../../src/monitor/receipt.js";
+import type { MonitorDisclosure } from "../../../src/monitor/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -237,6 +242,41 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     resolveStorePath.mockReset();
     loadSessionStore.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
+  });
+
+  it("delivers one deterministic monitor receipt before the natural final acknowledgement", async () => {
+    const harness = createTelegramBotHarness();
+    const disclosure = {
+      purpose: "Watch support replies",
+      source: { type: "gmail", target: { threadId: "thread-1" } },
+      checkCadence: { kind: "every", everyMs: 300_000 },
+      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+      expiryAt: null,
+      stopCondition: "support confirms resolution",
+      autonomy: { level: "observe_only" },
+      actionPolicy: "notify_draft",
+    } satisfies MonitorDisclosure;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolResult?.({
+          text: formatMonitorReceipt(disclosure),
+          channelData: buildMonitorReceiptChannelData(disclosure),
+        });
+        await dispatcherOptions.deliver({ text: "Monitoring is set." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithHarness({ bot: harness.bot });
+
+    const sends = sendMessageCalls(harness.calls);
+    expect(sends.map((call) => call.text)).toEqual([
+      "<p>Monitoring support replies<br>Every 5 minutes · stop when support confirms resolution<br>I'll message when something changes. If not, after 3 checks, then every 12 hours.</p>",
+      "<p>Monitoring is set.</p>",
+    ]);
+    expect(sends[0]?.text).toBeTruthy();
+    expect(sends[0]?.text).toContain("Monitoring support replies");
+    expect(sends[1]?.text).toContain("Monitoring is set.");
   });
 
   it("uses one mutable progress message, clears it, and sends final text once", async () => {
