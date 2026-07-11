@@ -257,6 +257,40 @@ describe("summarizeTelegramTesterTokenPool", () => {
     expect(report.config_diff_unexpected_paths).not.toContain("plugins.slots");
   });
 
+  it("does not report empty generated tools as a parity failure", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-empty-tools-parity-"));
+    const baseConfigPath = path.join(root, "base.json");
+    const runtimeConfigPath = path.join(root, "runtime.json");
+    writeFileSync(baseConfigPath, JSON.stringify({}), "utf8");
+    writeFileSync(runtimeConfigPath, JSON.stringify({ tools: {} }), "utf8");
+
+    const report = buildTelegramLiveRuntimeParityReport({
+      baseConfigPath,
+      runtimeConfigPath,
+    });
+
+    expect(report.config_diff_allowed_only).toBe(true);
+    expect(report.config_diff_unexpected_paths).not.toContain("tools");
+    expect(report.tools_match).toBe(true);
+  });
+
+  it("still reports a substantive tools policy difference", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-tools-parity-"));
+    const baseConfigPath = path.join(root, "base.json");
+    const runtimeConfigPath = path.join(root, "runtime.json");
+    writeFileSync(baseConfigPath, JSON.stringify({ tools: {} }), "utf8");
+    writeFileSync(runtimeConfigPath, JSON.stringify({ tools: { deny: ["exec"] } }), "utf8");
+
+    const report = buildTelegramLiveRuntimeParityReport({
+      baseConfigPath,
+      runtimeConfigPath,
+    });
+
+    expect(report.config_diff_allowed_only).toBe(false);
+    expect(report.config_diff_unexpected_paths).toContain("tools");
+    expect(report.tools_match).toBe(false);
+  });
+
   it("allows tester runtime model twin pruning in the parity report", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-model-parity-"));
     const baseConfigPath = path.join(root, "base.json");

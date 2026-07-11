@@ -2084,6 +2084,13 @@ function normalizePluginSlotsForParity(slots) {
   return slots;
 }
 
+function normalizeToolsForParity(tools) {
+  if (!tools || typeof tools !== "object" || Array.isArray(tools)) {
+    return {};
+  }
+  return tools;
+}
+
 function normalizeTesterModelAllowlistForParity(modelConfig, models) {
   const allowlist = models && typeof models === "object" && !Array.isArray(models) ? models : {};
   const primary = resolveConfiguredModelPrimary(modelConfig);
@@ -2153,6 +2160,12 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
         ),
       );
     }
+    if (pathKey === "tools") {
+      return !jsonEqual(
+        normalizeToolsForParity(resolveConfigValue(baseConfig, pathKey)),
+        normalizeToolsForParity(resolveConfigValue(runtimeConfig, pathKey)),
+      );
+    }
     return !jsonEqual(
       resolveConfigValue(baseConfig, pathKey),
       resolveConfigValue(runtimeConfig, pathKey),
@@ -2174,8 +2187,8 @@ export function buildTelegramLiveRuntimeParityReport(params = {}) {
     browser_profiles_match: jsonEqual(baseExistingProfiles, runtimeExistingProfiles),
     browser_existing_session_profiles: runtimeExistingProfiles,
     tools_match: jsonEqual(
-      resolveConfigValue(baseConfig, "tools"),
-      resolveConfigValue(runtimeConfig, "tools"),
+      normalizeToolsForParity(resolveConfigValue(baseConfig, "tools")),
+      normalizeToolsForParity(resolveConfigValue(runtimeConfig, "tools")),
     ),
     plugins_match:
       jsonEqual(
