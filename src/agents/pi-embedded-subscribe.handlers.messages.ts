@@ -49,13 +49,33 @@ function parseAssistantTextSignaturePhase(
   }
 }
 
-function resolveAssistantPhase(msg: AgentMessage): "commentary" | "final_answer" | undefined {
+function resolveAssistantPhase(
+  msg: AgentMessage,
+  contentIndex?: number,
+): "commentary" | "final_answer" | undefined {
   const messagePhase = (msg as { phase?: unknown }).phase;
+  const maybeContent = (msg as { content?: unknown }).content;
+  const content = Array.isArray(maybeContent) ? maybeContent : [];
+  if (contentIndex !== undefined && Number.isInteger(contentIndex) && contentIndex >= 0) {
+    const block = content[contentIndex];
+    if (block && typeof block === "object") {
+      const phase = parseAssistantTextSignaturePhase(
+        (block as { textSignature?: unknown }).textSignature,
+      );
+      if (phase) {
+        return phase;
+      }
+    }
+    // An indexed event is authoritative for block selection. If that partial
+    // has not carried its signature yet, retain the message-level fallback
+    // without accidentally scanning an earlier commentary block.
+    return messagePhase === "commentary" || messagePhase === "final_answer"
+      ? messagePhase
+      : undefined;
+  }
   if (messagePhase === "commentary" || messagePhase === "final_answer") {
     return messagePhase;
   }
-  const maybeContent = (msg as { content?: unknown }).content;
-  const content = Array.isArray(maybeContent) ? maybeContent : [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -161,7 +181,6 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
-  ctx.state.currentAssistantPhase = resolveAssistantPhase(msg) ?? ctx.state.currentAssistantPhase;
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -172,6 +191,28 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const contentIndex =
+    typeof assistantRecord?.contentIndex === "number" &&
+    Number.isInteger(assistantRecord.contentIndex) &&
+    assistantRecord.contentIndex >= 0
+      ? assistantRecord.contentIndex
+      : undefined;
+
+  const changedTextContent =
+    contentIndex !== undefined &&
+    (evtType === "text_start" || evtType === "text_delta") &&
+    ctx.state.activeAssistantContentIndex !== contentIndex;
+  if (contentIndex !== undefined && (evtType === "text_start" || evtType === "text_delta")) {
+    if (changedTextContent) {
+      ctx.resetAssistantContentState(contentIndex);
+    }
+  }
+  const eventAssistantPhase = resolveAssistantPhase(msg, contentIndex);
+  // A new indexed text block must not inherit the prior block's phase when its
+  // provider omits metadata. Phase-unknown stays conservatively buffered.
+  ctx.state.currentAssistantPhase = changedTextContent
+    ? eventAssistantPhase
+    : (eventAssistantPhase ?? ctx.state.currentAssistantPhase);
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
