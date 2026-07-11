@@ -1518,14 +1518,7 @@ async function runChromeMcpDownloadSession(params: {
       beforeNames,
       timeoutMs,
       isCancelled: () => downloadWaitCancelled,
-    })
-      .then((savedPath) => ({ kind: "download" as const, savedPath }))
-      .catch((err) => {
-        if (downloadWaitCancelled) {
-          return new Promise<never>(() => {});
-        }
-        throw err;
-      });
+    }).then((savedPath) => ({ kind: "download" as const, savedPath }));
     const result = await Promise.race([
       downloadPromise,
       pdfNetworkCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf })),

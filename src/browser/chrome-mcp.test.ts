@@ -1283,11 +1283,11 @@ describe("chrome MCP page parsing", () => {
     capture.observeEvent("Network.responseReceived", {
       requestId: "pdf-request-1",
       response: {
-        url: "https://www.dewa.gov.ae/api/sitecore/Bill/ActualbillDownload",
+        url: "https://example.com/api/export-statement",
         mimeType: "application/pdf",
         headers: {
           "content-type": "application/pdf",
-          "content-disposition": 'attachment; filename="ActualbillDownload.pdf"',
+          "content-disposition": 'attachment; filename="../../account-statement.pdf"',
         },
       },
     });
@@ -1300,8 +1300,8 @@ describe("chrome MCP page parsing", () => {
       ),
     ]);
     expect(result).toEqual({
-      url: "https://www.dewa.gov.ae/api/sitecore/Bill/ActualbillDownload",
-      suggestedFilename: "ActualbillDownload.pdf",
+      url: "https://example.com/api/export-statement",
+      suggestedFilename: "account-statement.pdf",
       buffer: pdfBytes,
     });
   });

@@ -143,10 +143,10 @@ describe("pw-tools-core", () => {
       const harness = createDownloadEventHarness();
       const pdfBytes = Buffer.from("%PDF-1.7\nnative response\n%%EOF\n");
       const response = {
-        url: () => "https://example.com/api/sitecore/Bill/ActualbillDownload",
+        url: () => "https://example.com/api/export-statement",
         headers: () => ({
           "content-type": "application/pdf",
-          "content-disposition": 'attachment; filename="ActualbillDownload.pdf"',
+          "content-disposition": 'attachment; filename="account-statement.pdf"',
         }),
         body: async () => pdfBytes,
       };
@@ -167,11 +167,39 @@ describe("pw-tools-core", () => {
       harness.expectArmed();
       harness.expectResponseArmed();
       expect(res).toEqual({
-        url: "https://example.com/api/sitecore/Bill/ActualbillDownload",
-        suggestedFilename: "ActualbillDownload.pdf",
+        url: "https://example.com/api/export-statement",
+        suggestedFilename: "account-statement.pdf",
         path: targetPath,
       });
       expect(await fs.readFile(targetPath)).toEqual(pdfBytes);
+    });
+  });
+
+  it("sanitizes response-provided PDF filenames before implicit output", async () => {
+    await withTempDir(async (tempDir) => {
+      tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(tempDir);
+      const harness = createDownloadEventHarness();
+      const pdfBytes = Buffer.from("%PDF-1.7\nnative response\n%%EOF\n");
+      const pending = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        timeoutMs: 1000,
+      });
+      await Promise.resolve();
+      harness.triggerResponse({
+        url: () => "https://example.com/api/export-statement",
+        headers: () => ({
+          "content-type": "application/pdf",
+          "content-disposition": 'attachment; filename="../../outside.pdf"',
+        }),
+        body: async () => pdfBytes,
+      });
+      const result = await pending;
+
+      expect(result.suggestedFilename).toBe("outside.pdf");
+      expect(path.dirname(result.path)).toBe(path.join(tempDir, "downloads"));
+      expect(path.basename(result.path)).toMatch(/-outside\.pdf$/);
+      expect(await fs.readFile(result.path)).toEqual(pdfBytes);
     });
   });
   it("clicks a ref and atomically finalizes explicit download paths", async () => {

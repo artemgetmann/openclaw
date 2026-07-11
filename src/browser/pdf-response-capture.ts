@@ -1,3 +1,5 @@
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
+
 export type PdfResponseMetadata = {
   url?: string;
   headers?: Record<string, unknown>;
@@ -72,11 +74,19 @@ function urlPdfFilename(value: string): string | undefined {
 export function inferPdfResponseFilename(meta: PdfResponseMetadata): string {
   const headers = normalizeResponseHeaders(meta.headers);
   const dispositionName = contentDispositionPdfFilename(headers["content-disposition"] ?? "");
+  let inferredName: string;
   if (dispositionName) {
-    return /\.pdf$/i.test(dispositionName) ? dispositionName : `${dispositionName}.pdf`;
+    inferredName = /\.pdf$/i.test(dispositionName) ? dispositionName : `${dispositionName}.pdf`;
+  } else {
+    const urlName = meta.url ? urlPdfFilename(meta.url) : undefined;
+    inferredName = urlName ?? "download.pdf";
   }
-  const urlName = meta.url ? urlPdfFilename(meta.url) : undefined;
-  return urlName ?? "download.pdf";
+
+  // Both Content-Disposition and the URL path are controlled by the remote
+  // server. Collapse directory components and control bytes before any caller
+  // joins this name beneath a download root, otherwise a forged filename can
+  // turn an implicit download into an arbitrary filesystem write.
+  return sanitizeUntrustedFileName(inferredName, "download.pdf");
 }
 
 export function pdfResponseMetadataMatches(meta: PdfResponseMetadata): boolean {
