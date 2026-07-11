@@ -7,6 +7,7 @@ import {
   classifyGoogleAuthFailure,
   DEFAULT_CONSUMER_GOOGLE_SERVICES,
   gogSubprocessEnv,
+  reserveAuthSessionDirectory,
   spawnWithAuthOperationLock,
   VERIFICATION_KEYRING_OPEN_TIMEOUT,
 } from "../../skills/gog/scripts/gog-auth-local.ts";
@@ -93,6 +94,45 @@ describe("gog auth local helper", () => {
     expect(result.diagnosticKind).toBe("keychain_approval_needed");
     expect(result.nextStep).toContain("Always Allow");
     expect(result.nextStep).not.toContain("Reopen");
+  });
+
+  it("preserves an active explicit session when the same session is retried", async () => {
+    const rootDir = await temporaryRoot();
+    const sessionId = "active-session";
+    const sessionDir = await reserveAuthSessionDirectory(rootDir, sessionId);
+    const originalStatus = {
+      sessionId,
+      phase: "authorizing",
+      pid: 41_001,
+      workerPid: 41_002,
+      lockPid: 41_003,
+      logPath: path.join(sessionDir, "gog-auth.log"),
+    };
+    await fsp.writeFile(
+      path.join(sessionDir, "status.json"),
+      JSON.stringify(originalStatus, null, 2),
+    );
+    await fsp.writeFile(originalStatus.logPath, "original auth output\n");
+
+    await expect(reserveAuthSessionDirectory(rootDir, sessionId)).rejects.toThrow("already exists");
+
+    // wait/stop still see the original phase and process ownership; the retry
+    // did not truncate the log or relabel the active session as an error.
+    expect(JSON.parse(await fsp.readFile(path.join(sessionDir, "status.json"), "utf8"))).toEqual(
+      originalStatus,
+    );
+    expect(await fsp.readFile(originalStatus.logPath, "utf8")).toBe("original auth output\n");
+  });
+
+  it("atomically gives a new explicit session to only one concurrent start", async () => {
+    const rootDir = await temporaryRoot();
+    const results = await Promise.allSettled([
+      reserveAuthSessionDirectory(rootDir, "shared-session"),
+      reserveAuthSessionDirectory(rootDir, "shared-session"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
   });
 
   it.runIf(process.platform === "darwin")(

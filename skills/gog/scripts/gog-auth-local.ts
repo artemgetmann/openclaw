@@ -122,6 +122,36 @@ function sessionDirFor(sessionId: string) {
   return path.join(SESSIONS_ROOT, sessionId);
 }
 
+/**
+ * Reserve a session namespace exactly once before any mutable files exist.
+ * Atomic mkdir closes the same-session TOCTOU: only one concurrent start can
+ * own the status/log paths, while lockf remains the global auth-worker lock.
+ */
+export async function reserveAuthSessionDirectory(rootDir: string, sessionId: string) {
+  if (
+    !sessionId ||
+    sessionId === "." ||
+    sessionId === ".." ||
+    sessionId.includes("/") ||
+    sessionId.includes("\\")
+  ) {
+    throw new Error("Google auth session ID must be one path-safe name");
+  }
+  await fsp.mkdir(rootDir, { recursive: true });
+  const sessionDir = path.join(rootDir, sessionId);
+  try {
+    await fsp.mkdir(sessionDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(
+        `Google auth session ${sessionId} already exists. Continue that session or choose a new session ID.`,
+      );
+    }
+    throw error;
+  }
+  return sessionDir;
+}
+
 function statusPathFor(sessionDir: string) {
   return path.join(sessionDir, STATUS_FILE);
 }
@@ -546,7 +576,7 @@ async function commandStart(flags: Map<string, string | boolean>) {
   const forceConsent = boolFlag(flags, "--force-consent");
 
   await ensureSessionsRoot();
-  await fsp.mkdir(sessionDir, { recursive: true });
+  await reserveAuthSessionDirectory(SESSIONS_ROOT, sessionId);
   const logPath = path.join(sessionDir, LOG_FILE);
   await fsp.writeFile(logPath, "", "utf8");
   await writeStatus(sessionDir, {
