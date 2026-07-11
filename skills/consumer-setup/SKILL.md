@@ -169,15 +169,16 @@ explicitly ask for the CLI path.
 - Check `gog --version` before assuming newer auth helpers exist. Treat
   v0.31.0+ as the cutoff for `gog auth setup`, `GOG_HELP=agent`, classified
   corrupt-token recovery, and global `--readonly` / `GOG_READONLY=1`.
-- On runtimes where `gog` safe-bin execution is available and the binary is
-  v0.31.0+, prefer `gog auth setup` first. If that helper is not present, fall
-  back to `gog auth add <email> --services <csv>`.
+- Route consumer Google auth through
+  `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`.
+  Its single-flight lock prevents multiple setup sessions from producing
+  overlapping Google or macOS Keychain prompts.
 - Prefer opening the real auth tab in Google Chrome when the runtime can do so.
   If Chrome is unavailable, use the default browser rather than dumping raw
   terminal instructions back to the user.
-- If Normal permissions block a shell wrapper or helper script, retry the
-  direct command form first. Do not translate that into "go use Terminal"
-  unless the user explicitly asks for the CLI path.
+- If Normal permissions block the guarded helper, report setup as blocked. Do
+  not bypass the guard with direct `gog auth setup`, `gog auth add`, or
+  `gog auth list` calls while setup is active.
 - If the local runtime can launch the flow itself, say that explicitly:
   "I opened the Google consent flow in the browser on this Mac. Finish the
   Google approval there."
@@ -190,10 +191,14 @@ explicitly ask for the CLI path.
 - If the local runtime cannot complete the consent click itself, say what the
   user must do in the browser. Do not translate that limitation into "go run
   this in Terminal."
-- Use `skills/gog/scripts/gog-auth-local.sh` only when repo-local helper
-  scripts are allowed and you need resumable polling across turns.
-- Verify with a read-only command such as `gog auth list`, `gog gmail search`,
-  or a calendar/list call before creating drafts or events.
+- Poll the guarded session with `skills/gog/scripts/gog-auth-local.sh wait`.
+  Its successful exit already verifies the account with a short bounded
+  `gog auth list`; do not launch a parallel direct verification probe.
+- If Keychain approval times out, ask the user to unlock the Mac, retry once,
+  complete the single macOS Keychain prompt with their Mac login password, and
+  choose Always Allow. Never capture, store, type, or bypass that password.
+- After the guarded session succeeds, a read-only Gmail search or calendar/list
+  call can verify the requested surface before creating drafts or events.
 - After verification succeeds, continue the user’s original Google task
   automatically instead of stopping at “auth is done”.
 
