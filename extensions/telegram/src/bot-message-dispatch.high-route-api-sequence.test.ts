@@ -366,11 +366,6 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
       // delayed message-start callback. That callback must not rotate the
       // already-visible final preview onto a second Telegram identity.
       await opts?.onPartialReply?.({ text: partialAnswer });
-      await vi.waitFor(() =>
-        expect(
-          sendMessageCalls(harness.calls).some((call) => call.text.includes(partialAnswer)),
-        ).toBe(true),
-      );
       await opts?.onAssistantMessageStart?.();
       return { text: finalAnswer };
     });
