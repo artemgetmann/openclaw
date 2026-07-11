@@ -3,6 +3,7 @@ import {
   appendIgnoredTelegramUserCandidate,
   matchTelegramUserMessage,
   resolveTelegramUserThreadAnchor,
+  shouldRecheckTelegramUserWaitCandidate,
 } from "./match.js";
 import type { TelegramUserMessage } from "./types.js";
 
@@ -67,6 +68,33 @@ describe("matchTelegramUserMessage", () => {
       threadAnchor: 99,
     });
     expect(result).toEqual({ matched: false, reason: "thread_mismatch:12" });
+  });
+
+  it("matches a hydrated media-only reply when no text filter was requested", () => {
+    const result = matchTelegramUserMessage(createMessage({ media_kind: "voice", text: "" }), {
+      afterId: 100,
+      contains: "",
+      senderId: 42,
+      threadAnchor: 0,
+    });
+
+    expect(result).toEqual({ matched: true, matchedBy: "no_thread_filter" });
+  });
+
+  it("keeps unhydrated empty replies eligible for a later poll", () => {
+    const result = matchTelegramUserMessage(createMessage({ media_kind: null, text: "" }), {
+      afterId: 100,
+      contains: "",
+      senderId: 42,
+      threadAnchor: 0,
+    });
+
+    expect(result).toEqual({ matched: false, reason: "empty_text" });
+    if (result.matched) {
+      throw new Error("expected an empty candidate");
+    }
+    expect(shouldRecheckTelegramUserWaitCandidate(result.reason)).toBe(true);
+    expect(shouldRecheckTelegramUserWaitCandidate("text_mismatch")).toBe(false);
   });
 
   it("keeps only the last ignored candidates", () => {
