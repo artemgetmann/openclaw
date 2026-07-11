@@ -149,6 +149,87 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     });
   });
 
+  it("restarts cumulative partials when a signed message advances text content blocks", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+    const commentarySignature = JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" });
+    const finalSignature = JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" });
+
+    subscribeEmbeddedPiSession({ session, runId: "run", onPartialReply });
+
+    emit({
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "", textSignature: commentarySignature }],
+      } as AssistantMessage,
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "", textSignature: commentarySignature }],
+      },
+      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Thinking first", textSignature: commentarySignature }],
+      },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Thinking first" },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Thinking first", textSignature: commentarySignature },
+          { type: "text", text: "", textSignature: finalSignature },
+        ],
+      },
+      assistantMessageEvent: { type: "text_start", contentIndex: 1 },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Thinking first", textSignature: commentarySignature },
+          { type: "text", text: "Final", textSignature: finalSignature },
+        ],
+      },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Final" },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Thinking first", textSignature: commentarySignature },
+          { type: "text", text: "Final answer", textSignature: finalSignature },
+        ],
+      },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: " answer" },
+    });
+
+    expect(onPartialReply.mock.calls.map(([payload]) => payload)).toEqual([
+      expect.objectContaining({
+        text: "Thinking first",
+        channelData: { openclaw: { assistantPhase: "commentary" } },
+      }),
+      expect.objectContaining({
+        text: "Final",
+        channelData: { openclaw: { assistantPhase: "final_answer" } },
+      }),
+      expect.objectContaining({
+        text: "Final answer",
+        channelData: { openclaw: { assistantPhase: "final_answer" } },
+      }),
+    ]);
+  });
+
   it("marks pre-tool text as commentary when phase is deferred", () => {
     const { emit, onBlockReply } = createBlockReplyHarness({
       deferPhaseUnknownBlockReplies: true,
