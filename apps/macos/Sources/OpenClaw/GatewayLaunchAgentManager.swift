@@ -150,14 +150,14 @@ enum GatewayLaunchAgentManager {
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
                 } else {
-                    return nil
+                    return await self.compensateIfMutationAuthorityWasRevoked(shouldMutate)
                 }
             case .start:
                 guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
                 if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
                     self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
                 } else {
-                    return nil
+                    return await self.compensateIfMutationAuthorityWasRevoked(shouldMutate)
                 }
             case .install, .stop, .uninstall:
                 break
@@ -167,7 +167,10 @@ enum GatewayLaunchAgentManager {
             // the caller's authority again so a mode change during that command
             // cannot turn the fallback into a late launchd mutation.
             guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
-            return await self.install(port: port)
+            if let error = await self.install(port: port) {
+                return error
+            }
+            return await self.compensateIfMutationAuthorityWasRevoked(shouldMutate)
         }
 
         if await self.shouldPreserveLoadedConsumerGatewayOnStop() {
@@ -360,6 +363,26 @@ extension GatewayLaunchAgentManager {
             self.logger.info("launchd mutation skipped because caller authority changed")
         }
         return allowed
+    }
+
+    private static func compensateIfMutationAuthorityWasRevoked(
+        _ shouldMutate: (@MainActor @Sendable () -> Bool)?) async -> String?
+    {
+        // Only reconciliation supplies this authority predicate. Keeping the
+        // post-command check opt-in prevents normal callers from acquiring stop
+        // authority over the canonical shared gateway.
+        guard let shouldMutate else { return nil }
+        guard await !shouldMutate() else { return nil }
+
+        // Do not route compensation back through `set(enabled: false)`: that
+        // public path intentionally skips remote mode and may preserve a loaded
+        // consumer gateway. This guarded command just started this exact scoped
+        // launchd label, so a direct stop is the narrow rollback for the race.
+        self.logger.warning("launchd mutation authority changed during command; stopping scoped service")
+        if let error = await self.runDaemonCommand(["stop"], timeout: 20) {
+            return "launchd authority changed after mutation, but compensating stop failed: \(error)"
+        }
+        return nil
     }
 
     private static func desiredEnableAction() async -> DesiredAction {
