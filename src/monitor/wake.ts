@@ -6,6 +6,11 @@ const CHECKPOINT_LIMIT_PLACEHOLDER = "[checkpoint content omitted: wake prompt l
 const CHECKPOINT_MAX_RENDERED_CHARS = 16_000;
 const CHECKPOINT_IMAGE_EXTENSIONS = "(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|svg|ico)";
 const CHECKPOINT_DATA_IMAGE_REGEX = /data:image\/[a-z0-9.+-]+(?:;[^,\s]*)?,[^\s"'`<>]*/giu;
+const CHECKPOINT_WHOLE_DATA_IMAGE_REGEX = /^\s*data:image\//iu;
+const CHECKPOINT_QUOTED_DATA_IMAGE_REGEX =
+  /(["'`])data:image\/[a-z0-9.+-]+(?:;[^,\r\n]*)?,[\s\S]*?\1/giu;
+const CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX =
+  /data:image\/svg\+xml(?:;[^,\r\n]*)?,[\s\S]*?<\/svg\s*>/giu;
 // Match the runner's file-URL grammar exactly: spaces are valid until the image extension, while
 // closing markers and ordinary prose after the extension remain untouched.
 const CHECKPOINT_FILE_URL_IMAGE_REGEX = new RegExp(
@@ -37,7 +42,10 @@ type CheckpointRenderState = {
 function replaceCheckpointMediaReferences(value: string): string {
   // Whole-value matching catches paths containing spaces. Inline matching keeps useful prose around
   // ordinary path/URL tokens while removing anything a prompt-image scanner could rehydrate.
-  if (CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX.test(value)) {
+  if (
+    CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX.test(value) ||
+    CHECKPOINT_WHOLE_DATA_IMAGE_REGEX.test(value)
+  ) {
     return CHECKPOINT_MEDIA_PLACEHOLDER;
   }
   return (
@@ -45,6 +53,10 @@ function replaceCheckpointMediaReferences(value: string): string {
       // Mirror the runner's structured markers before token matching so paths with spaces cannot
       // survive as `[Image: source: ...]` or `[media attached: ...]` prompt references.
       .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+      // Quotes and the closing SVG tag are reliable inline boundaries. Consume through them before
+      // the token fallback so wrapped payload bytes cannot remain while later prose stays intact.
+      .replace(CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+      .replace(CHECKPOINT_QUOTED_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_FILE_URL_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       // Mirror quoted-path detection separately so spaces are allowed only inside matched quotes;

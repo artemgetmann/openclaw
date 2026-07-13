@@ -79,6 +79,13 @@ describe("buildMonitorWakeMessage", () => {
           data: [1, 2, 3],
           buffer: { type: "Buffer", data: [4, 5, 6] },
         },
+        wrappedDataUri: "  \ndata:image/png;base64,WRAPPED-AAA\nWRAPPED-BBB",
+        svgDataUri:
+          'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>WHOLE-SVG-PAYLOAD</text></svg>',
+        inlineWrappedDataUri:
+          "Inline preview 'data:image/png;base64,INLINE-AAA\nINLINE-BBB' remains reviewed.",
+        inlineSvgDataUri:
+          'SVG preview data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>INLINE-SVG-PAYLOAD</text></svg> remains reviewed.',
       },
     };
     const checkpointBeforeWake = structuredClone(checkpoint);
@@ -132,6 +139,14 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("ordinary-checkpoint-b64-json");
     expect(message).toContain('"unrelatedBinaryShapes":{"data":[1,2,3]');
     expect(message).toContain('"buffer":{"type":"Buffer","data":[4,5,6]}');
+    expect(message).toContain('"wrappedDataUri":"[media reference omitted]"');
+    expect(message).toContain('"svgDataUri":"[media reference omitted]"');
+    expect(message).toContain("Inline preview [media reference omitted] remains reviewed.");
+    expect(message).toContain("SVG preview [media reference omitted] remains reviewed.");
+    expect(message).not.toContain("WRAPPED-BBB");
+    expect(message).not.toContain("WHOLE-SVG-PAYLOAD");
+    expect(message).not.toContain("INLINE-BBB");
+    expect(message).not.toContain("INLINE-SVG-PAYLOAD");
     expect(message).not.toContain("feedback confirmation.png");
     expect(message).not.toContain("follow up.jpeg");
     expect(message).not.toContain("final confirmation.webp");
