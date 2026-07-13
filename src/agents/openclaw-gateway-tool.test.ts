@@ -50,6 +50,14 @@ function requireGatewayTool(agentSessionKey?: string, config?: OpenClawConfig) {
   });
 }
 
+function expectRecoveryMessageArmsBeforeAsking(message: string) {
+  const armInstruction = 'action="restart.request_confirmation"';
+  const askInstruction = "Only after that action succeeds, ask exactly:";
+
+  expect(message.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+  expect(message.indexOf(askInstruction)).toBeGreaterThan(message.indexOf(armInstruction));
+}
+
 async function createSessionStoreFixture(params?: {
   sessionKey?: string;
   entry?: SessionEntry;
@@ -95,6 +103,19 @@ describe("gateway tool", () => {
   it("marks gateway as owner-only", async () => {
     const tool = requireGatewayTool();
     expect(tool.ownerOnly).toBe(true);
+  });
+
+  it("describes arming restart confirmation before asking the user", () => {
+    const description = requireGatewayTool().description;
+    const armInstruction =
+      "Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation.";
+    const askInstruction =
+      "Only after that action succeeds, ask the confirmation question returned by the tool";
+
+    expect(description.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+    expect(description.indexOf(askInstruction)).toBeGreaterThan(
+      description.indexOf(armInstruction),
+    );
   });
 
   it("schedules SIGUSR1 restart", async () => {
@@ -308,12 +329,40 @@ describe("gateway tool", () => {
       session: { store: storePath },
     });
 
-    await expect(
-      tool.execute("confirm2", {
+    const error = await tool
+      .execute("confirm2", {
         action: "config.patch",
         raw: '{\n  gateway: { logLevel: "debug" }\n}\n',
-      }),
-    ).rejects.toThrow("Restart confirmation required for live chat sessions");
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expectRecoveryMessageArmsBeforeAsking((error as Error).message);
+  });
+
+  it("tells the model to re-arm an expired confirmation before asking again", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 10_000, ttlMs: 1 });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt + 1_000,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    const error = await tool
+      .execute("confirm-expired", {
+        action: "config.patch",
+        raw: '{\n  gateway: { logLevel: "debug" }\n}\n',
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expectRecoveryMessageArmsBeforeAsking((error as Error).message);
   });
 
   it("consumes a valid confirmation on the next user turn for config.patch", async () => {

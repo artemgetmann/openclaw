@@ -84,7 +84,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, arm restart confirmation for the current chat, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use restart.request_confirmation before restart-capable actions in live chat. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, arm restart confirmation for the current chat, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Before asking the user to confirm a restart-capable action in live chat, first call restart.request_confirmation. Only after that action succeeds, ask the confirmation question returned by the tool, end the turn, and wait for the user's reply. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -117,11 +117,11 @@ export function createGatewayTool(opts?: {
         }
         if (consumed.status === "expired") {
           throw new Error(
-            `The pending restart confirmation expired. Ask again: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" and record it with action="restart.request_confirmation".`,
+            `The pending restart confirmation expired. First call the gateway tool with action="restart.request_confirmation". Only after that action succeeds, ask exactly: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" Then end the turn and wait for the user's reply.`,
           );
         }
         throw new Error(
-          `Restart confirmation required for live chat sessions. Ask: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" then call gateway with action="restart.request_confirmation" for this session before attempting restart-capable actions.`,
+          `Restart confirmation required for live chat sessions. First call the gateway tool with action="restart.request_confirmation" for this session. Only after that action succeeds, ask exactly: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" Then end the turn and wait for the user's reply before attempting restart-capable actions.`,
         );
       };
       if (action === "restart.request_confirmation") {
