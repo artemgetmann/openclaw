@@ -807,7 +807,14 @@ export async function runHeartbeatOnce(opts: {
     runStorePath = cronSession.storePath;
   }
 
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const delivery = resolveHeartbeatDeliveryTarget({
+    cfg,
+    entry,
+    // A forced restart continuation is recovered user work, not heartbeat
+    // telemetry. Route it back to the session that accepted the work even
+    // when ordinary heartbeat output is configured as target: "none".
+    heartbeat: isForcedRestartContinuation ? { ...heartbeat, target: "last" } : heartbeat,
+  });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
@@ -857,7 +864,9 @@ export async function runHeartbeatOnce(opts: {
   }).responsePrefix;
 
   const canRelayToUser = Boolean(
-    alertDelivery.channel !== "none" && alertDelivery.to && alertVisibility.showAlerts,
+    alertDelivery.channel !== "none" &&
+    alertDelivery.to &&
+    (isForcedRestartContinuation || alertVisibility.showAlerts),
   );
   const promptResolution = resolveHeartbeatRunPrompt({
     cfg,
@@ -894,7 +903,12 @@ export async function runHeartbeatOnce(opts: {
     SessionKey: runSessionKey,
     SourceReceipt: sourceReceipt,
   };
-  if (!alertVisibility.showAlerts && !okVisibility.showOk && !okVisibility.useIndicator) {
+  if (
+    !isForcedRestartContinuation &&
+    !alertVisibility.showAlerts &&
+    !okVisibility.showOk &&
+    !okVisibility.useIndicator
+  ) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
@@ -1014,23 +1028,12 @@ export async function runHeartbeatOnce(opts: {
         (contextKey): contextKey is string =>
           Boolean(contextKey?.startsWith("restart:")) && !remainingEventContexts.has(contextKey),
       );
-    if (consumedRestartContexts.length > 0 && agentRunStarted) {
+    const consumedRestartEvents = preflight.pendingEventEntries.filter((event) =>
+      consumedRestartContexts.includes(event.contextKey ?? ""),
+    );
+    const restartContinuationAwaitingDelivery = consumedRestartEvents.length > 0 && agentRunStarted;
+    if (consumedRestartEvents.length > 0 && !agentRunStarted) {
       try {
-        // The callback is the positive execution boundary. Event disappearance
-        // alone is insufficient because an active session can drain the event,
-        // drop this heartbeat, and return without starting an agent run.
-        await markRestartContinuationConsumed({
-          sessionKey,
-          contextKeys: consumedRestartContexts,
-        });
-      } catch (err) {
-        log.warn(`heartbeat: failed to acknowledge restart continuation: ${String(err)}`);
-      }
-    } else if (consumedRestartContexts.length > 0) {
-      try {
-        const consumedRestartEvents = preflight.pendingEventEntries.filter((event) =>
-          consumedRestartContexts.includes(event.contextKey ?? ""),
-        );
         await reconcileDrainedRestartEvents({
           events: consumedRestartEvents,
           error: "restart continuation agent execution did not start",
@@ -1039,6 +1042,14 @@ export async function runHeartbeatOnce(opts: {
         log.warn(`heartbeat: failed to reconcile unstarted restart continuation: ${String(err)}`);
       }
     }
+    const reconcileRestartContinuationWithoutDelivery = async (error: string) => {
+      if (!restartContinuationAwaitingDelivery) {
+        return;
+      }
+      // Draining the tagged event is not completion. Any terminal path that
+      // does not resolve an outbound send must restore replay state first.
+      await reconcileDrainedRestartEvents({ events: consumedRestartEvents, error });
+    };
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -1049,6 +1060,9 @@ export async function runHeartbeatOnce(opts: {
       !replyPayload ||
       (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
+      await reconcileRestartContinuationWithoutDelivery(
+        "restart continuation produced no deliverable response",
+      );
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1085,6 +1099,9 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
+      await reconcileRestartContinuationWithoutDelivery(
+        "restart continuation produced only a heartbeat acknowledgement",
+      );
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1123,6 +1140,9 @@ export async function runHeartbeatOnce(opts: {
       startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
 
     if (isDuplicateMain) {
+      await reconcileRestartContinuationWithoutDelivery(
+        "restart continuation response was suppressed as a duplicate heartbeat",
+      );
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1151,6 +1171,9 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (alertDelivery.channel === "none" || !alertDelivery.to) {
+      await reconcileRestartContinuationWithoutDelivery(
+        `restart continuation has no outbound route: ${alertDelivery.reason ?? "no-target"}`,
+      );
       emitHeartbeatEvent({
         status: "skipped",
         reason: alertDelivery.reason ?? "no-target",
@@ -1162,7 +1185,10 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!alertVisibility.showAlerts) {
+    if (!isForcedRestartContinuation && !alertVisibility.showAlerts) {
+      await reconcileRestartContinuationWithoutDelivery(
+        "restart continuation delivery was suppressed by heartbeat visibility",
+      );
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1190,6 +1216,9 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        await reconcileRestartContinuationWithoutDelivery(
+          `restart continuation outbound route is not ready: ${readiness.reason}`,
+        );
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -1227,6 +1256,20 @@ export async function runHeartbeatOnce(opts: {
       ],
       deps: opts.deps,
     });
+
+    if (restartContinuationAwaitingDelivery) {
+      try {
+        // This is deliberately after the awaited send. Agent execution proves
+        // the work ran; only resolved outbound delivery proves the recovered
+        // result crossed the user-visible boundary.
+        await markRestartContinuationConsumed({
+          sessionKey,
+          contextKeys: consumedRestartContexts,
+        });
+      } catch (err) {
+        log.warn(`heartbeat: failed to acknowledge restart continuation: ${String(err)}`);
+      }
+    }
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {

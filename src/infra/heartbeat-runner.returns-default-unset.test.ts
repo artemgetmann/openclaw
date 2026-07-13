@@ -1567,11 +1567,25 @@ describe("runHeartbeatOnce", () => {
       }),
     );
     enqueueSystemEvent("Reassess safely after restart", { sessionKey, contextKey });
-    return { cfg, sessionKey };
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "restart-message", toJid: "jid" });
+    return { cfg, sessionKey, storePath, sendWhatsApp };
   }
 
-  it("acks a restart continuation only after its tagged event is consumed by the agent call", async () => {
-    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-1");
+  it("acks a restart continuation only after outbound delivery resolves", async () => {
+    const { cfg, sessionKey, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:op-1");
+
+    let resolveDelivery: ((result: { messageId: string; toJid: string }) => void) | undefined;
+    sendWhatsApp.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDelivery = resolve;
+        }),
+    );
 
     const ackSpy = vi
       .spyOn(restartSentinel, "markRestartContinuationConsumed")
@@ -1586,14 +1600,26 @@ describe("runHeartbeatOnce", () => {
     });
 
     try {
-      const result = await runHeartbeatOnce({
+      const runPromise = runHeartbeatOnce({
         cfg,
         sessionKey,
         reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
       });
+
+      await vi.waitFor(() => expect(sendWhatsApp).toHaveBeenCalledTimes(1));
+      expect(ackSpy).not.toHaveBeenCalled();
+
+      resolveDelivery?.({ messageId: "restart-message", toJid: "jid" });
+      const result = await runPromise;
 
       expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Continuation checked",
+        expect.any(Object),
+      );
       expect(ackSpy).toHaveBeenCalledWith({
         sessionKey,
         contextKeys: ["restart:op-1"],
@@ -1605,7 +1631,8 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("requeues a restart event drained by an active-session drop before agent execution", async () => {
-    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-active");
+    const { cfg, sessionKey, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:op-active");
     const ackSpy = vi
       .spyOn(restartSentinel, "markRestartContinuationConsumed")
       .mockResolvedValue(true);
@@ -1626,6 +1653,7 @@ describe("runHeartbeatOnce", () => {
         cfg,
         sessionKey,
         reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
       });
 
       expect(result.status).toBe("ran");
@@ -1696,7 +1724,7 @@ describe("runHeartbeatOnce", () => {
 
     for (const testCase of cases) {
       const contextKey = `restart:policy-${testCase.name.replaceAll(" ", "-")}`;
-      const { cfg, sessionKey } = await seedRestartContinuationHeartbeat(contextKey);
+      const { cfg, sessionKey, sendWhatsApp } = await seedRestartContinuationHeartbeat(contextKey);
       testCase.mutate(cfg);
       setHeartbeatsEnabled(!testCase.disableGlobal);
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1713,9 +1741,13 @@ describe("runHeartbeatOnce", () => {
           cfg,
           sessionKey,
           reason: "restart-continuation",
-          deps: testCase.deps,
+          deps: {
+            ...createHeartbeatDeps(sendWhatsApp),
+            ...testCase.deps,
+          },
         });
         expect(result.status, testCase.name).toBe("ran");
+        expect(sendWhatsApp, testCase.name).toHaveBeenCalledTimes(1);
         expect(ackSpy, testCase.name).toHaveBeenCalledTimes(1);
       } finally {
         setHeartbeatsEnabled(true);
@@ -1739,8 +1771,74 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("requeues a consumed restart event when the agent call fails", async () => {
-    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-failed");
+  it("bypasses all heartbeat visibility suppression only for tagged restart recovery", async () => {
+    const { cfg, sessionKey, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:hidden-recovery");
+    cfg.channels = {
+      defaults: {
+        heartbeat: { showOk: false, showAlerts: false, useIndicator: false },
+      },
+      whatsapp: { allowFrom: ["*"] },
+    };
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (_ctx, options) => {
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("restart-hidden-run");
+      return { text: "Recovered user work" };
+    });
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Recovered user work",
+        expect.any(Object),
+      );
+      expect(ackSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
+    }
+
+    const ordinary = await seedRestartContinuationHeartbeat("ordinary:hidden-heartbeat");
+    ordinary.cfg.channels = cfg.channels;
+    ordinary.cfg.agents!.defaults!.heartbeat = {
+      ...ordinary.cfg.agents?.defaults?.heartbeat,
+      target: "last",
+    };
+    const ordinaryReplySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    ordinaryReplySpy.mockResolvedValue({ text: "Ordinary alert" });
+    try {
+      const result = await runHeartbeatOnce({
+        cfg: ordinary.cfg,
+        sessionKey: ordinary.sessionKey,
+        reason: "wake",
+        deps: createHeartbeatDeps(ordinary.sendWhatsApp),
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: "alerts-disabled" });
+      expect(ordinaryReplySpy).not.toHaveBeenCalled();
+      expect(ordinary.sendWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      ordinaryReplySpy.mockRestore();
+    }
+  });
+
+  it("requeues a consumed restart event when outbound delivery fails", async () => {
+    const { cfg, sessionKey, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:op-failed");
+    sendWhatsApp.mockRejectedValue(new Error("outbound delivery failed"));
     const ackSpy = vi
       .spyOn(restartSentinel, "markRestartContinuationConsumed")
       .mockResolvedValue(true);
@@ -1749,9 +1847,10 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue("restart:op-failed");
     const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    replySpy.mockImplementation(async () => {
+    replySpy.mockImplementation(async (_ctx, options) => {
       drainSystemEventEntries(sessionKey);
-      throw new Error("agent execution failed");
+      options?.onAgentRunStart?.("restart-delivery-failure-run");
+      return { text: "Continuation checked" };
     });
 
     try {
@@ -1759,20 +1858,79 @@ describe("runHeartbeatOnce", () => {
         cfg,
         sessionKey,
         reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
       });
 
-      expect(result).toEqual({ status: "failed", reason: "agent execution failed" });
+      expect(result).toEqual({ status: "failed", reason: "outbound delivery failed" });
       expect(ackSpy).not.toHaveBeenCalled();
       expect(failureSpy).toHaveBeenCalledWith({
         sessionKey,
         contextKeys: ["restart:op-failed"],
-        error: "agent execution failed",
+        error: "outbound delivery failed",
       });
       expect(peekSystemEventEntries(sessionKey)).toEqual([
         expect.objectContaining({
           text: "Reassess safely after restart",
           contextKey: "restart:op-failed",
         }),
+      ]);
+      expect(wakeSpy).toHaveBeenCalledWith({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: 1_000,
+      });
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
+      failureSpy.mockRestore();
+      wakeSpy.mockRestore();
+    }
+  });
+
+  it("keeps a restart continuation replayable when the original route is unavailable", async () => {
+    const { cfg, sessionKey, storePath, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:no-route");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const failureSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationFailed")
+      .mockResolvedValue("restart:no-route");
+    const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (_ctx, options) => {
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("restart-no-route-run");
+      return { text: "Continuation checked" };
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(ackSpy).not.toHaveBeenCalled();
+      expect(failureSpy).toHaveBeenCalledWith({
+        sessionKey,
+        contextKeys: ["restart:no-route"],
+        error: "restart continuation has no outbound route: no-target",
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({ contextKey: "restart:no-route" }),
       ]);
       expect(wakeSpy).toHaveBeenCalledWith({
         reason: "restart-continuation",
