@@ -158,6 +158,11 @@ enum GatewayLaunchAgentManager {
                 guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
+                    if let compensationError = await self.compensateIfMutationAuthorityWasRevoked(
+                        mutationAuthority)
+                    {
+                        return "\(error); \(compensationError)"
+                    }
                 } else {
                     return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
                 }
@@ -165,6 +170,11 @@ enum GatewayLaunchAgentManager {
                 guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
                 if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
                     self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
+                    if let compensationError = await self.compensateIfMutationAuthorityWasRevoked(
+                        mutationAuthority)
+                    {
+                        return "\(error); \(compensationError)"
+                    }
                 } else {
                     return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
                 }
@@ -177,6 +187,11 @@ enum GatewayLaunchAgentManager {
             // cannot turn the fallback into a late launchd mutation.
             guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
             if let error = await self.install(port: port) {
+                if let compensationError = await self.compensateIfMutationAuthorityWasRevoked(
+                    mutationAuthority)
+                {
+                    return "\(error); \(compensationError)"
+                }
                 return error
             }
             return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
@@ -400,10 +415,21 @@ extension GatewayLaunchAgentManager {
         // consumer gateway. This guarded command just started this exact scoped
         // launchd label, so a direct stop is the narrow rollback for the race.
         self.logger.warning("launchd mutation authority changed during command; stopping scoped service")
-        if let error = await self.runDaemonCommand(["stop"], timeout: 20) {
+        if let error = await self.runCompensatingStop() {
             return "launchd authority changed after mutation, but compensating stop failed: \(error)"
         }
         return nil
+    }
+
+    private static func runCompensatingStop() async -> String? {
+        // Reconciliation can discover revocation only after its parent task was
+        // cancelled. ShellExecutor observes task cancellation and would otherwise
+        // terminate the rollback child immediately. A detached task starts with a
+        // clean cancellation state; awaiting its value keeps rollback synchronous.
+        let stopTask = Task.detached {
+            await self.runDaemonCommand(["stop"], timeout: 20)
+        }
+        return await stopTask.value
     }
 
     private static func desiredEnableAction() async -> DesiredAction {

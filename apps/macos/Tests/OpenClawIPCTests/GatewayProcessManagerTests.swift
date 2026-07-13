@@ -347,6 +347,7 @@ struct GatewayProcessManagerTests {
                 manager.setTestingDesiredActive(true)
                 var loadedChecks = 0
                 var daemonCalls: [[String]] = []
+                var compensatingStopWasCancelled: Bool?
                 GatewayLaunchAgentManager._setTestingHooks(
                     launchAgentWriteDisabled: { false },
                     readDaemonLoaded: {
@@ -357,8 +358,11 @@ struct GatewayProcessManagerTests {
                         daemonCalls.append(args)
                         if args.first == "install" {
                             // Model ownership changing while the successful
-                            // launchd command is suspended outside this actor.
+                            // launchd command is suspended in a cancelled task.
+                            withUnsafeCurrentTask { $0?.cancel() }
                             manager.setTestingDesiredActive(false)
+                        } else if args == ["stop"] {
+                            compensatingStopWasCancelled = Task.isCancelled
                         }
                         return nil
                     })
@@ -370,6 +374,60 @@ struct GatewayProcessManagerTests {
                 await manager.testingReconcileLaunchAgentRegistrationNow()
 
                 #expect(loadedChecks == 3)
+                #expect(daemonCalls == [
+                    [
+                        "install",
+                        "--force",
+                        "--allow-shared-service-takeover",
+                        "--port",
+                        "\(GatewayEnvironment.gatewayPort())",
+                        "--runtime",
+                        "node",
+                    ],
+                    ["stop"],
+                ])
+                #expect(compensatingStopWasCancelled == false)
+            }
+    }
+
+    @Test func `reconciliation compensates failed mutation after authority is revoked`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: { false },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        if args.first == "install" {
+                            // A nonzero command can still leave launchd partially
+                            // mutated before reporting its failure.
+                            manager.setTestingDesiredActive(false)
+                            return "simulated partial install failure"
+                        }
+                        return nil
+                    })
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
                 #expect(daemonCalls == [
                     [
                         "install",
