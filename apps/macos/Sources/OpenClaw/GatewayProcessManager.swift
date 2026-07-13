@@ -95,12 +95,12 @@ final class GatewayProcessManager {
     func ensureLaunchAgentEnabledIfNeeded() async {
         await self.ensureLaunchAgentEnabledIfNeeded(
             allowAttachToHealthyGateway: true,
-            shouldMutate: nil)
+            mutationAuthority: nil)
     }
 
     private func ensureLaunchAgentEnabledIfNeeded(
         allowAttachToHealthyGateway: Bool,
-        shouldMutate: (@MainActor @Sendable () -> Bool)?) async
+        mutationAuthority: (@MainActor @Sendable () -> GatewayLaunchAgentManager.MutationAuthority)?) async
     {
         guard !CommandResolver.connectionModeIsRemote() else { return }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
@@ -121,7 +121,7 @@ final class GatewayProcessManager {
             enabled: true,
             bundlePath: bundlePath,
             port: port,
-            shouldMutate: shouldMutate)
+            mutationAuthority: mutationAuthority)
         if let err {
             self.appendLog("[gateway] launchd auto-enable failed: \(err)\n")
         }
@@ -318,13 +318,20 @@ final class GatewayProcessManager {
             } catch {
                 return
             }
-            guard await self.reconcileLaunchAgentRegistrationIfNeeded() else { return }
+            guard await self.reconcileLaunchAgentRegistrationIfNeeded(generation: generation) else { return }
         }
     }
 
     @discardableResult
-    private func reconcileLaunchAgentRegistrationIfNeeded() async -> Bool {
-        guard self.launchAgentReconciliationCanMutate() else { return false }
+    private func reconcileLaunchAgentRegistrationIfNeeded(generation: UInt) async -> Bool {
+        // Attach-only is special at loop entry: it pauses reconciliation without
+        // surrendering the loop, so removing the marker resumes healing. Every
+        // later suspended boundary uses the stricter mutation authority below.
+        guard self.desiredActive,
+              !CommandResolver.connectionModeIsRemote(),
+              self.launchAgentReconciliationGeneration == generation,
+              !Task.isCancelled
+        else { return false }
         // Attach-only is an explicit instruction not to mutate launchd. Keep the
         // loop alive so removing the marker later resumes healing without relaunch.
         guard !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() else { return true }
@@ -340,7 +347,7 @@ final class GatewayProcessManager {
         // Both status reads suspend. Revalidate all app-owned authority immediately
         // before entering the existing launchd mutation path so a late result cannot
         // recreate the service after stop, remote-mode transition, or cancellation.
-        guard self.launchAgentReconciliationCanMutate() else { return false }
+        guard self.launchAgentReconciliationCanMutate(generation: generation) else { return false }
 
         self.appendLog("[gateway] launchd job missing; reconciling app-owned service\n")
         self.logger.warning("gateway launchd job missing; reconciling app-owned service")
@@ -349,16 +356,37 @@ final class GatewayProcessManager {
         // before every start/install attempt and after any failed-command fallback.
         await self.ensureLaunchAgentEnabledIfNeeded(
             allowAttachToHealthyGateway: false,
-            shouldMutate: { [weak self] in
-                self?.launchAgentReconciliationCanMutate() == true
+            mutationAuthority: { [weak self] in
+                self?.launchAgentReconciliationMutationAuthority(generation: generation) ?? .revoked
             })
         return true
     }
 
-    private func launchAgentReconciliationCanMutate() -> Bool {
+    private func launchAgentReconciliationCanMutate(generation: UInt) -> Bool {
         self.desiredActive &&
             !CommandResolver.connectionModeIsRemote() &&
+            !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() &&
+            self.launchAgentReconciliationGeneration == generation &&
             !Task.isCancelled
+    }
+
+    private func launchAgentReconciliationMutationAuthority(
+        generation: UInt) -> GatewayLaunchAgentManager.MutationAuthority
+    {
+        if self.launchAgentReconciliationCanMutate(generation: generation) {
+            return .allowed
+        }
+
+        // Cancellation or a generation mismatch only makes this task stale. If
+        // current app state still wants a writable local service, a newer loop owns
+        // it and the old task must not compensate by stopping that shared service.
+        if self.desiredActive,
+           !CommandResolver.connectionModeIsRemote(),
+           !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
+        {
+            return .superseded
+        }
+        return .revoked
     }
 
     private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {
@@ -667,7 +695,8 @@ extension GatewayProcessManager {
     }
 
     func testingReconcileLaunchAgentRegistrationNow() async {
-        _ = await self.reconcileLaunchAgentRegistrationIfNeeded()
+        let generation = self.launchAgentReconciliationGeneration
+        _ = await self.reconcileLaunchAgentRegistrationIfNeeded(generation: generation)
     }
 
     func setTestingLastFailureReason(_ reason: String?) {

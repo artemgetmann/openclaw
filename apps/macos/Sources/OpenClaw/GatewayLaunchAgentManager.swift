@@ -50,6 +50,15 @@ enum GatewayLaunchAgentManager {
         case uninstall
     }
 
+    /// A guarded mutation must distinguish stale work from revoked ownership.
+    /// Both states block a command that has not started, but only revocation may
+    /// roll back a successful command: a newer owner may need that same service.
+    enum MutationAuthority: Equatable {
+        case allowed
+        case superseded
+        case revoked
+    }
+
     private static var disableLaunchAgentMarkerURL: URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("disable-launchagent")
     }
@@ -126,7 +135,7 @@ enum GatewayLaunchAgentManager {
         enabled: Bool,
         bundlePath: String,
         port: Int,
-        shouldMutate: (@MainActor @Sendable () -> Bool)? = nil) async -> String?
+        mutationAuthority: (@MainActor @Sendable () -> MutationAuthority)? = nil) async -> String?
     {
         _ = bundlePath
         guard !CommandResolver.connectionModeIsRemote() else {
@@ -146,18 +155,18 @@ enum GatewayLaunchAgentManager {
             case .noop:
                 return nil
             case .restart:
-                guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
+                guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
                 } else {
-                    return await self.compensateIfMutationAuthorityWasRevoked(shouldMutate)
+                    return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
                 }
             case .start:
-                guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
+                guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
                 if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
                     self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
                 } else {
-                    return await self.compensateIfMutationAuthorityWasRevoked(shouldMutate)
+                    return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
                 }
             case .install, .stop, .uninstall:
                 break
@@ -166,11 +175,11 @@ enum GatewayLaunchAgentManager {
             // A failed start/restart suspends before falling back to install. Check
             // the caller's authority again so a mode change during that command
             // cannot turn the fallback into a late launchd mutation.
-            guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
+            guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
             if let error = await self.install(port: port) {
                 return error
             }
-            return await self.compensateIfMutationAuthorityWasRevoked(shouldMutate)
+            return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
         }
 
         if await self.shouldPreserveLoadedConsumerGatewayOnStop() {
@@ -355,24 +364,36 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func mutationIsStillAllowed(
-        _ shouldMutate: (@MainActor @Sendable () -> Bool)?) async -> Bool
+        _ mutationAuthority: (@MainActor @Sendable () -> MutationAuthority)?) async -> Bool
     {
-        guard let shouldMutate else { return true }
-        let allowed = await shouldMutate()
-        if !allowed {
+        guard let mutationAuthority else { return true }
+        switch await mutationAuthority() {
+        case .allowed:
+            return true
+        case .superseded, .revoked:
             self.logger.info("launchd mutation skipped because caller authority changed")
+            return false
         }
-        return allowed
     }
 
     private static func compensateIfMutationAuthorityWasRevoked(
-        _ shouldMutate: (@MainActor @Sendable () -> Bool)?) async -> String?
+        _ mutationAuthority: (@MainActor @Sendable () -> MutationAuthority)?) async -> String?
     {
         // Only reconciliation supplies this authority predicate. Keeping the
         // post-command check opt-in prevents normal callers from acquiring stop
         // authority over the canonical shared gateway.
-        guard let shouldMutate else { return nil }
-        guard await !shouldMutate() else { return nil }
+        guard let mutationAuthority else { return nil }
+        switch await mutationAuthority() {
+        case .allowed:
+            return nil
+        case .superseded:
+            // The old command is stale, but a newer generation currently owns the
+            // same local service. Stopping here would destroy the new owner's work.
+            self.logger.info("launchd compensation skipped because mutation has a newer owner")
+            return nil
+        case .revoked:
+            break
+        }
 
         // Do not route compensation back through `set(enabled: false)`: that
         // public path intentionally skips remote mode and may preserve a loaded

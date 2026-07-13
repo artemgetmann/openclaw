@@ -236,6 +236,51 @@ struct GatewayProcessManagerTests {
             }
     }
 
+    @Test func `reconciliation revalidates attach-only mode after launchd action query`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                var writeDisabled = false
+                var loadedChecks = 0
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { writeDisabled },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        if loadedChecks == 3 {
+                            writeDisabled = true
+                        }
+                        return false
+                    },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(loadedChecks == 3)
+                #expect(daemonCalls.isEmpty)
+            }
+    }
+
     @Test func `reconciliation suppresses mutation when cancelled during launchd action query`() async {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
@@ -337,6 +382,58 @@ struct GatewayProcessManagerTests {
                     ],
                     ["stop"],
                 ])
+            }
+    }
+
+    @Test func `old reconciliation does not stop service owned by newer active generation`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: { false },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        if args.first == "install" {
+                            // The old command returns after stop/re-enable created
+                            // a new reconciliation owner for the same local service.
+                            withUnsafeCurrentTask { $0?.cancel() }
+                            manager.setTestingDesiredActive(false)
+                            manager.setTestingDesiredActive(true)
+                            manager.startTestingLaunchAgentReconciliation()
+                        }
+                        return nil
+                    })
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(daemonCalls == [[
+                    "install",
+                    "--force",
+                    "--allow-shared-service-takeover",
+                    "--port",
+                    "\(GatewayEnvironment.gatewayPort())",
+                    "--runtime",
+                    "node",
+                ]])
             }
     }
 
