@@ -1269,6 +1269,97 @@ describe("chrome MCP page parsing", () => {
     ).toThrow("was not a native PDF payload");
   });
 
+  it("rejects a background PDF and captures the authenticated attachment response", async () => {
+    const pdfBytes = Buffer.from("%PDF-1.7\nnative response\n%%EOF\n");
+    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      expect(method).toBe("Network.getResponseBody");
+      expect(params).toEqual({ requestId: "pdf-request-1" });
+      return { body: pdfBytes.toString("base64"), base64Encoded: true };
+    });
+    const capture = chromeMcpPdfResourceInternalsForTest.createChromeMcpPdfNetworkCapture({
+      send,
+    });
+
+    capture.observeEvent("Network.requestWillBeSent", {
+      requestId: "background-pdf",
+      type: "Fetch",
+      request: {
+        method: "GET",
+        url: "https://cdn.example.com/prefetched-help.pdf",
+      },
+    });
+    capture.observeEvent("Network.responseReceived", {
+      requestId: "background-pdf",
+      type: "Fetch",
+      response: {
+        url: "https://cdn.example.com/prefetched-help.pdf",
+        mimeType: "application/pdf",
+        headers: { "content-type": "application/pdf" },
+      },
+    });
+    capture.observeEvent("Network.loadingFinished", { requestId: "background-pdf" });
+
+    capture.observeEvent("Network.requestWillBeSent", {
+      requestId: "pdf-request-1",
+      type: "Fetch",
+      request: {
+        method: "POST",
+        url: "https://example.com/api/export-statement",
+        headers: { Authorization: "Bearer session-token" },
+      },
+    });
+    capture.observeEvent("Network.responseReceived", {
+      requestId: "pdf-request-1",
+      type: "Fetch",
+      response: {
+        url: "https://example.com/api/export-statement",
+        mimeType: "application/pdf",
+        headers: {
+          "content-type": "application/pdf",
+          "content-disposition": 'attachment; filename="../../account-statement.pdf"',
+        },
+      },
+    });
+    capture.observeEvent("Network.loadingFinished", { requestId: "pdf-request-1" });
+
+    const result = await Promise.race([
+      capture.promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timed out waiting for PDF capture")), 1_000),
+      ),
+    ]);
+    expect(result).toEqual({
+      url: "https://example.com/api/export-statement",
+      suggestedFilename: "account-statement.pdf",
+      buffer: pdfBytes,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an existing inferred filename for implicit network PDF captures", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-collision-"));
+    const originalPath = path.join(tempDir, "account-statement.pdf");
+    const originalBytes = Buffer.from("%PDF-1.7\noriginal\n%%EOF\n");
+    const capturedBytes = Buffer.from("%PDF-1.7\ncaptured\n%%EOF\n");
+
+    try {
+      await fs.writeFile(originalPath, originalBytes);
+      const savedPath = await chromeMcpPdfResourceInternalsForTest.writeCapturedPdfResponse({
+        buffer: capturedBytes,
+        downloadDir: tempDir,
+        suggestedFilename: "account-statement.pdf",
+      });
+
+      expect(savedPath).not.toBe(originalPath);
+      expect(path.dirname(savedPath)).toBe(tempDir);
+      expect(path.basename(savedPath)).toBe("account-statement (1).pdf");
+      expect(await fs.readFile(originalPath)).toEqual(originalBytes);
+      expect(await fs.readFile(savedPath)).toEqual(capturedBytes);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("clicks an existing-session element and saves the DevTools download artifact", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-download-"));
     const downloadDir = path.join(tempDir, "downloads");
