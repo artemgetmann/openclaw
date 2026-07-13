@@ -50,6 +50,18 @@ describe("buildMonitorWakeMessage", () => {
           media_type: "image/jpeg",
           data: "snake-case-image-base64-payload",
         },
+        byteArrayImage: {
+          type: "image",
+          mimeType: "image/png",
+          data: [137, 80, 78, 71],
+        },
+        serializedBufferImage: {
+          type: "image",
+          source: {
+            mediaType: "image/png",
+            data: { type: "Buffer", data: [137, 80, 78, 71] },
+          },
+        },
         unrelatedPayload: {
           type: "record",
           source: {
@@ -57,6 +69,10 @@ describe("buildMonitorWakeMessage", () => {
             data: "ordinary-checkpoint-data",
             b64_json: "ordinary-checkpoint-b64-json",
           },
+        },
+        unrelatedBinaryShapes: {
+          data: [1, 2, 3],
+          buffer: { type: "Buffer", data: [4, 5, 6] },
         },
       },
     };
@@ -96,8 +112,16 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).not.toContain("nested-image-base64-payload");
     expect(message).not.toContain("generated-image-b64-json-payload");
     expect(message).not.toContain("snake-case-image-base64-payload");
+    expect(message).toContain(
+      '"byteArrayImage":{"type":"image","mimeType":"image/png","data":"[media reference omitted]"}',
+    );
+    expect(message).toContain(
+      '"serializedBufferImage":{"type":"image","source":{"mediaType":"image/png","data":"[media reference omitted]"}}',
+    );
     expect(message).toContain("ordinary-checkpoint-data");
     expect(message).toContain("ordinary-checkpoint-b64-json");
+    expect(message).toContain('"unrelatedBinaryShapes":{"data":[1,2,3]');
+    expect(message).toContain('"buffer":{"type":"Buffer","data":[4,5,6]}');
     expect(message).not.toContain("feedback confirmation.png");
     expect(message).not.toContain("follow up.jpeg");
     expect(message).not.toContain("final confirmation.webp");

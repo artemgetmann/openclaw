@@ -98,10 +98,13 @@ function sanitizeCheckpointValue(
   // structures without separate depth, item, key, and node limits.
   state.remainingChars -= 8;
 
+  // Payload keys are authoritative regardless of representation: base64 strings, byte arrays, and
+  // serialized Buffer objects all describe the same image bytes and must stay out of wake prompts.
+  if (isInlineImagePayload(keyHint, parentDeclaresImage)) {
+    return CHECKPOINT_MEDIA_PLACEHOLDER;
+  }
   if (typeof value === "string") {
-    return isInlineImagePayload(keyHint, parentDeclaresImage)
-      ? CHECKPOINT_MEDIA_PLACEHOLDER
-      : takeCheckpointText(value, state);
+    return takeCheckpointText(value, state);
   }
   if (value === null || typeof value !== "object") {
     return value;
