@@ -396,17 +396,26 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     ).toHaveLength(0);
   });
 
-  it("retains the complete acknowledgment instead of a one-character transport snapshot", async () => {
+  it("waits for a complete first DM acknowledgment before adopting it into Work log", async () => {
     const harness = createTelegramBotHarness(6970);
-    const acknowledgment = "I’ll inspect the files first, then run the focused checks.";
+    const acknowledgment =
+      "I’ll rerun the focused Telegram sequence first, then verify the Work log and final lifecycle.";
     const planText = "Plan updated\n- [~] Inspect files\n- [ ] Run checks";
+    const finalPrefix = "The focused Telegram sequence passes.";
+    const finalMiddle = `${finalPrefix} The final keeps streaming on its own Telegram message.`;
+    const finalAnswer = `${finalMiddle} Finalization preserves that message identity.`;
+    const finalPhase = { openclaw: { assistantPhase: "final_answer" } };
 
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        // Reproduce the live ordering: the provider first exposes a raw token,
-        // then the lane receives the complete accumulated acknowledgment.
+        // Reproduce the live provider snapshots that exposed two incomplete
+        // prefixes before the complete punctuated acknowledgment arrived.
         await replyOptions?.onPartialReply?.({ text: "I" });
         expect(sendMessageCalls(harness.calls).some((call) => call.text === "I")).toBe(false);
+        await replyOptions?.onPartialReply?.({ text: "I’ll rerun the" });
+        expect(sendMessageCalls(harness.calls).some((call) => call.text === "I’ll rerun the")).toBe(
+          false,
+        );
         await replyOptions?.onPartialReply?.({ text: acknowledgment });
         await vi.waitFor(() =>
           expect(sendMessageCalls(harness.calls).some((call) => call.text === acknowledgment)).toBe(
@@ -418,7 +427,18 @@ describe("dispatchTelegramMessage progress API sequence", () => {
           text: planText,
           channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
         });
-        await dispatcherOptions.deliver({ text: "Focused checks passed." }, { kind: "final" });
+        await replyOptions?.onPartialReply?.({ text: finalPrefix, channelData: finalPhase });
+        await vi.waitFor(() =>
+          expect(sendMessageCalls(harness.calls).some((call) => call.text === finalPrefix)).toBe(
+            true,
+          ),
+        );
+        await replyOptions?.onPartialReply?.({ text: finalMiddle, channelData: finalPhase });
+        await replyOptions?.onPartialReply?.({ text: finalAnswer, channelData: finalPhase });
+        await dispatcherOptions.deliver(
+          { text: finalAnswer, channelData: finalPhase },
+          { kind: "final" },
+        );
         return { queuedFinal: true };
       },
     );
@@ -438,23 +458,35 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     const collapsedWorkLogEdit = editMessageTextCalls(harness.calls).find(
       (call) => call.text === "Work log",
     );
-    expect(sendMessageCalls(harness.calls).some((call) => call.text === "I")).toBe(false);
+    const finalPreviewSend = sendMessageCalls(harness.calls).find(
+      (call) => call.text === finalPrefix,
+    );
+    const finalEdit = editMessageTextCalls(harness.calls).find((call) => call.text === finalAnswer);
+    expect(
+      sendMessageCalls(harness.calls).some(
+        (call) => call.text === "I" || call.text === "I’ll rerun the",
+      ),
+    ).toBe(false);
     expect(sendMessageCalls(harness.calls)[0]).toEqual(
       expect.objectContaining({ text: acknowledgment }),
     );
     expect(acknowledgmentSend).toBeDefined();
     expect(collapsedWorkLogEdit).toBeDefined();
+    expect(finalPreviewSend).toBeDefined();
+    expect(finalEdit).toBeDefined();
     expect(collapsedWorkLogEdit).toEqual(
       expect.objectContaining({ messageId: acknowledgmentSend!.messageId }),
     );
+    expect(finalPreviewSend!.messageId).not.toBe(acknowledgmentSend!.messageId);
+    expect(finalEdit).toEqual(expect.objectContaining({ messageId: finalPreviewSend!.messageId }));
 
     const acknowledgmentSendIndex = harness.calls.indexOf(acknowledgmentSend!);
     const collapsedWorkLogEditIndex = harness.calls.indexOf(collapsedWorkLogEdit!);
-    const finalSendIndex = harness.calls.findIndex(
-      (call) => call.op === "sendMessage" && call.text.includes("Focused checks passed."),
-    );
+    const finalSendIndex = harness.calls.indexOf(finalPreviewSend!);
+    const finalEditIndex = harness.calls.indexOf(finalEdit!);
     expect(acknowledgmentSendIndex).toBeLessThan(collapsedWorkLogEditIndex);
     expect(collapsedWorkLogEditIndex).toBeLessThan(finalSendIndex);
+    expect(finalSendIndex).toBeLessThan(finalEditIndex);
     expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
   });
 
