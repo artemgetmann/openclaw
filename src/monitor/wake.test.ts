@@ -1,7 +1,118 @@
 import { describe, expect, it } from "vitest";
+import { detectImageReferences } from "../agents/pi-embedded-runner/run/images.js";
 import { buildMonitorWakeMessage } from "./wake.js";
 
 describe("buildMonitorWakeMessage", () => {
+  it("keeps checkpoint media references out of the wake prompt without mutating checkpoint state", () => {
+    const checkpoint = {
+      id: "checkpoint-dld-91f",
+      checkedAt: "2026-07-13T01:23:45.000Z",
+      chatTarget: "+971507664706",
+      summary: "Feedback was confirmed and the conversation remains resolved.",
+      evidence: {
+        screenshotId: "screenshot-record-17",
+        feedbackConfirmationScreenshot:
+          "/Users/test/Library/Application Support/OpenClaw/media/91f-proof.jpg",
+        attachments: [
+          "file:///Users/test/Pictures/follow-up.png",
+          "https://cdn.example.com/proofs/confirmation.webp?version=2",
+          "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD",
+        ],
+        structuredMarkers: [
+          "[Image: source: /Users/test/proofs/feedback confirmation.png]",
+          "[Image: source: file:///Users/test/proofs/follow up.jpeg]",
+          "[Image: source: https://cdn.example.com/proofs/final confirmation.webp]",
+          "[media attached: /Users/test/proofs/media attachment.tiff (image/tiff)]",
+        ],
+        nativeImage: {
+          type: "image",
+          mimeType: "image/png",
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+        },
+      },
+    };
+    const checkpointBeforeWake = structuredClone(checkpoint);
+
+    // This proves the production checkpoint shape is sufficient to trigger the
+    // embedded runner's local prompt-image detection before sanitization.
+    expect(detectImageReferences(JSON.stringify(checkpoint))).not.toHaveLength(0);
+
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-13T01:30:00.000Z",
+      wakeReason: "cron:monitor-dld",
+      monitor: {
+        monitorId: "monitor-dld",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-dld",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823" },
+        cadence: { kind: "every", everyMs: 600_000 },
+        actionPolicy: "notify_only",
+        status: "active",
+        lastCheckpoint: checkpoint,
+        cronJobId: "cron-dld",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(detectImageReferences(message)).toEqual([]);
+    expect(message).not.toContain("91f-proof.jpg");
+    expect(message).not.toContain("file:///Users/test/Pictures/follow-up.png");
+    expect(message).not.toContain("https://cdn.example.com/proofs/confirmation.webp");
+    expect(message).not.toContain("data:image/jpeg;base64");
+    expect(message).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");
+    expect(message).not.toContain("feedback confirmation.png");
+    expect(message).not.toContain("follow up.jpeg");
+    expect(message).not.toContain("final confirmation.webp");
+    expect(message).not.toContain("media attachment.tiff");
+    expect(message).toContain("[media reference omitted]");
+    expect(message).toContain('"id":"checkpoint-dld-91f"');
+    expect(message).toContain('"checkedAt":"2026-07-13T01:23:45.000Z"');
+    expect(message).toContain('"chatTarget":"+971507664706"');
+    expect(message).toContain('"screenshotId":"screenshot-record-17"');
+    expect(message).toContain("Feedback was confirmed and the conversation remains resolved.");
+    expect(checkpoint).toEqual(checkpointBeforeWake);
+  });
+
+  it("bounds pathological checkpoint structures while retaining their useful prefix", () => {
+    const checkpoint: Record<string, unknown> = {
+      id: "checkpoint-pathological",
+      summary: "Keep this useful checkpoint prefix.",
+      oversizedText: "x".repeat(100_000),
+      oversizedList: Array.from({ length: 1_000 }, (_, index) => ({ index })),
+    };
+    // Persisted checkpoints are JSON, so cycles should not normally exist. The
+    // wake renderer still must fail closed if an in-memory caller supplies one.
+    checkpoint.circular = checkpoint;
+
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-13T01:30:00.000Z",
+      wakeReason: "cron:pathological",
+      monitor: {
+        monitorId: "monitor-pathological",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-pathological",
+        sourceType: "synthetic",
+        sourceTarget: { source: "proof" },
+        cadence: { kind: "every", everyMs: 600_000 },
+        actionPolicy: "notify_only",
+        status: "active",
+        lastCheckpoint: checkpoint,
+        cronJobId: "cron-pathological",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain('"id":"checkpoint-pathological"');
+    expect(message).toContain("Keep this useful checkpoint prefix.");
+    expect(message).toContain("omitted");
+    expect(message.length).toBeLessThan(30_000);
+  });
+
   it("tells the waking agent to treat checkpoint data as baseline instead of final authority", () => {
     const message = buildMonitorWakeMessage({
       nowIso: "2026-04-10T04:30:13.436Z",

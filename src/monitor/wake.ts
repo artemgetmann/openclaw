@@ -1,6 +1,153 @@
 import { buildMonitorAutonomyLines, buildMonitorNotificationLines } from "./prompt-contract.js";
 import type { MonitorRecord } from "./types.js";
 
+const CHECKPOINT_MEDIA_PLACEHOLDER = "[media reference omitted]";
+const CHECKPOINT_LIMIT_PLACEHOLDER = "[checkpoint content omitted: wake prompt limit reached]";
+const CHECKPOINT_MAX_RENDERED_CHARS = 16_000;
+const CHECKPOINT_IMAGE_EXTENSIONS = "(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|svg|ico)";
+const CHECKPOINT_DATA_IMAGE_REGEX = /data:image\/[a-z0-9.+-]+(?:;[^,\s]*)?,[^\s"'`<>]*/giu;
+const CHECKPOINT_IMAGE_REFERENCE_REGEX = new RegExp(
+  `(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~\\/|\\.\\.?\\/|\\/)[^\\s"'<>\\]\\[(){}]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s"'<>\\]\\[(){}]*)?`,
+  "giu",
+);
+const CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX = new RegExp(
+  `^\\s*(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~\\/|\\.\\.?\\/|\\/)[\\s\\S]*\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s]*)?\\s*$`,
+  "iu",
+);
+const CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX = new RegExp(
+  `\\[(?:Image:\\s*source:|media attached(?:\\s+\\d+\\/\\d+)?:)\\s*[^\\]\\r\\n]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}[^\\]\\r\\n]*\\]`,
+  "giu",
+);
+
+type CheckpointRenderState = {
+  remainingChars: number;
+  activeReferences: WeakSet<object>;
+};
+
+function replaceCheckpointMediaReferences(value: string): string {
+  // Whole-value matching catches paths containing spaces. Inline matching keeps useful prose around
+  // ordinary path/URL tokens while removing anything a prompt-image scanner could rehydrate.
+  if (CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX.test(value)) {
+    return CHECKPOINT_MEDIA_PLACEHOLDER;
+  }
+  return (
+    value
+      // Mirror the runner's structured markers before token matching so paths with spaces cannot
+      // survive as `[Image: source: ...]` or `[media attached: ...]` prompt references.
+      .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+      .replace(CHECKPOINT_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+      .replace(CHECKPOINT_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+  );
+}
+
+function takeCheckpointText(value: string, state: CheckpointRenderState): string {
+  const safe = replaceCheckpointMediaReferences(value);
+  const retained = safe.slice(0, Math.max(0, state.remainingChars));
+  state.remainingChars -= retained.length;
+  return retained.length < safe.length ? `${retained}${CHECKPOINT_LIMIT_PLACEHOLDER}` : retained;
+}
+
+function objectDeclaresImageContent(value: Record<string, unknown>): boolean {
+  return [value.mimeType, value.mediaType, value.contentType, value.type].some(
+    (entry) =>
+      typeof entry === "string" &&
+      (entry.toLowerCase().startsWith("image/") || entry.trim().toLowerCase() === "image"),
+  );
+}
+
+function isInlineImagePayload(key: string | undefined, parentDeclaresImage: boolean): boolean {
+  if (!key) {
+    return false;
+  }
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (parentDeclaresImage && /^(?:data|content|payload|base64|bytes)$/.test(normalized)) {
+    return true;
+  }
+  // `screenshotId` remains useful ordinary data; only explicit byte/content keys are removed.
+  return (
+    /(?:image|screenshot|photo|thumbnail)(?:data|content|payload|base64|bytes)$/.test(normalized) ||
+    /^(?:data|content|payload|base64|bytes)(?:image|screenshot|photo|thumbnail)/.test(normalized)
+  );
+}
+
+function sanitizeCheckpointValue(
+  value: unknown,
+  state: CheckpointRenderState,
+  keyHint?: string,
+  parentDeclaresImage = false,
+): unknown {
+  if (state.remainingChars <= 0) {
+    return CHECKPOINT_LIMIT_PLACEHOLDER;
+  }
+  // Charge every visited node against the same global budget. This bounds wide and deeply nested
+  // structures without separate depth, item, key, and node limits.
+  state.remainingChars -= 8;
+
+  if (typeof value === "string") {
+    return isInlineImagePayload(keyHint, parentDeclaresImage)
+      ? CHECKPOINT_MEDIA_PLACEHOLDER
+      : takeCheckpointText(value, state);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (state.activeReferences.has(value)) {
+    return "[checkpoint circular reference omitted]";
+  }
+
+  state.activeReferences.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const sanitized: unknown[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (state.remainingChars <= 0) {
+          sanitized.push(CHECKPOINT_LIMIT_PLACEHOLDER);
+          break;
+        }
+        sanitized.push(sanitizeCheckpointValue(value[index], state, keyHint, parentDeclaresImage));
+      }
+      return sanitized;
+    }
+
+    const source = value as Record<string, unknown>;
+    const declaresImage = objectDeclaresImageContent(source);
+    const sanitized: Record<string, unknown> = {};
+    for (const key in source) {
+      if (!Object.hasOwn(source, key)) {
+        continue;
+      }
+      if (state.remainingChars <= 0) {
+        sanitized.__wakePromptOmitted = CHECKPOINT_LIMIT_PLACEHOLDER;
+        break;
+      }
+      const safeKey = takeCheckpointText(key, state);
+      sanitized[safeKey] = sanitizeCheckpointValue(source[key], state, key, declaresImage);
+    }
+    return sanitized;
+  } finally {
+    state.activeReferences.delete(value);
+  }
+}
+
+function renderCheckpointForWake(checkpoint: Record<string, unknown>): string {
+  try {
+    // Half the hard output limit is used as traversal budget, leaving headroom for JSON punctuation
+    // and escaping. The final check is the single authoritative bound.
+    const sanitized = sanitizeCheckpointValue(checkpoint, {
+      remainingChars: Math.floor(CHECKPOINT_MAX_RENDERED_CHARS / 2),
+      activeReferences: new WeakSet<object>(),
+    });
+    const rendered = JSON.stringify(sanitized);
+    return rendered.length <= CHECKPOINT_MAX_RENDERED_CHARS
+      ? rendered
+      : JSON.stringify({ checkpoint: CHECKPOINT_LIMIT_PLACEHOLDER });
+  } catch {
+    // Persisted checkpoints are JSON. Fail closed for invalid in-memory values such as throwing
+    // getters; the monitor can still inspect fresh source state on this wake.
+    return JSON.stringify({ checkpoint: "[checkpoint omitted: unable to render safely]" });
+  }
+}
+
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -58,7 +205,7 @@ export function buildMonitorWakeMessage(params: {
     ...(monitor.stopCondition?.trim() ? [`stopCondition: ${monitor.stopCondition.trim()}`] : []),
     ...(monitor.expiryAt?.trim() ? [`expiryAt: ${monitor.expiryAt.trim()}`] : []),
     ...(monitor.lastCheckpoint
-      ? [`lastCheckpoint: ${JSON.stringify(monitor.lastCheckpoint)}`]
+      ? [`lastCheckpoint: ${renderCheckpointForWake(monitor.lastCheckpoint)}`]
       : ["lastCheckpoint: none"]),
     "",
     // The checkpoint is a baseline cursor, not a hidden workflow engine.
