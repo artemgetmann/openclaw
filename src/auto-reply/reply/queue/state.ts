@@ -1,5 +1,6 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
+import { ackDurableFollowupsForQueueSync, ackDurableFollowupsSync } from "./durable-store.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
 export type FollowupQueueState = {
@@ -12,6 +13,8 @@ export type FollowupQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  /** Durable IDs represented only by the RAM summary after overflow. */
+  summarizedDurableIds?: Set<string>;
   lastRun?: FollowupRun["run"];
 };
 
@@ -61,6 +64,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
+    summarizedDurableIds: new Set<string>(),
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -73,13 +77,26 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
   const queue = getExistingFollowupQueue(cleaned);
+  // Cancellation must remove both visible items and overflow records whose
+  // payloads were replaced by a process-local summary. Ack known IDs first,
+  // then scan by queue key for records not restored into RAM after startup.
+  if (queue) {
+    ackDurableFollowupsSync([
+      ...queue.items.flatMap((item) => [item.durableId, ...(item.durableIds ?? [])]),
+      ...(queue.summarizedDurableIds ?? []),
+    ]);
+  }
+  ackDurableFollowupsForQueueSync(cleaned);
   if (!queue) {
     return 0;
   }
   const cleared = queue.items.length + queue.droppedCount;
+  // Mutate RAM only after all disk acknowledgement succeeds, so an unlink or
+  // scan failure leaves the queue available for a safe cancellation retry.
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
+  queue.summarizedDurableIds?.clear();
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);

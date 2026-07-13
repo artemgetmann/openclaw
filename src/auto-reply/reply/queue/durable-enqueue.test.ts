@@ -15,7 +15,7 @@ vi.mock("./drain.js", () => ({
 const { enqueueFollowupRunDurable, getFollowupQueueDepth, restoreDurableFollowupRuns } =
   await import("./enqueue.js");
 const { retainSummarizedDurableFollowups, scheduleFollowupDrain } = await import("./drain.js");
-const { clearFollowupQueue } = await import("./state.js");
+const { clearFollowupQueue, FOLLOWUP_QUEUES } = await import("./state.js");
 
 const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 20 };
 let keySequence = 0;
@@ -75,8 +75,10 @@ describe("durable followup enqueue", () => {
     const secondKey = `${key}-second`;
     await enqueueFollowupRunDurable(key, createRun(), settings);
     await enqueueFollowupRunDurable(secondKey, createRun(), settings);
-    clearFollowupQueue(key);
-    clearFollowupQueue(secondKey);
+    // Simulate process-local RAM loss without invoking explicit cancellation,
+    // which now intentionally acknowledges the corresponding disk records.
+    FOLLOWUP_QUEUES.delete(key);
+    FOLLOWUP_QUEUES.delete(secondKey);
     const runFollowup = vi.fn(async () => undefined);
 
     await expect(restoreDurableFollowupRuns({ runFollowup })).resolves.toBe(2);
@@ -131,5 +133,8 @@ describe("durable followup enqueue", () => {
 
     await expect(enqueueFollowupRunDurable(key, createRun(), settings)).rejects.toThrow();
     expect(getFollowupQueueDepth(key)).toBe(0);
+    // Restore the valid test directory so cancellation cleanup can scan the
+    // durable store without masking this persistence-failure assertion.
+    process.env.OPENCLAW_STATE_DIR = stateDir;
   });
 });

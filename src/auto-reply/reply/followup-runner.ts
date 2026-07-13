@@ -23,6 +23,10 @@ import {
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import {
+  loadDurableFollowupDelivery,
+  persistDurableFollowupDelivery,
+} from "./queue/durable-store.js";
+import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
@@ -94,8 +98,12 @@ export function createFollowupRunner(params: {
     agentCfgContextTokens,
     failureMode = "absorb",
   } = params;
+  const resolveDurableIds = (queued: FollowupRun): string[] =>
+    [...new Set([queued.durableId, ...(queued.durableIds ?? [])])].filter((id): id is string =>
+      Boolean(id?.trim()),
+    );
   const shouldThrowProcessingFailure = (queued: FollowupRun): boolean =>
-    failureMode === "throw-durable" && Boolean(queued.durableId?.trim());
+    failureMode === "throw-durable" && resolveDurableIds(queued).length > 0;
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -176,6 +184,24 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
+      const durableIds = resolveDurableIds(queued);
+      const stagedDelivery =
+        queued.deliveryPayloads && queued.deliveryPayloads.length > 0
+          ? undefined
+          : await loadDurableFollowupDelivery(durableIds);
+      if (stagedDelivery?.delivery) {
+        // A prior attempt completed the agent/tool turn. Mutate this in-memory
+        // wrapper as well as using the disk payload so immediate retry and
+        // restart recovery both remain delivery-only.
+        queued.durableId = stagedDelivery.id;
+        queued.durableIds = stagedDelivery.delivery.sourceDurableIds;
+        queued.deliveryPayloads = stagedDelivery.delivery.payloads;
+      }
+      if (queued.deliveryPayloads && queued.deliveryPayloads.length > 0) {
+        await sendFollowupPayloads(queued.deliveryPayloads, queued);
+        return;
+      }
+
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -408,6 +434,21 @@ export function createFollowupRunner(params: {
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,
           });
+        }
+      }
+
+      if (durableIds.length > 0) {
+        // Commit model-complete output before touching the outbound provider.
+        // A routing error can now retry this payload without replaying tools or
+        // any other side effects from the already-completed agent turn.
+        const deliveryRecord = await persistDurableFollowupDelivery({
+          run: queued,
+          payloads: finalPayloads,
+        });
+        if (deliveryRecord?.delivery) {
+          queued.durableId = deliveryRecord.id;
+          queued.durableIds = deliveryRecord.delivery.sourceDurableIds;
+          queued.deliveryPayloads = deliveryRecord.delivery.payloads;
         }
       }
 

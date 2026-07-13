@@ -9,7 +9,9 @@ import {
 } from "./drain.js";
 import {
   ackDurableFollowup,
+  DurableFollowupCancelledError,
   hydrateDurableFollowup,
+  isDurableFollowupRecordCancelled,
   loadDurableFollowups,
   persistDurableFollowup,
 } from "./durable-store.js";
@@ -126,7 +128,22 @@ export async function enqueueFollowupRunDurable(
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
 ): Promise<boolean> {
-  const record = await persistDurableFollowup({ queueKey: key, run, settings });
+  let record;
+  try {
+    record = await persistDurableFollowup({ queueKey: key, run, settings });
+  } catch (err) {
+    if (err instanceof DurableFollowupCancelledError) {
+      return false;
+    }
+    throw err;
+  }
+  // The cancellation may run after persistence's post-write check but before
+  // this continuation resumes. From here through RAM enqueue is synchronous,
+  // so this final cutoff check closes the remaining interleaving window.
+  if (isDurableFollowupRecordCancelled(record)) {
+    await ackDurableFollowup(record.id);
+    return false;
+  }
   const beforeIds = new Set(
     (getExistingFollowupQueue(key)?.items ?? [])
       .map((item) => item.durableId)

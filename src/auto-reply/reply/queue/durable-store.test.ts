@@ -1,13 +1,33 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../../test-utils/env.js";
+
+const writeGate = vi.hoisted(() => ({
+  afterWrite: undefined as undefined | (() => Promise<void>),
+}));
+
+vi.mock("../../../infra/json-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../infra/json-files.js")>();
+  return {
+    ...actual,
+    writeJsonAtomic: async (...args: Parameters<typeof actual.writeJsonAtomic>) => {
+      await actual.writeJsonAtomic(...args);
+      await writeGate.afterWrite?.();
+    },
+  };
+});
+
 import {
   ackDurableFollowup,
+  ackDurableFollowupsForQueueSync,
+  DurableFollowupCancelledError,
   hydrateDurableFollowup,
+  loadDurableFollowupDelivery,
   loadDurableFollowups,
   persistDurableFollowup,
+  persistDurableFollowupDelivery,
 } from "./durable-store.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
@@ -43,6 +63,15 @@ function createRun(prompt = "queued while busy"): FollowupRun {
   };
 }
 
+/** Explicit test-only rendezvous; avoids relying on newer Promise helpers. */
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = () => resolvePromise();
+  });
+  return { promise, resolve };
+}
+
 describe("durable followup queue", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let stateDir: string;
@@ -54,6 +83,7 @@ describe("durable followup queue", () => {
   });
 
   afterEach(async () => {
+    writeGate.afterWrite = undefined;
     envSnapshot.restore();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -77,6 +107,72 @@ describe("durable followup queue", () => {
 
     const currentConfig = { channels: { telegram: { enabled: true } } };
     expect(hydrateDurableFollowup(record, currentConfig).run.config).toBe(currentConfig);
+  });
+
+  it("transitions constituent inputs into one delivery-only carrier", async () => {
+    const first = await persistDurableFollowup({
+      queueKey: "delivery-stage",
+      run: createRun("first input"),
+      settings,
+    });
+    const second = await persistDurableFollowup({
+      queueKey: "delivery-stage",
+      run: createRun("second input"),
+      settings,
+    });
+    const synthetic = createRun("collected input");
+    synthetic.durableIds = [first.id, second.id];
+    synthetic.run.config = { channels: { telegram: { botToken: "must-not-persist" } } };
+
+    const delivery = await persistDurableFollowupDelivery({
+      run: synthetic,
+      payloads: [{ text: "completed model output" }],
+    });
+
+    expect(delivery?.delivery?.sourceDurableIds).toEqual([first.id, second.id]);
+    await expect(loadDurableFollowups()).resolves.toEqual([delivery]);
+    await expect(loadDurableFollowupDelivery([second.id])).resolves.toEqual(delivery);
+    await expect(fs.readdir(path.join(stateDir, "followup-queue"))).resolves.toEqual([
+      `${delivery?.id}.json`,
+    ]);
+    const raw = await fs.readFile(
+      path.join(stateDir, "followup-queue", `${delivery?.id}.json`),
+      "utf8",
+    );
+    expect(raw).not.toContain("must-not-persist");
+    expect(hydrateDurableFollowup(delivery!, {}).deliveryPayloads).toEqual([
+      { text: "completed model output" },
+    ]);
+    await ackDurableFollowup(delivery?.id);
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("does not route a carrier rewritten after its queue was cancelled", async () => {
+    const carrier = await persistDurableFollowup({
+      queueKey: "cancelled-delivery-stage",
+      run: createRun("input to cancel"),
+      settings,
+    });
+    const enteredDeliveryWrite = createDeferred();
+    const resumeDeliveryWrite = createDeferred();
+    writeGate.afterWrite = async () => {
+      enteredDeliveryWrite.resolve();
+      await resumeDeliveryWrite.promise;
+    };
+
+    const delivery = persistDurableFollowupDelivery({
+      run: { ...createRun("completed input"), durableId: carrier.id },
+      payloads: [{ text: "must not be delivered" }],
+    });
+    await enteredDeliveryWrite.promise;
+    // This is the real problematic interleaving: cancellation scans away the
+    // old carrier after delivery read it, then delivery resumes and rewrites it.
+    ackDurableFollowupsForQueueSync("cancelled-delivery-stage");
+    resumeDeliveryWrite.resolve();
+
+    await expect(delivery).rejects.toBeInstanceOf(DurableFollowupCancelledError);
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(stateDir, "followup-queue"))).resolves.toEqual([]);
   });
 
   it("rejects a failed durable write so callers cannot acknowledge transport input", async () => {

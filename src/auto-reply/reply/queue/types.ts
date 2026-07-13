@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
-import type { SourceReplyDeliveryMode } from "../../types.js";
+import type { ReplyPayload, SourceReplyDeliveryMode } from "../../types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
@@ -26,6 +26,17 @@ export type FollowupRun = {
    * steering and test-only queues may remain process-local.
    */
   durableId?: string;
+  /**
+   * Disk records represented by a synthetic collect/summary turn. The wrapper
+   * has no single input record of its own, but failures must still preserve all
+   * constituent records for retry.
+   */
+  durableIds?: string[];
+  /**
+   * Model-complete output restored from disk. When present, the runner skips
+   * agent/tool execution and retries only outbound delivery.
+   */
+  deliveryPayloads?: ReplyPayload[];
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;

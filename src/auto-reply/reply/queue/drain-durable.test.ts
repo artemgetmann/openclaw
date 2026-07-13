@@ -3,10 +3,14 @@ import type { FollowupRun, QueueSettings } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   ackDurableFollowup: vi.fn(async () => undefined),
+  ackDurableFollowupsForQueueSync: vi.fn(),
+  ackDurableFollowupsSync: vi.fn(),
 }));
 
 vi.mock("./durable-store.js", () => ({
   ackDurableFollowup: mocks.ackDurableFollowup,
+  ackDurableFollowupsForQueueSync: mocks.ackDurableFollowupsForQueueSync,
+  ackDurableFollowupsSync: mocks.ackDurableFollowupsSync,
 }));
 
 const { enqueueFollowupRun } = await import("./enqueue.js");
@@ -50,6 +54,8 @@ describe("durable followup drain", () => {
       clearFollowupQueue(key);
     }
     mocks.ackDurableFollowup.mockClear();
+    mocks.ackDurableFollowupsForQueueSync.mockClear();
+    mocks.ackDurableFollowupsSync.mockClear();
   });
 
   it("acks every individually drained collect item after successful processing", async () => {
@@ -126,6 +132,9 @@ describe("durable followup drain", () => {
     await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(2));
     for (const [run] of runFollowup.mock.calls) {
       expect(run.prompt).toContain("queued durable-dropped");
+      expect(run.durableIds).toEqual(
+        expect.arrayContaining(["durable-dropped", "durable-carrier"]),
+      );
     }
     expect(mocks.ackDurableFollowup).not.toHaveBeenCalled();
     finishSummary?.();

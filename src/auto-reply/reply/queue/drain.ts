@@ -1,5 +1,5 @@
 import { defaultRuntime } from "../../../runtime.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -25,34 +25,30 @@ const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Pr
 /**
  * Durable records removed from the live item list by `drop:summarize` cannot
  * be deleted yet: their only replacement is the summary text held in RAM.
- * Keep their IDs process-global so module reloads observe the same ownership,
- * then acknowledge only the IDs included in a successfully processed summary.
+ * Keep their IDs on the process-global queue object so both successful drain
+ * and explicit cancellation can acknowledge the same ownership set.
  */
-const FOLLOWUP_SUMMARY_DURABLE_IDS_KEY = Symbol.for("openclaw.followupSummaryDurableIds");
-const FOLLOWUP_SUMMARY_DURABLE_IDS = resolveGlobalSingleton(
-  FOLLOWUP_SUMMARY_DURABLE_IDS_KEY,
-  () => new WeakMap<FollowupQueueState, Set<string>>(),
-);
-
 export function retainSummarizedDurableFollowups(
   queue: FollowupQueueState,
   ids: Iterable<string>,
 ): void {
-  let pending = FOLLOWUP_SUMMARY_DURABLE_IDS.get(queue);
+  const pending = (queue.summarizedDurableIds ??= new Set<string>());
   for (const id of ids) {
     if (!id.trim()) {
       continue;
     }
-    pending ??= new Set<string>();
     pending.add(id);
-  }
-  if (pending) {
-    FOLLOWUP_SUMMARY_DURABLE_IDS.set(queue, pending);
   }
 }
 
 function snapshotSummarizedDurableFollowups(queue: FollowupQueueState): string[] {
-  return [...(FOLLOWUP_SUMMARY_DURABLE_IDS.get(queue) ?? [])];
+  return [...(queue.summarizedDurableIds ?? [])];
+}
+
+function collectDurableIds(items: FollowupRun[], summarizedIds: string[] = []): string[] {
+  return [...new Set([...items.map((item) => item.durableId), ...summarizedIds])].filter(
+    (id): id is string => Boolean(id?.trim()),
+  );
 }
 
 async function ackSummarizedDurableFollowups(
@@ -66,12 +62,8 @@ async function ackSummarizedDurableFollowups(
   // IDs added while the summary turn is running are intentionally left for the
   // next summary snapshot, because the current prompt did not represent them.
   await Promise.all(ids.map((id) => ackDurableFollowup(id)));
-  const pending = FOLLOWUP_SUMMARY_DURABLE_IDS.get(queue);
   for (const id of ids) {
-    pending?.delete(id);
-  }
-  if (pending?.size === 0) {
-    FOLLOWUP_SUMMARY_DURABLE_IDS.delete(queue);
+    queue.summarizedDurableIds?.delete(id);
   }
 }
 
@@ -224,6 +216,9 @@ export function scheduleFollowupDrain(
             prompt,
             run,
             enqueuedAt: Date.now(),
+            // A collected turn is synthetic, but its failure semantics are not:
+            // every represented disk record must survive model/routing errors.
+            durableIds: collectDurableIds(items, summarizedDurableIds),
             ...routing,
           });
           // The collected turn represents every snapshotted item. Only remove
@@ -251,6 +246,9 @@ export function scheduleFollowupDrain(
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
+                // Include both the carrier item and overflow records represented
+                // only by this summary so delivery staging covers the full turn.
+                durableIds: collectDurableIds([item], summarizedDurableIds),
                 originatingChannel: item.originatingChannel,
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
