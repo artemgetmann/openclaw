@@ -595,6 +595,63 @@ describe("createFollowupRunner typing cleanup", () => {
     expectTypingCleanup(typing);
   });
 
+  it("rejects model failures in recovery mode so durable work is not acknowledged", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(
+      runner({ ...baseQueuedRun(), durableId: "durable-model-failure" }),
+    ).rejects.toThrow("agent exploded");
+    expectTypingCleanup(typing);
+  });
+
+  it("keeps absorbing non-durable model failures in durable-only recovery mode", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("legacy agent failure"));
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner(baseQueuedRun())).resolves.toBeUndefined();
+    expectTypingCleanup(typing);
+  });
+
+  it("rejects unrecovered route failures in recovery mode", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+    const queued = {
+      ...baseQueuedRun("webchat"),
+      durableId: "durable-route-failure",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    } as FollowupRun;
+
+    await expect(runner(queued)).rejects.toThrow("adapter unavailable");
+    expectTypingCleanup(typing);
+  });
+
   it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {
     const typing = createMockTypingController();
     const onBlockReply = vi.fn(async () => {});

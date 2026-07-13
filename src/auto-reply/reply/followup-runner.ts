@@ -60,6 +60,10 @@ export function createRestoredFollowupRunner(): (queued: FollowupRun) => Promise
       sessionKey,
       storePath,
       defaultModel: queued.run.model,
+      // A fulfilled callback is the queue's durable acknowledgement boundary.
+      // Recovery must reject model or unrecovered route failures so the record
+      // remains available for the next drain/restart attempt.
+      failureMode: "throw-durable",
     });
     await run(queued);
   };
@@ -75,6 +79,8 @@ export function createFollowupRunner(params: {
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
+  /** Preserve legacy behavior for RAM-only work; durable drains opt into rejection. */
+  failureMode?: "absorb" | "throw-durable";
 }): (queued: FollowupRun) => Promise<void> {
   const {
     opts,
@@ -86,7 +92,10 @@ export function createFollowupRunner(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    failureMode = "absorb",
   } = params;
+  const shouldThrowProcessingFailure = (queued: FollowupRun): boolean =>
+    failureMode === "throw-durable" && Boolean(queued.durableId?.trim());
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -108,6 +117,9 @@ export function createFollowupRunner(params: {
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
+      if (shouldThrowProcessingFailure(queued)) {
+        throw new Error("Followup reply routing failed: no delivery handler");
+      }
       return;
     }
 
@@ -152,6 +164,8 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply && origin && origin === provider) {
             await opts.onBlockReply(payload);
+          } else if (shouldThrowProcessingFailure(queued)) {
+            throw new Error(`Followup reply routing failed: ${errorMsg}`);
           }
         }
       } else if (opts?.onBlockReply) {
@@ -283,6 +297,9 @@ export function createFollowupRunner(params: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
+        if (shouldThrowProcessingFailure(queued)) {
+          throw err;
+        }
         return;
       }
 

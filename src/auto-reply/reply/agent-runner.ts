@@ -502,6 +502,10 @@ export async function runReplyAgent(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    // The same callback drains RAM-only and persisted items. Preserve legacy
+    // best-effort behavior for the former, but reject failed durable work so
+    // the queue cannot acknowledge its disk record as successfully processed.
+    failureMode: "throw-durable",
   });
 
   const initialHardReservePayload = buildHardReserveOverflowPayload(followupRun.prompt);

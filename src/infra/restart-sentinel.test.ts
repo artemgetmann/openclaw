@@ -8,6 +8,7 @@ import {
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
   markRestartContinuationConsumed,
+  markRestartContinuationFailed,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
@@ -181,6 +182,64 @@ describe("restart sentinel", () => {
       }),
     ).resolves.toBe(true);
     expect((await readRestartSentinel())?.operation?.delivery.continuation).toBe("delivered");
+  });
+
+  it("restores failed continuation state only before the operation expires", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "requested",
+      ts: Date.now(),
+      sessionKey: "agent:main:telegram:dm:123",
+    });
+    const operationId = (await readRestartSentinel())?.operation?.id;
+    expect(operationId).toBeTruthy();
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            delivery: { ...current.operation.delivery, continuation: "delivering" },
+          }
+        : undefined,
+    }));
+
+    await expect(
+      markRestartContinuationFailed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+        error: "agent execution failed",
+      }),
+    ).resolves.toBe(`restart:${operationId}`);
+    expect((await readRestartSentinel())?.operation?.delivery).toEqual(
+      expect.objectContaining({
+        continuation: "pending",
+        lastError: "agent execution failed",
+      }),
+    );
+
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            expiresAt: Date.now() - 1,
+            delivery: { ...current.operation.delivery, continuation: "delivering" },
+          }
+        : undefined,
+    }));
+    await expect(
+      markRestartContinuationFailed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+        error: "agent execution failed again",
+      }),
+    ).resolves.toBeNull();
+    expect((await readRestartSentinel())?.operation?.delivery).toEqual(
+      expect.objectContaining({
+        continuation: "skipped",
+        lastError: "restart operation expired after continuation failure",
+      }),
+    );
   });
 
   it("summarizes restart payloads and trims log tails without trailing whitespace", () => {

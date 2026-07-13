@@ -10,8 +10,8 @@ vi.mock("./durable-store.js", () => ({
 }));
 
 const { enqueueFollowupRun } = await import("./enqueue.js");
-const { scheduleFollowupDrain } = await import("./drain.js");
-const { clearFollowupQueue } = await import("./state.js");
+const { retainSummarizedDurableFollowups, scheduleFollowupDrain } = await import("./drain.js");
+const { clearFollowupQueue, getExistingFollowupQueue } = await import("./state.js");
 
 const settings: QueueSettings = {
   mode: "collect",
@@ -81,7 +81,7 @@ describe("durable followup drain", () => {
     const retryBarrier = new Promise<void>((resolve) => {
       releaseRetry = resolve;
     });
-    const runFollowup = vi.fn(async () => {
+    const runFollowup = vi.fn(async (_run: FollowupRun) => {
       if (runFollowup.mock.calls.length === 1) {
         throw new Error("agent processing failed");
       }
@@ -96,5 +96,41 @@ describe("durable followup drain", () => {
     releaseRetry?.();
     await vi.waitFor(() => expect(mocks.ackDurableFollowup).toHaveBeenCalledTimes(1));
     expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-retry");
+  });
+
+  it("acks summarized durable records only after the summary turn succeeds", async () => {
+    const key = `durable-summary-${Date.now()}`;
+    keys.push(key);
+    const summarySettings: QueueSettings = {
+      ...settings,
+      cap: 1,
+    };
+    let finishSummary: (() => void) | undefined;
+    const summaryBarrier = new Promise<void>((resolve) => {
+      finishSummary = resolve;
+    });
+    const runFollowup = vi.fn(async (_run: FollowupRun) => {
+      if (runFollowup.mock.calls.length === 1) {
+        throw new Error("summary processing failed");
+      }
+      await summaryBarrier;
+    });
+    enqueueFollowupRun(key, createRun("durable-dropped", "channel:A"), summarySettings, "none");
+    enqueueFollowupRun(key, createRun("durable-carrier", "channel:A"), summarySettings, "none");
+    // Durable enqueue transfers IDs removed by `drop:summarize` into the
+    // drain-owned pending set. This test isolates that acknowledgement phase.
+    retainSummarizedDurableFollowups(getExistingFollowupQueue(key)!, ["durable-dropped"]);
+
+    scheduleFollowupDrain(key, runFollowup);
+
+    await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(2));
+    for (const [run] of runFollowup.mock.calls) {
+      expect(run.prompt).toContain("queued durable-dropped");
+    }
+    expect(mocks.ackDurableFollowup).not.toHaveBeenCalled();
+    finishSummary?.();
+    await vi.waitFor(() => expect(mocks.ackDurableFollowup).toHaveBeenCalledTimes(2));
+    expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-dropped");
+    expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-carrier");
   });
 });

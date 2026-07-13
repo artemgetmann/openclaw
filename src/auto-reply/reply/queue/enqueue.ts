@@ -2,14 +2,18 @@ import { loadConfig } from "../../../config/config.js";
 import { createDedupeCache } from "../../../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle, scheduleFollowupDrain } from "./drain.js";
+import {
+  kickFollowupDrainIfIdle,
+  retainSummarizedDurableFollowups,
+  scheduleFollowupDrain,
+} from "./drain.js";
 import {
   ackDurableFollowup,
   hydrateDurableFollowup,
   loadDurableFollowups,
   persistDurableFollowup,
 } from "./durable-store.js";
-import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
+import { getExistingFollowupQueue, getFollowupQueue, type FollowupQueueState } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
 /**
@@ -138,12 +142,29 @@ export async function enqueueFollowupRunDurable(
       .map((item) => item.durableId)
       .filter((id): id is string => Boolean(id)),
   );
-  // A cap/drop-old decision is itself durable intent: records removed from RAM
-  // must also be removed from disk or a restart would resurrect dropped work.
-  await Promise.all(
-    [...beforeIds].filter((id) => !afterIds.has(id)).map((id) => ackDurableFollowup(id)),
-  );
+  await handleRemovedDurableFollowups({
+    queue: getExistingFollowupQueue(key),
+    beforeIds,
+    afterIds,
+  });
   return true;
+}
+
+async function handleRemovedDurableFollowups(params: {
+  queue: FollowupQueueState | undefined;
+  beforeIds: Set<string>;
+  afterIds: Set<string>;
+}): Promise<void> {
+  const removedIds = [...params.beforeIds].filter((id) => !params.afterIds.has(id));
+  if (params.queue?.dropPolicy === "summarize") {
+    // The replacement summary is process-local until its followup turn returns.
+    // Retaining these disk records makes a crash replay the original accepted
+    // messages instead of silently losing work represented only in RAM.
+    retainSummarizedDurableFollowups(params.queue, removedIds);
+    return;
+  }
+  // `drop:old` is explicit durable intent, so a restart must not resurrect it.
+  await Promise.all(removedIds.map((id) => ackDurableFollowup(id)));
 }
 
 /** Restore disk-backed items before channels begin accepting new updates. */
@@ -155,6 +176,13 @@ export async function restoreDurableFollowupRuns(params?: {
   const restoredQueueKeys = new Set<string>();
   let restored = 0;
   for (const record of records) {
+    const existingItems = getExistingFollowupQueue(record.queueKey)?.items ?? [];
+    if (existingItems.some((item) => item.durableId === record.id)) {
+      // Queue state is process-global and can survive a SIGUSR1 module reload.
+      // The durable directory remains the restore source, but one record must
+      // still correspond to at most one live queue item in this process.
+      continue;
+    }
     // The disk directory is already the dedupe source. In-memory message-id
     // caches may have survived a module reload, so they must not suppress a
     // record whose durable acknowledgement still exists.
@@ -178,9 +206,11 @@ export async function restoreDurableFollowupRuns(params?: {
           .map((item) => item.durableId)
           .filter((id): id is string => Boolean(id)),
       );
-      await Promise.all(
-        [...before].filter((id) => !after.has(id)).map((id) => ackDurableFollowup(id)),
-      );
+      await handleRemovedDurableFollowups({
+        queue: getExistingFollowupQueue(record.queueKey),
+        beforeIds: before,
+        afterIds: after,
+      });
     }
   }
   if (params?.runFollowup) {

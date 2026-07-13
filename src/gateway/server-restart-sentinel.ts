@@ -23,6 +23,8 @@ import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/deliv
 import { loadSessionEntry } from "./session-utils.js";
 
 const withRestartOperationLock = createAsyncLock();
+const RESTART_OPERATION_RETRY_MS = 1_000;
+const restartOperationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const RESTART_CONTINUATION_PROMPT = [
   "The gateway restarted while this session had active work.",
@@ -36,6 +38,50 @@ function buildRecoveryReceipt(operation: RestartOperationRecord): string {
   return detail
     ? `Gateway restarted and is back online. ${detail}`
     : "Gateway restarted and is back online.";
+}
+
+function clearRestartOperationRetry(operationId: string): void {
+  const timer = restartOperationRetryTimers.get(operationId);
+  if (timer) {
+    clearTimeout(timer);
+    restartOperationRetryTimers.delete(operationId);
+  }
+}
+
+function scheduleRestartOperationRetry(params: {
+  operationId: string;
+  expiresAt: number;
+  deps: CliDeps;
+}): void {
+  if (restartOperationRetryTimers.has(params.operationId)) {
+    return;
+  }
+  const remainingMs = params.expiresAt - Date.now();
+  if (remainingMs <= 0) {
+    return;
+  }
+
+  // Reconciliation remains idempotent under the operation lock. The timer is
+  // process-local by design: a process restart gets a fresh startup attempt,
+  // while expiresAt remains the durable upper bound across every process.
+  const delayMs = Math.min(RESTART_OPERATION_RETRY_MS, remainingMs);
+  const timer = setTimeout(() => {
+    restartOperationRetryTimers.delete(params.operationId);
+    void scheduleRestartSentinelWake({ deps: params.deps }).catch(() => {
+      // A transient sentinel I/O failure should not permanently strand the
+      // operation. Retry again only while the original durable TTL permits it.
+      scheduleRestartOperationRetry(params);
+    });
+  }, delayMs);
+  timer.unref?.();
+  restartOperationRetryTimers.set(params.operationId, timer);
+}
+
+export function resetRestartOperationRetryStateForTests(): void {
+  for (const timer of restartOperationRetryTimers.values()) {
+    clearTimeout(timer);
+  }
+  restartOperationRetryTimers.clear();
 }
 
 async function markOperationDelivery(params: {
@@ -65,10 +111,12 @@ async function markOperationDelivery(params: {
 
 async function reconcileRestartOperation(params: {
   operation: RestartOperationRecord;
+  deps: CliDeps;
 }): Promise<void> {
   const { operation } = params;
   const now = Date.now();
   if (operation.expiresAt <= now) {
+    clearRestartOperationRetry(operation.id);
     await updateRestartSentinel((current) => {
       if (!current.operation || current.operation.id !== operation.id) {
         return current;
@@ -114,6 +162,7 @@ async function reconcileRestartOperation(params: {
 
   const fresh = (await readRestartSentinel())?.operation;
   if (!fresh || fresh.id !== operation.id || fresh.recovery.state === "error") {
+    clearRestartOperationRetry(operation.id);
     return;
   }
 
@@ -158,6 +207,7 @@ async function reconcileRestartOperation(params: {
         }
       }
       await markOperationDelivery({ operationId: fresh.id, field: "receipt", state: "delivered" });
+      clearRestartOperationRetry(fresh.id);
     } catch (err) {
       // A definite pre-send failure is retryable. Provider acceptance followed
       // by a transport error remains the standard unavoidable exactly-once gap.
@@ -166,6 +216,11 @@ async function reconcileRestartOperation(params: {
         field: "receipt",
         state: "pending",
         error: String(err),
+      });
+      scheduleRestartOperationRetry({
+        operationId: fresh.id,
+        expiresAt: fresh.expiresAt,
+        deps: params.deps,
       });
       return;
     }
@@ -204,13 +259,13 @@ async function reconcileRestartOperation(params: {
   );
 }
 
-export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
+export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const persisted = await readRestartSentinel();
   if (persisted?.operation) {
     await withRestartOperationLock(async () => {
       const current = await readRestartSentinel();
       if (current?.operation) {
-        await reconcileRestartOperation({ operation: current.operation });
+        await reconcileRestartOperation({ operation: current.operation, deps: params.deps });
       }
     });
     return;

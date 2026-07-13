@@ -24,6 +24,7 @@ import {
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
+import * as heartbeatWake from "./heartbeat-wake.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
@@ -32,6 +33,7 @@ import * as restartSentinel from "./restart-sentinel.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEvent,
+  peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "./system-events.js";
 
@@ -1599,11 +1601,15 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("does not ack a consumed restart event when the agent call fails", async () => {
+  it("requeues a consumed restart event when the agent call fails", async () => {
     const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-failed");
     const ackSpy = vi
       .spyOn(restartSentinel, "markRestartContinuationConsumed")
       .mockResolvedValue(true);
+    const failureSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationFailed")
+      .mockResolvedValue("restart:op-failed");
+    const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     replySpy.mockImplementation(async () => {
       drainSystemEventEntries(sessionKey);
@@ -1619,9 +1625,27 @@ describe("runHeartbeatOnce", () => {
 
       expect(result).toEqual({ status: "failed", reason: "agent execution failed" });
       expect(ackSpy).not.toHaveBeenCalled();
+      expect(failureSpy).toHaveBeenCalledWith({
+        sessionKey,
+        contextKeys: ["restart:op-failed"],
+        error: "agent execution failed",
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({
+          text: "Reassess safely after restart",
+          contextKey: "restart:op-failed",
+        }),
+      ]);
+      expect(wakeSpy).toHaveBeenCalledWith({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: 1_000,
+      });
     } finally {
       replySpy.mockRestore();
       ackSpy.mockRestore();
+      failureSpy.mockRestore();
+      wakeSpy.mockRestore();
     }
   });
 });

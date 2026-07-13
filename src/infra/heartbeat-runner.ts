@@ -82,8 +82,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { markRestartContinuationConsumed } from "./restart-sentinel.js";
-import { peekSystemEventEntries } from "./system-events.js";
+import {
+  markRestartContinuationConsumed,
+  markRestartContinuationFailed,
+} from "./restart-sentinel.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -93,6 +96,7 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
+const RESTART_CONTINUATION_RETRY_MS = 1_000;
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
 export {
@@ -1196,6 +1200,42 @@ export async function runHeartbeatOnce(opts: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
+    const remainingEventContexts = new Set(
+      peekSystemEventEntries(sessionKey).map((event) => event.contextKey),
+    );
+    const consumedRestartEvents = preflight.pendingEventEntries.filter(
+      (event) =>
+        Boolean(event.contextKey?.startsWith("restart:")) &&
+        !remainingEventContexts.has(event.contextKey),
+    );
+    if (consumedRestartEvents.length > 0) {
+      try {
+        // Agent setup drains system events before model execution. If that
+        // execution fails, restore only the matching restart event after the
+        // durable sentinel is replayable again. TTL enforcement in the
+        // sentinel helper bounds repeated failures without widening its schema.
+        const retryContextKey = await markRestartContinuationFailed({
+          sessionKey,
+          contextKeys: consumedRestartEvents.map((event) => event.contextKey),
+          error: reason,
+        });
+        const retryEvent = retryContextKey
+          ? consumedRestartEvents.find(
+              (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
+            )
+          : undefined;
+        if (retryEvent && retryContextKey) {
+          enqueueSystemEvent(retryEvent.text, { sessionKey, contextKey: retryContextKey });
+          requestHeartbeatNow({
+            reason: "restart-continuation",
+            sessionKey,
+            coalesceMs: RESTART_CONTINUATION_RETRY_MS,
+          });
+        }
+      } catch (reconcileError) {
+        log.warn(`heartbeat: failed to reconcile restart continuation: ${String(reconcileError)}`);
+      }
+    }
     emitHeartbeatEvent({
       status: "failed",
       reason,

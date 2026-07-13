@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinel } from "../infra/restart-sentinel.js";
 
 type MockOutboundParams = {
@@ -105,7 +105,13 @@ vi.mock("../infra/system-events.js", () => ({
   peekSystemEventEntries: mocks.peekSystemEventEntries,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const { resetRestartOperationRetryStateForTests, scheduleRestartSentinelWake } =
+  await import("./server-restart-sentinel.js");
+
+afterEach(() => {
+  resetRestartOperationRetryStateForTests();
+  vi.useRealTimers();
+});
 
 describe("scheduleRestartSentinelWake", () => {
   it("forwards session context to outbound delivery", async () => {
@@ -267,5 +273,50 @@ describe("scheduleRestartSentinelWake", () => {
     expect(readState().operation?.delivery.receipt).toBe("pending");
     expect(readState().operation?.delivery.lastError).toContain("provider rejected payload");
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient receipt failure in-process", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T10:00:00.000Z"));
+    const readState = installOperation();
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloads
+      .mockRejectedValueOnce(new Error("provider temporarily offline"))
+      .mockResolvedValueOnce([]);
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(readState().operation?.delivery.receipt).toBe("pending");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(readState().operation?.delivery.receipt).toBe("delivered");
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ contextKey: "restart:op-1" }),
+    );
+  });
+
+  it("stops retrying receipt delivery at the operation TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T10:00:00.000Z"));
+    const readState = installOperation({ expiresAt: Date.now() + 1_500 });
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloads.mockRejectedValue(new Error("provider offline"));
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(readState().operation?.delivery).toEqual(
+      expect.objectContaining({ receipt: "skipped", continuation: "skipped" }),
+    );
   });
 });

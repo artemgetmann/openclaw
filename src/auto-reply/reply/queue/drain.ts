@@ -1,9 +1,8 @@
 import { defaultRuntime } from "../../../runtime.js";
-import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
-  clearQueueSummaryState,
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
@@ -12,7 +11,7 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { ackDurableFollowup } from "./durable-store.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { FOLLOWUP_QUEUES, type FollowupQueueState } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
@@ -22,6 +21,97 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
+
+/**
+ * Durable records removed from the live item list by `drop:summarize` cannot
+ * be deleted yet: their only replacement is the summary text held in RAM.
+ * Keep their IDs process-global so module reloads observe the same ownership,
+ * then acknowledge only the IDs included in a successfully processed summary.
+ */
+const FOLLOWUP_SUMMARY_DURABLE_IDS_KEY = Symbol.for("openclaw.followupSummaryDurableIds");
+const FOLLOWUP_SUMMARY_DURABLE_IDS = resolveGlobalSingleton(
+  FOLLOWUP_SUMMARY_DURABLE_IDS_KEY,
+  () => new WeakMap<FollowupQueueState, Set<string>>(),
+);
+
+export function retainSummarizedDurableFollowups(
+  queue: FollowupQueueState,
+  ids: Iterable<string>,
+): void {
+  let pending = FOLLOWUP_SUMMARY_DURABLE_IDS.get(queue);
+  for (const id of ids) {
+    if (!id.trim()) {
+      continue;
+    }
+    pending ??= new Set<string>();
+    pending.add(id);
+  }
+  if (pending) {
+    FOLLOWUP_SUMMARY_DURABLE_IDS.set(queue, pending);
+  }
+}
+
+function snapshotSummarizedDurableFollowups(queue: FollowupQueueState): string[] {
+  return [...(FOLLOWUP_SUMMARY_DURABLE_IDS.get(queue) ?? [])];
+}
+
+async function ackSummarizedDurableFollowups(
+  queue: FollowupQueueState,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) {
+    return;
+  }
+  // Delete from the in-memory ownership set only after every disk ack succeeds.
+  // IDs added while the summary turn is running are intentionally left for the
+  // next summary snapshot, because the current prompt did not represent them.
+  await Promise.all(ids.map((id) => ackDurableFollowup(id)));
+  const pending = FOLLOWUP_SUMMARY_DURABLE_IDS.get(queue);
+  for (const id of ids) {
+    pending?.delete(id);
+  }
+  if (pending?.size === 0) {
+    FOLLOWUP_SUMMARY_DURABLE_IDS.delete(queue);
+  }
+}
+
+type QueueSummarySnapshot = Pick<
+  FollowupQueueState,
+  "dropPolicy" | "droppedCount" | "summaryLines"
+>;
+
+function captureQueueSummaryState(queue: FollowupQueueState): QueueSummarySnapshot {
+  return {
+    dropPolicy: queue.dropPolicy,
+    droppedCount: queue.droppedCount,
+    summaryLines: [...queue.summaryLines],
+  };
+}
+
+function renderQueueSummarySnapshot(snapshot: QueueSummarySnapshot): string | undefined {
+  // The shared prompt helper consumes its input. Render from a clone so failed
+  // processing leaves the live summary available for the next drain attempt.
+  return previewQueueSummaryPrompt({
+    state: { ...snapshot, summaryLines: [...snapshot.summaryLines] },
+    noun: "message",
+  });
+}
+
+function consumeQueueSummarySnapshot(
+  queue: FollowupQueueState,
+  snapshot: QueueSummarySnapshot,
+): void {
+  if (snapshot.droppedCount <= 0) {
+    return;
+  }
+  // Enqueue can append more drops while the summary turn is running. Consume
+  // only the snapshotted prefix; keep the newest bounded lines for the next
+  // prompt instead of clearing work the successful turn never represented.
+  const newerDroppedCount = Math.max(0, queue.droppedCount - snapshot.droppedCount);
+  const newerLineCount = Math.min(newerDroppedCount, queue.cap, queue.summaryLines.length);
+  queue.droppedCount = newerDroppedCount;
+  queue.summaryLines = newerLineCount > 0 ? queue.summaryLines.slice(-newerLineCount) : [];
+}
 
 export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
@@ -114,7 +204,9 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+          const summaryState = captureQueueSummaryState(queue);
+          const summarizedDurableIds = snapshotSummarizedDurableFollowups(queue);
+          const summary = renderQueueSummarySnapshot(summaryState);
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
@@ -137,14 +229,17 @@ export function scheduleFollowupDrain(
           // The collected turn represents every snapshotted item. Only remove
           // their records after the agent turn and reply routing both return.
           await Promise.all(items.map((item) => ackDurableFollowup(item.durableId)));
-          queue.items.splice(0, items.length);
           if (summary) {
-            clearQueueSummaryState(queue);
+            await ackSummarizedDurableFollowups(queue, summarizedDurableIds);
+            consumeQueueSummarySnapshot(queue, summaryState);
           }
+          queue.items.splice(0, items.length);
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+        const summaryState = captureQueueSummaryState(queue);
+        const summarizedDurableIds = snapshotSummarizedDurableFollowups(queue);
+        const summaryPrompt = renderQueueSummarySnapshot(summaryState);
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {
@@ -162,11 +257,12 @@ export function scheduleFollowupDrain(
                 originatingThreadId: item.originatingThreadId,
               });
               await ackDurableFollowup(item.durableId);
+              await ackSummarizedDurableFollowups(queue, summarizedDurableIds);
+              consumeQueueSummarySnapshot(queue, summaryState);
             }))
           ) {
             break;
           }
-          clearQueueSummaryState(queue);
           continue;
         }
 

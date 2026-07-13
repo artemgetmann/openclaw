@@ -8,12 +8,13 @@ import type { FollowupRun, QueueSettings } from "./types.js";
 
 vi.mock("./drain.js", () => ({
   kickFollowupDrainIfIdle: vi.fn(),
+  retainSummarizedDurableFollowups: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
 }));
 
 const { enqueueFollowupRunDurable, getFollowupQueueDepth, restoreDurableFollowupRuns } =
   await import("./enqueue.js");
-const { scheduleFollowupDrain } = await import("./drain.js");
+const { retainSummarizedDurableFollowups, scheduleFollowupDrain } = await import("./drain.js");
 const { clearFollowupQueue } = await import("./state.js");
 
 const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 20 };
@@ -54,6 +55,7 @@ describe("durable followup enqueue", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     keySequence += 1;
     key = `queue-${Date.now()}-${keySequence}`;
+    vi.mocked(retainSummarizedDurableFollowups).mockClear();
     vi.mocked(scheduleFollowupDrain).mockClear();
   });
 
@@ -84,6 +86,42 @@ describe("durable followup enqueue", () => {
     expect(scheduleFollowupDrain).toHaveBeenCalledWith(key, runFollowup);
     expect(scheduleFollowupDrain).toHaveBeenCalledWith(secondKey, runFollowup);
     clearFollowupQueue(secondKey);
+  });
+
+  it("does not restore a durable ID that is already present in the global queue", async () => {
+    await enqueueFollowupRunDurable(key, createRun(), settings);
+    const runFollowup = vi.fn(async () => undefined);
+
+    await expect(restoreDurableFollowupRuns({ runFollowup })).resolves.toBe(0);
+
+    expect(getFollowupQueueDepth(key)).toBe(1);
+    expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+    await expect(loadDurableFollowups()).resolves.toHaveLength(1);
+  });
+
+  it("retains summarized durable records until the RAM-only summary is processed", async () => {
+    const summarizeSettings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    await enqueueFollowupRunDurable(key, createRun(), summarizeSettings);
+    const firstRecord = (await loadDurableFollowups())[0];
+    if (!firstRecord) {
+      throw new Error("expected the first durable record");
+    }
+    await enqueueFollowupRunDurable(
+      key,
+      { ...createRun(), prompt: "second queued message", messageId: "telegram:102" },
+      summarizeSettings,
+    );
+
+    expect(getFollowupQueueDepth(key)).toBe(1);
+    expect(retainSummarizedDurableFollowups).toHaveBeenLastCalledWith(expect.anything(), [
+      firstRecord.id,
+    ]);
+    await expect(loadDurableFollowups()).resolves.toHaveLength(2);
   });
 
   it("does not mutate RAM when persistence fails", async () => {

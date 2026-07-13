@@ -285,6 +285,64 @@ export async function markRestartContinuationConsumed(params: {
   return marked;
 }
 
+/**
+ * Reconcile a restart continuation whose agent run failed after draining its
+ * tagged event. The caller owns restoring the in-memory event; this function
+ * only restores durable replay state and refuses retries after operation TTL.
+ */
+export async function markRestartContinuationFailed(params: {
+  sessionKey: string;
+  contextKeys: Iterable<string | null | undefined>;
+  error: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string | null> {
+  const operationIds = new Set<string>();
+  for (const contextKey of params.contextKeys) {
+    const normalized = contextKey?.trim().toLowerCase();
+    if (normalized?.startsWith("restart:") && normalized.length > "restart:".length) {
+      operationIds.add(normalized.slice("restart:".length));
+    }
+  }
+  if (operationIds.size === 0) {
+    return null;
+  }
+
+  const now = Date.now();
+  let retryContextKey: string | null = null;
+  await updateRestartSentinel((current) => {
+    const operation = current.operation;
+    if (
+      !operation ||
+      !operationIds.has(operation.id.toLowerCase()) ||
+      operation.sessionKey !== params.sessionKey ||
+      (operation.delivery.continuation !== "pending" &&
+        operation.delivery.continuation !== "delivering")
+    ) {
+      return current;
+    }
+
+    const expired = operation.expiresAt <= now;
+    if (!expired) {
+      retryContextKey = `restart:${operation.id}`;
+    }
+    return {
+      ...current,
+      operation: {
+        ...operation,
+        delivery: {
+          ...operation.delivery,
+          continuation: expired ? "skipped" : "pending",
+          updatedAt: now,
+          lastError: expired
+            ? "restart operation expired after continuation failure"
+            : params.error,
+        },
+      },
+    };
+  }, params.env);
+  return retryContextKey;
+}
+
 export async function readRestartRecoveryMarker(
   operationId: string,
   env: NodeJS.ProcessEnv = process.env,
