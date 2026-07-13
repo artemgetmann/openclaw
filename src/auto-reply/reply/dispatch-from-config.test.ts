@@ -3,6 +3,8 @@ import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { buildMonitorReceiptChannelData, formatMonitorReceipt } from "../../monitor/receipt.js";
+import type { MonitorDisclosure } from "../../monitor/types.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -1014,7 +1016,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("voices an inbound audio turn even when typed-message TTS is off", async () => {
+  it("does not voice an inbound audio turn after an explicit session /tts off", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     sessionStoreMocks.currentEntry = {
@@ -1040,13 +1042,46 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         kind: "final",
         inboundAudio: true,
-        ttsAuto: "inbound",
+        ttsAuto: "off",
         payload: { text: "Final voice response." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final voice response." });
+  });
+
+  it("voices an inbound audio turn when no explicit session TTS mode exists", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {};
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      MediaType: "audio/ogg",
+      SessionKey: "agent:main:telegram:direct:voice-in-default",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(
+        async () => ({ text: "Default voice response." }) satisfies ReplyPayload,
+      ),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: true,
+        ttsAuto: "inbound",
+        payload: { text: "Default voice response." },
       }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "Final voice response.",
+        text: "Default voice response.",
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
       }),
@@ -1249,6 +1284,48 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers monitor receipts unchanged while suppressing ordinary Telegram tool text", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:monitor-receipt",
+    });
+    const disclosure = {
+      purpose: "Watch support replies",
+      source: { type: "gmail", target: { threadId: "thread-1" } },
+      checkCadence: { kind: "every", everyMs: 300_000 },
+      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+      expiryAt: null,
+      stopCondition: null,
+      autonomy: { level: "observe_only" },
+      actionPolicy: "notify_draft",
+    } satisfies MonitorDisclosure;
+    const receiptPayload = {
+      text: formatMonitorReceipt(disclosure),
+      channelData: buildMonitorReceiptChannelData(disclosure),
+    } satisfies ReplyPayload;
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.(receiptPayload);
+      await opts?.onToolResult?.({ text: "ordinary internal tool text" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(receiptPayload);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hi" });
   });
 
   it("suppresses Telegram tool summaries even in verbose DM sessions", async () => {
@@ -1833,6 +1910,61 @@ describe("dispatchReplyFromConfig", () => {
         },
       }),
     );
+  });
+
+  it("synthesizes a block-stream TTS supplement from the exact finalized answer only", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const acknowledgment = "I’ll inspect the live path first.";
+    const progress = "The gateway ledger confirms the preview ordering.";
+    const finalText = "The final answer contains only the verified result.";
+    // Telegram is authoritative here: its finalizer removes retained progress
+    // from the accumulated block transcript before voice synthesis begins.
+    (dispatcher.finalizeBlockReply as ReturnType<typeof vi.fn>).mockResolvedValueOnce(finalText);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: acknowledgment });
+      await opts?.onBlockReply?.({ text: progress });
+      await opts?.onBlockReply?.({ text: finalText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const finalTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls.filter(
+      ([call]) => (call as { kind?: string }).kind === "final",
+    );
+    expect(finalTtsCalls).toHaveLength(1);
+    expect(finalTtsCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        text: finalText,
+      }),
+    );
+    const supplementText = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[1]?.[0]?.text;
+    expect(supplementText).toBe(finalText);
+    expect(supplementText).not.toContain(acknowledgment);
+    expect(supplementText).not.toContain(progress);
   });
 
   it("keeps structured Telegram final text intact when persisted TTS is on", async () => {

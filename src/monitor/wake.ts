@@ -1,3 +1,4 @@
+import { buildMonitorAutonomyLines, buildMonitorNotificationLines } from "./prompt-contract.js";
 import type { MonitorRecord } from "./types.js";
 
 function readOptionalString(value: unknown): string | undefined {
@@ -65,9 +66,15 @@ export function buildMonitorWakeMessage(params: {
     "If fresh source inspection finds a new actionable change after an older resolved-looking checkpoint, keep the monitor active and continue the task.",
     "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     "Use normal tools/skills to inspect fresh source state.",
+    ...buildMonitorAutonomyLines(monitor.goal),
+    ...buildMonitorNotificationLines({
+      policy: monitor.notificationPolicy,
+      state: monitor.notificationState,
+    }),
     "Evaluate after this wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
-    ...(monitor.actionPolicy === "auto_send"
+    ...(monitor.actionPolicy === "auto_send" &&
+    (!monitor.goal || monitor.goal.autonomy?.level === "act_within_scope")
       ? telegramUserChat && watchDeliveryConfigured
         ? [
             `Telegram-as-me watched-surface delivery is authorized and configured for chat ${telegramUserChat}.`,
@@ -91,8 +98,16 @@ export function buildMonitorWakeMessage(params: {
             ]
           : [
               "auto_send was requested, but no watched-surface delivery target is configured.",
-              "Do not send on the watched surface until a watched-surface delivery target is configured.",
-              "Report the missing delivery target through the origin chat instead.",
+              ...(monitor.goal?.autonomy?.level === "act_within_scope"
+                ? [
+                    "Only the delivery adapter is unavailable; the goal's act_within_scope autonomy remains intact.",
+                    "Use an available normal tool or skill path for an allowed action when one exists, and preserve every approval-required boundary.",
+                    "Do not use the unavailable adapter. If no authorized normal path exists, report that specific gap through the origin chat.",
+                  ]
+                : [
+                    "Do not send on the watched surface until a watched-surface delivery target is configured.",
+                    "Report the missing delivery target through the origin chat instead.",
+                  ]),
             ]
       : [
           "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",

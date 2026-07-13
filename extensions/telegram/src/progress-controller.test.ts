@@ -113,6 +113,44 @@ describe("createTelegramProgressController", () => {
     expect(controller.messageId()).toBe(88);
   });
 
+  it("reopens the progress stream when acknowledgment materialization has no message id", async () => {
+    const adoptedStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockReturnValue(undefined),
+      previewMode: vi.fn().mockReturnValue("draft"),
+      previewRevision: vi.fn().mockReturnValue(1),
+      lastDeliveredText: vi.fn().mockReturnValue("I’ll inspect the files, then run tests."),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      materialize: vi.fn().mockResolvedValue(undefined),
+      forceNewMessage: vi.fn(),
+      sendMayHaveLanded: vi.fn().mockReturnValue(false),
+    };
+    const controller = createTelegramProgressController({
+      api: {} as Bot["api"],
+      chatId: 123,
+      maxChars: 4096,
+      minInitialChars: 1,
+      stream: adoptedStream,
+      renderText: (text) => ({ text }),
+    });
+
+    controller.update("I’ll inspect the files, then run tests.");
+    await expect(controller.materialize()).resolves.toBeUndefined();
+    controller.updatePlan("Plan updated\n- [~] Inspect files\n- [ ] Run tests");
+
+    // materialize() stops a Telegram draft even when it cannot return an ID.
+    // The replacement plan must therefore reopen a new preview generation.
+    expect(adoptedStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(adoptedStream.forceNewMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      adoptedStream.update.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
+    );
+    expect(adoptedStream.update).toHaveBeenLastCalledWith(
+      "I’ll inspect the files, then run tests.\n\nPlan updated\n- [~] Inspect files\n- [ ] Run tests",
+    );
+  });
+
   it("can discard pending progress edits before deleting the visible final-bound bubble", async () => {
     const adoptedStream = {
       update: vi.fn(),
@@ -186,6 +224,30 @@ describe("createTelegramProgressController", () => {
     });
   });
 
+  it("retains acknowledgment, latest plan, and commentary in first-seen Work log order", async () => {
+    const { api, controller, resolveFirstSend } = createProgressControllerHarness();
+
+    controller.update("I’ll inspect the package first, then run the checks.");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    resolveFirstSend?.({ message_id: 77 });
+    controller.updatePlan("Plan updated\n- [~] Inspect package\n- [ ] Run checks");
+    controller.update("The package is confirmed; I’m running the checks now.");
+    controller.updatePlan("Plan updated\n- [x] Inspect package\n- [~] Run checks");
+    await controller.retainAsWorkLog({ toolNames: ["exec"] });
+
+    const workLog = getTelegramWorkLog("1");
+    expect(workLog).toBeDefined();
+    expect(renderTelegramWorkLog(workLog!, true)).toEqual({
+      text: [
+        "Work log",
+        "I’ll inspect the package first, then run the checks.",
+        "Plan updated\n- [x] Inspect package\n- [~] Run checks",
+        "The package is confirmed; I’m running the checks now.",
+      ].join("\n\n"),
+      buttons: [[{ text: "Hide", callback_data: "wl:1:hide" }]],
+    });
+  });
+
   it("dedupes repeated progress entries while preserving first-seen order", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
@@ -213,7 +275,7 @@ describe("createTelegramProgressController", () => {
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
   });
 
-  it("uses replace text as the new baseline for later appended progress", async () => {
+  it("updates one plan slot without discarding acknowledgment or later progress", async () => {
     const { api, controller, resolveFirstSend } = createProgressControllerHarness();
 
     controller.update("Opening example.com");
@@ -221,12 +283,12 @@ describe("createTelegramProgressController", () => {
     resolveFirstSend?.({ message_id: 77 });
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
 
-    controller.replace("Plan updated\n- [~] Run tests");
+    controller.updatePlan("Plan updated\n- [~] Run tests");
     await vi.waitFor(() =>
       expect(api.editMessageText).toHaveBeenLastCalledWith(
         123,
         77,
-        "Plan updated\n\n- [~] Run tests",
+        "Opening example.com\n\nPlan updated\n- [~] Run tests",
       ),
     );
 
@@ -235,15 +297,23 @@ describe("createTelegramProgressController", () => {
       expect(api.editMessageText).toHaveBeenLastCalledWith(
         123,
         77,
-        "Plan updated\n\n- [~] Run tests\n\nCollecting logs",
+        "Opening example.com\n\nPlan updated\n- [~] Run tests\n\nCollecting logs",
       ),
     );
-    expect(String(api.editMessageText.mock.lastCall?.[2] ?? "")).not.toContain(
-      "Opening example.com",
+    controller.updatePlan("Plan updated\n- [x] Run tests");
+    await vi.waitFor(
+      () =>
+        expect(api.editMessageText).toHaveBeenLastCalledWith(
+          123,
+          77,
+          "Opening example.com\n\nPlan updated\n- [x] Run tests\n\nCollecting logs",
+        ),
+      { timeout: 3_000 },
     );
+    expect(String(api.editMessageText.mock.lastCall?.[2] ?? "")).not.toContain("[~] Run tests");
   });
 
-  it("caps replacement snapshots before sending preview updates", async () => {
+  it("caps plan snapshots while preserving earlier Work log history when space allows", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 77 }),
       editMessageText: vi.fn().mockResolvedValue(true),
@@ -259,7 +329,7 @@ describe("createTelegramProgressController", () => {
 
     controller.update("Initial progress that should be replaced.");
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
-    controller.replace(
+    controller.updatePlan(
       [
         "Plan updated",
         "- [x] First very long checklist row that should not survive replacement truncation.",
@@ -271,7 +341,6 @@ describe("createTelegramProgressController", () => {
     const replacementText = String(api.editMessageText.mock.lastCall?.[2] ?? "");
     expect(replacementText.length).toBeLessThanOrEqual(80);
     expect(replacementText).toContain("Latest replacement row");
-    expect(replacementText).not.toContain("Initial progress");
 
     controller.update("After replacement");
     await vi.waitFor(() =>

@@ -21,6 +21,8 @@ const baseEdgeConfig = {
   lang: "en-US",
   outputFormat: "audio-24khz-48kbitrate-mono-mp3",
   outputFormatConfigured: false,
+  voiceConfigured: false,
+  langConfigured: false,
   saveSubtitles: false,
 };
 

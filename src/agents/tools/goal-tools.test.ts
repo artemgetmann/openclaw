@@ -76,6 +76,31 @@ describe("goal tools", () => {
     );
   });
 
+  it("records act-within-scope autonomy only when explicitly supplied", async () => {
+    const create = createCreateGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    });
+    const created = await create.execute?.("call-autonomy", {
+      objective: "Resolve the vendor delay.",
+      autonomy: {
+        level: "act_within_scope",
+        allowedActions: ["send follow-ups within the agreed terms"],
+        approvalRequired: ["change price or scope"],
+      },
+    });
+
+    expect(created?.details).toMatchObject({
+      goal: {
+        autonomy: {
+          level: "act_within_scope",
+          allowedActions: ["send follow-ups within the agreed terms"],
+          approvalRequired: ["change price or scope"],
+        },
+      },
+    });
+  });
+
   it("updates the origin session goal when called from a monitor session", async () => {
     const originGoal = await createSessionGoal({
       sessionKey,
@@ -235,6 +260,13 @@ describe("goal tools", () => {
 
     expect(snapshot?.details).toMatchObject({
       status: "found",
+      goal: { autonomy: { level: "observe_only" } },
+      continuationHealth: {
+        state: "degraded",
+        actionCapability: "observe_only",
+        activeMonitors: 1,
+        degradedMonitors: 1,
+      },
       waitingOnMonitors: [
         {
           monitorId: "monitor-active",
@@ -283,8 +315,52 @@ describe("goal tools", () => {
     });
     const snapshot = await get.execute?.("call-get-terminal", {});
 
-    expect(snapshot?.details).toMatchObject({ status: "found" });
+    expect(snapshot?.details).toMatchObject({
+      status: "found",
+      continuationHealth: {
+        state: "unbound",
+        actionCapability: "observe_only",
+        activeMonitors: 0,
+        degradedMonitors: 0,
+      },
+    });
     expect(snapshot?.details).not.toHaveProperty("waitingOnMonitors");
+  });
+
+  it("reports acting_within_scope for a healthy continuation with explicit autonomy", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Keep the vendor moving.",
+      autonomy: {
+        level: "act_within_scope",
+        allowedActions: ["send follow-ups under agreed terms"],
+        approvalRequired: ["change price or scope"],
+      },
+    });
+    await saveMonitorStore(monitorStorePath, {
+      version: 1,
+      monitors: [
+        buildMonitor({
+          goal: { id: goal.id, objective: goal.objective, autonomy: goal.autonomy },
+          status: "active",
+        }),
+      ],
+    });
+
+    const snapshot = await createGetGoalTool({
+      agentSessionKey: sessionKey,
+      config: { session: { store: storePath }, cron: { store: cronStorePath } },
+    }).execute?.("call-get-acting", {});
+
+    expect(snapshot?.details).toMatchObject({
+      continuationHealth: {
+        state: "acting_within_scope",
+        actionCapability: "act_within_scope",
+        activeMonitors: 1,
+        degradedMonitors: 0,
+      },
+    });
   });
 
   it("omits monitors bound to unrelated goal IDs", async () => {

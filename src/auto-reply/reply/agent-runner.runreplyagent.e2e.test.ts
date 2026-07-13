@@ -21,7 +21,7 @@ import {
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+  onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
@@ -546,6 +546,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(onReasoningStream).toHaveBeenCalled();
     expect(onPartialReply).toHaveBeenCalledWith({ text: "answer chunk", mediaUrls: undefined });
+  });
+
+  it("preserves assistant phase metadata on forwarded partial replies", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({
+        text: "The final story begins.",
+        channelData: { openclaw: { assistantPhase: "final_answer" } },
+      });
+      return { payloads: [{ text: "The final story begins." }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({ opts: { onPartialReply } });
+    await run();
+
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "The final story begins.",
+      mediaUrls: undefined,
+      channelData: { openclaw: { assistantPhase: "final_answer" } },
+    });
   });
 
   it("suppresses typing in never mode", async () => {

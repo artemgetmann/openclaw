@@ -134,6 +134,20 @@ test_phase_selection() {
   } >"$(jarvis_release_manifest_path "$root")"
   assert_eq "manifest-only app submission selects poll app" "$(jarvis_release_next_phase "$root" 0 0)" "poll-app-notarization"
 
+  local encoded_empty
+  for encoded_empty in "''" "\\'\\'" "\\\\\\'\\\\\\'"; do
+    root="$(make_state_root "app-empty-submission-${RANDOM}")"
+    mkdir -p "$root/dist/Jarvis.app"
+    {
+      printf 'JARVIS_APP_NOTARY_SUBMISSION_ID=%s\n' "$encoded_empty"
+      printf 'JARVIS_APP_NOTARY_STATUS=%s\n' "$encoded_empty"
+    } >"$(jarvis_release_manifest_path "$root")"
+    assert_eq \
+      "encoded empty app submission selects submit app ($encoded_empty)" \
+      "$(jarvis_release_next_phase "$root" 0 0)" \
+      "submit-app-notarization"
+  done
+
   root="$(make_state_root app-accepted)"
   mkdir -p "$root/dist/Jarvis.app"
   write_manifest_status "$root" "Accepted" ""

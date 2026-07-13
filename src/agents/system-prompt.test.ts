@@ -217,14 +217,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
-  it("instructs models to call update_plan early for multi-step work", () => {
+  it("instructs models to orient users before update_plan for multi-step work", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["update_plan"],
     });
 
     expect(prompt).toContain("## Planning");
-    expect(prompt).toContain("call update_plan before the first non-trivial tool call");
+    const orientationInstruction = "first send one short natural-language status note";
+    const planInstruction = "then call update_plan before the first non-trivial tool call";
+    expect(prompt).toContain(orientationInstruction);
+    expect(prompt).toContain(planInstruction);
+    expect(prompt.indexOf(orientationInstruction)).toBeLessThan(prompt.indexOf(planInstruction));
+    expect(prompt).toContain("what you are doing now/next");
+    expect(prompt).toContain("avoid repeating the checklist verbatim");
     expect(prompt).toContain("two or more meaningful steps");
     expect(prompt).toContain("update_plan is not /goal");
     expect(prompt).toContain(DURABLE_PLAN_FILE_POLICY_PROMPT);
@@ -384,14 +390,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("do not inspect Telethon internals");
   });
 
-  it("classifies cron as the default for reminders and explicit monitors", () => {
+  it("uses consumer terminology for reminders and explicit monitors", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["cron"],
     });
 
-    expect(prompt).toContain("default to cron for reminders, exact scheduled checks");
-    expect(prompt).toContain("watching an inbox, thread, or person until something happens");
+    expect(prompt).toContain("use reminder or scheduled task for one-time/generic scheduling");
+    expect(prompt).toContain(
+      "use monitor or monitoring for a watched inbox, thread, person, or condition",
+    );
+    expect(prompt).toContain("never call a consumer-facing monitor a cron job");
+    expect(prompt).toContain(
+      "a watched inbox, thread, person, or condition until something changes",
+    );
     expect(prompt).toContain("cadence, stop condition, and expiry");
     expect(prompt).toContain("use the relevant skill/helper script for detection");
     expect(prompt).toContain("pin that exact command or a tiny wrapper script");
@@ -412,7 +424,7 @@ describe("buildAgentSystemPrompt", () => {
       "It is not the default engine for ad hoc scoped monitors or per-inbox/per-thread/per-person watches.",
     );
     expect(prompt).toContain(
-      "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer cron",
+      "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer a monitor/monitoring flow",
     );
     expect(prompt).toContain(
       "Heartbeat can still cover broad periodic checks when the user wants them, including 30-minute sweeps",

@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
+import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -21,6 +22,8 @@ const MONITOR_UPDATE_PATCH_KEYS = new Set([
   "stopCondition",
   "actionPolicy",
   "goal",
+  "notificationPolicy",
+  "notificationEvent",
   "status",
   "lastCheckpoint",
   "lastWakeAtMs",
@@ -71,12 +74,23 @@ const MonitorToolSchema = Type.Object(
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(stringEnum(MONITOR_ACTION_POLICIES)),
+    notificationPolicy: Type.Optional(Type.Object({}, { additionalProperties: true })),
     watchDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
     patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
     goal: Type.Optional(
       Type.Object({
         id: Type.String(),
         objective: Type.String(),
+        autonomy: Type.Optional(
+          Type.Object(
+            {
+              level: stringEnum(["observe_only", "act_within_scope"] as const),
+              allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+              approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+            },
+            { additionalProperties: false },
+          ),
+        ),
       }),
     ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
@@ -105,11 +119,21 @@ For monitor creation:
 - instructions should capture the actual monitoring task in plain language.
 - if there is an active goal, monitor.create will bind it automatically and use supported event adapters as wake triggers; pass goal only when carrying an explicit snapshot.
 - sourceType/sourceTarget identify what is being checked.
-- cadence is the cron schedule object for repeated wakes.
+- Jarvis must disclose the purpose/source, exact check cadence, no-change notice cadence, expiry, stop condition, and autonomy/action level when creating a monitor. monitor.create returns the normalized stored disclosure; use that returned contract instead of paraphrasing hidden defaults.
+- cadence is the cron schedule object for repeated wakes. Poll cadence is independent from notification cadence.
+- successful unchanged checks 1-2 are silent, check 3 produces one useful notice, then unchanged reminders are limited to once per 12 hours until a material change resets the sequence.
+- material change, completion, user input, approval requirements, and degradation notify immediately.
+- a passed SLA/response deadline must be reported as notificationEvent=deadline_passed; obey the gateway's nextAction instead of treating it as unchanged.
 - default actionPolicy is notify_draft.
-- use actionPolicy=auto_send only when the user authorized Jarvis to act on the watched surface and a watched-surface delivery target is available.
+- actionPolicy controls delivery only; it never grants or removes goal autonomy.
+- use actionPolicy=auto_send only when watched-surface delivery is available. Goal-bound in-scope actions come from goal.autonomy, not auto_send.
 - for auto_send, provide watchDelivery when sourceTarget alone does not resolve to the external conversation; green-zone replies go to that watched surface, while approval questions must go back to the origin chat.
 - default report route is the origin chat from the current session.
+
+After a successful create:
+- Telegram renders a compact receipt from the normalized disclosure returned by monitor.create.
+- Do not repeat the cadence, expiry, stop condition, or notification promise in the final answer; acknowledge naturally and briefly.
+- Say monitor or monitoring to consumers. Never call a consumer monitor a cron job.
 
 For monitor-related user replies/status:
 - use the monitor-router skill for natural-language routing.
@@ -162,45 +186,67 @@ For monitor-related user replies/status:
           if (!cadence || typeof cadence !== "object" || Array.isArray(cadence)) {
             throw new ToolInputError("cadence required");
           }
-          return jsonResult(
-            await callGatewayTool("monitor.create", gatewayOpts, {
-              instructions: readStringParam(params, "instructions", { required: true }),
-              agentId: resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg }),
-              name: readStringParam(params, "name"),
-              originSessionKey: agentSessionKey,
-              originDelivery,
-              sourceType: readStringParam(params, "sourceType", { required: true }),
-              sourceTarget,
-              cadence,
-              trigger:
-                params.trigger &&
-                typeof params.trigger === "object" &&
-                !Array.isArray(params.trigger)
-                  ? params.trigger
-                  : undefined,
-              expiryAt: readStringParam(params, "expiryAt"),
-              stopCondition: readStringParam(params, "stopCondition"),
-              actionPolicy:
-                readStringParam(params, "actionPolicy") ??
-                ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
-              goal:
-                params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
-                  ? params.goal
-                  : undefined,
-              watchDelivery:
-                params.watchDelivery &&
-                typeof params.watchDelivery === "object" &&
-                !Array.isArray(params.watchDelivery)
-                  ? params.watchDelivery
-                  : undefined,
-              lastCheckpoint:
-                params.checkpoint &&
-                typeof params.checkpoint === "object" &&
-                !Array.isArray(params.checkpoint)
-                  ? params.checkpoint
-                  : undefined,
-            }),
-          );
+          const createdMonitor = await callGatewayTool("monitor.create", gatewayOpts, {
+            instructions: readStringParam(params, "instructions", { required: true }),
+            agentId: resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg }),
+            name: readStringParam(params, "name"),
+            originSessionKey: agentSessionKey,
+            originDelivery,
+            sourceType: readStringParam(params, "sourceType", { required: true }),
+            sourceTarget,
+            cadence,
+            trigger:
+              params.trigger && typeof params.trigger === "object" && !Array.isArray(params.trigger)
+                ? params.trigger
+                : undefined,
+            expiryAt: readStringParam(params, "expiryAt"),
+            stopCondition: readStringParam(params, "stopCondition"),
+            actionPolicy:
+              readStringParam(params, "actionPolicy") ??
+              ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
+            notificationPolicy:
+              params.notificationPolicy &&
+              typeof params.notificationPolicy === "object" &&
+              !Array.isArray(params.notificationPolicy)
+                ? params.notificationPolicy
+                : undefined,
+            goal:
+              params.goal && typeof params.goal === "object" && !Array.isArray(params.goal)
+                ? params.goal
+                : undefined,
+            watchDelivery:
+              params.watchDelivery &&
+              typeof params.watchDelivery === "object" &&
+              !Array.isArray(params.watchDelivery)
+                ? params.watchDelivery
+                : undefined,
+            lastCheckpoint:
+              params.checkpoint &&
+              typeof params.checkpoint === "object" &&
+              !Array.isArray(params.checkpoint)
+                ? params.checkpoint
+                : undefined,
+          });
+          const result = jsonResult(createdMonitor);
+          const payloadRecord =
+            createdMonitor && typeof createdMonitor === "object" && !Array.isArray(createdMonitor)
+              ? createdMonitor
+              : undefined;
+          const details =
+            result.details && typeof result.details === "object" && !Array.isArray(result.details)
+              ? (result.details as Record<string, unknown>)
+              : undefined;
+          if (
+            payloadRecord?.disclosure &&
+            typeof payloadRecord.disclosure === "object" &&
+            !Array.isArray(payloadRecord.disclosure) &&
+            details
+          ) {
+            // Keep the receipt signal enumerable so the agent core preserves it
+            // when it serializes and reconstructs the tool result.
+            details[MONITOR_RECEIPT_DETAILS_KEY] = true;
+          }
+          return result;
         }
         case "update": {
           const patch =

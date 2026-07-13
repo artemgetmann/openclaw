@@ -820,6 +820,7 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       tableMode: "block",
+      richMessages: true,
     });
 
     expect(sendRichMessage).toHaveBeenCalledWith(
@@ -838,7 +839,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("honors richMessages false and uses legacy text delivery", async () => {
+  it("keeps a regression-shaped structured final readable on forced legacy delivery", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
       message_id: 8,
@@ -850,8 +851,30 @@ describe("deliverReplies", () => {
     });
     const bot = createBot({ raw: { sendRichMessage }, sendMessage });
 
+    const replyText = [
+      "**Status:** ready.",
+      "",
+      "First paragraph stays separate.",
+      "",
+      "Do this:",
+      "- Eat first",
+      "- Bring water",
+      "",
+      "Then:",
+      "1. Leave early",
+      "2. Keep the plan optional",
+      "",
+      "```ts",
+      "const result = 42;",
+      "```",
+      "",
+      "| Name | Score |",
+      "| --- | --- |",
+      "| Ada | 9 |",
+    ].join("\n");
+
     await deliverWith({
-      replies: [{ text: "| Name | Score |\n| --- | --- |\n| Ada | **9** |" }],
+      replies: [{ text: replyText }],
       runtime,
       bot,
       tableMode: "block",
@@ -859,41 +882,68 @@ describe("deliverReplies", () => {
     });
 
     expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const legacyHtml = sendMessage.mock.calls[0]?.[1] as string;
+    expect(legacyHtml).toContain("<b>Status:</b> ready.");
+    expect(legacyHtml).toContain("First paragraph stays separate.\n\nDo this:");
+    expect(legacyHtml).toContain("• Eat first\n• Bring water");
+    expect(legacyHtml).toContain("1. Leave early\n2. Keep the plan optional");
+    expect(legacyHtml).toContain("<pre><code>const result = 42;\n</code></pre>");
+    expect(legacyHtml).toContain("<pre><code>| Name");
+    expect(legacyHtml).toContain("| Ada");
+    expect(legacyHtml).not.toMatch(/<(?:p|ol|ul|table)(?:\s|>)/);
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
-      expect.stringContaining("<table bordered striped>"),
+      legacyHtml,
       expect.objectContaining({ parse_mode: "HTML" }),
     );
   });
 
-  it("falls back to legacy HTML then plain text when rich table delivery fails", async () => {
+  it.each(["RICH_MESSAGE_URL_INVALID", "RICH_MESSAGE_CONTENT_REQUIRED"])(
+    "sends rich validation/content failure %s directly to plain text",
+    async (richError) => {
+      const runtime = createRuntime();
+      const sendRichMessage = vi
+        .fn()
+        .mockRejectedValue(new Error(`400: Bad Request: ${richError}`));
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+      const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+      await deliverWith({
+        replies: [{ text: "| Name | Score |\n| --- | --- |\n| Ada | **9** |" }],
+        runtime,
+        bot,
+        tableMode: "block",
+        richMessages: true,
+      });
+
+      expect(sendRichMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith("123", "Name | Score\nAda | 9", {});
+    },
+  );
+
+  it("does not silently plain-fallback for non-validation rich failures", async () => {
     const runtime = createRuntime();
-    const parseErr = new Error("400: Bad Request: can't parse entities");
-    const sendRichMessage = vi.fn().mockRejectedValue(new Error("rich endpoint unavailable"));
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(parseErr)
-      .mockResolvedValueOnce({ message_id: 9, chat: { id: "123" } });
+    const sendRichMessage = vi.fn().mockRejectedValue(new Error("network unavailable"));
+    const sendMessage = vi.fn();
     const bot = createBot({ raw: { sendRichMessage }, sendMessage });
 
-    await deliverWith({
-      replies: [{ text: "| Name | Score |\n| --- | --- |\n| Ada | **9** |" }],
-      runtime,
-      bot,
-      tableMode: "block",
-    });
+    await expect(
+      deliverWith({
+        replies: [{ text: "Delivery outcome is unknown." }],
+        runtime,
+        bot,
+        tableMode: "block",
+        richMessages: true,
+      }),
+    ).rejects.toThrow("network unavailable");
 
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
-      "123",
-      expect.stringContaining("<table bordered striped>"),
-      expect.objectContaining({ parse_mode: "HTML" }),
-    );
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "123", "Name | Score\nAda | 9", {});
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("falls back to legacy HTML when rich delivery returns explicit empty text", async () => {
+  it("falls back directly to plain text when rich delivery returns explicit empty text", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
       message_id: 8,
@@ -911,17 +961,18 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       tableMode: "block",
+      richMessages: true,
     });
 
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
-      expect.stringContaining("Final answer for normal clients."),
-      expect.objectContaining({ parse_mode: "HTML" }),
+      "Final answer for normal clients.",
+      expect.not.objectContaining({ parse_mode: expect.anything() }),
     );
   });
 
-  it("preserves three final paragraphs when blank rich delivery falls back to legacy HTML", async () => {
+  it("preserves three final paragraphs when blank rich delivery falls back to plain text", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
       message_id: 8,
@@ -946,20 +997,16 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       tableMode: "block",
+      richMessages: true,
     });
 
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
-    const fallbackHtml = sendMessage.mock.calls[0]?.[1] as string;
-    // This locks the exact regression: a blank rich response must retry through
-    // legacy Telegram HTML while keeping the final answer split into readable
-    // paragraphs instead of sending an empty or collapsed visible bubble.
-    expect(fallbackHtml).toContain("<p>First paragraph should stay visible.</p>");
-    expect(fallbackHtml).toContain("<p>Second paragraph should not collapse into the first.</p>");
-    expect(fallbackHtml).toContain("<p>Third paragraph should survive the fallback send.</p>");
+    // The fallback projection keeps the final readable but never hands the
+    // rich-only paragraph tags to legacy parse_mode=HTML.
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
-      fallbackHtml,
-      expect.objectContaining({ parse_mode: "HTML" }),
+      replyText,
+      expect.not.objectContaining({ parse_mode: expect.anything() }),
     );
   });
 
@@ -981,13 +1028,14 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       tableMode: "block",
+      richMessages: true,
     });
 
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("falls back to legacy HTML when Telegram returns an empty native rich message", async () => {
+  it("falls back directly to plain text when Telegram returns an empty native rich message", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
       message_id: 8,
@@ -1005,13 +1053,14 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       tableMode: "block",
+      richMessages: true,
     });
 
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
-      expect.stringContaining("Final answer fallback."),
-      expect.objectContaining({ parse_mode: "HTML" }),
+      "Final answer fallback.",
+      expect.not.objectContaining({ parse_mode: expect.anything() }),
     );
   });
 

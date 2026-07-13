@@ -10,10 +10,20 @@
 
 ## Gateway restart and checks
 
-- Main bot rule: validate fixes from a temp worktree first when possible, using a tester bot or other isolated runtime. The long-lived LaunchAgent gateway for the primary bot must still be rebuilt and restarted from the sacred `main` home clone with `main` checked out.
-- Runtime surgery may happen from `~/Programming_Projects/openclaw` because that sacred home clone owns the shared LaunchAgent. That does not make it a coding surface. If runtime debugging reveals a code fix, patch it in a temp worktree, validate it there, then switch the sacred home clone back to `main`, fast-forward, rebuild, and restart.
+- Daily Jarvis rule: Artem's normal founder bot is `ai.jarvis.gateway`, running
+  from the packaged app's seeded runtime under
+  `~/Library/Application Support/Jarvis/.jarvis`. A source checkout is not the
+  daily steady state, even when its commit is newer.
+- Shared developer rule: `ai.openclaw.gateway` is the source-checkout developer
+  lane and must run from the sacred `main` home clone when used. Runtime surgery
+  may happen there because that clone owns this shared LaunchAgent, but the clone
+  is not a coding surface and the service is not packaged Jarvis proof.
+- Validate fixes from a temp worktree first when possible, using a tester bot or
+  other isolated runtime. If debugging reveals a code fix, patch and validate it
+  in a temp worktree before choosing the managed-package ship lane or an explicit
+  break-glass source hotfix.
 - Shared-runtime ownership rule:
-  - the default shared main bot runtime must boot from `~/Programming_Projects/openclaw` on `main`
+  - the shared `ai.openclaw.gateway` developer runtime must boot from `~/Programming_Projects/openclaw` on `main`
   - feature worktrees must not own the default shared runtime
   - the safe test paths are:
     - isolated tester bot/runtime with explicit profile or config isolation
@@ -91,39 +101,49 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
   - the only break-glass bypass is `OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1`, and that should stay emergency-only
 - `scripts/restart-mac.sh` still has an explicit broad kill path via `--app-scope all`; do not use it as the default from linked worktrees.
 - Use `scripts/clawlog.sh` for macOS unified logs.
-- Temporary worktrees are the required implementation surface for development and pre-merge validation. The primary bot still must run from `main`, not from a worktree build. The `main` sacred home clone stays on `main`; shared-runtime restarts happen only after that clone is back on clean, fast-forwarded `main`.
+- Temporary worktrees are the required implementation surface for development
+  and pre-merge validation. Daily Jarvis stays on the managed package/app-support
+  runtime. The shared `ai.openclaw.gateway` developer service may run from sacred
+  `main`, never a feature worktree; the sacred clone stays clean and
+  fast-forwarded.
 
 ## Jarvis Runtime Shipping Lanes
 
 Keep these lanes separate. They answer different questions, mutate different
 state, and produce different proof:
 
-1. Fast live hotfix from sacred `main`
-   - Use this when a tested PR needs to be live for Artem's local validation.
-   - Merge the PR, fast-forward `~/Programming_Projects/openclaw`, then restart
-     and prove the runtime that is actually under test from the sacred `main`
-     checkout.
-   - For the shared gateway, use `scripts/deploy-shared-main-runtime.sh` or
-     `scripts/ship-main-gateway-fix.sh --pr <number>`.
-   - For Jarvis-managed proof, use
-     `scripts/prove-jarvis-runtime.sh --expected-commit <main-sha>`. That proof
-     is read-only and must report `runtime_source=jarvis-managed-bundle`.
-   - Do not rebuild `dist/Jarvis.app`, package a DMG, run Sparkle, or notarize
-     just to ship a normal runtime bug fix.
+1. Managed-package daily Jarvis
+   - This is the steady state: `/Applications/Jarvis.app` seeds the
+     `ai.jarvis.gateway` payload under Jarvis Application Support.
+   - Use `scripts/prove-jarvis-runtime.sh --expected-commit <package-sha>` for
+     read-only proof. It succeeds only when the running commit matches the
+     installed package receipt and reports `runtime_source=jarvis-managed-bundle`.
+   - A merged source commit is not live Jarvis proof. Refresh/release the managed
+     package lane when the daily bot must adopt it.
+   - `scripts/package-openclaw-mac-dist.sh --local-proof` validates a package but
+     does not install or relaunch it, so it cannot restore steady-state ownership.
+     Use the public release or Sparkle update lane to replace
+     `/Applications/Jarvis.app`; otherwise the older installed app can reseed
+     over a one-off `dist/Jarvis.app` launch later.
 
-2. Local Jarvis app-support bundled runtime refresh
-   - Use this only when the `ai.jarvis.gateway` app-support runtime itself must
-     be refreshed and the user has explicitly approved that mutation.
-   - The honest proof is still `scripts/prove-jarvis-runtime.sh` after the
-     refresh. If the installed app bundle is older than the refreshed
-     app-support runtime, run
+2. Explicit break-glass source hotfix
+   - Use this only when a tested fix must reach `ai.jarvis.gateway` before the
+     replacement package is ready and the user approved the app-support mutation.
+   - Merge first and fast-forward sacred `main`; never copy unmerged worktree
+     output into the daily runtime.
+   - A source-refreshed or protected payload must report
+     `runtime_source=jarvis-break-glass-hotfix`. It is intentionally rejected by
+     `scripts/prove-jarvis-runtime.sh`, because that script proves package-seeded
+     provenance, not merely a healthy process at a managed-looking path.
+   - If the installed app is older, run
      `scripts/protect-jarvis-runtime-from-app-reseed.sh --expected-live-commit <sha>`
-     first in dry-run mode, then use `--apply` only when the live runtime state
-     is clearly the one being protected.
+     in dry-run mode first, then use `--apply` only after verifying the exact
+     runtime being protected. Replace this temporary state with a package-seeded
+     runtime after the incident.
    - `scripts/open-consumer-mac-app.sh --refresh-gateway` is for isolated
      source-checkout debug lanes. On the default Jarvis instance it would make
-     `ai.jarvis.gateway` run from the current checkout, so it is not valid
-     `jarvis-managed-bundle` proof.
+     `ai.jarvis.gateway` run from the current checkout, so it is break-glass,
+     not `jarvis-managed-bundle` proof.
 
 3. Public macOS app release
    - Use this only for a sendable Jarvis DMG/app update or Sparkle release.
@@ -164,13 +184,15 @@ runtime proof. For founder Jarvis/Telegram proof, use the explicit Jarvis scope:
 bash scripts/ship-main-gateway-fix.sh --pr <number> --runtime-scope jarvis
 ```
 
-Jarvis scope fast-forwards the sacred main clone after merge, then runs
+Jarvis scope fast-forwards the sacred main clone only to establish expected
+source truth after merge, then runs
 `scripts/prove-jarvis-runtime.sh --expected-commit <main sha>`. It is read-only:
 it must prove `ai.jarvis.gateway`, Jarvis app-support state, and
 `runtimeSource=jarvis-managed-bundle`; it does not rebuild, restart, bootout,
 install, mutate `ai.openclaw.gateway`, or touch `/Applications/Jarvis.app`.
-If the Jarvis bundle is stale, that is the result: request explicit approval for
-the bundle refresh/relaunch step before claiming Telegram UX proof.
+If the Jarvis bundle is stale or protected by a source hotfix, that is the
+result: request explicit approval for the managed bundle refresh/relaunch step
+before claiming packaged Telegram UX proof.
 
 For managed `web_search` / `web_fetch` backend proof, use
 `/agent-guides/managed-web`. That runbook keeps config presence, backend
@@ -190,10 +212,11 @@ bash scripts/protect-jarvis-runtime-from-app-reseed.sh \
 This does not touch `/Applications/Jarvis.app`. It writes a compatibility
 manifest plus an audit marker under
 `~/Library/Application Support/Jarvis/.jarvis` so reopening the old app does not
-silently reseed over the fixed app-support runtime. Treat
-`scripts/prove-jarvis-runtime.sh` as the runtime truth after this protection;
-the compatibility manifest exists only to keep older app binaries from
-downgrading the live bundle while Jarvis app releases are batched.
+silently reseed over the fixed app-support runtime. After protection, runtime
+status must report `jarvis-break-glass-hotfix`, and
+`scripts/prove-jarvis-runtime.sh` must reject the temporary state as packaged
+proof. The compatibility manifest exists only to prevent downgrade while the
+replacement Jarvis package is prepared.
 
 Use `--dry-run` before the first live rollout or whenever the PR/runtime state
 is not obvious. Use `--skip-live` only when the proof level is intentionally

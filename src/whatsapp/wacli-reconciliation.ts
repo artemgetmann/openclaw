@@ -290,9 +290,13 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
 
     const rawTarget = params.target.trim();
     const explicitJid = rawTarget.includes("@") ? rawTarget : null;
-    const seedPhone = normalizeDigits(
-      explicitJid ? extractPhoneDigitsFromJid(explicitJid) : rawTarget,
-    );
+    // Explicit opaque LIDs do not encode a phone in the JID. Resolve their
+    // stored contact phone so identity matching works in both directions while
+    // still requiring positive DB evidence.
+    const seedPhone = explicitJid
+      ? (extractPhoneDigitsFromJid(explicitJid) ??
+        normalizeDigits(contacts.find((contact) => contact.jid === explicitJid)?.phone))
+      : normalizeDigits(rawTarget);
     const seedJids = new Set<string>();
     if (explicitJid) {
       seedJids.add(explicitJid);
@@ -368,11 +372,19 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       addIdentityName(row.senderName);
     }
 
-    // Name-based expansion is intentionally DB-backed only. We match exact
-    // normalized labels already observed on the seed chats instead of inventing
-    // a synthetic LID JID from phone digits.
+    // A shared display name is not identity evidence. Name expansion may only
+    // add a candidate when that candidate's canonical JID or stored contact
+    // phone positively maps back to the target phone. This preserves opaque
+    // @lid reconciliation without letting unknown-phone LIDs claim replies.
     for (const name of identityNames) {
-      for (const jid of nameIndex.get(name) ?? []) {
+      const matchingJids = nameIndex.get(name) ?? new Set<string>();
+      for (const jid of matchingJids) {
+        const candidatePhone =
+          extractPhoneDigitsFromJid(jid) ??
+          normalizeDigits(contacts.find((contact) => contact.jid === jid)?.phone);
+        if (!seedPhone || candidatePhone !== seedPhone) {
+          continue;
+        }
         addCandidate(jid, "matching-name");
       }
     }

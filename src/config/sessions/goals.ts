@@ -9,7 +9,7 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { mergeSessionEntry, resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type { SessionEntry, SessionGoal, SessionGoalAutonomy, SessionGoalStatus } from "./types.js";
 
 export type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -27,6 +27,11 @@ type SessionGoalStoreOptions = {
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
   objective: string;
   tokenBudget?: number;
+  autonomy?: SessionGoalAutonomy;
+};
+
+type RecordSessionGoalContinuationOptions = SessionGoalStoreOptions & {
+  expectedGoalId: string;
 };
 
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
@@ -64,6 +69,40 @@ function resolveEntryGoalStartTokens(
 function normalizeTokenBudget(value: number | undefined): number | undefined {
   const normalized = normalizeTokenCount(value);
   return normalized && normalized > 0 ? normalized : undefined;
+}
+
+const MAX_AUTONOMY_ITEMS = 12;
+const MAX_AUTONOMY_ITEM_CHARS = 160;
+
+function normalizeAutonomyItems(values: string[] | undefined): string[] | undefined {
+  if (!values) {
+    return undefined;
+  }
+  const normalized = [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+    .slice(0, MAX_AUTONOMY_ITEMS)
+    .map((value) => value.slice(0, MAX_AUTONOMY_ITEM_CHARS));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function normalizeSessionGoalAutonomy(
+  autonomy: SessionGoalAutonomy | undefined,
+): SessionGoalAutonomy | undefined {
+  if (!autonomy) {
+    return undefined;
+  }
+  const allowedActions = normalizeAutonomyItems(autonomy.allowedActions);
+  const approvalRequired = normalizeAutonomyItems(autonomy.approvalRequired);
+  return {
+    level: autonomy.level,
+    ...(allowedActions ? { allowedActions } : {}),
+    ...(approvalRequired ? { approvalRequired } : {}),
+  };
+}
+
+export function resolveSessionGoalAutonomy(
+  goal: Pick<SessionGoal, "autonomy"> | undefined,
+): SessionGoalAutonomy {
+  return normalizeSessionGoalAutonomy(goal?.autonomy) ?? { level: "observe_only" };
 }
 
 function cloneGoal(goal: SessionGoal): SessionGoal {
@@ -212,6 +251,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         throw new Error("goal already exists");
       }
       const tokenBudget = normalizeTokenBudget(options.tokenBudget);
+      const autonomy = normalizeSessionGoalAutonomy(options.autonomy);
       const entry = mergeSessionEntry(existing, options.fallbackEntry ?? {});
       const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
       created = {
@@ -226,6 +266,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         tokensUsed: 0,
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,
+        ...(autonomy ? { autonomy } : {}),
       };
       store[resolved.normalizedKey] = mergeSessionEntry(entry, { goal: created });
       for (const legacyKey of resolved.legacyKeys) {
@@ -239,6 +280,35 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
     throw new Error("session not found");
   }
   return cloneGoal(created);
+}
+
+export async function recordSessionGoalContinuation(
+  options: RecordSessionGoalContinuationOptions,
+): Promise<SessionGoal | undefined> {
+  const now = nowMs(options.now);
+  let updated: SessionGoal | undefined;
+  await updateSessionStoreEntry({
+    sessionKey: options.sessionKey,
+    storePath: options.storePath,
+    update: async (entry) => {
+      const accounted = accountGoalUsage(entry, now);
+      // A wake is continuation activity only while the exact origin goal remains active.
+      // Missing, replaced, paused, limited, blocked, or completed goals are left untouched.
+      if (!accounted || accounted.id !== options.expectedGoalId || accounted.status !== "active") {
+        return null;
+      }
+      updated = {
+        ...accounted,
+        continuationTurns: Math.min(
+          Number.MAX_SAFE_INTEGER,
+          Math.max(0, accounted.continuationTurns) + 1,
+        ),
+        updatedAt: now,
+      };
+      return { goal: updated };
+    },
+  });
+  return updated ? cloneGoal(updated) : undefined;
 }
 
 export async function updateSessionGoalStatus(

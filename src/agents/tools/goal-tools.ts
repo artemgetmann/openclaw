@@ -4,17 +4,25 @@ import { loadConfig } from "../../config/config.js";
 import {
   createSessionGoal,
   getSessionGoal,
+  resolveSessionGoalAutonomy,
   type SessionGoalSnapshot,
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import type { SessionGoalAutonomy } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronStorePath } from "../../cron/store.js";
 import { loadMonitorStore, resolveMonitorStorePath } from "../../monitor/store.js";
 import type { MonitorActionPolicy, MonitorRecord, MonitorStatus } from "../../monitor/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, ToolInputError, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  ToolInputError,
+  jsonResult,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 
 type GoalToolOptions = {
   agentSessionKey?: string;
@@ -41,6 +49,12 @@ type GoalWaitingMonitor = {
 
 type GoalSnapshotWithWaitingMonitors = SessionGoalSnapshot & {
   waitingOnMonitors?: GoalWaitingMonitor[];
+  continuationHealth?: {
+    state: "unbound" | "observing" | "acting_within_scope" | "degraded";
+    actionCapability: SessionGoalAutonomy["level"];
+    activeMonitors: number;
+    degradedMonitors: number;
+  };
 };
 
 const GOAL_TOOL_STATUSES = ["complete", "blocked"] as const;
@@ -50,6 +64,18 @@ const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
     description: "Concrete objective to pursue. Create only when explicitly requested.",
   }),
+  autonomy: Type.Optional(
+    Type.Object(
+      {
+        level: stringEnum(["observe_only", "act_within_scope"] as const, {
+          description: "observe_only | act_within_scope.",
+        }),
+        allowedActions: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+        approvalRequired: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+      },
+      { additionalProperties: false },
+    ),
+  ),
 });
 
 const UpdateGoalToolSchema = Type.Object({
@@ -156,6 +182,28 @@ async function resolveGoalWaitingMonitors(
     .map(toGoalWaitingMonitor);
 }
 
+function readExplicitAutonomy(params: Record<string, unknown>): SessionGoalAutonomy | undefined {
+  const raw = params.autonomy;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const autonomy = raw as Record<string, unknown>;
+  const level = readStringParam(autonomy, "level", { required: true });
+  if (level !== "observe_only" && level !== "act_within_scope") {
+    throw new ToolInputError("autonomy.level must be observe_only or act_within_scope");
+  }
+  const allowedActions = readStringArrayParam(autonomy, "allowedActions");
+  const approvalRequired = readStringArrayParam(autonomy, "approvalRequired");
+  if (level === "act_within_scope" && !allowedActions?.some((value) => value.trim())) {
+    throw new ToolInputError("act_within_scope requires at least one concise allowed action");
+  }
+  return {
+    level,
+    ...(allowedActions ? { allowedActions } : {}),
+    ...(approvalRequired ? { approvalRequired } : {}),
+  };
+}
+
 export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Get Goal",
@@ -169,9 +217,33 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
         persist: false,
       });
       const waitingOnMonitors = await resolveGoalWaitingMonitors(options, scope, snapshot);
+      const autonomy =
+        snapshot.status === "found" ? resolveSessionGoalAutonomy(snapshot.goal) : undefined;
+      const activeMonitors = waitingOnMonitors.filter(
+        (monitor) => monitor.status === "active",
+      ).length;
+      const degradedMonitors = waitingOnMonitors.length - activeMonitors;
       const details: GoalSnapshotWithWaitingMonitors = {
         ...snapshot,
+        ...(snapshot.goal && autonomy ? { goal: { ...snapshot.goal, autonomy } } : {}),
         ...(waitingOnMonitors.length ? { waitingOnMonitors } : {}),
+        ...(snapshot.goal?.status === "active" && autonomy
+          ? {
+              continuationHealth: {
+                state:
+                  waitingOnMonitors.length === 0
+                    ? "unbound"
+                    : degradedMonitors > 0
+                      ? "degraded"
+                      : autonomy.level === "act_within_scope"
+                        ? "acting_within_scope"
+                        : "observing",
+                actionCapability: autonomy.level,
+                activeMonitors,
+                degradedMonitors,
+              },
+            }
+          : {}),
       };
       return jsonResult(details);
     },
@@ -183,7 +255,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     label: "Create Goal",
     name: "create_goal",
     description:
-      "Create a goal only when explicitly requested by the user or system instructions. Fails if a goal already exists; do not silently replace an existing goal.",
+      "Create a goal only when explicitly requested by the user or system instructions. Autonomy defaults to observe-only and must be omitted unless the user explicitly grants it. Use act_within_scope only with concise allowed actions and approval-required boundaries. Fails if a goal already exists; do not silently replace an existing goal.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const current = resolveCurrentGoalSessionScope(options);
@@ -197,9 +269,11 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       }
       const params = args as Record<string, unknown>;
       const objective = readStringParam(params, "objective", { required: true });
+      const autonomy = readExplicitAutonomy(params);
       const goal = await createSessionGoal({
         ...current,
         objective,
+        ...(autonomy ? { autonomy } : {}),
       });
       return jsonResult({ status: "created", goal });
     },

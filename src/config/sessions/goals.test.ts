@@ -6,6 +6,8 @@ import {
   clearSessionGoal,
   createSessionGoal,
   getSessionGoal,
+  recordSessionGoalContinuation,
+  resolveSessionGoalAutonomy,
   updateSessionGoalStatus,
 } from "./goals.js";
 import { loadSessionStore, updateSessionStore } from "./store.js";
@@ -62,6 +64,66 @@ describe("session goals", () => {
 
     await expect(clearSessionGoal({ sessionKey, storePath })).resolves.toBe(true);
     expect((await getSessionGoal({ sessionKey, storePath })).status).toBe("missing");
+  });
+
+  it("persists only explicitly supplied bounded autonomy and defaults legacy goals to observe-only", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Negotiate within my stated limits.",
+      autonomy: {
+        level: "act_within_scope",
+        allowedActions: ["  follow up with the vendor  ", "follow up with the vendor"],
+        approvalRequired: ["accept a higher price"],
+      },
+    });
+    expect(goal.autonomy).toEqual({
+      level: "act_within_scope",
+      allowedActions: ["follow up with the vendor"],
+      approvalRequired: ["accept a higher price"],
+    });
+
+    await clearSessionGoal({ sessionKey, storePath });
+    const legacy = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Observe the ticket.",
+    });
+    expect(legacy).not.toHaveProperty("autonomy");
+    expect(resolveSessionGoalAutonomy(legacy)).toEqual({ level: "observe_only" });
+  });
+
+  it("records continuation only for the exact active goal", async () => {
+    const goal = await createSessionGoal({
+      sessionKey,
+      storePath,
+      objective: "Keep the process moving.",
+    });
+    const continued = await recordSessionGoalContinuation({
+      sessionKey,
+      storePath,
+      expectedGoalId: goal.id,
+      now: 2_000,
+    });
+    expect(continued?.continuationTurns).toBe(1);
+
+    await updateSessionGoalStatus({
+      sessionKey,
+      storePath,
+      status: "complete",
+      now: 3_000,
+    });
+    await expect(
+      recordSessionGoalContinuation({
+        sessionKey,
+        storePath,
+        expectedGoalId: goal.id,
+        now: 4_000,
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      (await getSessionGoal({ sessionKey, storePath, persist: false })).goal?.continuationTurns,
+    ).toBe(1);
   });
 
   it("accounts token budgets from fresh session usage", async () => {

@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
+source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -1144,6 +1145,16 @@ NODE
 }
 
 refresh_bundled_runtime_metadata() {
+  local manifest_path="${BUNDLED_RUNTIME_RESOURCE_DIR}/manifest.json"
+
+  # Cache/reuse retains payload code but refreshes build-info from the current
+  # checkout. Move the package receipt to the same commit/build in the same
+  # step, otherwise legitimate reused packages look like source hotfix drift.
+  openclaw_refresh_consumer_runtime_manifest \
+    "$VALIDATED_NODE_BIN" \
+    "$manifest_path" \
+    "$GIT_COMMIT" \
+    "$APP_BUILD"
   refresh_bundled_runtime_build_info
   sync_bundled_runtime_package_version
 }
