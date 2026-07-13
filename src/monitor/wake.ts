@@ -12,6 +12,10 @@ const CHECKPOINT_FILE_URL_IMAGE_REGEX = new RegExp(
   "file://[^<>\"'`\\]]+?\\." + CHECKPOINT_IMAGE_EXTENSIONS,
   "giu",
 );
+const CHECKPOINT_QUOTED_IMAGE_PATH_REGEX = new RegExp(
+  "([\"'`])((?:\\.\\.?/|[~/])[^\"'`\\r\\n]*?\\." + CHECKPOINT_IMAGE_EXTENSIONS + ")\\1",
+  "giu",
+);
 const CHECKPOINT_IMAGE_REFERENCE_REGEX = new RegExp(
   `(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~\\/|\\.\\.?\\/|\\/)[^\\s"'<>\\]\\[(){}]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s"'<>\\]\\[(){}]*)?`,
   "giu",
@@ -43,6 +47,9 @@ function replaceCheckpointMediaReferences(value: string): string {
       .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_FILE_URL_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+      // Mirror quoted-path detection separately so spaces are allowed only inside matched quotes;
+      // this avoids consuming ordinary prose adjacent to an unquoted checkpoint path.
+      .replace(CHECKPOINT_QUOTED_IMAGE_PATH_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
   );
 }
