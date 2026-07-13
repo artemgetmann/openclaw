@@ -371,7 +371,10 @@ extension GatewayLaunchAgentManager {
             ["status", "--json", "--no-probe"],
             timeout: 15,
             quiet: true)
-        guard result.success, let payload = result.payload else { return nil }
+        guard let payload = result.payload else { return nil }
+        // Missing canonical service is a valid status result but the CLI exits 1.
+        // The typed service field is authoritative even on that exit path; absent
+        // or malformed status JSON remains unknown and must never imply unloaded.
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
             let service = json["service"] as? [String: Any],

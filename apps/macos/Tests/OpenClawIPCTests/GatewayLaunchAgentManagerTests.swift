@@ -49,6 +49,50 @@ struct GatewayLaunchAgentManagerTests {
             launchAgentMatchesCurrentServiceVersion: false) == .install)
     }
 
+    @Test func `nonzero daemon status still reports structured unloaded service`() async {
+        GatewayLaunchAgentManager._setTestingHooks(
+            shellExecution: { _, _, _, _ in
+                ShellExecutor.ShellResult(
+                    stdout: #"{"ok":false,"error":"canonicalDefaultGateway.missing","service":{"loaded":false}}"#,
+                    stderr: "",
+                    exitCode: 1,
+                    timedOut: false,
+                    success: false,
+                    errorMessage: nil)
+            })
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let loaded = await GatewayLaunchAgentManager.loadedState()
+
+        #expect(loaded == false)
+    }
+
+    @Test func `nonzero malformed or unrelated daemon status remains unknown`() async {
+        var response = ShellExecutor.ShellResult(
+            stdout: #"{"service":{"loaded":false}"#,
+            stderr: "status failed",
+            exitCode: 1,
+            timedOut: false,
+            success: false,
+            errorMessage: nil)
+        GatewayLaunchAgentManager._setTestingHooks(
+            shellExecution: { _, _, _, _ in response })
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let malformed = await GatewayLaunchAgentManager.loadedState()
+        response = ShellExecutor.ShellResult(
+            stdout: #"{"ok":false,"error":"permission denied"}"#,
+            stderr: "",
+            exitCode: 1,
+            timedOut: false,
+            success: false,
+            errorMessage: nil)
+        let unrelated = await GatewayLaunchAgentManager.loadedState()
+
+        #expect(malformed == nil)
+        #expect(unrelated == nil)
+    }
+
     @Test func `service identity requires matching version and build when version marker exists`() throws {
         let currentVersion = "2026.3.22"
         let currentBuild = "2026061103"
