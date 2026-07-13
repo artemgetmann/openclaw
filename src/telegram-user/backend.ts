@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../daemon/service-env.js";
+import {
+  normalizeTelegramUserMonitorSelector,
+  readTelegramUserMonitorBinding,
+} from "./monitor-service-binding.js";
 import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
@@ -84,21 +89,32 @@ const backendScriptPath = path.join(telegramE2eDir, "telethon_cli.py");
 const requirementsPath = path.join(telegramE2eDir, "requirements.txt");
 const repoLocalEnvFilePath = path.join(telegramE2eDir, ".env.local");
 const repoLocalSessionPath = path.join(telegramE2eDir, "tmp", "userbot.session");
-const telegramUserStateDir = path.join(resolveStateDir(), "telegram-user");
-const stateEnvFilePath = path.join(telegramUserStateDir, ".env.local");
-const stateSessionPath = path.join(telegramUserStateDir, "userbot.session");
-const hasExplicitStateDir = Boolean(
-  process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim(),
-);
-const preferRepoLocalCompat = process.env.OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT === "1";
-const defaultEnvFilePath =
-  (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalEnvFilePath)
-    ? repoLocalEnvFilePath
-    : stateEnvFilePath;
-const defaultSessionPath =
-  (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalSessionPath)
-    ? repoLocalSessionPath
-    : stateSessionPath;
+
+function resolveTelegramUserDefaultPaths(env: NodeJS.ProcessEnv) {
+  const telegramUserStateDir = path.join(resolveStateDir(env), "telegram-user");
+  const hasExplicitStateDir = Boolean(
+    env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim(),
+  );
+  const preferRepoLocalCompat = env.OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT === "1";
+  return {
+    telegramUserStateDir,
+    defaultEnvFilePath:
+      (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalEnvFilePath)
+        ? repoLocalEnvFilePath
+        : path.join(telegramUserStateDir, ".env.local"),
+    defaultSessionPath:
+      (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalSessionPath)
+        ? repoLocalSessionPath
+        : path.join(telegramUserStateDir, "userbot.session"),
+  };
+}
+
+// Mutable tooling must follow the same canonical profile identity as selector
+// bindings; otherwise one command can mix a raw profile venv with canonical
+// credentials and session state.
+const backendRuntimeEnv = resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv;
+const { telegramUserStateDir, defaultEnvFilePath, defaultSessionPath } =
+  resolveTelegramUserDefaultPaths(backendRuntimeEnv);
 const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
 
 type PythonInvocation = {
@@ -288,27 +304,73 @@ function readNonEmpty(value: string | null | undefined): string | undefined {
 }
 
 export function resolveTelegramUserSessionPath(params: {
+  boundSession?: string | null;
   env?: NodeJS.ProcessEnv;
   explicitSession?: string | null;
   loadedEnv?: Record<string, string>;
 }): string {
   const env = params.env ?? process.env;
+  // Runtime identity normalization can replace a raw profile state directory
+  // with the canonical consumer app state. Derive the fallback from that same
+  // environment while retaining the explicit repo-local compatibility switch.
+  const { defaultSessionPath: runtimeDefaultSessionPath } = resolveTelegramUserDefaultPaths(env);
   return path.resolve(
     readNonEmpty(params.explicitSession) ??
+      readNonEmpty(params.boundSession) ??
       readNonEmpty(params.loadedEnv?.USERBOT_SESSION) ??
       readNonEmpty(env.USERBOT_SESSION) ??
       readNonEmpty(env.OPENCLAW_TELEGRAM_USER_SESSION) ??
-      defaultSessionPath,
+      runtimeDefaultSessionPath,
   );
 }
 
-async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
-  const envFilePath = options.envFile ? path.resolve(options.envFile) : defaultEnvFilePath;
+type TelegramUserBackendSelection = {
+  envFilePath: string;
+  loadedEnv: Record<string, string>;
+  sessionPath: string;
+};
+
+async function resolveTelegramUserBackendSelection(
+  options: TelegramUserBackendOptions,
+): Promise<TelegramUserBackendSelection> {
+  const explicitEnvFile = normalizeTelegramUserMonitorSelector(options.envFile);
+  // Service installation canonicalizes consumer profiles into their app-owned
+  // state roots. Backend calls must use the same identity or they silently read
+  // a different binding file from the raw shell profile state.
+  const runtimeEnv = resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv;
+  // An explicit env file is a complete credential context. Do not even read a
+  // damaged persisted binding first: it cannot influence this invocation and
+  // must not make an explicit recovery command unusable.
+  const binding = explicitEnvFile ? null : await readTelegramUserMonitorBinding(runtimeEnv);
+  const { defaultEnvFilePath: runtimeDefaultEnvFilePath } =
+    resolveTelegramUserDefaultPaths(runtimeEnv);
+  const envFilePath = explicitEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
   const loadedEnv = await loadScopedEnvFile(envFilePath);
   const sessionPath = resolveTelegramUserSessionPath({
     explicitSession: options.session,
+    // An explicit env file selects a complete credential context. Its
+    // USERBOT_SESSION (or the normal fallback) must not inherit a stale session
+    // from a different monitor-service binding.
+    boundSession: explicitEnvFile ? undefined : binding?.session,
+    env: runtimeEnv,
     loadedEnv,
   });
+  return { envFilePath, loadedEnv, sessionPath };
+}
+
+export async function resolveTelegramUserBackendSelectors(
+  options: TelegramUserBackendOptions,
+): Promise<{ envFilePath: string; sessionPath: string }> {
+  const { envFilePath, sessionPath } = await resolveTelegramUserBackendSelection(options);
+  return { envFilePath, sessionPath };
+}
+
+async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
+  // Credential values and USERBOT_SESSION must come from one file snapshot.
+  // Re-reading after selector resolution could pair credentials from a replaced
+  // env file with the previous account's resolved session path.
+  const { envFilePath, loadedEnv, sessionPath } =
+    await resolveTelegramUserBackendSelection(options);
   return {
     env: {
       ...process.env,

@@ -17,6 +17,7 @@ import {
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   buildMonitorDisclosure,
+  createMonitorListenerEvidence,
   createMonitorRecord,
   createMonitorIdentityKey,
   findMonitor,
@@ -504,8 +505,8 @@ async function dispatchMonitorEventToCronUnlocked(params: {
   const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event }).filter(
     (route) => !params.monitorId || route.monitorId === params.monitorId,
   );
+  let storeChanged = false;
   if (params.event.triggerKind === "process_exit") {
-    let storeChanged = false;
     const eventKey = monitorEventIdentityKey(params.event);
     if (routes.length === 0 && !params.monitorId) {
       // Fast background commands can exit before the monitor record exists.
@@ -556,9 +557,26 @@ async function dispatchMonitorEventToCronUnlocked(params: {
         storeChanged = true;
       }
     }
-    if (storeChanged) {
-      await saveMonitorStore(storePath, store);
+  }
+
+  const listenerEvidence = createMonitorListenerEvidence(params.event, Date.now());
+  if (listenerEvidence) {
+    for (const route of routes) {
+      const index = store.monitors.findIndex((monitor) => monitor.monitorId === route.monitorId);
+      if (index >= 0) {
+        store.monitors[index] = updateMonitorRecord(
+          store.monitors[index],
+          { listenerEvidence },
+          listenerEvidence.updatedAtMs,
+        );
+        storeChanged = true;
+      }
     }
+  }
+  if (storeChanged) {
+    // Commit the evidence receipt before cron enqueue so a restart cannot make
+    // an accepted listener wake look like it never reached this monitor.
+    await saveMonitorStore(storePath, store);
   }
 
   const wakes: MonitorEventDispatchResult["wakes"] = [];
