@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 describe("startHeartbeatRunner", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
@@ -62,6 +63,8 @@ describe("startHeartbeatRunner", () => {
 
   afterEach(() => {
     resetHeartbeatWakeStateForTests();
+    resetSystemEventsForTest();
+    setHeartbeatsEnabled(true);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -254,6 +257,32 @@ describe("startHeartbeatRunner", () => {
       },
     });
 
+    runner.stop();
+  });
+
+  it("dispatches a tagged restart continuation when ordinary scheduling is disabled", async () => {
+    useFakeHeartbeatTime();
+    const sessionKey = "agent:main:main";
+    enqueueSystemEvent("resume safely", { sessionKey, contextKey: "restart:startup-op" });
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: { agents: { defaults: { heartbeat: { every: "0m" } } } } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+    setHeartbeatsEnabled(false);
+
+    requestHeartbeatNow({ reason: "restart-continuation", sessionKey, coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        heartbeat: { every: "0m" },
+        reason: "restart-continuation",
+        sessionKey,
+      }),
+    );
     runner.stop();
   });
 

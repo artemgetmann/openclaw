@@ -32,6 +32,12 @@ export type FollowupRun = {
    * constituent records for retry.
    */
   durableIds?: string[];
+  /** Persisted retry attempt count for this disk-backed input. */
+  durableRetryCount?: number;
+  /** Earliest wall-clock time at which this input may run again. */
+  durableNextAttemptAt?: number;
+  /** Durable TTL copied into RAM so a sleeping retry cannot run after expiry. */
+  durableExpiresAt?: number;
   /**
    * Model-complete output restored from disk. When present, the runner skips
    * agent/tool execution and retries only outbound delivery.

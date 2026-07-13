@@ -18,7 +18,13 @@ import {
   loadDurableFollowups,
   persistDurableFollowup,
 } from "./durable-store.js";
-import { getExistingFollowupQueue, getFollowupQueue, type FollowupQueueState } from "./state.js";
+import {
+  getExistingFollowupQueue,
+  getFollowupQueue,
+  recordFollowupQueueSummaryDrops,
+  syncFollowupQueueSummary,
+  type FollowupQueueState,
+} from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
 /**
@@ -98,13 +104,27 @@ export function enqueueFollowupRun(
 
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
+  if (typeof run.durableNextAttemptAt === "number") {
+    // Preserve FIFO ownership: newer work cannot pull an older restored retry
+    // forward. The queue waits for the latest durable boundary it owns.
+    queue.nextAttemptAt = Math.max(queue.nextAttemptAt ?? 0, run.durableNextAttemptAt);
+  }
 
+  // The shared helper mutates the aggregate summary projection. Snapshot the
+  // concrete items first, then replace that projection from provenance-aware
+  // entries so one durable expiry never requires matching summary text.
+  syncFollowupQueueSummary(queue);
+  const itemsBeforeDrop = queue.items.slice();
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
   });
   if (!shouldEnqueue) {
     return false;
+  }
+  const droppedCount = itemsBeforeDrop.length - queue.items.length;
+  if (queue.dropPolicy === "summarize" && droppedCount > 0) {
+    recordFollowupQueueSummaryDrops(queue, itemsBeforeDrop.slice(0, droppedCount));
   }
 
   queue.items.push(run);
@@ -159,12 +179,17 @@ export async function enqueueFollowupRunDurable(
     await ackDurableFollowup(record.id);
     return false;
   }
-  const beforeIds = new Set(
+  const beforeItems = new Map(
     (getExistingFollowupQueue(key)?.items ?? [])
-      .map((item) => item.durableId)
-      .filter((id): id is string => Boolean(id)),
+      .filter((item): item is FollowupRun & { durableId: string } => Boolean(item.durableId))
+      .map((item) => [item.durableId, item]),
   );
-  const accepted = enqueueFollowupRun(key, { ...run, durableId: record.id }, settings, dedupeMode);
+  const accepted = enqueueFollowupRun(
+    key,
+    { ...run, durableId: record.id, durableExpiresAt: record.expiresAt },
+    settings,
+    dedupeMode,
+  );
   if (!accepted) {
     await ackDurableFollowup(record.id);
     return false;
@@ -176,7 +201,7 @@ export async function enqueueFollowupRunDurable(
   );
   await handleRemovedDurableFollowups({
     queue: getExistingFollowupQueue(key),
-    beforeIds,
+    beforeItems,
     afterIds,
   });
   return true;
@@ -184,15 +209,24 @@ export async function enqueueFollowupRunDurable(
 
 async function handleRemovedDurableFollowups(params: {
   queue: FollowupQueueState | undefined;
-  beforeIds: Set<string>;
+  beforeItems: Map<string, FollowupRun>;
   afterIds: Set<string>;
 }): Promise<void> {
-  const removedIds = [...params.beforeIds].filter((id) => !params.afterIds.has(id));
+  const removedIds = [...params.beforeItems.keys()].filter((id) => !params.afterIds.has(id));
   if (params.queue?.dropPolicy === "summarize") {
     // The replacement summary is process-local until its followup turn returns.
     // Retaining these disk records makes a crash replay the original accepted
     // messages instead of silently losing work represented only in RAM.
-    retainSummarizedDurableFollowups(params.queue, removedIds);
+    retainSummarizedDurableFollowups(
+      params.queue,
+      removedIds,
+      new Map(
+        removedIds.flatMap((id) => {
+          const expiresAt = params.beforeItems.get(id)?.durableExpiresAt;
+          return typeof expiresAt === "number" ? [[id, expiresAt] as const] : [];
+        }),
+      ),
+    );
     return;
   }
   // `drop:old` is explicit durable intent, so a restart must not resurrect it.
@@ -228,10 +262,10 @@ export async function restoreDurableFollowupRuns(params?: {
     // The disk directory is already the dedupe source. In-memory message-id
     // caches may have survived a module reload, so they must not suppress a
     // record whose durable acknowledgement still exists.
-    const before = new Set(
+    const before = new Map(
       (getExistingFollowupQueue(record.queueKey)?.items ?? [])
-        .map((item) => item.durableId)
-        .filter((id): id is string => Boolean(id)),
+        .filter((item): item is FollowupRun & { durableId: string } => Boolean(item.durableId))
+        .map((item) => [item.durableId, item]),
     );
     if (
       enqueueFollowupRun(
@@ -250,7 +284,7 @@ export async function restoreDurableFollowupRuns(params?: {
       );
       await handleRemovedDurableFollowups({
         queue: getExistingFollowupQueue(record.queueKey),
-        beforeIds: before,
+        beforeItems: before,
         afterIds: after,
       });
     }

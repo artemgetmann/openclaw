@@ -23,6 +23,7 @@ import {
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
+  setHeartbeatsEnabled,
 } from "./heartbeat-runner.js";
 import * as heartbeatWake from "./heartbeat-wake.js";
 import {
@@ -127,6 +128,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+  setHeartbeatsEnabled(true);
   if (testRegistry) {
     setActivePluginRegistry(testRegistry);
   }
@@ -1575,10 +1577,11 @@ describe("runHeartbeatOnce", () => {
       .spyOn(restartSentinel, "markRestartContinuationConsumed")
       .mockResolvedValue(true);
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    replySpy.mockImplementation(async () => {
+    replySpy.mockImplementation(async (_ctx, options) => {
       // Production drains this inside getReplyFromConfig before model
       // execution. The explicit drain makes that boundary visible here.
       drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("restart-agent-run");
       return { text: "Continuation checked" };
     });
 
@@ -1598,6 +1601,141 @@ describe("runHeartbeatOnce", () => {
     } finally {
       replySpy.mockRestore();
       ackSpy.mockRestore();
+    }
+  });
+
+  it("requeues a restart event drained by an active-session drop before agent execution", async () => {
+    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-active");
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const failureSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationFailed")
+      .mockResolvedValue("restart:op-active");
+    const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async () => {
+      // Active-session heartbeat handling drains system events before deciding
+      // to drop. No onAgentRunStart callback means no execution occurred.
+      drainSystemEventEntries(sessionKey);
+      return undefined;
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+      });
+
+      expect(result.status).toBe("ran");
+      expect(ackSpy).not.toHaveBeenCalled();
+      expect(failureSpy).toHaveBeenCalledWith({
+        sessionKey,
+        contextKeys: ["restart:op-active"],
+        error: "restart continuation agent execution did not start",
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({ contextKey: "restart:op-active" }),
+      ]);
+      expect(wakeSpy).toHaveBeenCalledWith({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: 1_000,
+      });
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
+      failureSpy.mockRestore();
+      wakeSpy.mockRestore();
+    }
+  });
+
+  it("bypasses ordinary heartbeat policy only for a forced tagged restart continuation", async () => {
+    const cases: Array<{
+      name: string;
+      mutate: (cfg: OpenClawConfig) => void;
+      deps?: HeartbeatDeps;
+      disableGlobal?: boolean;
+    }> = [
+      { name: "global disabled", mutate: () => {}, disableGlobal: true },
+      {
+        name: "agent disabled",
+        mutate: (cfg) => {
+          cfg.agents = {
+            ...cfg.agents,
+            list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+          };
+        },
+      },
+      {
+        name: "zero interval",
+        mutate: (cfg) => {
+          cfg.agents!.defaults!.heartbeat = {
+            ...cfg.agents?.defaults?.heartbeat,
+            every: "0m",
+          };
+        },
+      },
+      {
+        name: "quiet hours",
+        mutate: (cfg) => {
+          cfg.agents!.defaults = {
+            ...cfg.agents?.defaults,
+            userTimezone: "UTC",
+            heartbeat: {
+              ...cfg.agents?.defaults?.heartbeat,
+              activeHours: { start: "08:00", end: "09:00", timezone: "user" },
+            },
+          };
+        },
+        deps: { nowMs: () => Date.UTC(2025, 0, 1, 7, 0, 0) },
+      },
+      { name: "main lane in flight", mutate: () => {}, deps: { getQueueSize: () => 1 } },
+    ];
+
+    for (const testCase of cases) {
+      const contextKey = `restart:policy-${testCase.name.replaceAll(" ", "-")}`;
+      const { cfg, sessionKey } = await seedRestartContinuationHeartbeat(contextKey);
+      testCase.mutate(cfg);
+      setHeartbeatsEnabled(!testCase.disableGlobal);
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockImplementation(async (_ctx, options) => {
+        drainSystemEventEntries(sessionKey);
+        options?.onAgentRunStart?.(`run-${testCase.name}`);
+        return { text: "Continuation checked" };
+      });
+      const ackSpy = vi
+        .spyOn(restartSentinel, "markRestartContinuationConsumed")
+        .mockResolvedValue(true);
+      try {
+        const result = await runHeartbeatOnce({
+          cfg,
+          sessionKey,
+          reason: "restart-continuation",
+          deps: testCase.deps,
+        });
+        expect(result.status, testCase.name).toBe("ran");
+        expect(ackSpy, testCase.name).toHaveBeenCalledTimes(1);
+      } finally {
+        setHeartbeatsEnabled(true);
+        replySpy.mockRestore();
+        ackSpy.mockRestore();
+      }
+    }
+
+    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:normal-policy");
+    setHeartbeatsEnabled(false);
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await expect(runHeartbeatOnce({ cfg, sessionKey, reason: "interval" })).resolves.toEqual({
+        status: "skipped",
+        reason: "disabled",
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      setHeartbeatsEnabled(true);
+      replySpy.mockRestore();
     }
   });
 

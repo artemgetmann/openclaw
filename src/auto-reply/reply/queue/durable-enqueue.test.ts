@@ -125,9 +125,11 @@ describe("durable followup enqueue", () => {
     );
 
     expect(getFollowupQueueDepth(key)).toBe(1);
-    expect(retainSummarizedDurableFollowups).toHaveBeenLastCalledWith(expect.anything(), [
-      firstRecord.id,
-    ]);
+    expect(retainSummarizedDurableFollowups).toHaveBeenLastCalledWith(
+      expect.anything(),
+      [firstRecord.id],
+      expect.any(Map),
+    );
     await expect(loadDurableFollowups()).resolves.toHaveLength(2);
   });
 

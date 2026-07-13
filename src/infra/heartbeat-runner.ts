@@ -729,23 +729,33 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
-  if (!areHeartbeatsEnabled()) {
+  // Inspect only the explicit in-memory target before ordinary policy gates.
+  // Normal disabled heartbeats retain their old cheap exit and never touch the
+  // session store or HEARTBEAT.md merely to decide they are disabled.
+  const forcedSessionKey = opts.sessionKey?.trim();
+  const isForcedRestartContinuation =
+    opts.reason === "restart-continuation" &&
+    Boolean(forcedSessionKey) &&
+    peekSystemEventEntries(forcedSessionKey ?? "").some((event) =>
+      event.contextKey?.startsWith("restart:"),
+    );
+  if (!isForcedRestartContinuation && !areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (!isForcedRestartContinuation && !isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!isForcedRestartContinuation && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!isForcedRestartContinuation && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
+  if (!isForcedRestartContinuation && queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
@@ -754,7 +764,7 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     agentId,
     heartbeat,
-    forcedSessionKey: opts.sessionKey,
+    forcedSessionKey,
     reason: opts.reason,
   });
   if (preflight.skipReason) {
@@ -932,6 +942,36 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
+  const reconcileDrainedRestartEvents = async (params: {
+    events: typeof preflight.pendingEventEntries;
+    error: string;
+  }) => {
+    if (params.events.length === 0) {
+      return;
+    }
+    // Agent setup drains system events before it knows whether an actual model
+    // run can start. Restore durable replay state first, then put only the
+    // matching tagged event back in RAM and request a bounded retry.
+    const retryContextKey = await markRestartContinuationFailed({
+      sessionKey,
+      contextKeys: params.events.map((event) => event.contextKey),
+      error: params.error,
+    });
+    const retryEvent = retryContextKey
+      ? params.events.find(
+          (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
+        )
+      : undefined;
+    if (retryEvent && retryContextKey) {
+      enqueueSystemEvent(retryEvent.text, { sessionKey, contextKey: retryContextKey });
+      requestHeartbeatNow({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: RESTART_CONTINUATION_RETRY_MS,
+      });
+    }
+  };
+
   try {
     // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK.
     // For isolated sessions, capture the isolated transcript (not the main session's).
@@ -945,14 +985,25 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    let agentRunStarted = false;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          onAgentRunStart: () => {
+            agentRunStarted = true;
+          },
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : {
+          isHeartbeat: true,
+          suppressToolErrorWarnings,
+          bootstrapContextMode,
+          onAgentRunStart: () => {
+            agentRunStarted = true;
+          },
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const remainingEventContexts = new Set(
       peekSystemEventEntries(sessionKey).map((event) => event.contextKey),
@@ -963,18 +1014,29 @@ export async function runHeartbeatOnce(opts: {
         (contextKey): contextKey is string =>
           Boolean(contextKey?.startsWith("restart:")) && !remainingEventContexts.has(contextKey),
       );
-    if (consumedRestartContexts.length > 0) {
+    if (consumedRestartContexts.length > 0 && agentRunStarted) {
       try {
-        // getReplyFromConfig returned and the tagged input left the event
-        // queue, which is the first honest proof that the continuation was
-        // consumed by an agent execution. A crash before here leaves the
-        // sentinel replayable; a failed acknowledgement may replay safely.
+        // The callback is the positive execution boundary. Event disappearance
+        // alone is insufficient because an active session can drain the event,
+        // drop this heartbeat, and return without starting an agent run.
         await markRestartContinuationConsumed({
           sessionKey,
           contextKeys: consumedRestartContexts,
         });
       } catch (err) {
         log.warn(`heartbeat: failed to acknowledge restart continuation: ${String(err)}`);
+      }
+    } else if (consumedRestartContexts.length > 0) {
+      try {
+        const consumedRestartEvents = preflight.pendingEventEntries.filter((event) =>
+          consumedRestartContexts.includes(event.contextKey ?? ""),
+        );
+        await reconcileDrainedRestartEvents({
+          events: consumedRestartEvents,
+          error: "restart continuation agent execution did not start",
+        });
+      } catch (err) {
+        log.warn(`heartbeat: failed to reconcile unstarted restart continuation: ${String(err)}`);
       }
     }
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
@@ -1210,28 +1272,7 @@ export async function runHeartbeatOnce(opts: {
     );
     if (consumedRestartEvents.length > 0) {
       try {
-        // Agent setup drains system events before model execution. If that
-        // execution fails, restore only the matching restart event after the
-        // durable sentinel is replayable again. TTL enforcement in the
-        // sentinel helper bounds repeated failures without widening its schema.
-        const retryContextKey = await markRestartContinuationFailed({
-          sessionKey,
-          contextKeys: consumedRestartEvents.map((event) => event.contextKey),
-          error: reason,
-        });
-        const retryEvent = retryContextKey
-          ? consumedRestartEvents.find(
-              (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
-            )
-          : undefined;
-        if (retryEvent && retryContextKey) {
-          enqueueSystemEvent(retryEvent.text, { sessionKey, contextKey: retryContextKey });
-          requestHeartbeatNow({
-            reason: "restart-continuation",
-            sessionKey,
-            coalesceMs: RESTART_CONTINUATION_RETRY_MS,
-          });
-        }
+        await reconcileDrainedRestartEvents({ events: consumedRestartEvents, error: reason });
       } catch (reconcileError) {
         log.warn(`heartbeat: failed to reconcile restart continuation: ${String(reconcileError)}`);
       }
@@ -1364,22 +1405,28 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (!areHeartbeatsEnabled()) {
+    const reason = params?.reason;
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const isForcedRestartContinuation =
+      reason === "restart-continuation" &&
+      Boolean(requestedSessionKey) &&
+      peekSystemEventEntries(requestedSessionKey ?? "").some((event) =>
+        event.contextKey?.startsWith("restart:"),
+      );
+    if (!isForcedRestartContinuation && !areHeartbeatsEnabled()) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+    if (!isForcedRestartContinuation && state.agents.size === 0) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
 
-    const reason = params?.reason;
-    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1388,21 +1435,23 @@ export function startHeartbeatRunner(opts: {
     if (requestedSessionKey || requestedAgentId) {
       const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
       const targetAgent = state.agents.get(targetAgentId);
-      if (!targetAgent) {
+      if (!targetAgent && !isForcedRestartContinuation) {
         scheduleNext();
         return { status: "skipped", reason: "disabled" };
       }
       try {
         const res = await runOnce({
           cfg: state.cfg,
-          agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
+          agentId: targetAgent?.agentId ?? targetAgentId,
+          heartbeat: targetAgent?.heartbeat ?? resolveHeartbeatConfig(state.cfg, targetAgentId),
           reason,
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },
         });
         if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(targetAgent, now);
+          if (targetAgent) {
+            advanceAgentSchedule(targetAgent, now);
+          }
         }
         scheduleNext();
         return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
@@ -1411,7 +1460,9 @@ export function startHeartbeatRunner(opts: {
         log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
           error: errMsg,
         });
-        advanceAgentSchedule(targetAgent, now);
+        if (targetAgent) {
+          advanceAgentSchedule(targetAgent, now);
+        }
         scheduleNext();
         return { status: "failed", reason: errMsg };
       }

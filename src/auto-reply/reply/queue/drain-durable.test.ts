@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   completeDurableFollowup: vi.fn(async () => undefined),
   ackDurableFollowupsForQueueSync: vi.fn(),
   ackDurableFollowupsSync: vi.fn(),
+  scheduleDurableFollowupRetries: vi.fn(async () => ({ scheduled: [], terminalIds: [] })),
 }));
 
 vi.mock("./durable-store.js", () => ({
@@ -13,6 +14,8 @@ vi.mock("./durable-store.js", () => ({
   completeDurableFollowup: mocks.completeDurableFollowup,
   ackDurableFollowupsForQueueSync: mocks.ackDurableFollowupsForQueueSync,
   ackDurableFollowupsSync: mocks.ackDurableFollowupsSync,
+  scheduleDurableFollowupRetries: mocks.scheduleDurableFollowupRetries,
+  DURABLE_FOLLOWUP_RETRY_BASE_MS: 1,
 }));
 
 const { enqueueFollowupRun } = await import("./enqueue.js");
@@ -59,6 +62,7 @@ describe("durable followup drain", () => {
     mocks.completeDurableFollowup.mockClear();
     mocks.ackDurableFollowupsForQueueSync.mockClear();
     mocks.ackDurableFollowupsSync.mockClear();
+    mocks.scheduleDurableFollowupRetries.mockClear();
   });
 
   it("acks every individually drained collect item after successful processing", async () => {

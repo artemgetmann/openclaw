@@ -10,8 +10,13 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { completeDurableFollowup } from "./durable-store.js";
-import { FOLLOWUP_QUEUES, type FollowupQueueState } from "./state.js";
+import {
+  ackDurableFollowup,
+  completeDurableFollowup,
+  DURABLE_FOLLOWUP_RETRY_BASE_MS,
+  scheduleDurableFollowupRetries,
+} from "./durable-store.js";
+import { FOLLOWUP_QUEUES, syncFollowupQueueSummary, type FollowupQueueState } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
@@ -25,30 +30,76 @@ const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Pr
 /**
  * Durable records removed from the live item list by `drop:summarize` cannot
  * be deleted yet: their only replacement is the summary text held in RAM.
- * Keep their IDs on the process-global queue object so both successful drain
- * and explicit cancellation can acknowledge the same ownership set.
+ * Update expiry metadata after durable persistence. The summary contribution
+ * itself is recorded at the exact item-removal boundary in enqueue.ts.
  */
 export function retainSummarizedDurableFollowups(
   queue: FollowupQueueState,
   ids: Iterable<string>,
+  expiresAtById?: ReadonlyMap<string, number>,
 ): void {
-  const pending = (queue.summarizedDurableIds ??= new Set<string>());
   for (const id of ids) {
-    if (!id.trim()) {
+    const entry = queue.summarizedDurableFollowups?.get(id);
+    if (!entry) {
       continue;
     }
-    pending.add(id);
+    const expiresAt = expiresAtById?.get(id);
+    if (typeof expiresAt === "number") {
+      entry.expiresAt = expiresAt;
+    }
   }
 }
 
 function snapshotSummarizedDurableFollowups(queue: FollowupQueueState): string[] {
-  return [...(queue.summarizedDurableIds ?? [])];
+  return [...(queue.summarizedDurableFollowups?.keys() ?? [])];
 }
 
 function collectDurableIds(items: FollowupRun[], summarizedIds: string[] = []): string[] {
   return [...new Set([...items.map((item) => item.durableId), ...summarizedIds])].filter(
     (id): id is string => Boolean(id?.trim()),
   );
+}
+
+function collectQueueDurableIds(queue: FollowupQueueState): string[] {
+  return collectDurableIds(queue.items, snapshotSummarizedDurableFollowups(queue));
+}
+
+async function waitForDurableRetry(queue: FollowupQueueState): Promise<void> {
+  const nextAttemptAt = queue.nextAttemptAt;
+  if (typeof nextAttemptAt !== "number") {
+    return;
+  }
+  const delayMs = nextAttemptAt - Date.now();
+  if (delayMs > 0) {
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  }
+  // Clear only the boundary we observed. An enqueue/failure racing this wait
+  // may publish a later one that the next loop must still honor.
+  if (queue.nextAttemptAt === nextAttemptAt) {
+    queue.nextAttemptAt = undefined;
+  }
+}
+
+async function discardExpiredDurableItems(queue: FollowupQueueState): Promise<void> {
+  const now = Date.now();
+  const expiredItemIds = queue.items
+    .filter((item) => typeof item.durableExpiresAt === "number" && item.durableExpiresAt <= now)
+    .map((item) => item.durableId)
+    .filter((id): id is string => Boolean(id));
+  const expiredSummaryIds = [...(queue.summarizedDurableFollowups?.values() ?? [])]
+    .filter((entry) => typeof entry.expiresAt === "number" && entry.expiresAt <= now)
+    .map((entry) => entry.id);
+  const expiredIds = [...new Set([...expiredItemIds, ...expiredSummaryIds])];
+  if (expiredIds.length === 0) {
+    return;
+  }
+  const expired = new Set(expiredIds);
+  await Promise.all(expiredIds.map((id) => ackDurableFollowup(id)));
+  queue.items = queue.items.filter((item) => !item.durableId || !expired.has(item.durableId));
+  for (const id of expiredSummaryIds) {
+    queue.summarizedDurableFollowups?.delete(id);
+  }
+  syncFollowupQueueSummary(queue);
 }
 
 async function completeSummarizedDurableFollowups(
@@ -63,20 +114,26 @@ async function completeSummarizedDurableFollowups(
   // next summary snapshot, because the current prompt did not represent them.
   await Promise.all(ids.map((id) => completeDurableFollowup(id)));
   for (const id of ids) {
-    queue.summarizedDurableIds?.delete(id);
+    queue.summarizedDurableFollowups?.delete(id);
   }
+  syncFollowupQueueSummary(queue);
 }
 
 type QueueSummarySnapshot = Pick<
   FollowupQueueState,
   "dropPolicy" | "droppedCount" | "summaryLines"
->;
+> & {
+  processLocalDroppedCount: number;
+  summarySequence: number;
+};
 
 function captureQueueSummaryState(queue: FollowupQueueState): QueueSummarySnapshot {
   return {
     dropPolicy: queue.dropPolicy,
     droppedCount: queue.droppedCount,
     summaryLines: [...queue.summaryLines],
+    processLocalDroppedCount: queue.processLocalDroppedCount ?? 0,
+    summarySequence: queue.summarySequence ?? 0,
   };
 }
 
@@ -99,10 +156,14 @@ function consumeQueueSummarySnapshot(
   // Enqueue can append more drops while the summary turn is running. Consume
   // only the snapshotted prefix; keep the newest bounded lines for the next
   // prompt instead of clearing work the successful turn never represented.
-  const newerDroppedCount = Math.max(0, queue.droppedCount - snapshot.droppedCount);
-  const newerLineCount = Math.min(newerDroppedCount, queue.cap, queue.summaryLines.length);
-  queue.droppedCount = newerDroppedCount;
-  queue.summaryLines = newerLineCount > 0 ? queue.summaryLines.slice(-newerLineCount) : [];
+  queue.processLocalDroppedCount = Math.max(
+    0,
+    (queue.processLocalDroppedCount ?? 0) - snapshot.processLocalDroppedCount,
+  );
+  queue.processLocalSummaryEntries = (queue.processLocalSummaryEntries ?? []).filter(
+    (entry) => entry.sequence > snapshot.summarySequence,
+  );
+  syncFollowupQueueSummary(queue);
 }
 
 export function clearFollowupDrainCallback(key: string): void {
@@ -163,9 +224,15 @@ export function scheduleFollowupDrain(
   // callbacks around from finalize calls where no queue work is pending.
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
+    let attemptedDurableIds: string[] = [];
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
+        await waitForDurableRetry(queue);
+        await discardExpiredDurableItems(queue);
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
@@ -181,11 +248,13 @@ export function scheduleFollowupDrain(
             isCrossChannel,
             items: queue.items,
             run: async (item) => {
+              attemptedDurableIds = collectDurableIds([item]);
               await runFollowup(item);
               // Mixed-target collect mode shifts exactly one item after this
               // callback succeeds. Match that removal boundary on disk so a
               // restart cannot resurrect work that already completed.
               await completeDurableFollowup(item.durableId);
+              attemptedDurableIds = [];
             },
           });
           if (collectDrainResult === "empty") {
@@ -212,7 +281,7 @@ export function scheduleFollowupDrain(
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          await runFollowup({
+          const collectedRun: FollowupRun = {
             prompt,
             run,
             enqueuedAt: Date.now(),
@@ -220,7 +289,9 @@ export function scheduleFollowupDrain(
             // every represented disk record must survive model/routing errors.
             durableIds: collectDurableIds(items, summarizedDurableIds),
             ...routing,
-          });
+          };
+          attemptedDurableIds = collectDurableIds(items, summarizedDurableIds);
+          await runFollowup(collectedRun);
           // The collected turn represents every snapshotted item. Only remove
           // their records after the agent turn and reply routing both return.
           await Promise.all(items.map((item) => completeDurableFollowup(item.durableId)));
@@ -229,6 +300,7 @@ export function scheduleFollowupDrain(
             consumeQueueSummarySnapshot(queue, summaryState);
           }
           queue.items.splice(0, items.length);
+          attemptedDurableIds = [];
           continue;
         }
 
@@ -242,7 +314,7 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await runFollowup({
+              const summaryRun: FollowupRun = {
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
@@ -253,10 +325,13 @@ export function scheduleFollowupDrain(
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
-              });
+              };
+              attemptedDurableIds = collectDurableIds([item], summarizedDurableIds);
+              await runFollowup(summaryRun);
               await completeDurableFollowup(item.durableId);
               await completeSummarizedDurableFollowups(queue, summarizedDurableIds);
               consumeQueueSummarySnapshot(queue, summaryState);
+              attemptedDurableIds = [];
             }))
           ) {
             break;
@@ -266,8 +341,10 @@ export function scheduleFollowupDrain(
 
         if (
           !(await drainNextQueueItem(queue.items, async (item) => {
+            attemptedDurableIds = collectDurableIds([item]);
             await runFollowup(item);
             await completeDurableFollowup(item.durableId);
+            attemptedDurableIds = [];
           }))
         ) {
           break;
@@ -275,6 +352,53 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
+      try {
+        // Only the attempted turn earns backoff. Collect/summary attempts name
+        // every represented record; untouched FIFO items keep attempt zero.
+        const retry = await scheduleDurableFollowupRetries({
+          ids: attemptedDurableIds.length > 0 ? attemptedDurableIds : collectQueueDurableIds(queue),
+        });
+        const terminalIds = new Set(retry.terminalIds);
+        if (terminalIds.size > 0) {
+          queue.items = queue.items.filter(
+            (item) => !item.durableId || !terminalIds.has(item.durableId),
+          );
+          for (const id of terminalIds) {
+            queue.summarizedDurableFollowups?.delete(id);
+          }
+          syncFollowupQueueSummary(queue);
+        }
+        const updates = new Map(retry.scheduled.map((update) => [update.id, update]));
+        for (const item of queue.items) {
+          const update = item.durableId ? updates.get(item.durableId) : undefined;
+          if (update) {
+            item.durableRetryCount = update.retryCount;
+            item.durableNextAttemptAt = update.nextAttemptAt;
+            item.durableExpiresAt = update.expiresAt;
+          }
+        }
+        for (const update of retry.scheduled) {
+          const summarized = queue.summarizedDurableFollowups?.get(update.id);
+          if (summarized) {
+            summarized.expiresAt = update.expiresAt;
+          }
+        }
+        if (retry.scheduled.length > 0) {
+          queue.nextAttemptAt = Math.max(
+            queue.nextAttemptAt ?? 0,
+            ...retry.scheduled.map((update) => update.nextAttemptAt),
+          );
+        } else if (queue.items.length > 0 || queue.droppedCount > 0) {
+          // Process-local/test-only work has no disk record. It still needs a
+          // floor so debounce=0 cannot create a tight retry loop.
+          queue.nextAttemptAt = Date.now() + DURABLE_FOLLOWUP_RETRY_BASE_MS;
+        }
+      } catch (retryErr) {
+        // A persistence failure must not become a paid hot loop. Keep the live
+        // process bounded while leaving the original disk input untouched.
+        queue.nextAttemptAt = Date.now() + DURABLE_FOLLOWUP_RETRY_BASE_MS;
+        defaultRuntime.error?.(`followup queue retry state failed for ${key}: ${String(retryErr)}`);
+      }
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;

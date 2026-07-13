@@ -1,20 +1,39 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
-import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
+import { applyQueueRuntimeSettings, buildQueueSummaryLine } from "../../../utils/queue-helpers.js";
 import { ackDurableFollowupsForQueueSync, ackDurableFollowupsSync } from "./durable-store.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+
+export type FollowupQueueSummaryEntry = {
+  sequence: number;
+  summaryLine: string;
+};
+
+export type SummarizedDurableFollowup = FollowupQueueSummaryEntry & {
+  id: string;
+  expiresAt?: number;
+};
 
 export type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
   lastEnqueuedAt: number;
+  /** Latest eligibility boundary among ordered durable work in this queue. */
+  nextAttemptAt?: number;
   mode: QueueMode;
   debounceMs: number;
   cap: number;
   dropPolicy: QueueDropPolicy;
+  /** Aggregate projection consumed by the shared queue helpers. */
   droppedCount: number;
   summaryLines: string[];
-  /** Durable IDs represented only by the RAM summary after overflow. */
-  summarizedDurableIds?: Set<string>;
+  /** Monotonic order shared by durable and process-local summary entries. */
+  summarySequence?: number;
+  /** Process-local drops have no durable ID but keep their existing count semantics. */
+  processLocalDroppedCount?: number;
+  /** Bounded process-local summary lines, ordered with durable contributions. */
+  processLocalSummaryEntries?: FollowupQueueSummaryEntry[];
+  /** Durable ownership and exact summary content, in original ID insertion order. */
+  summarizedDurableFollowups?: Map<string, SummarizedDurableFollowup>;
   lastRun?: FollowupRun["run"];
 };
 
@@ -38,6 +57,75 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+/**
+ * True while a queue owns the next turn for this session.
+ *
+ * Startup restoration establishes this synchronously before channels open.
+ * Inbound dispatch must treat that ownership like an active embedded run so a
+ * newer message cannot leapfrog restored disk-backed work into direct execution.
+ */
+export function hasFollowupQueueOwnership(key: string): boolean {
+  const queue = getExistingFollowupQueue(key);
+  return Boolean(queue && (queue.draining || queue.items.length > 0 || queue.droppedCount > 0));
+}
+
+function ensureFollowupQueueSummaryTracking(queue: FollowupQueueState): void {
+  queue.summarySequence ??= 0;
+  queue.processLocalDroppedCount ??= queue.droppedCount;
+  queue.processLocalSummaryEntries ??= queue.summaryLines.map((summaryLine, index) => ({
+    sequence: index + 1,
+    summaryLine,
+  }));
+  queue.summarizedDurableFollowups ??= new Map<string, SummarizedDurableFollowup>();
+  if (queue.summarySequence < queue.processLocalSummaryEntries.length) {
+    queue.summarySequence = queue.processLocalSummaryEntries.length;
+  }
+}
+
+/** Rebuild the legacy count/line projection from addressable queue summary state. */
+export function syncFollowupQueueSummary(queue: FollowupQueueState): void {
+  ensureFollowupQueueSummaryTracking(queue);
+  const durable = [...(queue.summarizedDurableFollowups?.values() ?? [])];
+  const processLocal = queue.processLocalSummaryEntries ?? [];
+  queue.droppedCount = (queue.processLocalDroppedCount ?? 0) + durable.length;
+  queue.summaryLines = [...processLocal, ...durable]
+    .toSorted((a, b) => a.sequence - b.sequence)
+    .slice(-Math.max(0, queue.cap))
+    .map((entry) => entry.summaryLine);
+}
+
+/** Record the exact overflow contributions before the removed items leave RAM. */
+export function recordFollowupQueueSummaryDrops(
+  queue: FollowupQueueState,
+  dropped: FollowupRun[],
+): void {
+  ensureFollowupQueueSummaryTracking(queue);
+  for (const item of dropped) {
+    const entry: FollowupQueueSummaryEntry = {
+      sequence: (queue.summarySequence ?? 0) + 1,
+      summaryLine: buildQueueSummaryLine(item.summaryLine?.trim() || item.prompt.trim()),
+    };
+    queue.summarySequence = entry.sequence;
+    if (item.durableId) {
+      queue.summarizedDurableFollowups?.set(item.durableId, {
+        ...entry,
+        id: item.durableId,
+        expiresAt: item.durableExpiresAt,
+      });
+      continue;
+    }
+    queue.processLocalDroppedCount = (queue.processLocalDroppedCount ?? 0) + 1;
+    (queue.processLocalSummaryEntries ??= []).push(entry);
+    if (queue.processLocalSummaryEntries.length > queue.cap) {
+      queue.processLocalSummaryEntries.splice(
+        0,
+        queue.processLocalSummaryEntries.length - queue.cap,
+      );
+    }
+  }
+  syncFollowupQueueSummary(queue);
+}
+
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
@@ -52,6 +140,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     items: [],
     draining: false,
     lastEnqueuedAt: 0,
+    nextAttemptAt: undefined,
     mode: settings.mode,
     debounceMs:
       typeof settings.debounceMs === "number"
@@ -64,7 +153,10 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
-    summarizedDurableIds: new Set<string>(),
+    summarySequence: 0,
+    processLocalDroppedCount: 0,
+    processLocalSummaryEntries: [],
+    summarizedDurableFollowups: new Map<string, SummarizedDurableFollowup>(),
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -83,7 +175,7 @@ export function clearFollowupQueue(key: string): number {
   if (queue) {
     ackDurableFollowupsSync([
       ...queue.items.flatMap((item) => [item.durableId, ...(item.durableIds ?? [])]),
-      ...(queue.summarizedDurableIds ?? []),
+      ...(queue.summarizedDurableFollowups?.keys() ?? []),
     ]);
   }
   ackDurableFollowupsForQueueSync(cleaned);
@@ -96,7 +188,9 @@ export function clearFollowupQueue(key: string): number {
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
-  queue.summarizedDurableIds?.clear();
+  queue.processLocalDroppedCount = 0;
+  queue.processLocalSummaryEntries = [];
+  queue.summarizedDurableFollowups?.clear();
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);

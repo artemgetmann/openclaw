@@ -16,6 +16,8 @@ const PROCESSED_MESSAGE_DIRNAME = "followup-queue-processed";
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const PROCESSED_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROCESSED_MESSAGES = 10_000;
+export const DURABLE_FOLLOWUP_RETRY_BASE_MS = 1_000;
+export const DURABLE_FOLLOWUP_RETRY_MAX_MS = 5 * 60_000;
 
 type DurableFollowupCancellation = {
   version: typeof STORE_VERSION;
@@ -58,6 +60,10 @@ export type DurableFollowupRecord = {
   processedMessageKey?: string;
   /** Cancellation generation already present when this new work began. */
   acceptedCancellationId?: string;
+  /** Optional for compatibility with records written before durable retries. */
+  retryCount?: number;
+  /** Optional for compatibility; absence means immediately eligible. */
+  nextAttemptAt?: number;
   createdAt: number;
   expiresAt: number;
 };
@@ -348,10 +354,77 @@ export function hydrateDurableFollowup(
     ...record.run,
     durableId: record.id,
     durableIds: record.delivery?.sourceDurableIds,
+    durableRetryCount: record.retryCount,
+    durableNextAttemptAt: record.nextAttemptAt,
+    durableExpiresAt: record.expiresAt,
     // Presence, including an empty array, means agent/tool execution completed.
     deliveryPayloads: record.delivery?.payloads,
     run: { ...record.run.run, config },
   };
+}
+
+export type DurableFollowupRetryUpdate = {
+  id: string;
+  retryCount: number;
+  nextAttemptAt: number;
+  expiresAt: number;
+};
+
+/**
+ * Persist the retry clock before the drain is re-armed.
+ *
+ * Backoff metadata contains no route/provider identifiers or credentials. The
+ * cap prevents unbounded sleeps while the record TTL remains the terminal
+ * boundary. Older records simply begin at attempt zero.
+ */
+export async function scheduleDurableFollowupRetries(params: {
+  ids: Iterable<string | undefined>;
+  now?: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ scheduled: DurableFollowupRetryUpdate[]; terminalIds: string[] }> {
+  const env = params.env ?? process.env;
+  const now = params.now ?? Date.now();
+  const scheduled: DurableFollowupRetryUpdate[] = [];
+  const terminalIds: string[] = [];
+  for (const id of new Set(params.ids)) {
+    const cleaned = id?.trim();
+    if (!cleaned) {
+      continue;
+    }
+    const filePath = resolveDurableFollowupPath(cleaned, env);
+    let record: DurableFollowupRecord;
+    try {
+      const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+      if (!isDurableFollowupRecord(parsed)) {
+        await fs.rm(filePath, { force: true });
+        terminalIds.push(cleaned);
+        continue;
+      }
+      record = parsed;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+    if (record.expiresAt <= now || isDurableFollowupRecordCancelled(record, env)) {
+      await fs.rm(filePath, { force: true });
+      terminalIds.push(record.id);
+      continue;
+    }
+    const retryCount = Math.max(0, Math.floor(record.retryCount ?? 0)) + 1;
+    const exponentialDelay = DURABLE_FOLLOWUP_RETRY_BASE_MS * 2 ** Math.min(30, retryCount - 1);
+    const delayMs = Math.min(DURABLE_FOLLOWUP_RETRY_MAX_MS, exponentialDelay);
+    const nextAttemptAt = Math.min(record.expiresAt, now + delayMs);
+    const updated: DurableFollowupRecord = { ...record, retryCount, nextAttemptAt };
+    await writeJsonAtomic(filePath, updated, {
+      mode: 0o600,
+      ensureDirMode: 0o700,
+      trailingNewline: true,
+    });
+    scheduled.push({ id: record.id, retryCount, nextAttemptAt, expiresAt: record.expiresAt });
+  }
+  return { scheduled, terminalIds };
 }
 
 function normalizeDurableIds(run: FollowupRun): string[] {
@@ -644,6 +717,12 @@ function isDurableFollowupRecord(value: unknown): value is DurableFollowupRecord
     typeof record.queueKey === "string" &&
     Boolean(record.settings) &&
     Boolean(record.run) &&
+    (record.retryCount === undefined ||
+      (typeof record.retryCount === "number" &&
+        Number.isFinite(record.retryCount) &&
+        record.retryCount >= 0)) &&
+    (record.nextAttemptAt === undefined ||
+      (typeof record.nextAttemptAt === "number" && Number.isFinite(record.nextAttemptAt))) &&
     typeof record.expiresAt === "number"
   );
 }
