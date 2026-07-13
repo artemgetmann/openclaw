@@ -29,12 +29,15 @@ vi.mock("./route-reply.js", async (importOriginal) => {
 });
 
 import { createFollowupRunner } from "./followup-runner.js";
+import { scheduleFollowupDrain } from "./queue/drain.js";
 import {
   ackDurableFollowup,
   hydrateDurableFollowup,
   loadDurableFollowups,
   persistDurableFollowup,
 } from "./queue/durable-store.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -807,6 +810,121 @@ describe("createFollowupRunner durable delivery recovery", () => {
     );
     await Promise.all([first.id, second.id].map((id) => ackDurableFollowup(id)));
     await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("drains a same-process staged FIFO prefix before later collected input", async () => {
+    const settings = { mode: "collect" as const, debounceMs: 0, cap: 20 };
+    const queueKey = `delivery-retry-fifo-${Date.now()}`;
+    const firstRun = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const secondRun = createQueuedRun({
+      messageId: "discord:second",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const first = await persistDurableFollowup({
+      queueKey,
+      run: firstRun,
+      settings,
+    });
+    const second = await persistDurableFollowup({
+      queueKey,
+      run: secondRun,
+      settings,
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    enqueueFollowupRun(queueKey, { ...firstRun, durableId: first.id }, settings, "none");
+    enqueueFollowupRun(queueKey, { ...secondRun, durableId: second.id }, settings, "none");
+
+    // The collect drain builds A+B itself. Their agent/tool turn completes,
+    // stages its delivery, then the first provider call fails while both
+    // original items remain at the in-memory FIFO head.
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "original staged output" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    scheduleFollowupDrain(queueKey, runner);
+    await vi.waitFor(() => {
+      expect(routeReplyMock).toHaveBeenCalledTimes(1);
+      // The drain immediately schedules its bounded retry, so `draining`
+      // becomes true again. The persisted retry boundary proves the failed
+      // attempt finished while its replacement is still waiting.
+      expect(getExistingFollowupQueue(queueKey)?.nextAttemptAt).toBeTypeOf("number");
+    });
+    expect(getExistingFollowupQueue(queueKey)?.items.map((item) => item.durableId)).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    await expect(loadDurableFollowups()).resolves.toEqual([
+      expect.objectContaining({
+        id: first.id,
+        delivery: expect.objectContaining({ sourceDurableIds: [first.id, second.id] }),
+      }),
+    ]);
+
+    // C arrives before the scheduled retry. Exact-prefix discovery must select
+    // only [A,B], even though collect mode now sees an expanded [A,B,C] queue.
+    const laterRun = createQueuedRun({
+      messageId: "discord:later",
+      prompt: "later durable input",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const later = await persistDurableFollowup({
+      queueKey,
+      run: laterRun,
+      settings,
+    });
+    enqueueFollowupRun(queueKey, hydrateDurableFollowup(later, {}), settings, "none");
+    let releaseLaterModel!: () => void;
+    const laterModelGate = new Promise<void>((resolve) => {
+      releaseLaterModel = resolve;
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      // Hold C at model entry so the assertion below can prove that the staged
+      // carrier completed by itself: C remains durable and has no outbound
+      // delivery or acknowledgement until this distinct turn is released.
+      await laterModelGate;
+      return { payloads: [{ text: "later input output" }], meta: {} };
+    });
+    routeReplyMock.mockResolvedValue({ ok: true });
+
+    scheduleFollowupDrain(queueKey, runner);
+    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2));
+    await expect(loadDurableFollowups()).resolves.toEqual([later]);
+    expect(getExistingFollowupQueue(queueKey)?.items.map((item) => item.durableId)).toEqual([
+      later.id,
+    ]);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ payload: { text: "original staged output" } }),
+    );
+
+    releaseLaterModel();
+    await vi.waitFor(async () => {
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+      await expect(loadDurableFollowups()).resolves.toEqual([]);
+    });
+
+    // First retry sends A+B's staged payload without a second old model turn.
+    // Only then does C execute and deliver in a distinct second model turn.
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ payload: { text: "later input output" } }),
+    );
+    expect(getExistingFollowupQueue(queueKey)).toBeUndefined();
+    clearFollowupQueue(queueKey);
   });
 
   it("restores an empty completed stage without rerunning the agent", async () => {

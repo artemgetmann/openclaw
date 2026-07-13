@@ -136,7 +136,7 @@ describe("durable followup queue", () => {
     expect(delivery?.delivery?.sourceDurableIds).toEqual([first.id, second.id]);
     expect(delivery?.delivery?.processedMessageKeys).toHaveLength(2);
     await expect(loadDurableFollowups()).resolves.toEqual([delivery]);
-    await expect(loadDurableFollowupDelivery([second.id])).resolves.toEqual(delivery);
+    await expect(loadDurableFollowupDelivery([second.id, first.id])).resolves.toEqual(delivery);
     await expect(fs.readdir(path.join(stateDir, "followup-queue"))).resolves.toEqual([
       `${delivery?.id}.json`,
     ]);
@@ -150,6 +150,41 @@ describe("durable followup queue", () => {
     ]);
     await ackDurableFollowup(delivery?.id);
     await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("matches a staged delivery only to its exact retry batch", async () => {
+    const queueKey = "delivery-stage-exact-batch";
+    const first = await persistDurableFollowup({
+      queueKey,
+      run: createRun("first input"),
+      settings,
+    });
+    const second = await persistDurableFollowup({
+      queueKey,
+      run: { ...createRun("second input"), messageId: "telegram:102" },
+      settings,
+    });
+    const delivery = await persistDurableFollowupDelivery({
+      run: { ...createRun("original collected input"), durableIds: [first.id, second.id] },
+      payloads: [{ text: "original completed output" }],
+    });
+    const later = await persistDurableFollowup({
+      queueKey,
+      run: { ...createRun("later input"), messageId: "telegram:103" },
+      settings,
+    });
+
+    // The expanded collect wrapper did not produce the staged output and must
+    // not use it to acknowledge the later input.
+    await expect(
+      loadDurableFollowupDelivery([first.id, second.id, later.id]),
+    ).resolves.toBeUndefined();
+
+    // The original retry batch still owns its completed output. Draining it
+    // leaves the later FIFO input durable for its own subsequent turn.
+    await expect(loadDurableFollowupDelivery([second.id, first.id])).resolves.toEqual(delivery);
+    await completeDurableFollowup(delivery?.id);
+    await expect(loadDurableFollowups()).resolves.toEqual([later]);
   });
 
   it("repairs partial collect receipts without replaying completed delivery", async () => {

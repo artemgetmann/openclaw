@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   completeDurableFollowup: vi.fn(async () => undefined),
   ackDurableFollowupsForQueueSync: vi.fn(),
   ackDurableFollowupsSync: vi.fn(),
+  loadDurableFollowupDelivery: vi.fn(async () => undefined),
+  loadDurableFollowupDeliveryCarrier: vi.fn(async () => undefined),
   scheduleDurableFollowupRetries: vi.fn(async () => ({ scheduled: [], terminalIds: [] })),
 }));
 
@@ -14,6 +16,9 @@ vi.mock("./durable-store.js", () => ({
   completeDurableFollowup: mocks.completeDurableFollowup,
   ackDurableFollowupsForQueueSync: mocks.ackDurableFollowupsForQueueSync,
   ackDurableFollowupsSync: mocks.ackDurableFollowupsSync,
+  hydrateDurableFollowup: (record: unknown) => record,
+  loadDurableFollowupDelivery: mocks.loadDurableFollowupDelivery,
+  loadDurableFollowupDeliveryCarrier: mocks.loadDurableFollowupDeliveryCarrier,
   scheduleDurableFollowupRetries: mocks.scheduleDurableFollowupRetries,
   DURABLE_FOLLOWUP_RETRY_BASE_MS: 1,
 }));
@@ -62,6 +67,8 @@ describe("durable followup drain", () => {
     mocks.completeDurableFollowup.mockClear();
     mocks.ackDurableFollowupsForQueueSync.mockClear();
     mocks.ackDurableFollowupsSync.mockClear();
+    mocks.loadDurableFollowupDelivery.mockClear();
+    mocks.loadDurableFollowupDeliveryCarrier.mockClear();
     mocks.scheduleDurableFollowupRetries.mockClear();
   });
 

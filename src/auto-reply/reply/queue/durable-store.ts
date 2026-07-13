@@ -647,7 +647,44 @@ export async function loadDurableFollowupDelivery(
     return undefined;
   }
   const records = await loadDurableFollowups();
-  return records.find((record) => record.delivery?.sourceDurableIds.some((id) => wanted.has(id)));
+  return records.find((record) => {
+    const stagedIds = new Set(record.delivery?.sourceDurableIds ?? []);
+    // A collect/summary retry can expand while an older outbound payload is
+    // waiting for delivery. Reuse only the exact completed turn: intersection
+    // matching would send stale output and let the drain acknowledge inputs
+    // that the completed agent turn never represented.
+    return stagedIds.size === wanted.size && [...stagedIds].every((id) => wanted.has(id));
+  });
+}
+
+/**
+ * Load a staged carrier by its own durable ID.
+ *
+ * Queue restoration places the carrier itself at the FIFO head while its
+ * `sourceDurableIds` can also name inputs folded into an overflow summary and
+ * therefore absent from `queue.items`. This intentionally differs from the
+ * exact source-set lookup above: callers already know the persisted carrier
+ * identity and must not infer it from a possibly expanded retry wrapper.
+ */
+export async function loadDurableFollowupDeliveryCarrier(
+  id: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DurableFollowupRecord | undefined> {
+  const cleaned = id?.trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(resolveDurableFollowupPath(cleaned, env), "utf8"),
+    ) as unknown;
+    return isDurableFollowupRecord(parsed) && parsed.delivery ? parsed : undefined;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw err;
+  }
 }
 
 export async function ackDurableFollowup(

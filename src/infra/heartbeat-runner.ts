@@ -1050,6 +1050,25 @@ export async function runHeartbeatOnce(opts: {
       // does not resolve an outbound send must restore replay state first.
       await reconcileDrainedRestartEvents({ events: consumedRestartEvents, error });
     };
+    const consumeRestartContinuationNoOp = async () => {
+      if (!restartContinuationAwaitingDelivery) {
+        return;
+      }
+      // Empty and heartbeat-ack replies are successful terminal outcomes for
+      // the continuation prompt. They intentionally produce no user payload,
+      // so acknowledge the drained event instead of making it replay forever.
+      try {
+        await markRestartContinuationConsumed({
+          sessionKey,
+          contextKeys: consumedRestartContexts,
+        });
+      } catch (err) {
+        // Keep the run successful when the durable acknowledgement itself
+        // fails; this mirrors the post-delivery acknowledgement path while
+        // preserving the no-op result semantics for the caller.
+        log.warn(`heartbeat: failed to acknowledge restart continuation no-op: ${String(err)}`);
+      }
+    };
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -1060,9 +1079,7 @@ export async function runHeartbeatOnce(opts: {
       !replyPayload ||
       (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
-      await reconcileRestartContinuationWithoutDelivery(
-        "restart continuation produced no deliverable response",
-      );
+      await consumeRestartContinuationNoOp();
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1099,9 +1116,7 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
-      await reconcileRestartContinuationWithoutDelivery(
-        "restart continuation produced only a heartbeat acknowledgement",
-      );
+      await consumeRestartContinuationNoOp();
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,

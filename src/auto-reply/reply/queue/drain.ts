@@ -14,6 +14,8 @@ import {
   ackDurableFollowup,
   completeDurableFollowup,
   DURABLE_FOLLOWUP_RETRY_BASE_MS,
+  hydrateDurableFollowup,
+  loadDurableFollowupDeliveryCarrier,
   scheduleDurableFollowupRetries,
 } from "./durable-store.js";
 import { FOLLOWUP_QUEUES, syncFollowupQueueSummary, type FollowupQueueState } from "./state.js";
@@ -62,6 +64,81 @@ function collectDurableIds(items: FollowupRun[], summarizedIds: string[] = []): 
 
 function collectQueueDurableIds(queue: FollowupQueueState): string[] {
   return collectDurableIds(queue.items, snapshotSummarizedDurableFollowups(queue));
+}
+
+/**
+ * Return a completed delivery carrier only when it owns the FIFO queue head.
+ *
+ * Restored carriers and same-process failed deliveries both expose
+ * `deliveryPayloads`. Ordinary queue items must avoid a disk probe here so the
+ * scheduler preserves its immediate-start contract.
+ */
+async function loadStagedDeliveryAtQueueHead(queue: FollowupQueueState): Promise<
+  | {
+      carrierId: string;
+      sourceDurableIds: string[];
+      run: FollowupRun;
+    }
+  | undefined
+> {
+  const first = queue.items[0];
+  const firstDurableId = first?.durableId?.trim();
+  if (!first || !firstDurableId) {
+    return undefined;
+  }
+  if (first.deliveryPayloads === undefined) {
+    return undefined;
+  }
+  const staged = await loadDurableFollowupDeliveryCarrier(firstDurableId);
+  if (staged?.delivery && staged.id === firstDurableId) {
+    return {
+      carrierId: staged.id,
+      sourceDurableIds: staged.delivery.sourceDurableIds,
+      run: hydrateDurableFollowup(staged, first.run.config),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Project a synthetic collect/summary delivery stage back onto its live FIFO
+ * carrier. The runner mutates the synthetic run after persisting its outbound
+ * payload; retaining that marker avoids replaying the model turn after a route
+ * failure while leaving newer queue items untouched.
+ */
+function retainStagedDeliveryOnQueue(
+  queue: FollowupQueueState,
+  run: FollowupRun | undefined,
+): void {
+  if (!run?.durableId || run.deliveryPayloads === undefined) {
+    return;
+  }
+  const carrier = queue.items.find((item) => item.durableId === run.durableId);
+  if (!carrier) {
+    return;
+  }
+  carrier.durableIds = run.durableIds;
+  carrier.deliveryPayloads = run.deliveryPayloads;
+}
+
+/** Remove only the FIFO head and summary entries represented by a staged turn. */
+function consumeStagedDeliveryQueueHead(
+  queue: FollowupQueueState,
+  sourceDurableIds: string[],
+): void {
+  const represented = new Set(sourceDurableIds);
+  let itemCount = 0;
+  for (const item of queue.items) {
+    if (!item.durableId || !represented.has(item.durableId)) {
+      break;
+    }
+    itemCount += 1;
+  }
+  queue.items.splice(0, itemCount);
+  for (const id of represented) {
+    queue.summarizedDurableFollowups?.delete(id);
+  }
+  syncFollowupQueueSummary(queue);
 }
 
 async function waitForDurableRetry(queue: FollowupQueueState): Promise<void> {
@@ -225,6 +302,7 @@ export function scheduleFollowupDrain(
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
     let attemptedDurableIds: string[] = [];
+    let attemptedRun: FollowupRun | undefined;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -234,6 +312,17 @@ export function scheduleFollowupDrain(
           break;
         }
         await waitForQueueDebounce(queue);
+        const stagedHead = await loadStagedDeliveryAtQueueHead(queue);
+        if (stagedHead) {
+          // A completed turn owns only this FIFO head. A later enqueue must
+          // survive for a fresh model turn after the staged send succeeds.
+          attemptedDurableIds = [stagedHead.carrierId];
+          await runFollowup(stagedHead.run);
+          await completeDurableFollowup(stagedHead.carrierId);
+          consumeStagedDeliveryQueueHead(queue, stagedHead.sourceDurableIds);
+          attemptedDurableIds = [];
+          continue;
+        }
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.
@@ -249,6 +338,7 @@ export function scheduleFollowupDrain(
             items: queue.items,
             run: async (item) => {
               attemptedDurableIds = collectDurableIds([item]);
+              attemptedRun = item;
               await runFollowup(item);
               // Mixed-target collect mode shifts exactly one item after this
               // callback succeeds. Match that removal boundary on disk so a
@@ -291,6 +381,7 @@ export function scheduleFollowupDrain(
             ...routing,
           };
           attemptedDurableIds = collectDurableIds(items, summarizedDurableIds);
+          attemptedRun = collectedRun;
           await runFollowup(collectedRun);
           // The collected turn represents every snapshotted item. Only remove
           // their records after the agent turn and reply routing both return.
@@ -327,6 +418,7 @@ export function scheduleFollowupDrain(
                 originatingThreadId: item.originatingThreadId,
               };
               attemptedDurableIds = collectDurableIds([item], summarizedDurableIds);
+              attemptedRun = summaryRun;
               await runFollowup(summaryRun);
               await completeDurableFollowup(item.durableId);
               await completeSummarizedDurableFollowups(queue, summarizedDurableIds);
@@ -342,6 +434,7 @@ export function scheduleFollowupDrain(
         if (
           !(await drainNextQueueItem(queue.items, async (item) => {
             attemptedDurableIds = collectDurableIds([item]);
+            attemptedRun = item;
             await runFollowup(item);
             await completeDurableFollowup(item.durableId);
             attemptedDurableIds = [];
@@ -352,6 +445,7 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
+      retainStagedDeliveryOnQueue(queue, attemptedRun);
       try {
         // Only the attempted turn earns backoff. Collect/summary attempts name
         // every represented record; untouched FIFO items keep attempt zero.

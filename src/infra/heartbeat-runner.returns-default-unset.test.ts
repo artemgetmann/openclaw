@@ -1630,6 +1630,86 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("consumes a restart continuation when the agent returns an empty result", async () => {
+    const { cfg, sessionKey, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:op-empty");
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const failureSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationFailed")
+      .mockResolvedValue("restart:op-empty");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (_ctx, options) => {
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("restart-empty-run");
+      return undefined;
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(ackSpy).toHaveBeenCalledWith({
+        sessionKey,
+        contextKeys: ["restart:op-empty"],
+      });
+      expect(failureSpy).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
+      failureSpy.mockRestore();
+    }
+  });
+
+  it("consumes a restart continuation when NO_REPLY resolves to no payload", async () => {
+    const { cfg, sessionKey, sendWhatsApp } =
+      await seedRestartContinuationHeartbeat("restart:op-no-reply");
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const failureSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationFailed")
+      .mockResolvedValue("restart:op-no-reply");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (_ctx, options) => {
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("restart-no-reply-run");
+      // The reply layer normalizes an intentional NO_REPLY into an empty
+      // payload before heartbeat-runner receives it.
+      return [];
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(ackSpy).toHaveBeenCalledWith({
+        sessionKey,
+        contextKeys: ["restart:op-no-reply"],
+      });
+      expect(failureSpy).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
+      failureSpy.mockRestore();
+    }
+  });
+
   it("requeues a restart event drained by an active-session drop before agent execution", async () => {
     const { cfg, sessionKey, sendWhatsApp } =
       await seedRestartContinuationHeartbeat("restart:op-active");

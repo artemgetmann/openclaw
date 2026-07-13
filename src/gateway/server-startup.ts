@@ -207,17 +207,12 @@ export async function startGatewaySidecars(params: {
     logPhase("internal hook loading skipped");
   }
 
-  try {
-    const restoredFollowups = await restoreDurableFollowupRuns({
-      runFollowup: createRestoredFollowupRunner(),
-    });
-    if (restoredFollowups > 0) {
-      logPhase(`restored ${restoredFollowups} durable followup(s)`);
-    }
-  } catch (err) {
-    // Channel startup may continue, but its transport cursor must not advance
-    // for new busy-session messages unless their own durable write succeeds.
-    params.log.warn(`durable followup recovery failed: ${String(err)}`);
+  // Fail closed: unreadable durable state must stop startup before any channel opens.
+  const restoredFollowups = await restoreDurableFollowupRuns({
+    runFollowup: createRestoredFollowupRunner(),
+  });
+  if (restoredFollowups > 0) {
+    logPhase(`restored ${restoredFollowups} durable followup(s)`);
   }
 
   // Launch configured channels so gateway replies via the surface the message came from.

@@ -70,7 +70,10 @@ describe("durable followup retry backoff", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await vi.advanceTimersByTimeAsync(0);
-    expect(runFollowup).toHaveBeenCalledTimes(1);
+    // Staged-head discovery now performs an async durable-store read before
+    // ordinary processing. Wait for that I/O boundary instead of assuming the
+    // first callback is reachable in a single timer microtask.
+    await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(1));
     let failed = (await loadDurableFollowups())[0];
     await vi.waitFor(
       async () => {
@@ -79,13 +82,16 @@ describe("durable followup retry backoff", () => {
       },
       { interval: 1, timeout: 100 },
     );
-    expect(failed?.nextAttemptAt).toBe(failedAt + 1_000);
+    // `vi.waitFor` advances fake time while the new durable read settles. The
+    // retry delay is still measured from the actual failure boundary, so prove
+    // the full one-second floor without coupling to that test-poll interval.
+    expect((failed?.nextAttemptAt ?? failedAt) - failedAt).toBeGreaterThanOrEqual(1_000);
 
     const remainingMs = (failed?.nextAttemptAt ?? Date.now()) - Date.now();
     await vi.advanceTimersByTimeAsync(remainingMs - 1);
     expect(runFollowup).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(runFollowup).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(2));
   });
 
   it("grows retry delay exponentially and caps it", async () => {
@@ -121,7 +127,7 @@ describe("durable followup retry backoff", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(runFollowup).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(runFollowup).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(1));
     releaseModel();
     await vi.advanceTimersByTimeAsync(0);
   });
