@@ -10,7 +10,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { ackDurableFollowup } from "./durable-store.js";
+import { completeDurableFollowup } from "./durable-store.js";
 import { FOLLOWUP_QUEUES, type FollowupQueueState } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -51,7 +51,7 @@ function collectDurableIds(items: FollowupRun[], summarizedIds: string[] = []): 
   );
 }
 
-async function ackSummarizedDurableFollowups(
+async function completeSummarizedDurableFollowups(
   queue: FollowupQueueState,
   ids: string[],
 ): Promise<void> {
@@ -61,7 +61,7 @@ async function ackSummarizedDurableFollowups(
   // Delete from the in-memory ownership set only after every disk ack succeeds.
   // IDs added while the summary turn is running are intentionally left for the
   // next summary snapshot, because the current prompt did not represent them.
-  await Promise.all(ids.map((id) => ackDurableFollowup(id)));
+  await Promise.all(ids.map((id) => completeDurableFollowup(id)));
   for (const id of ids) {
     queue.summarizedDurableIds?.delete(id);
   }
@@ -185,7 +185,7 @@ export function scheduleFollowupDrain(
               // Mixed-target collect mode shifts exactly one item after this
               // callback succeeds. Match that removal boundary on disk so a
               // restart cannot resurrect work that already completed.
-              await ackDurableFollowup(item.durableId);
+              await completeDurableFollowup(item.durableId);
             },
           });
           if (collectDrainResult === "empty") {
@@ -223,9 +223,9 @@ export function scheduleFollowupDrain(
           });
           // The collected turn represents every snapshotted item. Only remove
           // their records after the agent turn and reply routing both return.
-          await Promise.all(items.map((item) => ackDurableFollowup(item.durableId)));
+          await Promise.all(items.map((item) => completeDurableFollowup(item.durableId)));
           if (summary) {
-            await ackSummarizedDurableFollowups(queue, summarizedDurableIds);
+            await completeSummarizedDurableFollowups(queue, summarizedDurableIds);
             consumeQueueSummarySnapshot(queue, summaryState);
           }
           queue.items.splice(0, items.length);
@@ -254,8 +254,8 @@ export function scheduleFollowupDrain(
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
               });
-              await ackDurableFollowup(item.durableId);
-              await ackSummarizedDurableFollowups(queue, summarizedDurableIds);
+              await completeDurableFollowup(item.durableId);
+              await completeSummarizedDurableFollowups(queue, summarizedDurableIds);
               consumeQueueSummarySnapshot(queue, summaryState);
             }))
           ) {
@@ -267,7 +267,7 @@ export function scheduleFollowupDrain(
         if (
           !(await drainNextQueueItem(queue.items, async (item) => {
             await runFollowup(item);
-            await ackDurableFollowup(item.durableId);
+            await completeDurableFollowup(item.durableId);
           }))
         ) {
           break;

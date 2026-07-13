@@ -9,6 +9,7 @@ import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  consumeRestartSentinelIfTerminal,
   consumeRestartSentinel,
   formatRestartSentinelMessage,
   readRestartRecoveryMarker,
@@ -90,7 +91,7 @@ async function markOperationDelivery(params: {
   state: RestartOperationRecord["delivery"]["receipt"];
   error?: string;
 }): Promise<void> {
-  await updateRestartSentinel((current) => {
+  const updated = await updateRestartSentinel((current) => {
     if (!current.operation || current.operation.id !== params.operationId) {
       return current;
     }
@@ -107,6 +108,9 @@ async function markOperationDelivery(params: {
       },
     };
   });
+  if (updated?.operation?.id === params.operationId) {
+    await consumeRestartSentinelIfTerminal(params.operationId);
+  }
 }
 
 async function reconcileRestartOperation(params: {
@@ -115,9 +119,19 @@ async function reconcileRestartOperation(params: {
 }): Promise<void> {
   const { operation } = params;
   const now = Date.now();
+  const isTerminal = (state: RestartOperationRecord["delivery"]["receipt"]) =>
+    state === "delivered" || state === "skipped";
+  if (isTerminal(operation.delivery.receipt) && isTerminal(operation.delivery.continuation)) {
+    // A prior process may crash after the terminal state write but before its
+    // unlink. Startup must consume that stale success instead of treating it as
+    // an operation that still needs reconciliation forever.
+    clearRestartOperationRetry(operation.id);
+    await consumeRestartSentinelIfTerminal(operation.id);
+    return;
+  }
   if (operation.expiresAt <= now) {
     clearRestartOperationRetry(operation.id);
-    await updateRestartSentinel((current) => {
+    const updated = await updateRestartSentinel((current) => {
       if (!current.operation || current.operation.id !== operation.id) {
         return current;
       }
@@ -136,6 +150,9 @@ async function reconcileRestartOperation(params: {
         },
       };
     });
+    if (updated?.operation?.id === operation.id) {
+      await consumeRestartSentinelIfTerminal(operation.id);
+    }
     return;
   }
 

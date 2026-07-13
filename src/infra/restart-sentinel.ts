@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
-import { writeJsonAtomic } from "./json-files.js";
+import { createAsyncLock, writeJsonAtomic } from "./json-files.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 export type RestartSentinelLog = {
@@ -84,6 +84,13 @@ export type RestartOperationRecord = {
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
 const RESTART_OPERATION_TTL_MS = 10 * 60 * 1000;
+const withRestartSentinelLock = createAsyncLock();
+
+function isRestartOperationTerminal(operation: RestartOperationRecord): boolean {
+  const terminal = (state: RestartOperationDeliveryState) =>
+    state === "delivered" || state === "skipped";
+  return terminal(operation.delivery.receipt) && terminal(operation.delivery.continuation);
+}
 
 function resolveRestartRecoveryMarkerPath(
   operationId: string,
@@ -207,10 +214,12 @@ export async function writeRestartSentinel(
   const filePath = resolveRestartSentinelPath(env);
   const operation = buildRestartOperation(payload);
   const data: RestartSentinel = { version: 1, payload, operation };
-  await writeJsonAtomic(filePath, data, {
-    mode: 0o600,
-    ensureDirMode: 0o700,
-    trailingNewline: true,
+  await withRestartSentinelLock(async () => {
+    await writeJsonAtomic(filePath, data, {
+      mode: 0o600,
+      ensureDirMode: 0o700,
+      trailingNewline: true,
+    });
   });
   if (operation) {
     scheduleDetachedRestartRecoveryWatcher({ operation, env });
@@ -222,17 +231,54 @@ export async function updateRestartSentinel(
   update: (current: RestartSentinel) => RestartSentinel,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const current = await readRestartSentinel(env);
-  if (!current) {
-    return null;
-  }
-  const next = update(current);
-  await writeJsonAtomic(resolveRestartSentinelPath(env), next, {
-    mode: 0o600,
-    ensureDirMode: 0o700,
-    trailingNewline: true,
+  return withRestartSentinelLock(async () => {
+    const current = await readRestartSentinel(env);
+    if (!current) {
+      return null;
+    }
+    const next = update(current);
+    await writeJsonAtomic(resolveRestartSentinelPath(env), next, {
+      mode: 0o600,
+      ensureDirMode: 0o700,
+      trailingNewline: true,
+    });
+    return next;
   });
-  return next;
+}
+
+/**
+ * Remove only the matching fully terminal operation. Serializing this compare
+ * and unlink with sentinel writes prevents completion of an older restart from
+ * deleting a newer restart request that reused the single sentinel pathname.
+ */
+export async function consumeRestartSentinelIfTerminal(
+  operationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  return withRestartSentinelLock(async () => {
+    const current = await readRestartSentinel(env);
+    if (
+      !current?.operation ||
+      current.operation.id !== operationId ||
+      !isRestartOperationTerminal(current.operation)
+    ) {
+      return false;
+    }
+    try {
+      await fs.unlink(resolveRestartSentinelPath(env));
+    } catch (err) {
+      // Another successful terminal consumer may win the unlink race. Every
+      // other filesystem failure must propagate; claiming cleanup while stale
+      // sentinel state remains would recreate the review blocker.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+    // The detached observer's marker is scoped to this operation and has no
+    // value once both receipt and continuation are terminal.
+    await fs.unlink(resolveRestartRecoveryMarkerPath(operationId, env)).catch(() => undefined);
+    return true;
+  });
 }
 
 /**
@@ -257,7 +303,7 @@ export async function markRestartContinuationConsumed(params: {
   }
 
   let marked = false;
-  await updateRestartSentinel((current) => {
+  const updated = await updateRestartSentinel((current) => {
     const operation = current.operation;
     if (
       !operation ||
@@ -282,6 +328,9 @@ export async function markRestartContinuationConsumed(params: {
       },
     };
   }, params.env);
+  if (marked && updated?.operation && isRestartOperationTerminal(updated.operation)) {
+    await consumeRestartSentinelIfTerminal(updated.operation.id, params.env);
+  }
   return marked;
 }
 
@@ -309,7 +358,7 @@ export async function markRestartContinuationFailed(params: {
 
   const now = Date.now();
   let retryContextKey: string | null = null;
-  await updateRestartSentinel((current) => {
+  const updated = await updateRestartSentinel((current) => {
     const operation = current.operation;
     if (
       !operation ||
@@ -340,6 +389,9 @@ export async function markRestartContinuationFailed(params: {
       },
     };
   }, params.env);
+  if (updated?.operation && isRestartOperationTerminal(updated.operation)) {
+    await consumeRestartSentinelIfTerminal(updated.operation.id, params.env);
+  }
   return retryContextKey;
 }
 
@@ -394,13 +446,15 @@ export async function readRestartSentinel(
 export async function consumeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const filePath = resolveRestartSentinelPath(env);
-  const parsed = await readRestartSentinel(env);
-  if (!parsed) {
-    return null;
-  }
-  await fs.unlink(filePath).catch(() => {});
-  return parsed;
+  return withRestartSentinelLock(async () => {
+    const filePath = resolveRestartSentinelPath(env);
+    const parsed = await readRestartSentinel(env);
+    if (!parsed) {
+      return null;
+    }
+    await fs.unlink(filePath).catch(() => {});
+    return parsed;
+  });
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {

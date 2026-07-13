@@ -9,9 +9,12 @@ import {
 } from "./drain.js";
 import {
   ackDurableFollowup,
+  cleanupDurableProcessedMessages,
   DurableFollowupCancelledError,
   hydrateDurableFollowup,
   isDurableFollowupRecordCancelled,
+  isDurableFollowupMessageProcessed,
+  isDurableFollowupRecordProcessed,
   loadDurableFollowups,
   persistDurableFollowup,
 } from "./durable-store.js";
@@ -128,6 +131,12 @@ export async function enqueueFollowupRunDurable(
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
 ): Promise<boolean> {
+  // A provider may redeliver after this queue has successfully drained but
+  // before its transport cursor reaches disk. Check the bounded durable receipt
+  // before creating a second replayable input record.
+  if (await isDurableFollowupMessageProcessed({ queueKey: key, run })) {
+    return false;
+  }
   let record;
   try {
     record = await persistDurableFollowup({ queueKey: key, run, settings });
@@ -141,6 +150,12 @@ export async function enqueueFollowupRunDurable(
   // this continuation resumes. From here through RAM enqueue is synchronous,
   // so this final cutoff check closes the remaining interleaving window.
   if (isDurableFollowupRecordCancelled(record)) {
+    await ackDurableFollowup(record.id);
+    return false;
+  }
+  // Close the race where the original drain publishes its success receipt
+  // while this duplicate's initial receipt lookup/persist is in flight.
+  if (await isDurableFollowupRecordProcessed(record)) {
     await ackDurableFollowup(record.id);
     return false;
   }
@@ -188,11 +203,21 @@ async function handleRemovedDurableFollowups(params: {
 export async function restoreDurableFollowupRuns(params?: {
   runFollowup?: (run: FollowupRun) => Promise<void>;
 }): Promise<number> {
+  // Startup is the guaranteed maintenance tick even when no new completions
+  // occur. Keep normal runner delivery lookups O(queue-records), not O(10k
+  // processed receipts), by pruning explicitly at restore instead.
+  await cleanupDurableProcessedMessages();
   const records = await loadDurableFollowups();
   const config = loadConfig();
   const restoredQueueKeys = new Set<string>();
   let restored = 0;
   for (const record of records) {
+    if (await isDurableFollowupRecordProcessed(record)) {
+      // Completion receipts are the durable source of truth if an unlink failed
+      // after delivery. Do not resurrect that stale queue input on startup.
+      await ackDurableFollowup(record.id);
+      continue;
+    }
     const existingItems = getExistingFollowupQueue(record.queueKey)?.items ?? [];
     if (existingItems.some((item) => item.durableId === record.id)) {
       // Queue state is process-global and can survive a SIGUSR1 module reload.

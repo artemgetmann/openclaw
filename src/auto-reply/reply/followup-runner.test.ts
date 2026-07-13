@@ -774,6 +774,71 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await Promise.all([first.id, second.id].map((id) => ackDurableFollowup(id)));
     await expect(loadDurableFollowups()).resolves.toEqual([]);
   });
+
+  it("restores an empty completed stage without rerunning the agent", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "empty-delivery-retry",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner({ ...queued, durableId: input.id });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([]);
+
+    // Restart hydration must preserve stage presence even though the payload
+    // array is empty. NO_REPLY/suppressed work is complete, not missing.
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("restores a suppressed automatic reply without rerunning the agent", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      run: { messageProvider: "heartbeat" },
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "suppressed-delivery-retry",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "automatic reply that must be suppressed" }],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner({ ...queued, durableId: input.id });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([]);
+
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("createFollowupRunner agentDir forwarding", () => {

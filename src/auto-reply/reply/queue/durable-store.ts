@@ -12,13 +12,24 @@ import type { FollowupRun, QueueSettings } from "./types.js";
 const STORE_VERSION = 1;
 const QUEUE_DIRNAME = "followup-queue";
 const CANCELLATION_DIRNAME = "followup-queue-cancellations";
+const PROCESSED_MESSAGE_DIRNAME = "followup-queue-processed";
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+const PROCESSED_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_PROCESSED_MESSAGES = 10_000;
 
 type DurableFollowupCancellation = {
   version: typeof STORE_VERSION;
   id: string;
   queueKey: string;
   cancelledAt: number;
+};
+
+type DurableProcessedMessage = {
+  version: typeof STORE_VERSION;
+  /** SHA-256 of queue + route + provider message ID; raw identifiers never land here. */
+  key: string;
+  processedAt: number;
+  expiresAt: number;
 };
 
 export class DurableFollowupCancelledError extends Error {
@@ -39,8 +50,12 @@ export type DurableFollowupRecord = {
   /** Present after agent/tool completion and before successful outbound delivery. */
   delivery?: {
     sourceDurableIds: string[];
+    /** Every original message represented by this carrier, including collect/summary inputs. */
+    processedMessageKeys: string[];
     payloads: ReplyPayload[];
   };
+  /** Opaque identity used only after successful drain to suppress provider redelivery. */
+  processedMessageKey?: string;
   /** Cancellation generation already present when this new work began. */
   acceptedCancellationId?: string;
   createdAt: number;
@@ -67,6 +82,170 @@ function resolveDurableFollowupCancellationPath(
   // them into an opaque, filesystem-safe name instead of leaking them in state.
   const filename = createHash("sha256").update(queueKey).digest("hex");
   return path.join(resolveDurableFollowupCancellationDir(env), `${filename}.json`);
+}
+
+function resolveDurableProcessedMessageDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), PROCESSED_MESSAGE_DIRNAME);
+}
+
+function resolveDurableProcessedMessagePath(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.join(resolveDurableProcessedMessageDir(env), `${key}.json`);
+}
+
+/**
+ * Provider message IDs are only unique inside their route/account namespace.
+ * Hash the complete tuple so dedupe distinguishes genuinely new messages while
+ * the durable receipt directory reveals neither chat IDs nor message IDs.
+ */
+export function buildDurableFollowupMessageKey(
+  queueKey: string,
+  run: Pick<
+    FollowupRun,
+    | "messageId"
+    | "originatingChannel"
+    | "originatingTo"
+    | "originatingAccountId"
+    | "originatingThreadId"
+  >,
+): string | undefined {
+  const messageId = run.messageId?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  const identity = JSON.stringify([
+    "queue",
+    queueKey,
+    run.originatingChannel ?? "",
+    run.originatingTo ?? "",
+    run.originatingAccountId ?? "",
+    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
+    messageId,
+  ]);
+  return createHash("sha256").update(identity).digest("hex");
+}
+
+async function isDurableProcessedMessageKey(
+  key: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): Promise<boolean> {
+  if (!key) {
+    return false;
+  }
+  const filePath = resolveDurableProcessedMessagePath(key, env);
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(filePath, "utf8"),
+    ) as Partial<DurableProcessedMessage>;
+    if (
+      parsed.version === STORE_VERSION &&
+      parsed.key === key &&
+      typeof parsed.expiresAt === "number" &&
+      parsed.expiresAt > now
+    ) {
+      return true;
+    }
+    // Expired or malformed receipts cannot suppress a genuinely new delivery.
+    await fs.rm(filePath, { force: true });
+    return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
+}
+
+export async function isDurableFollowupMessageProcessed(params: {
+  queueKey: string;
+  run: FollowupRun;
+  env?: NodeJS.ProcessEnv;
+  now?: number;
+}): Promise<boolean> {
+  return isDurableProcessedMessageKey(
+    buildDurableFollowupMessageKey(params.queueKey, params.run),
+    params.env,
+    params.now,
+  );
+}
+
+async function pruneDurableProcessedMessages(env: NodeJS.ProcessEnv, now: number): Promise<void> {
+  const dir = resolveDurableProcessedMessageDir(env);
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+
+  const live: Array<{ name: string; processedAt: number }> = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) {
+      continue;
+    }
+    const filePath = path.join(dir, name);
+    try {
+      const parsed = JSON.parse(
+        await fs.readFile(filePath, "utf8"),
+      ) as Partial<DurableProcessedMessage>;
+      if (
+        parsed.version !== STORE_VERSION ||
+        typeof parsed.key !== "string" ||
+        typeof parsed.processedAt !== "number" ||
+        typeof parsed.expiresAt !== "number" ||
+        parsed.expiresAt <= now
+      ) {
+        await fs.rm(filePath, { force: true });
+        continue;
+      }
+      live.push({ name, processedAt: parsed.processedAt });
+    } catch {
+      await fs.rm(filePath, { force: true }).catch(() => undefined);
+    }
+  }
+
+  // Keep the newest bounded set. Cleanup is intentionally independent of raw
+  // provider identifiers because filenames and file contents are opaque hashes.
+  const overflow = live
+    .toSorted((a, b) => b.processedAt - a.processedAt || b.name.localeCompare(a.name))
+    .slice(MAX_PROCESSED_MESSAGES);
+  await Promise.all(overflow.map(({ name }) => fs.rm(path.join(dir, name), { force: true })));
+}
+
+/** Startup maintenance for the bounded processed-message receipt directory. */
+export async function cleanupDurableProcessedMessages(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): Promise<void> {
+  await pruneDurableProcessedMessages(env, now);
+}
+
+async function persistDurableProcessedMessageKeys(
+  keys: Iterable<string>,
+  env: NodeJS.ProcessEnv,
+  now: number,
+): Promise<void> {
+  await Promise.all(
+    [...new Set(keys)].map((key) => {
+      const receipt: DurableProcessedMessage = {
+        version: STORE_VERSION,
+        key,
+        processedAt: now,
+        expiresAt: now + PROCESSED_MESSAGE_TTL_MS,
+      };
+      return writeJsonAtomic(resolveDurableProcessedMessagePath(key, env), receipt, {
+        mode: 0o600,
+        ensureDirMode: 0o700,
+        trailingNewline: true,
+      });
+    }),
+  );
 }
 
 function loadDurableFollowupCancellationSync(
@@ -141,6 +320,7 @@ export async function persistDurableFollowup(params: {
     queueKey: params.queueKey,
     settings: params.settings,
     run: { ...safeFollowupRun, durableId: id, run: safeRunConfig },
+    processedMessageKey: buildDurableFollowupMessageKey(params.queueKey, params.run),
     acceptedCancellationId: cancellationAtStart?.id,
     createdAt: now,
     expiresAt: now + Math.max(1, params.ttlMs ?? DEFAULT_TTL_MS),
@@ -168,6 +348,7 @@ export function hydrateDurableFollowup(
     ...record.run,
     durableId: record.id,
     durableIds: record.delivery?.sourceDurableIds,
+    // Presence, including an empty array, means agent/tool execution completed.
     deliveryPayloads: record.delivery?.payloads,
     run: { ...record.run.run, config },
   };
@@ -198,14 +379,15 @@ export async function persistDurableFollowupDelivery(params: {
   }
   const env = params.env ?? process.env;
   let carrier: DurableFollowupRecord | undefined;
+  const sourceRecords: DurableFollowupRecord[] = [];
   for (const id of sourceDurableIds) {
     try {
       const parsed = JSON.parse(
         await fs.readFile(resolveDurableFollowupPath(id, env), "utf8"),
       ) as unknown;
       if (isDurableFollowupRecord(parsed)) {
-        carrier = parsed;
-        break;
+        carrier ??= parsed;
+        sourceRecords.push(parsed);
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -229,7 +411,21 @@ export async function persistDurableFollowupDelivery(params: {
     // required by adapters (Slack blocks, Telegram flags, etc.). It may contain
     // generated user content, but never runtime config/auth: those remain only
     // in `FollowupRun.run.config`, which the disk schema excludes above.
-    delivery: { sourceDurableIds, payloads: params.payloads },
+    delivery: {
+      sourceDurableIds,
+      // Covered inputs are removed before outbound delivery. Preserve every
+      // constituent's opaque identity on the carrier so successful completion
+      // can publish receipts for collect/summarize batches, not just one file.
+      processedMessageKeys: [
+        ...new Set(
+          sourceRecords.flatMap((source) => [
+            source.processedMessageKey,
+            ...(source.delivery?.processedMessageKeys ?? []),
+          ]),
+        ),
+      ].filter((key): key is string => Boolean(key)),
+      payloads: params.payloads,
+    },
   };
   await writeJsonAtomic(resolveDurableFollowupPath(record.id, env), record, {
     mode: 0o600,
@@ -283,6 +479,79 @@ export async function ackDurableFollowup(
     return;
   }
   await fs.rm(resolveDurableFollowupPath(cleaned, env), { force: true });
+}
+
+/**
+ * Complete a successfully drained record without reopening the Telegram offset
+ * race. Receipts land before queue input deletion, so a crash or provider
+ * redelivery after delivery but before cursor persistence cannot run a second
+ * agent turn. Plain `ackDurableFollowup` remains cancellation/drop semantics.
+ */
+export async function completeDurableFollowup(
+  id: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const cleaned = id?.trim();
+  if (!cleaned) {
+    return;
+  }
+  const filePath = resolveDurableFollowupPath(cleaned, env);
+  let record: DurableFollowupRecord | undefined;
+  try {
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    if (isDurableFollowupRecord(parsed)) {
+      record = parsed;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+    return;
+  }
+  if (!record) {
+    await fs.rm(filePath, { force: true });
+    return;
+  }
+
+  const now = Date.now();
+  const processedMessageKeys = [
+    ...new Set([record.processedMessageKey, ...(record.delivery?.processedMessageKeys ?? [])]),
+  ].filter((key): key is string => Boolean(key));
+  await persistDurableProcessedMessageKeys(processedMessageKeys, env, now);
+
+  // Once every receipt is durable, a leftover input file is harmless: restore
+  // checks the same receipts before enqueue. Best-effort cleanup avoids turning
+  // a post-delivery unlink failure into an immediate duplicate provider send.
+  await Promise.all(
+    [cleaned, ...(record.delivery?.sourceDurableIds ?? [])].map((sourceId) =>
+      fs.rm(resolveDurableFollowupPath(sourceId, env), { force: true }).catch(() => undefined),
+    ),
+  );
+  // Receipt publication is the correctness boundary; pruning is storage hygiene.
+  // A later successful completion retries cleanup if this best-effort pass fails.
+  await pruneDurableProcessedMessages(env, now).catch(() => undefined);
+}
+
+export async function isDurableFollowupRecordProcessed(
+  record: DurableFollowupRecord,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const keys = [
+    ...new Set([record.processedMessageKey, ...(record.delivery?.processedMessageKeys ?? [])]),
+  ].filter((key): key is string => Boolean(key));
+  if (keys.length === 0) {
+    return false;
+  }
+  const processed = await Promise.all(keys.map((key) => isDurableProcessedMessageKey(key, env)));
+  if (!processed.some(Boolean)) {
+    return false;
+  }
+  // Publishing several constituent receipts cannot be one filesystem atomic
+  // operation. Any landed receipt proves this carrier passed successful drain;
+  // repair the missing siblings before suppressing restore/redelivery. If that
+  // repair fails, startup/enqueue fails closed instead of rerunning side effects.
+  await persistDurableProcessedMessageKeys(keys, env, Date.now());
+  return true;
 }
 
 /**

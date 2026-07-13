@@ -22,8 +22,12 @@ vi.mock("../../../infra/json-files.js", async (importOriginal) => {
 import {
   ackDurableFollowup,
   ackDurableFollowupsForQueueSync,
+  cleanupDurableProcessedMessages,
+  completeDurableFollowup,
   DurableFollowupCancelledError,
   hydrateDurableFollowup,
+  isDurableFollowupMessageProcessed,
+  isDurableFollowupRecordProcessed,
   loadDurableFollowupDelivery,
   loadDurableFollowups,
   persistDurableFollowup,
@@ -117,7 +121,7 @@ describe("durable followup queue", () => {
     });
     const second = await persistDurableFollowup({
       queueKey: "delivery-stage",
-      run: createRun("second input"),
+      run: { ...createRun("second input"), messageId: "telegram:102" },
       settings,
     });
     const synthetic = createRun("collected input");
@@ -130,6 +134,7 @@ describe("durable followup queue", () => {
     });
 
     expect(delivery?.delivery?.sourceDurableIds).toEqual([first.id, second.id]);
+    expect(delivery?.delivery?.processedMessageKeys).toHaveLength(2);
     await expect(loadDurableFollowups()).resolves.toEqual([delivery]);
     await expect(loadDurableFollowupDelivery([second.id])).resolves.toEqual(delivery);
     await expect(fs.readdir(path.join(stateDir, "followup-queue"))).resolves.toEqual([
@@ -145,6 +150,52 @@ describe("durable followup queue", () => {
     ]);
     await ackDurableFollowup(delivery?.id);
     await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("repairs partial collect receipts without replaying completed delivery", async () => {
+    const queueKey = "partial-processed-receipts";
+    const firstRun = createRun("first input");
+    const secondRun = { ...createRun("second input"), messageId: "telegram:102" };
+    const first = await persistDurableFollowup({ queueKey, run: firstRun, settings });
+    const second = await persistDurableFollowup({ queueKey, run: secondRun, settings });
+    const delivery = await persistDurableFollowupDelivery({
+      run: { ...createRun("collected input"), durableIds: [first.id, second.id] },
+      payloads: [{ text: "completed output" }],
+    });
+    expect(delivery).toBeDefined();
+
+    // Simulate a crash during multi-receipt publication: only the first
+    // constituent's hash landed. Recovery must treat that as proof the carrier
+    // already drained, repair the second receipt, and never resend the carrier.
+    const duplicateFirst = await persistDurableFollowup({ queueKey, run: firstRun, settings });
+    await completeDurableFollowup(duplicateFirst.id);
+    await expect(isDurableFollowupRecordProcessed(delivery!)).resolves.toBe(true);
+    await expect(isDurableFollowupMessageProcessed({ queueKey, run: firstRun })).resolves.toBe(
+      true,
+    );
+    await expect(isDurableFollowupMessageProcessed({ queueKey, run: secondRun })).resolves.toBe(
+      true,
+    );
+    await expect(fs.readdir(path.join(stateDir, "followup-queue-processed"))).resolves.toHaveLength(
+      2,
+    );
+  });
+
+  it("prunes expired processed receipts during startup load", async () => {
+    const record = await persistDurableFollowup({
+      queueKey: "expired-receipt",
+      run: createRun(),
+      settings,
+    });
+    await completeDurableFollowup(record.id);
+    const receiptDir = path.join(stateDir, "followup-queue-processed");
+    const [receiptName] = await fs.readdir(receiptDir);
+    const receiptPath = path.join(receiptDir, receiptName ?? "missing");
+    const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8")) as Record<string, unknown>;
+    await fs.writeFile(receiptPath, JSON.stringify({ ...receipt, expiresAt: 1 }));
+
+    await expect(cleanupDurableProcessedMessages(process.env, 2)).resolves.toBeUndefined();
+    await expect(fs.readdir(receiptDir)).resolves.toEqual([]);
   });
 
   it("does not route a carrier rewritten after its queue was cancelled", async () => {

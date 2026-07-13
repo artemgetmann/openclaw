@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../../test-utils/env.js";
-import { loadDurableFollowups } from "./durable-store.js";
+import { completeDurableFollowup, loadDurableFollowups } from "./durable-store.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
 vi.mock("./drain.js", () => ({
@@ -12,8 +12,12 @@ vi.mock("./drain.js", () => ({
   scheduleFollowupDrain: vi.fn(),
 }));
 
-const { enqueueFollowupRunDurable, getFollowupQueueDepth, restoreDurableFollowupRuns } =
-  await import("./enqueue.js");
+const {
+  enqueueFollowupRunDurable,
+  getFollowupQueueDepth,
+  resetRecentQueuedMessageIdDedupe,
+  restoreDurableFollowupRuns,
+} = await import("./enqueue.js");
 const { retainSummarizedDurableFollowups, scheduleFollowupDrain } = await import("./drain.js");
 const { clearFollowupQueue, FOLLOWUP_QUEUES } = await import("./state.js");
 
@@ -61,6 +65,7 @@ describe("durable followup enqueue", () => {
 
   afterEach(async () => {
     clearFollowupQueue(key);
+    resetRecentQueuedMessageIdDedupe();
     envSnapshot.restore();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -136,5 +141,36 @@ describe("durable followup enqueue", () => {
     // Restore the valid test directory so cancellation cleanup can scan the
     // durable store without masking this persistence-failure assertion.
     process.env.OPENCLAW_STATE_DIR = stateDir;
+  });
+
+  it("rejects drained provider redelivery after process-memory reset but accepts a new message", async () => {
+    const original = createRun();
+    await expect(enqueueFollowupRunDurable(key, original, settings)).resolves.toBe(true);
+    const [record] = await loadDurableFollowups();
+    expect(record).toBeDefined();
+    await completeDurableFollowup(record?.id);
+
+    // Model a restart after queue drain but before Telegram's update offset
+    // write: both live queue state and the five-minute RAM cache disappear.
+    FOLLOWUP_QUEUES.delete(key);
+    resetRecentQueuedMessageIdDedupe();
+    await expect(enqueueFollowupRunDurable(key, original, settings)).resolves.toBe(false);
+    expect(getFollowupQueueDepth(key)).toBe(0);
+
+    await expect(
+      enqueueFollowupRunDurable(
+        key,
+        { ...original, messageId: "telegram:102", prompt: "genuinely new message" },
+        settings,
+      ),
+    ).resolves.toBe(true);
+    expect(getFollowupQueueDepth(key)).toBe(1);
+
+    const receiptDir = path.join(stateDir, "followup-queue-processed");
+    const receiptNames = await fs.readdir(receiptDir);
+    const receiptRaw = await fs.readFile(path.join(receiptDir, receiptNames[0] ?? ""), "utf8");
+    expect(receiptNames.join("\n")).not.toContain("telegram:101");
+    expect(receiptRaw).not.toContain("telegram:101");
+    expect(receiptRaw).not.toContain("-100123");
   });
 });

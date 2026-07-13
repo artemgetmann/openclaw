@@ -18,6 +18,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { completeDurableFollowup, persistDurableFollowup } from "./queue/durable-store.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -83,10 +84,16 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: vi.fn(),
-  scheduleFollowupDrain: vi.fn(),
-}));
+vi.mock("./queue.js", () => {
+  // Both exports share one spy so older queue-policy assertions continue to
+  // observe the durable enqueue boundary used by production.
+  const enqueue = vi.fn();
+  return {
+    enqueueFollowupRun: enqueue,
+    enqueueFollowupRunDurable: enqueue,
+    scheduleFollowupDrain: vi.fn(),
+  };
+});
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
@@ -160,6 +167,7 @@ function createMinimalRun(params?: {
   return {
     typing,
     opts,
+    followupRun,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
@@ -297,6 +305,36 @@ async function runReplyAgentWithBase(params: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("skips idle direct execution for a drained provider redelivery", async () => {
+    await withStateDirEnv("openclaw-agent-redelivery-", async () => {
+      const duplicate = createMinimalRun();
+      duplicate.followupRun.messageId = "telegram:101";
+      duplicate.followupRun.originatingChannel = "telegram";
+      duplicate.followupRun.originatingTo = "-100123";
+      const record = await persistDurableFollowup({
+        queueKey: "main",
+        run: duplicate.followupRun,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+      });
+      await completeDurableFollowup(record.id);
+
+      await expect(duplicate.run()).resolves.toBeUndefined();
+      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(duplicate.typing.cleanup).toHaveBeenCalledTimes(1);
+
+      const newMessage = createMinimalRun();
+      newMessage.followupRun.messageId = "telegram:102";
+      newMessage.followupRun.originatingChannel = "telegram";
+      newMessage.followupRun.originatingTo = "-100123";
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "new message processed" }],
+        meta: {},
+      });
+      await newMessage.run();
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },

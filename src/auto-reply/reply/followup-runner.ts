@@ -104,6 +104,15 @@ export function createFollowupRunner(params: {
     );
   const shouldThrowProcessingFailure = (queued: FollowupRun): boolean =>
     failureMode === "throw-durable" && resolveDurableIds(queued).length > 0;
+  const persistDeliveryStage = async (queued: FollowupRun, payloads: ReplyPayload[]) => {
+    const deliveryRecord = await persistDurableFollowupDelivery({ run: queued, payloads });
+    if (!deliveryRecord?.delivery) {
+      return;
+    }
+    queued.durableId = deliveryRecord.id;
+    queued.durableIds = deliveryRecord.delivery.sourceDurableIds;
+    queued.deliveryPayloads = deliveryRecord.delivery.payloads;
+  };
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -186,7 +195,7 @@ export function createFollowupRunner(params: {
     try {
       const durableIds = resolveDurableIds(queued);
       const stagedDelivery =
-        queued.deliveryPayloads && queued.deliveryPayloads.length > 0
+        queued.deliveryPayloads !== undefined
           ? undefined
           : await loadDurableFollowupDelivery(durableIds);
       if (stagedDelivery?.delivery) {
@@ -197,7 +206,10 @@ export function createFollowupRunner(params: {
         queued.durableIds = stagedDelivery.delivery.sourceDurableIds;
         queued.deliveryPayloads = stagedDelivery.delivery.payloads;
       }
-      if (queued.deliveryPayloads && queued.deliveryPayloads.length > 0) {
+      if (queued.deliveryPayloads !== undefined) {
+        // Empty is a valid completed stage (NO_REPLY or messaging-tool
+        // suppression). Its presence must skip model/tool execution just like
+        // a non-empty outbound retry.
         await sendFollowupPayloads(queued.deliveryPayloads, queued);
         return;
       }
@@ -360,6 +372,12 @@ export function createFollowupRunner(params: {
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
+        if (durableIds.length > 0) {
+          // The agent completed successfully with no reply at all. Persist that
+          // stage before drain acknowledgement so restart cannot interpret an
+          // intentionally empty result as work that never ran.
+          await persistDeliveryStage(queued, []);
+        }
         return;
       }
       const sanitizedPayloads = payloadArray.flatMap((payload) => {
@@ -416,6 +434,12 @@ export function createFollowupRunner(params: {
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
+        if (durableIds.length > 0) {
+          // Persist the completed empty stage before the queue acknowledges its
+          // input. A crash in this tiny window must not replay agent tools merely
+          // because there is intentionally nothing to send.
+          await persistDeliveryStage(queued, []);
+        }
         return;
       }
 
@@ -441,15 +465,7 @@ export function createFollowupRunner(params: {
         // Commit model-complete output before touching the outbound provider.
         // A routing error can now retry this payload without replaying tools or
         // any other side effects from the already-completed agent turn.
-        const deliveryRecord = await persistDurableFollowupDelivery({
-          run: queued,
-          payloads: finalPayloads,
-        });
-        if (deliveryRecord?.delivery) {
-          queued.durableId = deliveryRecord.id;
-          queued.durableIds = deliveryRecord.delivery.sourceDurableIds;
-          queued.deliveryPayloads = deliveryRecord.delivery.payloads;
-        }
+        await persistDeliveryStage(queued, finalPayloads);
       }
 
       await sendFollowupPayloads(finalPayloads, queued);

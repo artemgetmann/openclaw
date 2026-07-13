@@ -3,12 +3,14 @@ import type { FollowupRun, QueueSettings } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   ackDurableFollowup: vi.fn(async () => undefined),
+  completeDurableFollowup: vi.fn(async () => undefined),
   ackDurableFollowupsForQueueSync: vi.fn(),
   ackDurableFollowupsSync: vi.fn(),
 }));
 
 vi.mock("./durable-store.js", () => ({
   ackDurableFollowup: mocks.ackDurableFollowup,
+  completeDurableFollowup: mocks.completeDurableFollowup,
   ackDurableFollowupsForQueueSync: mocks.ackDurableFollowupsForQueueSync,
   ackDurableFollowupsSync: mocks.ackDurableFollowupsSync,
 }));
@@ -54,6 +56,7 @@ describe("durable followup drain", () => {
       clearFollowupQueue(key);
     }
     mocks.ackDurableFollowup.mockClear();
+    mocks.completeDurableFollowup.mockClear();
     mocks.ackDurableFollowupsForQueueSync.mockClear();
     mocks.ackDurableFollowupsSync.mockClear();
   });
@@ -69,13 +72,13 @@ describe("durable followup drain", () => {
 
     await vi.waitFor(() => {
       expect(runFollowup).toHaveBeenCalledTimes(2);
-      expect(mocks.ackDurableFollowup).toHaveBeenNthCalledWith(1, "durable-1");
-      expect(mocks.ackDurableFollowup).toHaveBeenNthCalledWith(2, "durable-2");
+      expect(mocks.completeDurableFollowup).toHaveBeenNthCalledWith(1, "durable-1");
+      expect(mocks.completeDurableFollowup).toHaveBeenNthCalledWith(2, "durable-2");
     });
-    expect(mocks.ackDurableFollowup.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(mocks.completeDurableFollowup.mock.invocationCallOrder[0]).toBeGreaterThan(
       runFollowup.mock.invocationCallOrder[0] ?? 0,
     );
-    expect(mocks.ackDurableFollowup.mock.invocationCallOrder[1]).toBeGreaterThan(
+    expect(mocks.completeDurableFollowup.mock.invocationCallOrder[1]).toBeGreaterThan(
       runFollowup.mock.invocationCallOrder[1] ?? 0,
     );
   });
@@ -98,10 +101,10 @@ describe("durable followup drain", () => {
     scheduleFollowupDrain(key, runFollowup);
 
     await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(2));
-    expect(mocks.ackDurableFollowup).not.toHaveBeenCalled();
+    expect(mocks.completeDurableFollowup).not.toHaveBeenCalled();
     releaseRetry?.();
-    await vi.waitFor(() => expect(mocks.ackDurableFollowup).toHaveBeenCalledTimes(1));
-    expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-retry");
+    await vi.waitFor(() => expect(mocks.completeDurableFollowup).toHaveBeenCalledTimes(1));
+    expect(mocks.completeDurableFollowup).toHaveBeenCalledWith("durable-retry");
   });
 
   it("acks summarized durable records only after the summary turn succeeds", async () => {
@@ -136,10 +139,10 @@ describe("durable followup drain", () => {
         expect.arrayContaining(["durable-dropped", "durable-carrier"]),
       );
     }
-    expect(mocks.ackDurableFollowup).not.toHaveBeenCalled();
+    expect(mocks.completeDurableFollowup).not.toHaveBeenCalled();
     finishSummary?.();
-    await vi.waitFor(() => expect(mocks.ackDurableFollowup).toHaveBeenCalledTimes(2));
-    expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-dropped");
-    expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-carrier");
+    await vi.waitFor(() => expect(mocks.completeDurableFollowup).toHaveBeenCalledTimes(2));
+    expect(mocks.completeDurableFollowup).toHaveBeenCalledWith("durable-dropped");
+    expect(mocks.completeDurableFollowup).toHaveBeenCalledWith("durable-carrier");
   });
 });

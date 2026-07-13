@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
+  consumeRestartSentinelIfTerminal: vi.fn(async () => true),
   readRestartSentinel: vi.fn<() => Promise<RestartSentinel | null>>(async () => null),
   readRestartRecoveryMarker: vi.fn(async () => null),
   updateRestartSentinel: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../infra/restart-sentinel.js", () => ({
   consumeRestartSentinel: mocks.consumeRestartSentinel,
+  consumeRestartSentinelIfTerminal: mocks.consumeRestartSentinelIfTerminal,
   readRestartSentinel: mocks.readRestartSentinel,
   readRestartRecoveryMarker: mocks.readRestartRecoveryMarker,
   updateRestartSentinel: mocks.updateRestartSentinel,
@@ -220,10 +222,26 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("consumes an already-terminal operation on startup without another wake", async () => {
+    installOperation({ receipt: "delivered", continuation: "delivered" });
+    mocks.consumeRestartSentinelIfTerminal.mockClear();
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.enqueueSystemEvent.mockClear();
+    mocks.requestHeartbeatNow.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.consumeRestartSentinelIfTerminal).toHaveBeenCalledWith("op-1");
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
   it("skips stale operations without delivery or continuation", async () => {
     const readState = installOperation({ expiresAt: Date.now() - 1 });
     mocks.deliverOutboundPayloads.mockClear();
     mocks.enqueueSystemEvent.mockClear();
+    mocks.consumeRestartSentinelIfTerminal.mockClear();
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -232,6 +250,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(readState().operation?.delivery).toEqual(
       expect.objectContaining({ receipt: "skipped", continuation: "skipped" }),
     );
+    expect(mocks.consumeRestartSentinelIfTerminal).toHaveBeenCalledWith("op-1");
   });
 
   it("does not create a continuation when no active session was recorded", async () => {

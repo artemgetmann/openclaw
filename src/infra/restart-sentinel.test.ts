@@ -184,6 +184,38 @@ describe("restart sentinel", () => {
     expect((await readRestartSentinel())?.operation?.delivery.continuation).toBe("delivered");
   });
 
+  it("consumes the sentinel after receipt delivery and continuation completion are terminal", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "requested",
+      ts: Date.now(),
+      sessionKey: "agent:main:telegram:dm:123",
+    });
+    const operationId = (await readRestartSentinel())?.operation?.id;
+    expect(operationId).toBeTruthy();
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            delivery: {
+              ...current.operation.delivery,
+              receipt: "delivered",
+              continuation: "delivering",
+            },
+          }
+        : undefined,
+    }));
+
+    await expect(
+      markRestartContinuationConsumed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+      }),
+    ).resolves.toBe(true);
+    await expect(readRestartSentinel()).resolves.toBeNull();
+  });
+
   it("restores failed continuation state only before the operation expires", async () => {
     await writeRestartSentinel({
       kind: "restart",
