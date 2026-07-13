@@ -11,6 +11,10 @@ final class GatewayProcessManager {
     // errors in the app, so keep one explicit, shared readiness budget here.
     static let gatewayReadinessTimeout: TimeInterval = 20
     private static let readinessPollIntervalNanos: UInt64 = 400_000_000
+    /// launchd normally restarts a crashed gateway itself. This slower app-owned
+    /// check covers the different failure mode where the job registration vanishes
+    /// while Jarvis remains open and still believes it is attached to the gateway.
+    private static let launchAgentReconciliationInterval: Duration = .seconds(60)
 
     enum Status: Equatable {
         case stopped
@@ -48,6 +52,10 @@ final class GatewayProcessManager {
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
+    private var launchAgentReconciliationTask: Task<Void, Never>?
+    /// A cancelled loop can finish after local mode has already started a replacement.
+    /// The generation prevents that stale loop from clearing the replacement task handle.
+    private var launchAgentReconciliationGeneration: UInt = 0
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -77,6 +85,7 @@ final class GatewayProcessManager {
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active {
+            self.startLaunchAgentReconciliationIfNeeded()
             self.startIfNeeded()
         } else {
             self.stop()
@@ -84,13 +93,20 @@ final class GatewayProcessManager {
     }
 
     func ensureLaunchAgentEnabledIfNeeded() async {
+        await self.ensureLaunchAgentEnabledIfNeeded(allowAttachToHealthyGateway: true)
+    }
+
+    private func ensureLaunchAgentEnabledIfNeeded(allowAttachToHealthyGateway: Bool) async {
         guard !CommandResolver.connectionModeIsRemote() else { return }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
             return
         }
-        if await self.shouldAttachInsteadOfEnableLaunchd() {
+        // Initial local-mode application may safely attach to an already-healthy
+        // canonical gateway. Reconciliation has stronger evidence: launchd reports
+        // that its job is missing, so socket health must not suppress service repair.
+        if allowAttachToHealthyGateway, await self.shouldAttachInsteadOfEnableLaunchd() {
             return
         }
         let bundlePath = Bundle.main.bundleURL.path
@@ -137,6 +153,7 @@ final class GatewayProcessManager {
         }
         self.logger.info("gateway managed restart requested")
         self.desiredActive = true
+        self.startLaunchAgentReconciliationIfNeeded()
         self.existingGatewayDetails = nil
         self.clearLastFailure()
         self.status = .starting
@@ -185,6 +202,7 @@ final class GatewayProcessManager {
 
     func stop() {
         self.desiredActive = false
+        self.stopLaunchAgentReconciliation()
         self.existingGatewayDetails = nil
         self.lastFailureReason = nil
         self.status = .stopped
@@ -247,6 +265,79 @@ final class GatewayProcessManager {
     }
 
     // MARK: - Internals
+
+    private func startLaunchAgentReconciliationIfNeeded() {
+        guard self.desiredActive else { return }
+        guard !CommandResolver.connectionModeIsRemote() else { return }
+        // setActive(true) is intentionally idempotent. Multiple UI and connection
+        // surfaces call it, but only one serial reconciliation loop may own launchd.
+        guard self.launchAgentReconciliationTask == nil else { return }
+
+        self.launchAgentReconciliationGeneration &+= 1
+        let generation = self.launchAgentReconciliationGeneration
+        self.launchAgentReconciliationTask = Task { [weak self] in
+            await self?.runLaunchAgentReconciliationLoop(
+                generation: generation,
+                interval: Self.launchAgentReconciliationInterval)
+        }
+    }
+
+    private func stopLaunchAgentReconciliation() {
+        // Invalidate before cancelling so a suspended old loop cannot clear a newer
+        // task if local mode is toggled off and back on in quick succession.
+        self.launchAgentReconciliationGeneration &+= 1
+        self.launchAgentReconciliationTask?.cancel()
+        self.launchAgentReconciliationTask = nil
+    }
+
+    private func runLaunchAgentReconciliationLoop(
+        generation: UInt,
+        interval: Duration) async
+    {
+        defer {
+            if self.launchAgentReconciliationGeneration == generation {
+                self.launchAgentReconciliationTask = nil
+            }
+        }
+
+        // The normal startup path already performs an immediate ensure. Sleeping
+        // first avoids a duplicate status/install race during launch while still
+        // bounding recovery time for registration loss after startup.
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: interval)
+            } catch {
+                return
+            }
+            guard await self.reconcileLaunchAgentRegistrationIfNeeded() else { return }
+        }
+    }
+
+    @discardableResult
+    private func reconcileLaunchAgentRegistrationIfNeeded() async -> Bool {
+        guard self.desiredActive else { return false }
+        guard !CommandResolver.connectionModeIsRemote() else { return false }
+        // Attach-only is an explicit instruction not to mutate launchd. Keep the
+        // loop alive so removing the marker later resumes healing without relaunch.
+        guard !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() else { return true }
+
+        let launchAgentLoaded = await GatewayLaunchAgentManager.isLoaded()
+        guard !launchAgentLoaded else { return true }
+
+        // Mode can change while the status command is suspended. Re-check authority
+        // before any write so a late result cannot install a local service in remote
+        // or stopped mode.
+        guard self.desiredActive else { return false }
+        guard !CommandResolver.connectionModeIsRemote() else { return false }
+
+        self.appendLog("[gateway] launchd job missing; reconciling app-owned service\n")
+        self.logger.warning("gateway launchd job missing; reconciling app-owned service")
+        // Reuse the established enable policy. It performs a second launchd status
+        // read and chooses noop/start/install, which prevents a transient first read
+        // from blindly reinstalling a healthy service.
+        await self.ensureLaunchAgentEnabledIfNeeded(allowAttachToHealthyGateway: false)
+        return true
+    }
 
     private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {
         guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime() else { return false }
@@ -538,6 +629,23 @@ extension GatewayProcessManager {
 
     func setTestingDesiredActive(_ active: Bool) {
         self.desiredActive = active
+        if !active {
+            // Tests that model leaving local mode must release the same background
+            // ownership as production `stop()`, without issuing a real launchd stop.
+            self.stopLaunchAgentReconciliation()
+        }
+    }
+
+    func startTestingLaunchAgentReconciliation() {
+        self.startLaunchAgentReconciliationIfNeeded()
+    }
+
+    func testingLaunchAgentReconciliationIsRunning() -> Bool {
+        self.launchAgentReconciliationTask != nil
+    }
+
+    func testingReconcileLaunchAgentRegistrationNow() async {
+        _ = await self.reconcileLaunchAgentRegistrationIfNeeded()
     }
 
     func setTestingLastFailureReason(_ reason: String?) {

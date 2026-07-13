@@ -10,6 +10,139 @@ struct GatewayProcessManagerTests {
         #expect(GatewayProcessManager.gatewayReadinessTimeout >= 20)
     }
 
+    @Test func `reconciliation repairs missing launchd registration while desired active`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: { false },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                // This is the stale state from the incident: socket/status truth still
+                // says running, but launchd no longer owns a registered service.
+                manager.setTestingStatus(.running(details: "stale app state"))
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                    manager.setTestingStatus(.stopped)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(daemonCalls == [[
+                    "install",
+                    "--force",
+                    "--allow-shared-service-takeover",
+                    "--port",
+                    "\(GatewayEnvironment.gatewayPort())",
+                    "--runtime",
+                    "node",
+                ]])
+            }
+    }
+
+    @Test func `reconciliation leaves loaded launchd service untouched across checks`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                var loadedChecks = 0
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        return true
+                    },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(loadedChecks == 2)
+                #expect(daemonCalls.isEmpty)
+            }
+    }
+
+    @Test func `reconciliation task stops and no longer checks launchd when inactive`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                var loadedChecks = 0
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        return false
+                    },
+                    runDaemonCommand: { _, _, _ in nil })
+
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                manager.startTestingLaunchAgentReconciliation()
+                #expect(manager.testingLaunchAgentReconciliationIsRunning())
+
+                manager.setTestingDesiredActive(false)
+                #expect(!manager.testingLaunchAgentReconciliationIsRunning())
+
+                // A late/manual tick models a suspended status read resuming after mode
+                // changed. The inactive guard must stop before consulting launchd.
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+                #expect(loadedChecks == 0)
+
+                GatewayLaunchAgentManager._clearTestingHooks()
+            }
+    }
+
     @Test func `clears last failure when health succeeds`() async throws {
         let session = GatewayTestWebSocketSession(
             taskFactory: {
