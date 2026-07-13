@@ -19,7 +19,7 @@ import {
   decodeCdpResponseBody,
   hasPdfSignature,
   inferPdfResponseFilename,
-  pdfResponseMetadataMatches,
+  pdfResponseHasCredibleDownloadIntent,
 } from "./pdf-response-capture.js";
 
 type ChromeMcpStructuredPage = {
@@ -1007,7 +1007,13 @@ function createChromeMcpPdfNetworkCapture(params: {
       const url = typeof response?.url === "string" ? response.url : "";
       const headers = asRecord(response?.headers) ?? {};
       const mimeType = response?.mimeType;
-      if (requestId && pdfResponseMetadataMatches({ url, headers, mimeType })) {
+      if (
+        requestId &&
+        pdfResponseHasCredibleDownloadIntent(
+          { url, headers, mimeType },
+          { resourceType: event.type },
+        )
+      ) {
         candidates.set(requestId, { url, headers, mimeType });
       }
       return;
@@ -1056,6 +1062,7 @@ export const chromeMcpPdfResourceInternalsForTest = {
   collectPdfResourceCandidates,
   createChromeMcpPdfNetworkCapture,
   decodeChromeResourceContent,
+  writeCapturedPdfResponse,
 };
 
 export async function readChromeMcpPdfResource(params: {
@@ -1293,9 +1300,44 @@ async function writeCapturedPdfResponse(params: {
   );
   await fs.mkdir(path.dirname(finalPath), { recursive: true });
 
+  if (!requestedPath) {
+    const extension = path.extname(finalPath);
+    const stem = path.basename(finalPath, extension);
+    const directory = path.dirname(finalPath);
+
+    // Implicit paths belong to the browser, not the caller. Reserve each name
+    // with an exclusive create so concurrent captures cannot pass an existence
+    // check together and overwrite one another. Keep the inferred name for the
+    // first capture, then add a familiar numeric suffix on collisions.
+    for (let suffix = 0; suffix < 10_000; suffix += 1) {
+      const candidateName =
+        suffix === 0 ? `${stem}${extension}` : `${stem} (${suffix})${extension}`;
+      const candidatePath = path.join(directory, candidateName);
+      let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      try {
+        handle = await fs.open(candidatePath, "wx");
+        await handle.writeFile(params.buffer);
+        await handle.close();
+        return candidatePath;
+      } catch (err) {
+        await handle?.close().catch(() => {});
+        const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+        if (code === "EEXIST") {
+          continue;
+        }
+        await fs.rm(candidatePath, { force: true }).catch(() => {});
+        throw err;
+      }
+    }
+    throw new Error(
+      `Unable to choose a unique PDF download path for "${path.basename(finalPath)}"`,
+    );
+  }
+
   // Network-captured PDFs skip Chrome's on-disk download machinery, so use the
-  // same sibling-temp finalization pattern as browser-managed downloads. This
-  // keeps explicit output paths atomic and blocks hardlink alias surprises.
+  // same sibling-temp finalization pattern as browser-managed downloads for an
+  // explicit caller-owned path. This keeps finalization atomic and blocks
+  // hardlink alias surprises.
   await writeViaSiblingTempPath({
     rootDir: path.dirname(finalPath),
     targetPath: finalPath,

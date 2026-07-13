@@ -138,19 +138,36 @@ describe("pw-tools-core", () => {
     });
   });
 
-  it("captures token-bound PDF response bytes while clicking when no download event fires", async () => {
+  it("rejects a background PDF and captures the authenticated attachment response", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();
       const pdfBytes = Buffer.from("%PDF-1.7\nnative response\n%%EOF\n");
+      const backgroundBody = vi.fn(async () => Buffer.from("%PDF-1.7\nprefetched\n%%EOF\n"));
       const response = {
         url: () => "https://example.com/api/export-statement",
         headers: () => ({
           "content-type": "application/pdf",
           "content-disposition": 'attachment; filename="account-statement.pdf"',
         }),
+        request: () => ({
+          headers: () => ({ authorization: "Bearer session-token" }),
+          isNavigationRequest: () => false,
+          method: () => "POST",
+          resourceType: () => "fetch",
+        }),
         body: async () => pdfBytes,
       };
       const click = vi.fn(async () => {
+        harness.triggerResponse({
+          url: () => "https://cdn.example.com/prefetched-help.pdf",
+          headers: () => ({ "content-type": "application/pdf" }),
+          request: () => ({
+            isNavigationRequest: () => false,
+            method: () => "GET",
+            resourceType: () => "fetch",
+          }),
+          body: backgroundBody,
+        });
         harness.triggerResponse(response);
       });
       setPwToolsCoreCurrentRefLocator({ click });
@@ -172,6 +189,7 @@ describe("pw-tools-core", () => {
         path: targetPath,
       });
       expect(await fs.readFile(targetPath)).toEqual(pdfBytes);
+      expect(backgroundBody).not.toHaveBeenCalled();
     });
   });
 

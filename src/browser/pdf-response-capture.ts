@@ -6,6 +6,11 @@ export type PdfResponseMetadata = {
   mimeType?: unknown;
 };
 
+export type PdfResponseIntent = {
+  isNavigationRequest?: boolean;
+  resourceType?: unknown;
+};
+
 function asHeaderText(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -97,6 +102,30 @@ export function pdfResponseMetadataMatches(meta: PdfResponseMetadata): boolean {
     isPdfMime(meta.mimeType) ||
     Boolean(dispositionName && /\.pdf$/i.test(dispositionName)) ||
     Boolean(meta.url && urlPdfFilename(meta.url))
+  );
+}
+
+export function pdfResponseHasCredibleDownloadIntent(
+  meta: PdfResponseMetadata,
+  intent: PdfResponseIntent = {},
+): boolean {
+  if (!pdfResponseMetadataMatches(meta)) {
+    return false;
+  }
+
+  const headers = normalizeResponseHeaders(meta.headers);
+  const disposition = headers["content-disposition"]?.split(";", 1)[0]?.trim().toLowerCase();
+  const resourceType =
+    typeof intent.resourceType === "string" ? intent.resourceType.trim().toLowerCase() : "";
+
+  // PDF metadata alone is common on preloads, previews, and background API
+  // traffic. An attachment header is the server's explicit download signal;
+  // a document/navigation request is the browser's signal that the armed user
+  // action is replacing or opening the current page with the PDF.
+  return (
+    disposition === "attachment" ||
+    intent.isNavigationRequest === true ||
+    resourceType === "document"
   );
 }
 

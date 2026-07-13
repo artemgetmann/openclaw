@@ -8,7 +8,7 @@ import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./path
 import {
   hasPdfSignature,
   inferPdfResponseFilename,
-  pdfResponseMetadataMatches,
+  pdfResponseHasCredibleDownloadIntent,
 } from "./pdf-response-capture.js";
 import {
   ensurePageState,
@@ -171,10 +171,23 @@ function createPdfResponseWaiter(page: Page, timeoutMs: number) {
         url?: () => string;
         headers?: () => Record<string, string>;
         body?: () => Promise<Buffer>;
+        request?: () => {
+          isNavigationRequest?: () => boolean;
+          resourceType?: () => string;
+        };
       };
       const url = resp.url?.() || "";
       const headers = resp.headers?.() ?? {};
-      if (!pdfResponseMetadataMatches({ url, headers })) {
+      const request = resp.request?.();
+      if (
+        !pdfResponseHasCredibleDownloadIntent(
+          { url, headers },
+          {
+            isNavigationRequest: request?.isNavigationRequest?.(),
+            resourceType: request?.resourceType?.(),
+          },
+        )
+      ) {
         return;
       }
 
