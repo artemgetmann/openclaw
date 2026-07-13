@@ -592,10 +592,18 @@ export async function readLaunchAgentRuntime(
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
+    const detail = (res.stderr || res.stdout).trim() || undefined;
+    // launchctl uses the same nonzero result for a missing label and for
+    // observer failures such as denied access. Only its explicit missing-label
+    // diagnostic is safe to promote into reinstall authority.
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const missingUnit = detail
+      ? new RegExp(`Could not find service ["']${escapedLabel}["'] in domain`, "i").test(detail)
+      : false;
     return {
       status: "unknown",
-      detail: (res.stderr || res.stdout).trim() || undefined,
-      missingUnit: true,
+      detail,
+      ...(missingUnit ? { missingUnit: true } : {}),
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");

@@ -93,7 +93,7 @@ struct GatewayLaunchAgentManagerTests {
         #expect(loaded == false)
     }
 
-    @Test func `nonzero generic unloaded daemon status remains unknown`() async {
+    @Test func `nonzero permission denied daemon status remains unknown`() async {
         GatewayLaunchAgentManager._setTestingHooks(
             shellExecution: { _, _, _, _ in
                 ShellExecutor.ShellResult(
@@ -107,7 +107,7 @@ struct GatewayLaunchAgentManagerTests {
                         "loaded": false,
                         "runtime": {
                           "status": "unknown",
-                          "detail": "launchctl unavailable"
+                          "detail": "Operation not permitted"
                         }
                       }
                     }
