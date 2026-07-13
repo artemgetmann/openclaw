@@ -11,6 +11,7 @@ enum GatewayLaunchAgentManager {
         _ args: [String],
         _ timeout: Double,
         _ quiet: Bool) async -> String?)?
+    private nonisolated(unsafe) static var testBeforeCompensatingStopHook: (@MainActor @Sendable () async -> Void)?
     private nonisolated(unsafe) static var testShellExecutionHook: ((
         _ command: [String],
         _ cwd: String?,
@@ -323,6 +324,7 @@ extension GatewayLaunchAgentManager {
         launchAgentWriteDisabled: (() -> Bool)? = nil,
         readDaemonLoaded: (() async -> Bool?)? = nil,
         runDaemonCommand: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)? = nil,
+        beforeCompensatingStop: (@MainActor @Sendable () async -> Void)? = nil,
         shellExecution: ((
             _ command: [String],
             _ cwd: String?,
@@ -334,6 +336,7 @@ extension GatewayLaunchAgentManager {
         self.testLaunchAgentWriteDisabledHook = launchAgentWriteDisabled
         self.testReadDaemonLoadedHook = readDaemonLoaded
         self.testRunDaemonCommandHook = runDaemonCommand
+        self.testBeforeCompensatingStopHook = beforeCompensatingStop
         self.testShellExecutionHook = shellExecution
         self.testCurrentServiceVersionHook = currentServiceVersion
         self.testCurrentServiceBuildHook = currentServiceBuild
@@ -343,6 +346,7 @@ extension GatewayLaunchAgentManager {
         self.testLaunchAgentWriteDisabledHook = nil
         self.testReadDaemonLoadedHook = nil
         self.testRunDaemonCommandHook = nil
+        self.testBeforeCompensatingStopHook = nil
         self.testShellExecutionHook = nil
         self.testCurrentServiceVersionHook = nil
         self.testCurrentServiceBuildHook = nil
@@ -414,20 +418,40 @@ extension GatewayLaunchAgentManager {
         // public path intentionally skips remote mode and may preserve a loaded
         // consumer gateway. This guarded command just started this exact scoped
         // launchd label, so a direct stop is the narrow rollback for the race.
-        self.logger.warning("launchd mutation authority changed during command; stopping scoped service")
-        if let error = await self.runCompensatingStop() {
+        self.logger.warning("launchd mutation authority changed during command; scheduling scoped compensation")
+        if let error = await self.runCompensatingStop(rechecking: mutationAuthority) {
             return "launchd authority changed after mutation, but compensating stop failed: \(error)"
         }
         return nil
     }
 
-    private static func runCompensatingStop() async -> String? {
+    private static func runCompensatingStop(
+        rechecking mutationAuthority: @escaping @MainActor @Sendable () -> MutationAuthority) async -> String?
+    {
         // Reconciliation can discover revocation only after its parent task was
         // cancelled. ShellExecutor observes task cancellation and would otherwise
         // terminate the rollback child immediately. A detached task starts with a
         // clean cancellation state; awaiting its value keeps rollback synchronous.
-        let stopTask = Task.detached {
-            await self.runDaemonCommand(["stop"], timeout: 20)
+        let stopTask = Task<String?, Never>.detached {
+            #if DEBUG
+            // Deterministic seam for ownership changes after scheduling but before
+            // the detached rollback reaches launchd. Production has no pause here.
+            if let hook = self.testBeforeCompensatingStopHook {
+                await hook()
+            }
+            #endif
+            // Ownership can change after the old task schedules this detached
+            // rollback. Recheck from the clean task immediately before launchd so
+            // a newer allowed/superseding generation cannot be stopped by stale work.
+            switch await mutationAuthority() {
+            case .allowed, .superseded:
+                self.logger.info("launchd compensation skipped because authority changed before stop")
+                return nil
+            case .revoked:
+                break
+            }
+            self.logger.warning("launchd authority remains revoked; stopping scoped service")
+            return await self.runDaemonCommand(["stop"], timeout: 20)
         }
         return await stopTask.value
     }
