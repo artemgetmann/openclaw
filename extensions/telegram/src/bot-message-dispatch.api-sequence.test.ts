@@ -403,13 +403,16 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        // Reproduce the live ordering: fast-first transport sends one delta,
+        // Reproduce the live ordering: the provider first exposes a raw token,
         // then the lane receives the complete accumulated acknowledgment.
         await replyOptions?.onPartialReply?.({ text: "I" });
-        await vi.waitFor(() =>
-          expect(sendMessageCalls(harness.calls).some((call) => call.text === "I")).toBe(true),
-        );
+        expect(sendMessageCalls(harness.calls).some((call) => call.text === "I")).toBe(false);
         await replyOptions?.onPartialReply?.({ text: acknowledgment });
+        await vi.waitFor(() =>
+          expect(sendMessageCalls(harness.calls).some((call) => call.text === acknowledgment)).toBe(
+            true,
+          ),
+        );
         await replyOptions?.onToolStart?.({ name: "update_plan", phase: "completed" });
         await replyOptions?.onToolResult?.({
           text: planText,
@@ -429,17 +432,30 @@ describe("dispatchTelegramMessage progress API sequence", () => {
     );
     expect(renderTelegramWorkLog(workLog!, true).text).not.toMatch(/^Work log\n\nI\n\n/m);
 
-    const oneCharacterSendIndex = harness.calls.findIndex(
-      (call) => call.op === "sendMessage" && call.text === "I",
+    const acknowledgmentSend = sendMessageCalls(harness.calls).find(
+      (call) => call.text === acknowledgment,
     );
-    const collapsedWorkLogEditIndex = harness.calls.findIndex(
-      (call) => call.op === "editMessageText" && call.text === "Work log",
+    const collapsedWorkLogEdit = editMessageTextCalls(harness.calls).find(
+      (call) => call.text === "Work log",
     );
+    expect(sendMessageCalls(harness.calls).some((call) => call.text === "I")).toBe(false);
+    expect(sendMessageCalls(harness.calls)[0]).toEqual(
+      expect.objectContaining({ text: acknowledgment }),
+    );
+    expect(acknowledgmentSend).toBeDefined();
+    expect(collapsedWorkLogEdit).toBeDefined();
+    expect(collapsedWorkLogEdit).toEqual(
+      expect.objectContaining({ messageId: acknowledgmentSend!.messageId }),
+    );
+
+    const acknowledgmentSendIndex = harness.calls.indexOf(acknowledgmentSend!);
+    const collapsedWorkLogEditIndex = harness.calls.indexOf(collapsedWorkLogEdit!);
     const finalSendIndex = harness.calls.findIndex(
       (call) => call.op === "sendMessage" && call.text.includes("Focused checks passed."),
     );
-    expect(oneCharacterSendIndex).toBeLessThan(collapsedWorkLogEditIndex);
+    expect(acknowledgmentSendIndex).toBeLessThan(collapsedWorkLogEditIndex);
     expect(collapsedWorkLogEditIndex).toBeLessThan(finalSendIndex);
+    expect(deleteMessageCalls(harness.calls)).toHaveLength(0);
   });
 
   it("keeps repeated plans and natural commentary inside one Work log", async () => {

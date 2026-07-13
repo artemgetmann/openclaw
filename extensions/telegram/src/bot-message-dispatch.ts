@@ -145,7 +145,10 @@ function shouldEmitCoalescedDraftPreview(params: {
   }
   if (!previous) {
     if (params.fastFirstPreview) {
-      return true;
+      // DM previews should feel immediate once they contain useful text, but
+      // allocating a Telegram message for a raw one-token prefix (for example
+      // "I") exposes transport timing as broken user-facing copy.
+      return next.length >= DRAFT_MIN_INITIAL_CHARS;
     }
     // Avoid creating Telegram drafts for tiny token prefixes; the final lane
     // still receives the complete answer even when early previews are skipped.
