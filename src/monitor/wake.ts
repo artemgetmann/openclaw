@@ -11,6 +11,8 @@ const CHECKPOINT_QUOTED_DATA_IMAGE_REGEX =
   /(["'`])data:image\/[a-z0-9.+-]+(?:;[^,\r\n]*)?,[\s\S]*?\1/giu;
 const CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX =
   /data:image\/svg\+xml(?:;[^,\r\n]*)?,[\s\S]*?<\/svg\s*>/giu;
+const CHECKPOINT_WRAPPED_DATA_IMAGE_REGEX =
+  /data:image\/[a-z0-9.+-]+(?:;[^,\r\n]*)?,[^\r\n]*[\r\n]/iu;
 // Match the runner's file-URL grammar exactly: spaces are valid until the image extension, while
 // closing markers and ordinary prose after the extension remain untouched.
 const CHECKPOINT_FILE_URL_IMAGE_REGEX = new RegExp(
@@ -48,15 +50,19 @@ function replaceCheckpointMediaReferences(value: string): string {
   ) {
     return CHECKPOINT_MEDIA_PLACEHOLDER;
   }
+  const boundedMediaSafe = value
+    // Mirror the runner's structured markers before token matching so paths with spaces cannot
+    // survive as `[Image: source: ...]` or `[media attached: ...]` prompt references.
+    .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+    // Quotes and the closing SVG tag are reliable inline boundaries. Consume through them before
+    // deciding whether any remaining multiline data URI makes the whole string unsafe.
+    .replace(CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+    .replace(CHECKPOINT_QUOTED_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER);
+  if (CHECKPOINT_WRAPPED_DATA_IMAGE_REGEX.test(boundedMediaSafe)) {
+    return CHECKPOINT_MEDIA_PLACEHOLDER;
+  }
   return (
-    value
-      // Mirror the runner's structured markers before token matching so paths with spaces cannot
-      // survive as `[Image: source: ...]` or `[media attached: ...]` prompt references.
-      .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-      // Quotes and the closing SVG tag are reliable inline boundaries. Consume through them before
-      // the token fallback so wrapped payload bytes cannot remain while later prose stays intact.
-      .replace(CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-      .replace(CHECKPOINT_QUOTED_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+    boundedMediaSafe
       .replace(CHECKPOINT_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_FILE_URL_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       // Mirror quoted-path detection separately so spaces are allowed only inside matched quotes;

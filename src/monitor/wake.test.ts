@@ -84,6 +84,7 @@ describe("buildMonitorWakeMessage", () => {
           'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>WHOLE-SVG-PAYLOAD</text></svg>',
         inlineWrappedDataUri:
           "Inline preview 'data:image/png;base64,INLINE-AAA\nINLINE-BBB' remains reviewed.",
+        unquotedWrappedDataUri: "Preview data:image/png;base64,UNQUOTED-AAAA\nUNQUOTED-BBBB",
         inlineSvgDataUri:
           'SVG preview data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>INLINE-SVG-PAYLOAD</text></svg> remains reviewed.',
       },
@@ -142,10 +143,12 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain('"wrappedDataUri":"[media reference omitted]"');
     expect(message).toContain('"svgDataUri":"[media reference omitted]"');
     expect(message).toContain("Inline preview [media reference omitted] remains reviewed.");
+    expect(message).toContain('"unquotedWrappedDataUri":"[media reference omitted]"');
     expect(message).toContain("SVG preview [media reference omitted] remains reviewed.");
     expect(message).not.toContain("WRAPPED-BBB");
     expect(message).not.toContain("WHOLE-SVG-PAYLOAD");
     expect(message).not.toContain("INLINE-BBB");
+    expect(message).not.toContain("UNQUOTED-BBBB");
     expect(message).not.toContain("INLINE-SVG-PAYLOAD");
     expect(message).not.toContain("feedback confirmation.png");
     expect(message).not.toContain("follow up.jpeg");
