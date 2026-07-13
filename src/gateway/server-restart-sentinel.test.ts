@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RestartSentinel } from "../infra/restart-sentinel.js";
 
+type MockOutboundParams = {
+  onError?: (err: unknown, payload: { text: string; mediaUrls: string[] }) => void;
+};
+
+type MockSystemEvent = { text: string; ts: number; contextKey?: string | null };
+
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
   consumeRestartSentinel: vi.fn(async () => ({
@@ -13,7 +19,7 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
-  readRestartSentinel: vi.fn(async () => null),
+  readRestartSentinel: vi.fn<() => Promise<RestartSentinel | null>>(async () => null),
   readRestartRecoveryMarker: vi.fn(async () => null),
   updateRestartSentinel: vi.fn(),
   formatRestartSentinelMessage: vi.fn(() => "restart message"),
@@ -29,8 +35,11 @@ const mocks = vi.hoisted(() => ({
   })),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
-  deliverOutboundPayloads: vi.fn(async () => []),
+  deliverOutboundPayloads: vi.fn<(params?: MockOutboundParams) => Promise<unknown[]>>(
+    async () => [],
+  ),
   enqueueSystemEvent: vi.fn(),
+  peekSystemEventEntries: vi.fn<(sessionKey: string) => MockSystemEvent[]>(() => []),
   requestHeartbeatNow: vi.fn(),
 }));
 
@@ -93,6 +102,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
+  peekSystemEventEntries: mocks.peekSystemEventEntries,
 }));
 
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
@@ -117,6 +127,20 @@ describe("scheduleRestartSentinelWake", () => {
     receipt?: "pending" | "delivering" | "delivered" | "skipped";
     continuation?: "pending" | "delivering" | "delivered" | "skipped";
   }) {
+    const queuedContexts = new Set<string>();
+    mocks.enqueueSystemEvent.mockImplementation(
+      (_text: string, options: { contextKey?: string }) => {
+        const contextKey = options.contextKey ?? "";
+        if (queuedContexts.has(contextKey)) {
+          return false;
+        }
+        queuedContexts.add(contextKey);
+        return true;
+      },
+    );
+    mocks.peekSystemEventEntries.mockImplementation(() =>
+      [...queuedContexts].map((contextKey) => ({ text: "restart", ts: 1, contextKey })),
+    );
     let state: RestartSentinel = {
       version: 1,
       payload: { kind: "restart", status: "requested", ts: 100 },
@@ -174,7 +198,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({ sessionKey: "agent:main:main", reason: "restart-continuation" }),
     );
     expect(readState().operation?.delivery).toEqual(
-      expect.objectContaining({ receipt: "delivered", continuation: "delivered" }),
+      expect.objectContaining({ receipt: "delivered", continuation: "delivering" }),
     );
   });
 
@@ -224,6 +248,24 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(readState().operation?.delivery.receipt).toBe("pending");
     expect(readState().operation?.delivery.lastError).toContain("provider offline");
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps receipt pending when best-effort delivery reports a payload error", async () => {
+    const readState = installOperation();
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      params?.onError?.(new Error("provider rejected payload"), {
+        text: "receipt",
+        mediaUrls: [],
+      });
+      return [];
+    });
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(readState().operation?.delivery.receipt).toBe("pending");
+    expect(readState().operation?.delivery.lastError).toContain("provider rejected payload");
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 });

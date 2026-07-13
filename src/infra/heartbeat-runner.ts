@@ -82,6 +82,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { markRestartContinuationConsumed } from "./restart-sentinel.js";
 import { peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
@@ -511,6 +512,9 @@ async function resolveHeartbeatPreflight(params: {
     params.forcedSessionKey,
   );
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const hasTaggedRestartEvents = pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("restart:"),
+  );
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -520,7 +524,8 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    hasTaggedRestartEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
@@ -764,7 +769,13 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const hasRestartContinuation = preflight.pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("restart:"),
+  );
+  // Restart continuation must reuse the original transcript: that is where the
+  // interrupted task and its safety state live. An isolated heartbeat session
+  // would neither drain the tagged event nor have enough context to resume it.
+  const useIsolatedSession = heartbeat?.isolatedSession === true && !hasRestartContinuation;
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
@@ -939,6 +950,29 @@ export async function runHeartbeatOnce(opts: {
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    const remainingEventContexts = new Set(
+      peekSystemEventEntries(sessionKey).map((event) => event.contextKey),
+    );
+    const consumedRestartContexts = preflight.pendingEventEntries
+      .map((event) => event.contextKey)
+      .filter(
+        (contextKey): contextKey is string =>
+          Boolean(contextKey?.startsWith("restart:")) && !remainingEventContexts.has(contextKey),
+      );
+    if (consumedRestartContexts.length > 0) {
+      try {
+        // getReplyFromConfig returned and the tagged input left the event
+        // queue, which is the first honest proof that the continuation was
+        // consumed by an agent execution. A crash before here leaves the
+        // sentinel replayable; a failed acknowledgement may replay safely.
+        await markRestartContinuationConsumed({
+          sessionKey,
+          contextKeys: consumedRestartContexts,
+        });
+      } catch (err) {
+        log.warn(`heartbeat: failed to acknowledge restart continuation: ${String(err)}`);
+      }
+    }
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning

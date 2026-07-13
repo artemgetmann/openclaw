@@ -8,10 +8,12 @@ import type { FollowupRun, QueueSettings } from "./types.js";
 
 vi.mock("./drain.js", () => ({
   kickFollowupDrainIfIdle: vi.fn(),
+  scheduleFollowupDrain: vi.fn(),
 }));
 
 const { enqueueFollowupRunDurable, getFollowupQueueDepth, restoreDurableFollowupRuns } =
   await import("./enqueue.js");
+const { scheduleFollowupDrain } = await import("./drain.js");
 const { clearFollowupQueue } = await import("./state.js");
 
 const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 20 };
@@ -52,6 +54,7 @@ describe("durable followup enqueue", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     keySequence += 1;
     key = `queue-${Date.now()}-${keySequence}`;
+    vi.mocked(scheduleFollowupDrain).mockClear();
   });
 
   afterEach(async () => {
@@ -66,12 +69,21 @@ describe("durable followup enqueue", () => {
     await expect(loadDurableFollowups()).resolves.toHaveLength(1);
   });
 
-  it("rehydrates an accepted item after process-local queue loss", async () => {
+  it("rehydrates and explicitly schedules every restored queue", async () => {
+    const secondKey = `${key}-second`;
     await enqueueFollowupRunDurable(key, createRun(), settings);
+    await enqueueFollowupRunDurable(secondKey, createRun(), settings);
     clearFollowupQueue(key);
+    clearFollowupQueue(secondKey);
+    const runFollowup = vi.fn(async () => undefined);
 
-    await expect(restoreDurableFollowupRuns()).resolves.toBe(1);
+    await expect(restoreDurableFollowupRuns({ runFollowup })).resolves.toBe(2);
     expect(getFollowupQueueDepth(key)).toBe(1);
+    expect(getFollowupQueueDepth(secondKey)).toBe(1);
+    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(2);
+    expect(scheduleFollowupDrain).toHaveBeenCalledWith(key, runFollowup);
+    expect(scheduleFollowupDrain).toHaveBeenCalledWith(secondKey, runFollowup);
+    clearFollowupQueue(secondKey);
   });
 
   it("does not mutate RAM when persistence fails", async () => {

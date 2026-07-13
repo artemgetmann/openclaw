@@ -28,7 +28,12 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import * as restartSentinel from "./restart-sentinel.js";
+import {
+  drainSystemEventEntries,
+  enqueueSystemEvent,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -1525,6 +1530,98 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {
       replySpy.mockRestore();
+    }
+  });
+
+  async function seedRestartContinuationHeartbeat(contextKey: string) {
+    const tmpDir = await createCaseDir("hb-restart-continuation");
+    const storePath = path.join(tmpDir, "sessions.json");
+    // An empty heartbeat file normally gates interval work. Tagged restart
+    // input is recovery work and must still execute.
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "# HEARTBEAT.md\n", "utf-8");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          // Recovery must override isolated heartbeat mode so the original
+          // session consumes the event and retains its interrupted context.
+          heartbeat: { every: "5m", target: "none", isolatedSession: true },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("Reassess safely after restart", { sessionKey, contextKey });
+    return { cfg, sessionKey };
+  }
+
+  it("acks a restart continuation only after its tagged event is consumed by the agent call", async () => {
+    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-1");
+
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async () => {
+      // Production drains this inside getReplyFromConfig before model
+      // execution. The explicit drain makes that boundary visible here.
+      drainSystemEventEntries(sessionKey);
+      return { text: "Continuation checked" };
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(ackSpy).toHaveBeenCalledWith({
+        sessionKey,
+        contextKeys: ["restart:op-1"],
+      });
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
+    }
+  });
+
+  it("does not ack a consumed restart event when the agent call fails", async () => {
+    const { cfg, sessionKey } = await seedRestartContinuationHeartbeat("restart:op-failed");
+    const ackSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async () => {
+      drainSystemEventEntries(sessionKey);
+      throw new Error("agent execution failed");
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+      });
+
+      expect(result).toEqual({ status: "failed", reason: "agent execution failed" });
+      expect(ackSpy).not.toHaveBeenCalled();
+    } finally {
+      replySpy.mockRestore();
+      ackSpy.mockRestore();
     }
   });
 });

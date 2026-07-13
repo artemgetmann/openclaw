@@ -235,6 +235,56 @@ export async function updateRestartSentinel(
   return next;
 }
 
+/**
+ * Acknowledge restart continuation only after its tagged system event has been
+ * consumed by a successful agent call. Until this write lands, the sentinel is
+ * the replayable input: a crash leaves `pending`/`delivering` for next startup.
+ */
+export async function markRestartContinuationConsumed(params: {
+  sessionKey: string;
+  contextKeys: Iterable<string | null | undefined>;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const operationIds = new Set<string>();
+  for (const contextKey of params.contextKeys) {
+    const normalized = contextKey?.trim().toLowerCase();
+    if (normalized?.startsWith("restart:") && normalized.length > "restart:".length) {
+      operationIds.add(normalized.slice("restart:".length));
+    }
+  }
+  if (operationIds.size === 0) {
+    return false;
+  }
+
+  let marked = false;
+  await updateRestartSentinel((current) => {
+    const operation = current.operation;
+    if (
+      !operation ||
+      !operationIds.has(operation.id.toLowerCase()) ||
+      operation.sessionKey !== params.sessionKey ||
+      (operation.delivery.continuation !== "pending" &&
+        operation.delivery.continuation !== "delivering")
+    ) {
+      return current;
+    }
+    marked = true;
+    return {
+      ...current,
+      operation: {
+        ...operation,
+        delivery: {
+          ...operation.delivery,
+          continuation: "delivered",
+          updatedAt: Date.now(),
+          lastError: undefined,
+        },
+      },
+    };
+  }, params.env);
+  return marked;
+}
+
 export async function readRestartRecoveryMarker(
   operationId: string,
   env: NodeJS.ProcessEnv = process.env,

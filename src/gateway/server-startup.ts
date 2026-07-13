@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { createRestoredFollowupRunner } from "../auto-reply/reply/followup-runner.js";
 import { restoreDurableFollowupRuns } from "../auto-reply/reply/queue.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
@@ -207,7 +208,9 @@ export async function startGatewaySidecars(params: {
   }
 
   try {
-    const restoredFollowups = await restoreDurableFollowupRuns();
+    const restoredFollowups = await restoreDurableFollowupRuns({
+      runFollowup: createRestoredFollowupRunner(),
+    });
     if (restoredFollowups > 0) {
       logPhase(`restored ${restoredFollowups} durable followup(s)`);
     }

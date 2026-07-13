@@ -2,7 +2,7 @@ import { loadConfig } from "../../../config/config.js";
 import { createDedupeCache } from "../../../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { kickFollowupDrainIfIdle, scheduleFollowupDrain } from "./drain.js";
 import {
   ackDurableFollowup,
   hydrateDurableFollowup,
@@ -140,14 +140,19 @@ export async function enqueueFollowupRunDurable(
   );
   // A cap/drop-old decision is itself durable intent: records removed from RAM
   // must also be removed from disk or a restart would resurrect dropped work.
-  await Promise.all([...beforeIds].filter((id) => !afterIds.has(id)).map(ackDurableFollowup));
+  await Promise.all(
+    [...beforeIds].filter((id) => !afterIds.has(id)).map((id) => ackDurableFollowup(id)),
+  );
   return true;
 }
 
 /** Restore disk-backed items before channels begin accepting new updates. */
-export async function restoreDurableFollowupRuns(): Promise<number> {
+export async function restoreDurableFollowupRuns(params?: {
+  runFollowup?: (run: FollowupRun) => Promise<void>;
+}): Promise<number> {
   const records = await loadDurableFollowups();
   const config = loadConfig();
+  const restoredQueueKeys = new Set<string>();
   let restored = 0;
   for (const record of records) {
     // The disk directory is already the dedupe source. In-memory message-id
@@ -167,12 +172,23 @@ export async function restoreDurableFollowupRuns(): Promise<number> {
       )
     ) {
       restored += 1;
+      restoredQueueKeys.add(record.queueKey);
       const after = new Set(
         (getExistingFollowupQueue(record.queueKey)?.items ?? [])
           .map((item) => item.durableId)
           .filter((id): id is string => Boolean(id)),
       );
-      await Promise.all([...before].filter((id) => !after.has(id)).map(ackDurableFollowup));
+      await Promise.all(
+        [...before].filter((id) => !after.has(id)).map((id) => ackDurableFollowup(id)),
+      );
+    }
+  }
+  if (params?.runFollowup) {
+    // A fresh process has no callback cache. Restoring records into RAM alone
+    // therefore cannot start their drains; every restored queue must be armed
+    // explicitly before channel cursors are allowed to accept newer work.
+    for (const queueKey of restoredQueueKeys) {
+      scheduleFollowupDrain(queueKey, params.runFollowup);
     }
   }
   return restored;

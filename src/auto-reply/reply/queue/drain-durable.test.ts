@@ -1,0 +1,100 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FollowupRun, QueueSettings } from "./types.js";
+
+const mocks = vi.hoisted(() => ({
+  ackDurableFollowup: vi.fn(async () => undefined),
+}));
+
+vi.mock("./durable-store.js", () => ({
+  ackDurableFollowup: mocks.ackDurableFollowup,
+}));
+
+const { enqueueFollowupRun } = await import("./enqueue.js");
+const { scheduleFollowupDrain } = await import("./drain.js");
+const { clearFollowupQueue } = await import("./state.js");
+
+const settings: QueueSettings = {
+  mode: "collect",
+  debounceMs: 0,
+  cap: 20,
+  dropPolicy: "summarize",
+};
+
+function createRun(id: string, to: string): FollowupRun {
+  return {
+    durableId: id,
+    prompt: `queued ${id}`,
+    enqueuedAt: Date.now(),
+    originatingChannel: "slack",
+    originatingTo: to,
+    run: {
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      provider: "test",
+      model: "test",
+      timeoutMs: 30_000,
+      blockReplyBreak: "message_end",
+    },
+  };
+}
+
+describe("durable followup drain", () => {
+  const keys: string[] = [];
+
+  afterEach(() => {
+    for (const key of keys.splice(0)) {
+      clearFollowupQueue(key);
+    }
+    mocks.ackDurableFollowup.mockClear();
+  });
+
+  it("acks every individually drained collect item after successful processing", async () => {
+    const key = `durable-collect-${Date.now()}`;
+    keys.push(key);
+    const runFollowup = vi.fn(async () => undefined);
+    enqueueFollowupRun(key, createRun("durable-1", "channel:A"), settings, "none");
+    enqueueFollowupRun(key, createRun("durable-2", "channel:B"), settings, "none");
+
+    scheduleFollowupDrain(key, runFollowup);
+
+    await vi.waitFor(() => {
+      expect(runFollowup).toHaveBeenCalledTimes(2);
+      expect(mocks.ackDurableFollowup).toHaveBeenNthCalledWith(1, "durable-1");
+      expect(mocks.ackDurableFollowup).toHaveBeenNthCalledWith(2, "durable-2");
+    });
+    expect(mocks.ackDurableFollowup.mock.invocationCallOrder[0]).toBeGreaterThan(
+      runFollowup.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(mocks.ackDurableFollowup.mock.invocationCallOrder[1]).toBeGreaterThan(
+      runFollowup.mock.invocationCallOrder[1] ?? 0,
+    );
+  });
+
+  it("does not ack an item until a failed processing attempt later succeeds", async () => {
+    const key = `durable-collect-retry-${Date.now()}`;
+    keys.push(key);
+    let releaseRetry: (() => void) | undefined;
+    const retryBarrier = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+    const runFollowup = vi.fn(async () => {
+      if (runFollowup.mock.calls.length === 1) {
+        throw new Error("agent processing failed");
+      }
+      await retryBarrier;
+    });
+    enqueueFollowupRun(key, createRun("durable-retry", "channel:A"), settings, "none");
+
+    scheduleFollowupDrain(key, runFollowup);
+
+    await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(2));
+    expect(mocks.ackDurableFollowup).not.toHaveBeenCalled();
+    releaseRetry?.();
+    await vi.waitFor(() => expect(mocks.ackDurableFollowup).toHaveBeenCalledTimes(1));
+    expect(mocks.ackDurableFollowup).toHaveBeenCalledWith("durable-retry");
+  });
+});

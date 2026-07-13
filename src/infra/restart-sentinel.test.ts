@@ -7,10 +7,12 @@ import {
   consumeRestartSentinel,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
+  markRestartContinuationConsumed,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
   trimLogTail,
+  updateRestartSentinel,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
 
@@ -145,6 +147,40 @@ describe("restart sentinel", () => {
     expect(textA).toBe(textB);
     expect(textA).toContain("Gateway restart restart requested");
     expect(textA).not.toContain('"ts"');
+  });
+
+  it("marks only the matching session continuation consumed", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "requested",
+      ts: Date.now(),
+      sessionKey: "agent:main:telegram:dm:123",
+    });
+    const operationId = (await readRestartSentinel())?.operation?.id;
+    expect(operationId).toBeTruthy();
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            delivery: { ...current.operation.delivery, continuation: "delivering" },
+          }
+        : undefined,
+    }));
+
+    await expect(
+      markRestartContinuationConsumed({
+        sessionKey: "agent:main:telegram:dm:other",
+        contextKeys: [`restart:${operationId}`],
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      markRestartContinuationConsumed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+      }),
+    ).resolves.toBe(true);
+    expect((await readRestartSentinel())?.operation?.delivery.continuation).toBe("delivered");
   });
 
   it("summarizes restart payloads and trims log tails without trailing whitespace", () => {

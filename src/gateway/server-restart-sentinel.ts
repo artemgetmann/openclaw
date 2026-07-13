@@ -17,7 +17,7 @@ import {
   updateRestartSentinel,
   type RestartOperationRecord,
 } from "../infra/restart-sentinel.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -135,6 +135,7 @@ async function reconcileRestartOperation(params: {
         if (!channel || !resolved?.ok) {
           throw new Error("restart receipt route is unavailable");
         }
+        let receiptError: unknown;
         await deliverOutboundPayloads({
           cfg,
           channel,
@@ -145,7 +146,16 @@ async function reconcileRestartOperation(params: {
           payloads: [{ text: buildRecoveryReceipt(fresh) }],
           session: buildOutboundSessionContext({ cfg, sessionKey: fresh.sessionKey }),
           bestEffort: true,
+          // bestEffort reports provider failures here instead of rejecting.
+          // Capture the first one so durable receipt state cannot advance to a
+          // false success merely because the outer promise resolved.
+          onError: (err) => {
+            receiptError ??= err;
+          },
         });
+        if (receiptError) {
+          throw receiptError;
+        }
       }
       await markOperationDelivery({ operationId: fresh.id, field: "receipt", state: "delivered" });
     } catch (err) {
@@ -165,7 +175,8 @@ async function reconcileRestartOperation(params: {
   if (
     !afterReceipt ||
     afterReceipt.id !== operation.id ||
-    afterReceipt.delivery.continuation !== "pending" ||
+    (afterReceipt.delivery.continuation !== "pending" &&
+      afterReceipt.delivery.continuation !== "delivering") ||
     !afterReceipt.sessionKey
   ) {
     return;
@@ -175,18 +186,22 @@ async function reconcileRestartOperation(params: {
     field: "continuation",
     state: "delivering",
   });
-  enqueueSystemEvent(RESTART_CONTINUATION_PROMPT, {
-    sessionKey: afterReceipt.sessionKey,
-    contextKey: `restart:${afterReceipt.id}`,
-  });
+  const contextKey = `restart:${afterReceipt.id}`;
+  const alreadyQueued = peekSystemEventEntries(afterReceipt.sessionKey).some(
+    (event) => event.contextKey === contextKey,
+  );
+  if (!alreadyQueued) {
+    // The sentinel remains `delivering` until heartbeat execution consumes
+    // this tagged input. A process crash clears this in-memory event but leaves
+    // the durable sentinel replayable for the replacement process.
+    enqueueSystemEvent(RESTART_CONTINUATION_PROMPT, {
+      sessionKey: afterReceipt.sessionKey,
+      contextKey,
+    });
+  }
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(afterReceipt.sessionKey, { reason: "restart-continuation" }),
   );
-  await markOperationDelivery({
-    operationId: afterReceipt.id,
-    field: "continuation",
-    state: "delivered",
-  });
 }
 
 export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {

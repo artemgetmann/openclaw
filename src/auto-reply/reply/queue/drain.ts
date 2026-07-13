@@ -98,7 +98,13 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: runFollowup,
+            run: async (item) => {
+              await runFollowup(item);
+              // Mixed-target collect mode shifts exactly one item after this
+              // callback succeeds. Match that removal boundary on disk so a
+              // restart cannot resurrect work that already completed.
+              await ackDurableFollowup(item.durableId);
+            },
           });
           if (collectDrainResult === "empty") {
             break;

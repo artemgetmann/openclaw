@@ -5,7 +5,7 @@ import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -32,7 +32,38 @@ import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import type { TypingController } from "./typing.js";
+import { createTypingController, type TypingController } from "./typing.js";
+
+/**
+ * Build the process-start callback used for disk-backed followups.
+ *
+ * Unlike the normal callback, this cannot inherit a live inbound dispatcher or
+ * typing lifecycle from the pre-restart process. Every queued record already
+ * carries its original routing, model, and session input, so reconstruct only
+ * the local session bookkeeping and let routeReply deliver to that origin.
+ */
+export function createRestoredFollowupRunner(): (queued: FollowupRun) => Promise<void> {
+  return async (queued) => {
+    const sessionKey = queued.run.sessionKey;
+    const storePath = sessionKey
+      ? resolveStorePath(queued.run.config.session?.store, { agentId: queued.run.agentId })
+      : undefined;
+    const sessionStore = storePath ? loadSessionStore(storePath) : undefined;
+    const typing = createTypingController({});
+    const run = createFollowupRunner({
+      typing,
+      // Recovery has no transport-owned typing callback. Disabling it avoids
+      // inventing a stale indicator while preserving the actual reply route.
+      typingMode: "never",
+      sessionEntry: sessionKey ? sessionStore?.[sessionKey] : undefined,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: queued.run.model,
+    });
+    await run(queued);
+  };
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
