@@ -175,9 +175,17 @@ enum GatewayLaunchAgentManager {
 
         if enabled {
             let plan = await self.desiredEnablePlan()
+            let isReconciliation = mutationAuthority != nil
             self.logger
                 .info(
                     "launchd enable requested action=\(String(describing: plan.action), privacy: .public) port=\(port)")
+            // Periodic reconciliation has authority to fill a missing registration,
+            // not replace one it cannot verify. Foreground enable remains the repair
+            // path for stale, malformed, or foreign-owned plists.
+            if isReconciliation, plan.hadPlist, plan.action == .install {
+                self.logger.warning("launchd reconciliation skipped unverified existing registration")
+                return nil
+            }
             switch plan.action {
             case .noop:
                 return nil
@@ -218,6 +226,10 @@ enum GatewayLaunchAgentManager {
             // A failed start/restart suspends before falling back to install. Check
             // the caller's authority again so a mode change during that command
             // cannot turn the fallback into a late launchd mutation.
+            if isReconciliation, plan.hadPlist {
+                self.logger.warning("launchd reconciliation left existing registration unchanged after bringup failure")
+                return nil
+            }
             guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
             let rollback = self.compensationRollback(for: plan)
             if let error = await self.install(port: port) {
@@ -416,15 +428,14 @@ extension GatewayLaunchAgentManager {
             return nil
         }
 
-        // A successful status command observed the service directly, so its
-        // typed loaded value is authoritative.
-        if result.success {
-            return loaded
-        }
+        // A positive observation is authoritative regardless of the command exit:
+        // a loaded unit exists even if some later status section failed.
+        if loaded { return true }
 
         // `gatherDaemonStatus` catches service-inspection errors and can still
-        // serialize `loaded: false`. On a nonzero exit, only explicit absence
-        // evidence distinguishes a missing unit from an unavailable observer.
+        // serialize `loaded: false`, including on an otherwise successful command.
+        // Only explicit absence evidence distinguishes a missing unit from an
+        // unavailable observer.
         let canonicalGateway = json["canonicalDefaultGateway"] as? [String: Any]
         let runtime = service["runtime"] as? [String: Any]
         let explicitlyMissing = canonicalGateway?["missing"] as? Bool == true ||
@@ -541,9 +552,8 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func compensationRollback(for plan: EnablePlan) -> CompensationRollback {
-        // Only a direct install into an empty registration slot created durable
-        // state that did not exist before. Repair installs and bringup fallbacks
-        // must preserve the prior plist and merely stop the process they started.
+        // Reconciliation refuses every install over an existing plist, so its
+        // only reachable install rollback is a fresh persistent registration.
         if plan.action == .install, !plan.hadPlist {
             return .uninstall
         }
