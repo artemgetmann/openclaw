@@ -15,6 +15,7 @@ describe("buildMonitorWakeMessage", () => {
           "/Users/test/Library/Application Support/OpenClaw/media/91f-proof.jpg",
         attachments: [
           "file:///Users/test/Pictures/follow-up.png",
+          "Proof is file:///Users/test/proofs/final proof.png after review.",
           "https://cdn.example.com/proofs/confirmation.webp?version=2",
           "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD",
         ],
@@ -60,6 +61,7 @@ describe("buildMonitorWakeMessage", () => {
     expect(detectImageReferences(message)).toEqual([]);
     expect(message).not.toContain("91f-proof.jpg");
     expect(message).not.toContain("file:///Users/test/Pictures/follow-up.png");
+    expect(message).not.toContain("file:///Users/test/proofs/final proof.png");
     expect(message).not.toContain("https://cdn.example.com/proofs/confirmation.webp");
     expect(message).not.toContain("data:image/jpeg;base64");
     expect(message).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");

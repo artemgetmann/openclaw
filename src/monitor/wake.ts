@@ -6,6 +6,12 @@ const CHECKPOINT_LIMIT_PLACEHOLDER = "[checkpoint content omitted: wake prompt l
 const CHECKPOINT_MAX_RENDERED_CHARS = 16_000;
 const CHECKPOINT_IMAGE_EXTENSIONS = "(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|svg|ico)";
 const CHECKPOINT_DATA_IMAGE_REGEX = /data:image\/[a-z0-9.+-]+(?:;[^,\s]*)?,[^\s"'`<>]*/giu;
+// Match the runner's file-URL grammar exactly: spaces are valid until the image extension, while
+// closing markers and ordinary prose after the extension remain untouched.
+const CHECKPOINT_FILE_URL_IMAGE_REGEX = new RegExp(
+  "file://[^<>\"'`\\]]+?\\." + CHECKPOINT_IMAGE_EXTENSIONS,
+  "giu",
+);
 const CHECKPOINT_IMAGE_REFERENCE_REGEX = new RegExp(
   `(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~\\/|\\.\\.?\\/|\\/)[^\\s"'<>\\]\\[(){}]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s"'<>\\]\\[(){}]*)?`,
   "giu",
@@ -36,6 +42,7 @@ function replaceCheckpointMediaReferences(value: string): string {
       // survive as `[Image: source: ...]` or `[media attached: ...]` prompt references.
       .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
+      .replace(CHECKPOINT_FILE_URL_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
       .replace(CHECKPOINT_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
   );
 }
