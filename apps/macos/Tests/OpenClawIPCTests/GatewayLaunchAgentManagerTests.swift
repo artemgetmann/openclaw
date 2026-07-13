@@ -57,11 +57,29 @@ struct GatewayLaunchAgentManagerTests {
             launchAgentMatchesCurrentServiceVersion: false) == .install)
     }
 
-    @Test func `nonzero daemon status still reports structured unloaded service`() async {
+    @Test func `nonzero daemon status trusts explicit missing service evidence`() async {
         GatewayLaunchAgentManager._setTestingHooks(
             shellExecution: { _, _, _, _ in
                 ShellExecutor.ShellResult(
-                    stdout: #"{"ok":false,"error":"canonicalDefaultGateway.missing","service":{"loaded":false}}"#,
+                    stdout: #"""
+                    {
+                      "service": {
+                        "label": "LaunchAgent",
+                        "loaded": false,
+                        "runtime": {
+                          "status": "unknown",
+                          "missingUnit": true,
+                          "detail": "Could not find service"
+                        }
+                      },
+                      "canonicalDefaultGateway": {
+                        "missing": true,
+                        "label": "ai.openclaw.gateway",
+                        "reason": "canonical shared gateway LaunchAgent is missing or not registered",
+                        "recoveryCommand": "bash scripts/gateway-recover-main.sh"
+                      }
+                    }
+                    """#,
                     stderr: "",
                     exitCode: 1,
                     timedOut: false,
@@ -73,6 +91,38 @@ struct GatewayLaunchAgentManagerTests {
         let loaded = await GatewayLaunchAgentManager.loadedState()
 
         #expect(loaded == false)
+    }
+
+    @Test func `nonzero generic unloaded daemon status remains unknown`() async {
+        GatewayLaunchAgentManager._setTestingHooks(
+            shellExecution: { _, _, _, _ in
+                ShellExecutor.ShellResult(
+                    // `gatherDaemonStatus` can fall back to `loaded: false` when
+                    // service inspection throws. Without an explicit missing marker,
+                    // this is failed observation rather than proof of absence.
+                    stdout: #"""
+                    {
+                      "service": {
+                        "label": "LaunchAgent",
+                        "loaded": false,
+                        "runtime": {
+                          "status": "unknown",
+                          "detail": "launchctl unavailable"
+                        }
+                      }
+                    }
+                    """#,
+                    stderr: "status failed",
+                    exitCode: 1,
+                    timedOut: false,
+                    success: false,
+                    errorMessage: nil)
+            })
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let loaded = await GatewayLaunchAgentManager.loadedState()
+
+        #expect(loaded == nil)
     }
 
     @Test func `nonzero malformed or unrelated daemon status remains unknown`() async {

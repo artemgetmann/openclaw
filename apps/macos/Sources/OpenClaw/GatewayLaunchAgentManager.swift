@@ -372,9 +372,6 @@ extension GatewayLaunchAgentManager {
             timeout: 15,
             quiet: true)
         guard let payload = result.payload else { return nil }
-        // Missing canonical service is a valid status result but the CLI exits 1.
-        // The typed service field is authoritative even on that exit path; absent
-        // or malformed status JSON remains unknown and must never imply unloaded.
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
             let service = json["service"] as? [String: Any],
@@ -382,7 +379,22 @@ extension GatewayLaunchAgentManager {
         else {
             return nil
         }
-        return loaded
+
+        // A successful status command observed the service directly, so its
+        // typed loaded value is authoritative.
+        if result.success {
+            return loaded
+        }
+
+        // `gatherDaemonStatus` catches service-inspection errors and can still
+        // serialize `loaded: false`. On a nonzero exit, only explicit absence
+        // evidence distinguishes a missing unit from an unavailable observer.
+        let canonicalGateway = json["canonicalDefaultGateway"] as? [String: Any]
+        let runtime = service["runtime"] as? [String: Any]
+        let explicitlyMissing = canonicalGateway?["missing"] as? Bool == true ||
+            runtime?["missingUnit"] as? Bool == true
+        guard loaded == false, explicitlyMissing else { return nil }
+        return false
     }
 
     private static func mutationIsStillAllowed(
