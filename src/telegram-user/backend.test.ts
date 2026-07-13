@@ -180,6 +180,24 @@ describe("telegram-user backend defaults", () => {
     });
   });
 
+  it("uses canonical consumer state for mutable Telegram tooling", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-consumer-home-"));
+    tempToolingRoots.push(homeDir);
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_PROFILE", "consumer-lane");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(homeDir, "raw-profile-state"));
+
+    const { resolveConsumerRuntimeIdentity } = await import("../consumer/runtime-identity.js");
+    const identity = resolveConsumerRuntimeIdentity({ homeDir, instanceId: "lane" });
+    const { getTelegramUserDefaults } = await import("./backend.js");
+
+    expect(getTelegramUserDefaults()).toMatchObject({
+      defaultEnvFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
+      defaultSessionPath: path.join(identity.stateDir, "telegram-user", "userbot.session"),
+      telegramUserStateDir: path.join(identity.stateDir, "telegram-user"),
+    });
+  });
+
   it("uses explicit env-file credentials even when the persisted binding is unreadable", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-state-"));
     tempToolingRoots.push(stateDir);

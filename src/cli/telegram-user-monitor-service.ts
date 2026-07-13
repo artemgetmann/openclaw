@@ -332,33 +332,8 @@ export async function runTelegramMonitorServiceInstall(opts: TelegramMonitorServ
       checkError = err;
     }
 
-    if (loaded && installed !== false) {
-      // A force install started with a live unit. Loaded-after-error is not new
-      // evidence by itself: retain new selectors only when the unit file proves
-      // that the replacement plan actually landed.
-      const installedCommand = await service
-        .readCommand(daemonEnv as NodeJS.ProcessEnv)
-        .catch(() => null);
-      if (
-        installedCommandMatchesPlan({
-          command: installedCommand,
-          environment: plan.environment,
-          programArguments: plan.programArguments,
-          workingDirectory: plan.workingDirectory,
-        })
-      ) {
-        fail(
-          `Telegram monitor install failed after updating the service command: ${String(installError)}. The new binding was retained.`,
-        );
-        return;
-      }
-    }
-
-    if (loaded || installed === false) {
+    const restorePriorBinding = async () => {
       try {
-        // A pre-existing unit with no matching replacement command is the old
-        // service surviving. Restoring its prior selectors avoids splitting
-        // the service command and backend credential sources.
         await restoreTelegramMonitorBinding({ env: plan.binding.env, previous: previousBinding });
       } catch (rollbackError) {
         fail(
@@ -369,6 +344,38 @@ export async function runTelegramMonitorServiceInstall(opts: TelegramMonitorServ
       fail(
         `Telegram monitor install failed: ${String(installError)}; replacement was not verified, so the prior binding was restored.`,
       );
+    };
+
+    if (loaded) {
+      // A pre-existing service may still be executing its old command even if
+      // install already replaced the unit file. Without active-process command
+      // introspection, the old binding is the only defensible runtime identity.
+      await restorePriorBinding();
+      return;
+    }
+
+    // Service activation and command installation are separate facts. A failed
+    // fresh bootstrap can leave its command on disk while reporting the unit as
+    // unloaded; retain matching selectors because no older service can own them.
+    const installedCommand = await service
+      .readCommand(daemonEnv as NodeJS.ProcessEnv)
+      .catch(() => null);
+    if (
+      installedCommandMatchesPlan({
+        command: installedCommand,
+        environment: plan.environment,
+        programArguments: plan.programArguments,
+        workingDirectory: plan.workingDirectory,
+      })
+    ) {
+      fail(
+        `Telegram monitor install failed after updating the service command: ${String(installError)}. The new binding was retained.`,
+      );
+      return;
+    }
+
+    if (installed === false) {
+      await restorePriorBinding();
       return;
     }
 
@@ -409,7 +416,12 @@ export async function runTelegramMonitorServiceUninstall(
     service: resolveTelegramMonitorService(),
     opts,
     stopBeforeUninstall: false,
-    assertNotLoadedAfterUninstall: false,
+    assertNotLoadedAfterUninstall: true,
+    afterUninstall: async (env) => {
+      // The binding changes selector defaults for all Telegram-user commands,
+      // so its ownership ends with the monitor service that created it.
+      await clearTelegramUserMonitorBinding(env as NodeJS.ProcessEnv);
+    },
   });
 }
 
@@ -447,7 +459,12 @@ export async function runTelegramMonitorServiceStatus(
       .readRuntime(daemonEnv as NodeJS.ProcessEnv)
       .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
     readBestEffortConfig(),
-    summarizeTelegramUserMonitorBinding(daemonEnv as NodeJS.ProcessEnv),
+    summarizeTelegramUserMonitorBinding(daemonEnv as NodeJS.ProcessEnv).catch(() => ({
+      configured: false,
+      source: "unavailable" as const,
+      envFile: { configured: false, present: false },
+      session: { configured: false, present: false },
+    })),
   ]);
   const defaultHookUrl = resolveDefaultTelegramMonitorHookUrl({
     env: daemonEnv,

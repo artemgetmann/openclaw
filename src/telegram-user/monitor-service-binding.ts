@@ -19,7 +19,7 @@ export type TelegramUserMonitorBindingSummary = {
   configured: boolean;
   envFile: { configured: boolean; present: boolean };
   session: { configured: boolean; present: boolean };
-  source: "profile-state" | "none";
+  source: "profile-state" | "none" | "unavailable";
 };
 
 type StoredBinding = TelegramUserMonitorBinding & {
@@ -40,20 +40,22 @@ export function resolveTelegramUserMonitorBindingPath(env: NodeJS.ProcessEnv = p
 }
 
 function parseBinding(raw: string): TelegramUserMonitorBinding | null {
+  let parsed: Partial<StoredBinding>;
   try {
-    const parsed = JSON.parse(raw) as Partial<StoredBinding>;
-    if (parsed.version !== bindingVersion) {
-      return null;
-    }
-    return {
-      envFile: normalizeTelegramUserMonitorSelector(parsed.envFile),
-      session: normalizeTelegramUserMonitorSelector(parsed.session),
-    };
-  } catch {
-    // A damaged or future-version file must not prevent explicit CLI commands
-    // from working; callers safely fall back to the established defaults.
-    return null;
+    parsed = JSON.parse(raw) as Partial<StoredBinding>;
+  } catch (error) {
+    throw new Error("Telegram monitor binding is not valid JSON.", { cause: error });
   }
+  if (parsed.version !== bindingVersion) {
+    // Absence is the only state eligible for legacy backfill. Failing closed
+    // prevents an older CLI from replacing a newer binding format it cannot
+    // safely interpret; explicit --env-file commands bypass this read.
+    throw new Error(`Unsupported Telegram monitor binding version: ${String(parsed.version)}.`);
+  }
+  return {
+    envFile: normalizeTelegramUserMonitorSelector(parsed.envFile),
+    session: normalizeTelegramUserMonitorSelector(parsed.session),
+  };
 }
 
 export async function readTelegramUserMonitorBinding(

@@ -82,4 +82,17 @@ describe("telegram-user monitor service binding", () => {
     });
     await expect(readTelegramUserMonitorBinding(env)).resolves.toBeNull();
   });
+
+  it("rejects and preserves a future-version binding", async () => {
+    const env = await makeEnv();
+    const bindingPath = resolveTelegramUserMonitorBindingPath(env);
+    await fs.mkdir(path.dirname(bindingPath), { recursive: true });
+    const futureBinding = '{"version":2,"envFile":"/future/account.env"}\n';
+    await fs.writeFile(bindingPath, futureBinding);
+
+    await expect(readTelegramUserMonitorBinding(env)).rejects.toThrow(
+      "Unsupported Telegram monitor binding version: 2.",
+    );
+    await expect(fs.readFile(bindingPath, "utf8")).resolves.toBe(futureBinding);
+  });
 });

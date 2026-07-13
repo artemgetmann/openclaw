@@ -50,6 +50,7 @@ vi.mock("../telegram-user/monitor-service-binding.js", () => ({
 
 let runTelegramMonitorServiceStatus: typeof import("./telegram-user-monitor-service.js").runTelegramMonitorServiceStatus;
 let runTelegramMonitorServiceInstall: typeof import("./telegram-user-monitor-service.js").runTelegramMonitorServiceInstall;
+let runTelegramMonitorServiceUninstall: typeof import("./telegram-user-monitor-service.js").runTelegramMonitorServiceUninstall;
 let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 
 function readLoggedJson(log: ReturnType<typeof vi.spyOn>) {
@@ -59,8 +60,11 @@ function readLoggedJson(log: ReturnType<typeof vi.spyOn>) {
 }
 
 beforeAll(async () => {
-  ({ runTelegramMonitorServiceInstall, runTelegramMonitorServiceStatus } =
-    await import("./telegram-user-monitor-service.js"));
+  ({
+    runTelegramMonitorServiceInstall,
+    runTelegramMonitorServiceStatus,
+    runTelegramMonitorServiceUninstall,
+  } = await import("./telegram-user-monitor-service.js"));
   ({ defaultRuntime } = await import("../runtime.js"));
 });
 
@@ -99,6 +103,7 @@ describe("telegram-user monitor-service cli", () => {
       envFile: { configured: false, present: false },
       session: { configured: false, present: false },
     });
+    service.readCommand.mockResolvedValue(null);
   });
 
   it("proves selectors are writable before installing the service", async () => {
@@ -184,6 +189,19 @@ describe("telegram-user monitor-service cli", () => {
     });
   });
 
+  it("does not overwrite an incompatible binding during legacy backfill", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    service.isLoaded.mockResolvedValueOnce(true);
+    readBindingMock.mockRejectedValueOnce(new Error("unsupported binding version"));
+
+    await runTelegramMonitorServiceInstall({ json: true });
+
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(writeBindingMock).not.toHaveBeenCalled();
+  });
+
   it("does not install when the proposed binding cannot be written", async () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -239,15 +257,6 @@ describe("telegram-user monitor-service cli", () => {
     readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
     service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     service.install.mockRejectedValueOnce(new Error("forced install broke"));
-    service.readCommand.mockResolvedValueOnce({
-      programArguments: [
-        "openclaw",
-        "telegram-user",
-        "monitor-poll",
-        "--env-file",
-        "/private/previous.env",
-      ],
-    });
 
     await runTelegramMonitorServiceInstall({
       force: true,
@@ -265,25 +274,13 @@ describe("telegram-user monitor-service cli", () => {
     });
   });
 
-  it("retains the new binding when a forced reinstall updated the loaded service command", async () => {
+  it("restores the prior binding when a failed replacement rewrites the unit file", async () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
     service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     service.install.mockRejectedValueOnce(new Error("install reported late failure"));
-    service.readCommand.mockResolvedValueOnce({
-      environment: { OPENCLAW_STATE_DIR: "/state" },
-      programArguments: [
-        "openclaw",
-        "telegram-user",
-        "monitor-poll",
-        "--env-file",
-        "/private/account.env",
-        "--session",
-        "/private/account.session",
-      ],
-    });
 
     await runTelegramMonitorServiceInstall({
       force: true,
@@ -291,7 +288,81 @@ describe("telegram-user monitor-service cli", () => {
       envFile: "/private/account.env",
     });
 
-    expect(writeBindingMock).toHaveBeenCalledOnce();
+    expect(writeBindingMock).toHaveBeenNthCalledWith(2, {
+      env: { OPENCLAW_STATE_DIR: "/state" },
+      envFile: "/private/previous.env",
+    });
+    expect(clearBindingMock).not.toHaveBeenCalled();
+  });
+
+  it("restores the prior binding when a failed replacement leaves the service unloaded", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
+    service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    service.install.mockRejectedValueOnce(new Error("replacement bootstrap failed"));
+
+    await runTelegramMonitorServiceInstall({
+      force: true,
+      json: true,
+      envFile: "/private/account.env",
+    });
+
+    expect(writeBindingMock).toHaveBeenNthCalledWith(2, {
+      env: { OPENCLAW_STATE_DIR: "/state" },
+      envFile: "/private/previous.env",
+    });
+    expect(clearBindingMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the monitor-owned selector binding after a successful uninstall", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    service.uninstall.mockResolvedValueOnce(undefined);
+
+    await runTelegramMonitorServiceUninstall({ json: true });
+
+    expect(service.uninstall).toHaveBeenCalledOnce();
+    expect(clearBindingMock).toHaveBeenCalledOnce();
+    expect(clearBindingMock).toHaveBeenCalledWith(service.uninstall.mock.calls[0]?.[0]?.env);
+  });
+
+  it("preserves the selector binding when service uninstall fails", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.uninstall.mockRejectedValueOnce(new Error("uninstall broke"));
+
+    await runTelegramMonitorServiceUninstall({ json: true });
+
+    expect(clearBindingMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the selector binding when the service remains loaded after uninstall", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    service.uninstall.mockResolvedValueOnce(undefined);
+
+    await runTelegramMonitorServiceUninstall({ json: true });
+
+    expect(clearBindingMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the selector binding when service removal cannot be verified", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    service.isLoaded
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error("status unavailable"));
+    service.uninstall.mockResolvedValueOnce(undefined);
+
+    await runTelegramMonitorServiceUninstall({ json: true });
+
     expect(clearBindingMock).not.toHaveBeenCalled();
   });
 
@@ -367,5 +438,26 @@ describe("telegram-user monitor-service cli", () => {
     expect(payload.service?.defaultHookUrl).toBe(
       "http://127.0.0.1:19999/hooks/telegram-user-monitor-event",
     );
+  });
+
+  it("keeps status available when the binding metadata is unreadable", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(false);
+    service.readCommand.mockResolvedValueOnce(null);
+    service.readRuntime.mockResolvedValueOnce({ status: "unknown" });
+    summarizeBindingMock.mockRejectedValueOnce(new Error("binding unreadable"));
+
+    await runTelegramMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(log)).toMatchObject({
+      service: {
+        binding: {
+          configured: false,
+          source: "unavailable",
+          envFile: { configured: false, present: false },
+          session: { configured: false, present: false },
+        },
+      },
+    });
   });
 });

@@ -109,8 +109,12 @@ function resolveTelegramUserDefaultPaths(env: NodeJS.ProcessEnv) {
   };
 }
 
+// Mutable tooling must follow the same canonical profile identity as selector
+// bindings; otherwise one command can mix a raw profile venv with canonical
+// credentials and session state.
+const backendRuntimeEnv = resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv;
 const { telegramUserStateDir, defaultEnvFilePath, defaultSessionPath } =
-  resolveTelegramUserDefaultPaths(process.env);
+  resolveTelegramUserDefaultPaths(backendRuntimeEnv);
 const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
 
 type PythonInvocation = {
@@ -320,9 +324,15 @@ export function resolveTelegramUserSessionPath(params: {
   );
 }
 
-export async function resolveTelegramUserBackendSelectors(
+type TelegramUserBackendSelection = {
+  envFilePath: string;
+  loadedEnv: Record<string, string>;
+  sessionPath: string;
+};
+
+async function resolveTelegramUserBackendSelection(
   options: TelegramUserBackendOptions,
-): Promise<{ envFilePath: string; sessionPath: string }> {
+): Promise<TelegramUserBackendSelection> {
   const explicitEnvFile = normalizeTelegramUserMonitorSelector(options.envFile);
   // Service installation canonicalizes consumer profiles into their app-owned
   // state roots. Backend calls must use the same identity or they silently read
@@ -345,12 +355,22 @@ export async function resolveTelegramUserBackendSelectors(
     env: runtimeEnv,
     loadedEnv,
   });
+  return { envFilePath, loadedEnv, sessionPath };
+}
+
+export async function resolveTelegramUserBackendSelectors(
+  options: TelegramUserBackendOptions,
+): Promise<{ envFilePath: string; sessionPath: string }> {
+  const { envFilePath, sessionPath } = await resolveTelegramUserBackendSelection(options);
   return { envFilePath, sessionPath };
 }
 
 async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
-  const { envFilePath, sessionPath } = await resolveTelegramUserBackendSelectors(options);
-  const loadedEnv = await loadScopedEnvFile(envFilePath);
+  // Credential values and USERBOT_SESSION must come from one file snapshot.
+  // Re-reading after selector resolution could pair credentials from a replaced
+  // env file with the previous account's resolved session path.
+  const { envFilePath, loadedEnv, sessionPath } =
+    await resolveTelegramUserBackendSelection(options);
   return {
     env: {
       ...process.env,
