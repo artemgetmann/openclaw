@@ -19,6 +19,8 @@ describe("buildMonitorWakeMessage", () => {
           "Single proof '~/Application Support/proof image.png' remains reviewed.",
           "Backtick proof `../Application Support/backtick proof.jpeg` remains reviewed.",
           'Double proof "./Application Support/double proof.webp" remains reviewed.',
+          "Bare tilde ~proof.png remains reviewed.",
+          "Parenthesized (~proof-two.jpeg) remains reviewed.",
           "https://cdn.example.com/proofs/confirmation.webp?version=2",
           "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD",
         ],
@@ -112,6 +114,8 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("Single proof [media reference omitted] remains reviewed.");
     expect(message).toContain("Backtick proof [media reference omitted] remains reviewed.");
     expect(message).toContain("Double proof [media reference omitted] remains reviewed.");
+    expect(message).toContain("Bare tilde [media reference omitted] remains reviewed.");
+    expect(message).toContain("Parenthesized ([media reference omitted]) remains reviewed.");
     expect(message).not.toContain("https://cdn.example.com/proofs/confirmation.webp");
     expect(message).not.toContain("data:image/jpeg;base64");
     expect(message).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");

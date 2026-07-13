@@ -17,7 +17,7 @@ const CHECKPOINT_QUOTED_IMAGE_PATH_REGEX = new RegExp(
   "giu",
 );
 const CHECKPOINT_IMAGE_REFERENCE_REGEX = new RegExp(
-  `(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~\\/|\\.\\.?\\/|\\/)[^\\s"'<>\\]\\[(){}]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s"'<>\\]\\[(){}]*)?`,
+  `(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~|\\.\\.?\\/|\\/)[^\\s"'<>\\]\\[(){}]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s"'<>\\]\\[(){}]*)?`,
   "giu",
 );
 const CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX = new RegExp(
