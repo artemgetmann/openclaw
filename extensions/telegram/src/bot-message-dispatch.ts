@@ -129,11 +129,20 @@ function isLikelyFinalAnswerPreviewAfterProgress(text: string): boolean {
   return false;
 }
 
+function hasCompleteFirstPreviewBoundary(text: string): boolean {
+  // The first DM preview is durable user-facing text, so wait for evidence
+  // that the provider finished a sentence or paragraph instead of guessing
+  // completeness from an arbitrary character count.
+  return /(?:[.!?…]["')\]]?|[\r\n]{2,})\s*$/.test(text);
+}
+
 function shouldEmitCoalescedDraftPreview(params: {
   previousText: string;
   nextText: string;
   laneName: LaneName;
   fastFirstPreview?: boolean;
+  requireCompleteFirstPreview?: boolean;
+  nextTextHasCompletionBoundary?: boolean;
 }): boolean {
   if (params.laneName === "reasoning") {
     return true;
@@ -144,11 +153,11 @@ function shouldEmitCoalescedDraftPreview(params: {
     return false;
   }
   if (!previous) {
+    if (params.requireCompleteFirstPreview) {
+      return params.nextTextHasCompletionBoundary === true;
+    }
     if (params.fastFirstPreview) {
-      // DM previews should feel immediate once they contain useful text, but
-      // allocating a Telegram message for a raw one-token prefix (for example
-      // "I") exposes transport timing as broken user-facing copy.
-      return next.length >= DRAFT_MIN_INITIAL_CHARS;
+      return true;
     }
     // Avoid creating Telegram drafts for tiny token prefixes; the final lane
     // still receives the complete answer even when early previews are skipped.
@@ -597,6 +606,7 @@ export const dispatchTelegramMessage = async ({
   const archivedReasoningPreviewIds: number[] = [];
   let partialCallbackCount = 0;
   let firstPartialTextLength: number | undefined;
+  let firstDmAnswerPreviewDelivered = false;
   let firstTelegramPreviewAttemptLogged = false;
   let firstTelegramPreviewCompleteLogged = false;
   // Draft streams only know that they created a real Telegram message. The
@@ -677,6 +687,9 @@ export const dispatchTelegramMessage = async ({
       },
       renderText: renderDraftPreview,
       onMessageDelivered: (messageId, event) => {
+        if (laneName === "answer" && useMessagePreviewTransportForDm) {
+          firstDmAnswerPreviewDelivered = true;
+        }
         const classification = draftDurableSendClassificationByLane[laneName];
         logPreviewLedger({
           lane: laneName,
@@ -1417,7 +1430,14 @@ export const dispatchTelegramMessage = async ({
         previousText: previousDeliveredPreviewText,
         nextText: previewText,
         laneName,
-        fastFirstPreview: lane === answerLane && useMessagePreviewTransportForDm,
+        // Only the first visible DM answer must wait for a complete boundary.
+        // Once it lands, later edits and the separate final lane keep the
+        // existing low-latency streaming behavior.
+        requireCompleteFirstPreview:
+          lane === answerLane && useMessagePreviewTransportForDm && !firstDmAnswerPreviewDelivered,
+        fastFirstPreview:
+          lane === answerLane && useMessagePreviewTransportForDm && firstDmAnswerPreviewDelivered,
+        nextTextHasCompletionBoundary: hasCompleteFirstPreviewBoundary(text),
       })
     ) {
       lane.lastPartialText = previewText;
@@ -1550,6 +1570,31 @@ export const dispatchTelegramMessage = async ({
     );
     return controller;
   };
+  const flushBufferedFirstDmAnswerPreviewAtProgressBoundary = async () => {
+    if (
+      !useMessagePreviewTransportForDm ||
+      firstDmAnswerPreviewDelivered ||
+      answerLane.hasStreamedMessage ||
+      !answerLane.lastPartialText.trim()
+    ) {
+      return;
+    }
+    // A tool/progress boundary proves the preceding assistant snapshot is
+    // complete even when the model omitted punctuation. Materialize that
+    // buffered acknowledgment before adopting it into the Work log.
+    const stream = answerLane.stream ?? ensureDraftLaneStream("answer");
+    if (!stream) {
+      return;
+    }
+    setDraftDurableSendClassification("answer", {
+      reason: "progress",
+      callsite: "answer-preview-progress-boundary-fallback",
+      sourceKind: "partial",
+    });
+    answerLane.hasStreamedMessage = true;
+    stream.update(answerLane.lastPartialText);
+    await stream.flush();
+  };
   const updateAnswerProgressFromBlock = async (
     text: string | undefined,
     options: {
@@ -1569,9 +1614,11 @@ export const dispatchTelegramMessage = async ({
     // there is an existing visible answer bubble to adopt.
     await waitForDraftLaneIdle();
     // This explicit progress/commentary boundary classifies any raw partial
-    // immediately before it as progress. Drop the candidate after the queue is
-    // idle so fire-and-forget provider callbacks cannot repopulate it behind
-    // this boundary. No Telegram preview exists, so no delete is required.
+    // immediately before it as progress. If the first acknowledgment lacked
+    // punctuation, materialize it now; then drop the candidate after the queue
+    // is idle so fire-and-forget callbacks cannot repopulate it behind the
+    // boundary.
+    await flushBufferedFirstDmAnswerPreviewAtProgressBoundary();
     pendingAnswerPartialDuringPlan = undefined;
     const controller =
       (await adoptSpeculativeAnswerPreviewAsProgress("before-progress-update")) ??
