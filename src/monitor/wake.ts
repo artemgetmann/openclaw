@@ -55,7 +55,15 @@ function takeCheckpointText(value: string, state: CheckpointRenderState): string
 }
 
 function objectDeclaresImageContent(value: Record<string, unknown>): boolean {
-  return [value.mimeType, value.mediaType, value.contentType, value.type].some(
+  return [
+    value.mimeType,
+    value.mime_type,
+    value.mediaType,
+    value.media_type,
+    value.contentType,
+    value.content_type,
+    value.type,
+  ].some(
     (entry) =>
       typeof entry === "string" &&
       (entry.toLowerCase().startsWith("image/") || entry.trim().toLowerCase() === "image"),
@@ -67,7 +75,7 @@ function isInlineImagePayload(key: string | undefined, parentDeclaresImage: bool
     return false;
   }
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (parentDeclaresImage && /^(?:data|content|payload|base64|bytes)$/.test(normalized)) {
+  if (parentDeclaresImage && /^(?:data|content|payload|base64|b64json|bytes)$/.test(normalized)) {
     return true;
   }
   // `screenshotId` remains useful ordinary data; only explicit byte/content keys are removed.
@@ -117,7 +125,9 @@ function sanitizeCheckpointValue(
     }
 
     const source = value as Record<string, unknown>;
-    const declaresImage = objectDeclaresImageContent(source);
+    // Image blocks commonly nest encoded bytes under `source`; once declared, image context stays
+    // active for descendants so inner payload fields cannot become ordinary checkpoint data again.
+    const declaresImage = parentDeclaresImage || objectDeclaresImageContent(source);
     const sanitized: Record<string, unknown> = {};
     for (const key in source) {
       if (!Object.hasOwn(source, key)) {

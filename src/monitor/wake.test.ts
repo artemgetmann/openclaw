@@ -30,6 +30,34 @@ describe("buildMonitorWakeMessage", () => {
           mimeType: "image/png",
           data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
         },
+        nestedImage: {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "nested-image-base64-payload",
+          },
+        },
+        generatedImage: {
+          type: "image",
+          source: {
+            mediaType: "image/webp",
+            b64_json: "generated-image-b64-json-payload",
+          },
+        },
+        standaloneImageSource: {
+          type: "base64",
+          media_type: "image/jpeg",
+          data: "snake-case-image-base64-payload",
+        },
+        unrelatedPayload: {
+          type: "record",
+          source: {
+            media_type: "application/json",
+            data: "ordinary-checkpoint-data",
+            b64_json: "ordinary-checkpoint-b64-json",
+          },
+        },
       },
     };
     const checkpointBeforeWake = structuredClone(checkpoint);
@@ -65,6 +93,11 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).not.toContain("https://cdn.example.com/proofs/confirmation.webp");
     expect(message).not.toContain("data:image/jpeg;base64");
     expect(message).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");
+    expect(message).not.toContain("nested-image-base64-payload");
+    expect(message).not.toContain("generated-image-b64-json-payload");
+    expect(message).not.toContain("snake-case-image-base64-payload");
+    expect(message).toContain("ordinary-checkpoint-data");
+    expect(message).toContain("ordinary-checkpoint-b64-json");
     expect(message).not.toContain("feedback confirmation.png");
     expect(message).not.toContain("follow up.jpeg");
     expect(message).not.toContain("final confirmation.webp");
