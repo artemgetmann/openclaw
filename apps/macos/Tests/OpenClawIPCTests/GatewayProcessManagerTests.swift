@@ -344,7 +344,7 @@ extension GatewayLaunchAgentManagerTests {
             }
     }
 
-    @Test func `reconciliation stops successful mutation when authority is revoked during command`() async {
+    @Test func `reconciliation uninstalls fresh registration when authority is revoked during command`() async {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
@@ -365,7 +365,7 @@ extension GatewayLaunchAgentManagerTests {
                 manager.setTestingDesiredActive(true)
                 var loadedChecks = 0
                 var daemonCalls: [[String]] = []
-                var compensatingStopWasCancelled: Bool?
+                var compensatingRollbackWasCancelled: Bool?
                 GatewayLaunchAgentManager._setTestingHooks(
                     launchAgentWriteDisabled: { false },
                     readDaemonLoaded: {
@@ -379,8 +379,8 @@ extension GatewayLaunchAgentManagerTests {
                             // launchd command is suspended in a cancelled task.
                             withUnsafeCurrentTask { $0?.cancel() }
                             manager.setTestingDesiredActive(false)
-                        } else if args == ["stop"] {
-                            compensatingStopWasCancelled = Task.isCancelled
+                        } else if args == ["uninstall"] {
+                            compensatingRollbackWasCancelled = Task.isCancelled
                         }
                         return nil
                     })
@@ -402,9 +402,9 @@ extension GatewayLaunchAgentManagerTests {
                         "--runtime",
                         "node",
                     ],
-                    ["stop"],
+                    ["uninstall"],
                 ])
-                #expect(compensatingStopWasCancelled == false)
+                #expect(compensatingRollbackWasCancelled == false)
             }
     }
 
@@ -458,7 +458,7 @@ extension GatewayLaunchAgentManagerTests {
                         "--runtime",
                         "node",
                     ],
-                    ["stop"],
+                    ["uninstall"],
                 ])
             }
     }
@@ -517,7 +517,7 @@ extension GatewayLaunchAgentManagerTests {
             }
     }
 
-    @Test func `detached compensation does not stop service claimed before rollback executes`() async {
+    @Test func `detached compensation does not uninstall registration claimed before rollback executes`() async {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
@@ -548,7 +548,7 @@ extension GatewayLaunchAgentManagerTests {
                         }
                         return nil
                     },
-                    beforeCompensatingStop: {
+                    beforeCompensatingRollback: {
                         // The parent already observed revocation and scheduled its
                         // detached rollback. A new generation now owns the service
                         // before that rollback reaches the launchd command.

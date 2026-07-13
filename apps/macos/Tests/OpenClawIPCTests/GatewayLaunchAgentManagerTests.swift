@@ -57,6 +57,21 @@ struct GatewayLaunchAgentManagerTests {
             launchAgentMatchesCurrentServiceVersion: false) == .install)
     }
 
+    @Test func `compensation only uninstalls a fresh registration`() {
+        #expect(GatewayLaunchAgentManager._testCompensationCommand(
+            action: .install,
+            hadPlist: false) == ["uninstall"])
+        #expect(GatewayLaunchAgentManager._testCompensationCommand(
+            action: .install,
+            hadPlist: true) == ["stop"])
+        #expect(GatewayLaunchAgentManager._testCompensationCommand(
+            action: .start,
+            hadPlist: true) == ["stop"])
+        #expect(GatewayLaunchAgentManager._testCompensationCommand(
+            action: .restart,
+            hadPlist: true) == ["stop"])
+    }
+
     @Test func `nonzero daemon status trusts explicit missing service evidence`() async {
         GatewayLaunchAgentManager._setTestingHooks(
             shellExecution: { _, _, _, _ in

@@ -11,7 +11,7 @@ enum GatewayLaunchAgentManager {
         _ args: [String],
         _ timeout: Double,
         _ quiet: Bool) async -> String?)?
-    private nonisolated(unsafe) static var testBeforeCompensatingStopHook: (@MainActor @Sendable () async -> Void)?
+    private nonisolated(unsafe) static var testBeforeCompensatingRollbackHook: (@MainActor @Sendable () async -> Void)?
     private nonisolated(unsafe) static var testShellExecutionHook: ((
         _ command: [String],
         _ cwd: String?,
@@ -49,6 +49,31 @@ enum GatewayLaunchAgentManager {
         case restart
         case stop
         case uninstall
+    }
+
+    private struct EnablePlan {
+        let action: DesiredAction
+        /// Persistent registration that existed before this mutation began.
+        let hadPlist: Bool
+    }
+
+    private enum CompensationRollback: Sendable {
+        case stop
+        case uninstall
+
+        var command: [String] {
+            switch self {
+            case .stop: ["stop"]
+            case .uninstall: ["uninstall"]
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .stop: "stop"
+            case .uninstall: "uninstall"
+            }
+        }
     }
 
     /// A guarded mutation must distinguish stale work from revoked ownership.
@@ -149,10 +174,11 @@ enum GatewayLaunchAgentManager {
         }
 
         if enabled {
-            let action = await self.desiredEnableAction()
+            let plan = await self.desiredEnablePlan()
             self.logger
-                .info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
-            switch action {
+                .info(
+                    "launchd enable requested action=\(String(describing: plan.action), privacy: .public) port=\(port)")
+            switch plan.action {
             case .noop:
                 return nil
             case .restart:
@@ -160,24 +186,30 @@ enum GatewayLaunchAgentManager {
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
                     if let compensationError = await self.compensateIfMutationAuthorityWasRevoked(
-                        mutationAuthority)
+                        mutationAuthority,
+                        rollback: .stop)
                     {
                         return "\(error); \(compensationError)"
                     }
                 } else {
-                    return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
+                    return await self.compensateIfMutationAuthorityWasRevoked(
+                        mutationAuthority,
+                        rollback: .stop)
                 }
             case .start:
                 guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
                 if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
                     self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
                     if let compensationError = await self.compensateIfMutationAuthorityWasRevoked(
-                        mutationAuthority)
+                        mutationAuthority,
+                        rollback: .stop)
                     {
                         return "\(error); \(compensationError)"
                     }
                 } else {
-                    return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
+                    return await self.compensateIfMutationAuthorityWasRevoked(
+                        mutationAuthority,
+                        rollback: .stop)
                 }
             case .install, .stop, .uninstall:
                 break
@@ -187,15 +219,19 @@ enum GatewayLaunchAgentManager {
             // the caller's authority again so a mode change during that command
             // cannot turn the fallback into a late launchd mutation.
             guard await self.mutationIsStillAllowed(mutationAuthority) else { return nil }
+            let rollback = self.compensationRollback(for: plan)
             if let error = await self.install(port: port) {
                 if let compensationError = await self.compensateIfMutationAuthorityWasRevoked(
-                    mutationAuthority)
+                    mutationAuthority,
+                    rollback: rollback)
                 {
                     return "\(error); \(compensationError)"
                 }
                 return error
             }
-            return await self.compensateIfMutationAuthorityWasRevoked(mutationAuthority)
+            return await self.compensateIfMutationAuthorityWasRevoked(
+                mutationAuthority,
+                rollback: rollback)
         }
 
         if await self.shouldPreserveLoadedConsumerGatewayOnStop() {
@@ -324,7 +360,7 @@ extension GatewayLaunchAgentManager {
         launchAgentWriteDisabled: (() -> Bool)? = nil,
         readDaemonLoaded: (() async -> Bool?)? = nil,
         runDaemonCommand: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)? = nil,
-        beforeCompensatingStop: (@MainActor @Sendable () async -> Void)? = nil,
+        beforeCompensatingRollback: (@MainActor @Sendable () async -> Void)? = nil,
         shellExecution: ((
             _ command: [String],
             _ cwd: String?,
@@ -336,7 +372,7 @@ extension GatewayLaunchAgentManager {
         self.testLaunchAgentWriteDisabledHook = launchAgentWriteDisabled
         self.testReadDaemonLoadedHook = readDaemonLoaded
         self.testRunDaemonCommandHook = runDaemonCommand
-        self.testBeforeCompensatingStopHook = beforeCompensatingStop
+        self.testBeforeCompensatingRollbackHook = beforeCompensatingRollback
         self.testShellExecutionHook = shellExecution
         self.testCurrentServiceVersionHook = currentServiceVersion
         self.testCurrentServiceBuildHook = currentServiceBuild
@@ -346,7 +382,7 @@ extension GatewayLaunchAgentManager {
         self.testLaunchAgentWriteDisabledHook = nil
         self.testReadDaemonLoadedHook = nil
         self.testRunDaemonCommandHook = nil
-        self.testBeforeCompensatingStopHook = nil
+        self.testBeforeCompensatingRollbackHook = nil
         self.testShellExecutionHook = nil
         self.testCurrentServiceVersionHook = nil
         self.testCurrentServiceBuildHook = nil
@@ -411,7 +447,8 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func compensateIfMutationAuthorityWasRevoked(
-        _ mutationAuthority: (@MainActor @Sendable () -> MutationAuthority)?) async -> String?
+        _ mutationAuthority: (@MainActor @Sendable () -> MutationAuthority)?,
+        rollback: CompensationRollback) async -> String?
     {
         // Only reconciliation supplies this authority predicate. Keeping the
         // post-command check opt-in prevents normal callers from acquiring stop
@@ -429,49 +466,50 @@ extension GatewayLaunchAgentManager {
             break
         }
 
-        // Do not route compensation back through `set(enabled: false)`: that
-        // public path intentionally skips remote mode and may preserve a loaded
-        // consumer gateway. This guarded command just started this exact scoped
-        // launchd label, so a direct stop is the narrow rollback for the race.
-        self.logger.warning("launchd mutation authority changed during command; scheduling scoped compensation")
-        if let error = await self.runCompensatingStop(rechecking: mutationAuthority) {
-            return "launchd authority changed after mutation, but compensating stop failed: \(error)"
+        // Do not route compensation through public stop/uninstall policy. The
+        // guarded command must undo this exact scoped mutation even after the
+        // caller switches to remote or attach-only mode.
+        self.logger.warning(
+            "launchd mutation authority changed during command; scheduling scoped \(rollback.description)")
+        if let error = await self.runCompensatingRollback(rollback, rechecking: mutationAuthority) {
+            return "launchd authority changed after mutation, but compensating \(rollback.description) failed: \(error)"
         }
         return nil
     }
 
-    private static func runCompensatingStop(
+    private static func runCompensatingRollback(
+        _ rollback: CompensationRollback,
         rechecking mutationAuthority: @escaping @MainActor @Sendable () -> MutationAuthority) async -> String?
     {
         // Reconciliation can discover revocation only after its parent task was
         // cancelled. ShellExecutor observes task cancellation and would otherwise
         // terminate the rollback child immediately. A detached task starts with a
         // clean cancellation state; awaiting its value keeps rollback synchronous.
-        let stopTask = Task<String?, Never>.detached {
+        let rollbackTask = Task<String?, Never>.detached {
             #if DEBUG
             // Deterministic seam for ownership changes after scheduling but before
             // the detached rollback reaches launchd. Production has no pause here.
-            if let hook = self.testBeforeCompensatingStopHook {
+            if let hook = self.testBeforeCompensatingRollbackHook {
                 await hook()
             }
             #endif
             // Ownership can change after the old task schedules this detached
             // rollback. Recheck from the clean task immediately before launchd so
-            // a newer allowed/superseding generation cannot be stopped by stale work.
+            // stale work cannot stop or unregister a newer owner's service.
             switch await mutationAuthority() {
             case .allowed, .superseded:
-                self.logger.info("launchd compensation skipped because authority changed before stop")
+                self.logger.info("launchd compensation skipped because authority changed before rollback")
                 return nil
             case .revoked:
                 break
             }
-            self.logger.warning("launchd authority remains revoked; stopping scoped service")
-            return await self.runDaemonCommand(["stop"], timeout: 20)
+            self.logger.warning("launchd authority remains revoked; running scoped \(rollback.description)")
+            return await self.runDaemonCommand(rollback.command, timeout: 20)
         }
-        return await stopTask.value
+        return await rollbackTask.value
     }
 
-    private static func desiredEnableAction() async -> DesiredAction {
+    private static func desiredEnablePlan() async -> EnablePlan {
         let loaded = await self.readDaemonLoaded()
         let snapshot = self.launchdConfigSnapshot()
         let launchAgentMatchesCurrentRuntime = self.launchAgentMatchesCurrentRuntime(snapshot: snapshot)
@@ -484,21 +522,32 @@ extension GatewayLaunchAgentManager {
             launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
             launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint,
             launchAgentMatchesCurrentServiceVersion: launchAgentMatchesCurrentServiceVersion)
-        switch action {
+        let plannedAction: DesiredAction = switch action {
         case .noop:
             // A normal enable request means "make sure the service exists". If the
             // matching service is already loaded, do nothing so delayed startup
             // paths cannot bounce a healthy shared gateway.
-            return .noop
+            .noop
         case .restart:
-            return .restart
+            .restart
         case .start:
             // A plist already exists under the consumer label. Try a normal start first so we
             // re-use the registered service instead of churning install/uninstall state.
-            return .start
+            .start
         case .install, .stop, .uninstall:
-            return .install
+            .install
         }
+        return EnablePlan(action: plannedAction, hadPlist: snapshot != nil)
+    }
+
+    private static func compensationRollback(for plan: EnablePlan) -> CompensationRollback {
+        // Only a direct install into an empty registration slot created durable
+        // state that did not exist before. Repair installs and bringup fallbacks
+        // must preserve the prior plist and merely stop the process they started.
+        if plan.action == .install, !plan.hadPlist {
+            return .uninstall
+        }
+        return .stop
     }
 
     private static func restartOrStartLoadedGateway(port: Int) async -> String? {
@@ -898,6 +947,10 @@ extension GatewayLaunchAgentManager {
 
 #if DEBUG
 extension GatewayLaunchAgentManager {
+    static func _testCompensationCommand(action: DesiredAction, hadPlist: Bool) -> [String] {
+        self.compensationRollback(for: EnablePlan(action: action, hadPlist: hadPlist)).command
+    }
+
     static func _testDesiredEnableAction(
         loaded: Bool?,
         hasPlist: Bool,
