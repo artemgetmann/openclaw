@@ -123,6 +123,17 @@ const MonitorEventEnvelopeSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const MonitorListenerEvidenceSchema = Type.Object(
+  {
+    sourceKind: Type.Literal("local_listener"),
+    sourceType: Type.Union([Type.Literal("telegram-user"), Type.Literal("whatsapp")]),
+    idempotencyKeyHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    receivedAtMs: Type.Integer({ minimum: 0 }),
+    updatedAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 const MonitorGoalSnapshotSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -151,6 +162,7 @@ export const MonitorRecordSchema = Type.Object(
     goal: Type.Optional(MonitorGoalSnapshotSchema),
     notificationPolicy: Type.Optional(MonitorNotificationPolicySchema),
     notificationState: Type.Optional(MonitorNotificationStateSchema),
+    listenerEvidence: Type.Optional(MonitorListenerEvidenceSchema),
     disclosure: Type.Optional(
       Type.Object(
         {

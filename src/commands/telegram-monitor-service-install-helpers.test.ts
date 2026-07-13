@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConsumerRuntimeIdentity } from "../consumer/runtime-identity.js";
 
@@ -119,6 +120,26 @@ describe("telegram monitor service install helpers", () => {
     expect(plan.environment.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.telegram-monitor");
     expect(plan.environment.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-telegram-monitor");
     expect(plan.environment.OPENCLAW_SERVICE_KIND).toBe("telegram-monitor");
+    expect(plan.binding).toEqual({
+      env: expect.objectContaining({ OPENCLAW_GATEWAY_PORT: "18888" }),
+      envFile: "/tmp/tg.env",
+      session: "/tmp/userbot.session",
+    });
+  });
+
+  it("gives the poller and durable binding the same normalized selectors", async () => {
+    const plan = await buildTelegramMonitorServiceInstallPlan({
+      env: { HOME: "/Users/test" },
+      envFile: "./private/telegram.env",
+      intervalMs: 2500,
+      runtime: "node",
+      session: "./private/account.session",
+    });
+
+    const envFile = path.resolve("private/telegram.env");
+    const session = path.resolve("private/account.session");
+    expect(programArgsMock).toHaveBeenCalledWith(expect.objectContaining({ envFile, session }));
+    expect(plan.binding).toMatchObject({ envFile, session });
   });
 
   it("defaults the hook URL after resolving consumer runtime identity", async () => {

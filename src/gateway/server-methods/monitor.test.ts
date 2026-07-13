@@ -2081,6 +2081,239 @@ describe("monitor gateway handlers", () => {
     expect(call?.[2]?.message).toContain("invalid monitor.create params");
   });
 
+  it("persists bounded matched listener evidence before cron enqueue", async () => {
+    const { respond, cronEnqueueRun, cronStorePath } = createInvokeContext();
+    const storeDir = path.dirname(cronStorePath);
+    await fs.mkdir(storeDir, { recursive: true });
+    const monitorBase = {
+      agentId: "main",
+      originSessionKey: "agent:main:main",
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_draft",
+      status: "active",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    await fs.writeFile(
+      path.join(storeDir, "monitors.json"),
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            ...monitorBase,
+            monitorId: "monitor-telegram-evidence",
+            monitorSessionKey: "agent:main:monitor:monitor-telegram-evidence",
+            sourceType: "telegram-user",
+            sourceTarget: { chat: "chat-1" },
+            trigger: { kind: "local_listener", match: { sourceType: "telegram-user" } },
+            cronJobId: "cron-telegram-evidence",
+          },
+          {
+            ...monitorBase,
+            monitorId: "monitor-whatsapp-evidence",
+            monitorSessionKey: "agent:main:monitor:monitor-whatsapp-evidence",
+            sourceType: "whatsapp",
+            sourceTarget: { target: "contact-1" },
+            trigger: { kind: "local_listener", match: { sourceType: "whatsapp" } },
+            cronJobId: "cron-whatsapp-evidence",
+          },
+          {
+            ...monitorBase,
+            monitorId: "monitor-schedule-only",
+            monitorSessionKey: "agent:main:monitor:monitor-schedule-only",
+            sourceType: "telegram-user",
+            sourceTarget: { chat: "chat-1" },
+            trigger: { kind: "schedule", cadence: { kind: "every", everyMs: 300_000 } },
+            cronJobId: "cron-schedule-only",
+          },
+          {
+            ...monitorBase,
+            monitorId: "monitor-gmail-listener",
+            monitorSessionKey: "agent:main:monitor:monitor-gmail-listener",
+            sourceType: "gmail",
+            sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+            trigger: { kind: "local_listener", match: { sourceType: "gmail" } },
+            cronJobId: "cron-gmail-listener",
+          },
+        ],
+      }),
+    );
+
+    cronEnqueueRun.mockImplementation(async (jobId: string, mode: "due" | "force") => {
+      if (jobId === "cron-telegram-evidence") {
+        // The route must flush its bounded receipt before asking cron to wake
+        // the monitor, otherwise a restart can lose the accepted event boundary.
+        const storeAtEnqueue = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+        expect(
+          storeAtEnqueue.monitors.find(
+            (monitor) => monitor.monitorId === "monitor-telegram-evidence",
+          )?.listenerEvidence,
+        ).toMatchObject({
+          idempotencyKeyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          receivedAtMs: 1000,
+        });
+      }
+      return { ok: true, enqueued: true, runId: `manual:${jobId}:${mode}` };
+    });
+
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "local_listener",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "chat-1", accountId: "personal" },
+        eventType: "message.created",
+        idempotencyKey: "telegram-user:private-chat:81",
+        receivedAtMs: 1000,
+        evidence: {
+          messageId: "81",
+          text: "private Telegram body",
+          raw: { cursorPath: "/private/telegram-cursor.json" },
+        },
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: { enqueueRun: cronEnqueueRun },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-route-telegram-evidence", method: "monitor.routeEvent" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(cronEnqueueRun).toHaveBeenCalledWith("cron-telegram-evidence", "force");
+    expect(cronEnqueueRun).not.toHaveBeenCalledWith("cron-schedule-only", "force");
+    let persisted = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    const telegramMonitor = persisted.monitors.find(
+      (monitor) => monitor.monitorId === "monitor-telegram-evidence",
+    );
+    expect(telegramMonitor?.listenerEvidence).toEqual({
+      sourceKind: "local_listener",
+      sourceType: "telegram-user",
+      idempotencyKeyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      receivedAtMs: 1000,
+      updatedAtMs: expect.any(Number),
+    });
+    expect(validateMonitorRecord(telegramMonitor!)).toBe(true);
+    expect(JSON.stringify(telegramMonitor?.listenerEvidence)).not.toContain(
+      "private Telegram body",
+    );
+    expect(JSON.stringify(telegramMonitor?.listenerEvidence)).not.toContain("cursorPath");
+    expect(JSON.stringify(telegramMonitor?.listenerEvidence)).not.toContain("/private");
+    expect(JSON.stringify(telegramMonitor?.listenerEvidence)).not.toContain("chat-1");
+    expect(JSON.stringify(telegramMonitor?.listenerEvidence)).not.toContain("private-chat");
+
+    const telegramEvidenceBeforeNonmatch = telegramMonitor?.listenerEvidence;
+    respond.mockClear();
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "local_listener",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "wrong-chat" },
+        idempotencyKey: "telegram-user:wrong-chat:82",
+        receivedAtMs: 1001,
+        evidence: { messageId: "82", text: "another private body" },
+      },
+      respond: respond as never,
+      context: { cronStorePath, cron: { enqueueRun: cronEnqueueRun } } as never,
+      client: null,
+      req: { type: "req", id: "req-route-telegram-nonmatch", method: "monitor.routeEvent" },
+      isWebchatConnect: () => false,
+    });
+    expect(respond.mock.calls[0]?.[1]).toEqual({ matched: 0, wakes: [] });
+    expect(cronEnqueueRun).toHaveBeenCalledOnce();
+    persisted = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    expect(
+      persisted.monitors.find((monitor) => monitor.monitorId === "monitor-telegram-evidence")
+        ?.listenerEvidence,
+    ).toEqual(telegramEvidenceBeforeNonmatch);
+
+    respond.mockClear();
+    await monitorHandlers["monitor.get"]({
+      params: { monitorId: "monitor-telegram-evidence" },
+      respond: respond as never,
+      context: { cronStorePath } as never,
+      client: null,
+      req: { type: "req", id: "req-get-telegram-evidence", method: "monitor.get" },
+      isWebchatConnect: () => false,
+    });
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      monitorId: "monitor-telegram-evidence",
+      listenerEvidence: telegramEvidenceBeforeNonmatch,
+    });
+
+    respond.mockClear();
+    await monitorHandlers["monitor.list"]({
+      params: {},
+      respond: respond as never,
+      context: { cronStorePath } as never,
+      client: null,
+      req: { type: "req", id: "req-list-telegram-evidence", method: "monitor.list" },
+      isWebchatConnect: () => false,
+    });
+    const listed = respond.mock.calls[0]?.[1] as { monitors?: Array<Record<string, unknown>> };
+    expect(
+      listed.monitors?.find((monitor) => monitor.monitorId === "monitor-telegram-evidence"),
+    ).toMatchObject({ listenerEvidence: telegramEvidenceBeforeNonmatch });
+
+    respond.mockClear();
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "local_listener",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "contact-1" },
+        idempotencyKey: "whatsapp:private-chat:wamid.123",
+        receivedAtMs: 2000,
+        evidence: { displayText: "private WhatsApp body", raw: { path: "/private/wacli.db" } },
+      },
+      respond: respond as never,
+      context: { cronStorePath, cron: { enqueueRun: cronEnqueueRun } } as never,
+      client: null,
+      req: { type: "req", id: "req-route-whatsapp-evidence", method: "monitor.routeEvent" },
+      isWebchatConnect: () => false,
+    });
+    expect(cronEnqueueRun).toHaveBeenLastCalledWith("cron-whatsapp-evidence", "force");
+    persisted = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    const whatsappEvidence = persisted.monitors.find(
+      (monitor) => monitor.monitorId === "monitor-whatsapp-evidence",
+    )?.listenerEvidence;
+    expect(whatsappEvidence).toEqual({
+      sourceKind: "local_listener",
+      sourceType: "whatsapp",
+      idempotencyKeyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      receivedAtMs: 2000,
+      updatedAtMs: expect.any(Number),
+    });
+    expect(JSON.stringify(whatsappEvidence)).not.toContain("private WhatsApp body");
+    expect(JSON.stringify(whatsappEvidence)).not.toContain("private-chat");
+    expect(JSON.stringify(whatsappEvidence)).not.toContain("/private");
+    expect(JSON.stringify(whatsappEvidence)).not.toContain("contact-1");
+
+    await monitorHandlers["monitor.routeEvent"]({
+      params: {
+        triggerKind: "local_listener",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+        idempotencyKey: "gmail:private-thread:1",
+        evidence: { body: "private Gmail body" },
+      },
+      respond: respond as never,
+      context: { cronStorePath, cron: { enqueueRun: cronEnqueueRun } } as never,
+      client: null,
+      req: { type: "req", id: "req-route-gmail-evidence", method: "monitor.routeEvent" },
+      isWebchatConnect: () => false,
+    });
+    expect(cronEnqueueRun).toHaveBeenLastCalledWith("cron-gmail-listener", "force");
+    persisted = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    expect(
+      persisted.monitors.find((monitor) => monitor.monitorId === "monitor-schedule-only")
+        ?.listenerEvidence,
+    ).toBeUndefined();
+    expect(
+      persisted.monitors.find((monitor) => monitor.monitorId === "monitor-gmail-listener")
+        ?.listenerEvidence,
+    ).toBeUndefined();
+  });
+
   it("disables cron when the agent marks a monitor completed", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
     const storeDir = path.dirname(cronStorePath);

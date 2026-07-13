@@ -93,6 +93,16 @@ export type MonitorEventEnvelope = {
   evidence?: MonitorSourceTarget;
 };
 
+/** Bounded diagnostic receipt for a matched local-listener event. */
+export type MonitorListenerEvidence = {
+  sourceKind: "local_listener";
+  sourceType: "telegram-user" | "whatsapp";
+  /** Hash of the source's durable deduplication boundary; never routing authority. */
+  idempotencyKeyHash: string;
+  receivedAtMs: number;
+  updatedAtMs: number;
+};
+
 export type MonitorGoalSnapshot = {
   id: string;
   objective: string;
@@ -121,6 +131,8 @@ export type MonitorRecord = {
   notificationState?: MonitorNotificationState;
   /** Optional for legacy records; monitor.create always returns it for new records. */
   disclosure?: MonitorDisclosure;
+  /** Last matched local-listener receipt; never stores source targets or body content. */
+  listenerEvidence?: MonitorListenerEvidence;
   status: MonitorStatus;
   lastCheckpoint?: MonitorCheckpoint;
   cronJobId: string;
@@ -174,6 +186,7 @@ export type MonitorUpdatePatch = Partial<
     | "notificationPolicy"
     | "notificationState"
     | "disclosure"
+    | "listenerEvidence"
     | "status"
     | "lastCheckpoint"
     | "lastWakeAtMs"
