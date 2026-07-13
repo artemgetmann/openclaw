@@ -3,9 +3,11 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+/// Process-manager tests share the launch-agent suite because both mutate
+/// `GatewayLaunchAgentManager`'s process-wide DEBUG hooks. One serialized suite
+/// is the scheduler boundary that prevents those hooks from overlapping.
 @MainActor
-struct GatewayProcessManagerTests {
+extension GatewayLaunchAgentManagerTests {
     @Test func `gateway readiness timeout allows real launchd restart budget`() {
         #expect(GatewayProcessManager.gatewayReadinessTimeout >= 20)
     }
@@ -21,9 +23,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 var daemonCalls: [[String]] = []
                 GatewayLaunchAgentManager._setTestingHooks(
@@ -70,9 +74,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 var loadedChecks = 0
                 var daemonCalls: [[String]] = []
@@ -113,9 +119,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 var loadedChecks = 0
                 var daemonCalls: [[String]] = []
@@ -155,9 +163,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -201,9 +211,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -247,9 +259,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -292,9 +306,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -339,9 +355,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -401,9 +419,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -454,9 +474,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -506,9 +528,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 let manager = GatewayProcessManager()
                 manager.setTestingDesiredActive(true)
@@ -561,9 +585,11 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
-                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
             ]) {
                 var loadedChecks = 0
                 GatewayLaunchAgentManager._setTestingHooks(
@@ -651,6 +677,7 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
                 "openclaw.gatewayProjectRootPath": packagedRoot.path,
@@ -716,6 +743,7 @@ struct GatewayProcessManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
                 "openclaw.gatewayProjectRootPath": packagedRoot.path,

@@ -4,6 +4,14 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
+/// An empty, immutable config prevents the developer's live gateway mode from
+/// overriding UserDefaults values installed by `TestIsolation`.
+let gatewayManagerEmptyConfigPath = "/dev/null"
+/// Tests change the app variant inside `TestIsolation`, after call arguments
+/// are evaluated. Isolating both stable keys avoids computing the wrong prefix.
+let gatewayManagerStandardConnectionModeKey = "openclaw.connectionMode"
+let gatewayManagerConsumerConnectionModeKey = "openclaw.consumer.connectionMode"
+
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
     @Test func `launch agent plist snapshot parses args and env`() throws {
@@ -167,6 +175,7 @@ struct GatewayLaunchAgentManagerTests {
             ConsumerInstance.envKey: nil,
             "OPENCLAW_TEST": "1",
             "OPENCLAW_TEST_HOME": home.path,
+            "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
         ]) {
             let identity = RuntimeIdentity.current
             let snapshot = LaunchAgentPlistSnapshot(
@@ -217,8 +226,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": installedRoot.path,
             ])
         {
@@ -275,8 +287,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
             ])
         {
@@ -333,8 +348,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": sourceRoot.path,
             ])
         {
@@ -397,8 +415,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
             ])
         {
@@ -484,8 +505,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
             ])
         {
@@ -535,8 +559,11 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_FORK_ROOT": worktreeRoot.path,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": canonicalRoot.path,
             ])
         {
@@ -583,6 +610,8 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_TEST": "1",
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": sourceRoot.path,
             ])
         {
@@ -617,6 +646,8 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_TEST": "1",
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": fixture.worktreeRoot.path,
             ])
         {
@@ -639,6 +670,8 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_TEST": "1",
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": fixture.worktreeRoot.path,
             ])
         {
@@ -683,8 +716,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": installedRoot.path,
             ])
         {
@@ -753,8 +789,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": installedRoot.path,
             ])
         {
@@ -834,8 +873,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": root.path,
             ])
         {
@@ -915,8 +957,11 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_FORK_ROOT": nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": root.path,
             ])
         {
@@ -1065,8 +1110,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": runtimeRoot.path,
             ])
         {
@@ -1145,8 +1193,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": runtimeRoot.path,
             ])
         {
@@ -1193,6 +1244,7 @@ struct GatewayLaunchAgentManagerTests {
             "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
             "OPENCLAW_TEST": "1",
             "OPENCLAW_TEST_HOME": home.path,
+            "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
         ]) {
             let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
                 base: [:],
@@ -1217,6 +1269,7 @@ struct GatewayLaunchAgentManagerTests {
             ConsumerInstance.envKey: "visible-surface-parity",
             "OPENCLAW_TEST": "1",
             "OPENCLAW_TEST_HOME": home.path,
+            "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
         ]) {
             let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
                 base: ["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": "/stale/shared/openclaw.json"],
@@ -1248,6 +1301,7 @@ struct GatewayLaunchAgentManagerTests {
             ConsumerInstance.envKey: "visible-surface-parity",
             "OPENCLAW_TEST": "1",
             "OPENCLAW_TEST_HOME": home.path,
+            "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
         ]) {
             let identity = RuntimeIdentity.current
             let plist: [String: Any] = [
@@ -1307,8 +1361,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": packagedRoot.path,
             ])
         {
@@ -1394,8 +1451,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": packagedRoot.path,
             ])
         {
@@ -1495,8 +1555,11 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": packagedRoot.path,
             ])
         {
@@ -1596,6 +1659,8 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_GATEWAY_PORT": "\(port)",
             ],
             defaults: [
+                gatewayManagerStandardConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
                 "openclaw.gatewayProjectRootPath": repoRoot.path,
             ]) {
                 // Clean up any stale throwaway label first so the assertions only observe
