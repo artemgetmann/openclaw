@@ -93,10 +93,15 @@ final class GatewayProcessManager {
     }
 
     func ensureLaunchAgentEnabledIfNeeded() async {
-        await self.ensureLaunchAgentEnabledIfNeeded(allowAttachToHealthyGateway: true)
+        await self.ensureLaunchAgentEnabledIfNeeded(
+            allowAttachToHealthyGateway: true,
+            shouldMutate: nil)
     }
 
-    private func ensureLaunchAgentEnabledIfNeeded(allowAttachToHealthyGateway: Bool) async {
+    private func ensureLaunchAgentEnabledIfNeeded(
+        allowAttachToHealthyGateway: Bool,
+        shouldMutate: (@MainActor @Sendable () -> Bool)?) async
+    {
         guard !CommandResolver.connectionModeIsRemote() else { return }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
@@ -112,7 +117,11 @@ final class GatewayProcessManager {
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         self.appendLog("[gateway] auto-enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
-        let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
+        let err = await GatewayLaunchAgentManager.set(
+            enabled: true,
+            bundlePath: bundlePath,
+            port: port,
+            shouldMutate: shouldMutate)
         if let err {
             self.appendLog("[gateway] launchd auto-enable failed: \(err)\n")
         }
@@ -315,28 +324,41 @@ final class GatewayProcessManager {
 
     @discardableResult
     private func reconcileLaunchAgentRegistrationIfNeeded() async -> Bool {
-        guard self.desiredActive else { return false }
-        guard !CommandResolver.connectionModeIsRemote() else { return false }
+        guard self.launchAgentReconciliationCanMutate() else { return false }
         // Attach-only is an explicit instruction not to mutate launchd. Keep the
         // loop alive so removing the marker later resumes healing without relaunch.
         guard !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() else { return true }
 
-        let launchAgentLoaded = await GatewayLaunchAgentManager.isLoaded()
-        guard !launchAgentLoaded else { return true }
+        // `nil` means the status command failed or returned an unrecognized payload.
+        // Unknown service truth is not authority to start or reinstall anything.
+        guard await GatewayLaunchAgentManager.loadedState() == false else { return true }
 
-        // Mode can change while the status command is suspended. Re-check authority
-        // before any write so a late result cannot install a local service in remote
-        // or stopped mode.
-        guard self.desiredActive else { return false }
-        guard !CommandResolver.connectionModeIsRemote() else { return false }
+        // Require a second definitive observation. Besides filtering a transient
+        // read, this gives a service that recovered between polls a clean no-op path.
+        guard await GatewayLaunchAgentManager.loadedState() == false else { return true }
+
+        // Both status reads suspend. Revalidate all app-owned authority immediately
+        // before entering the existing launchd mutation path so a late result cannot
+        // recreate the service after stop, remote-mode transition, or cancellation.
+        guard self.launchAgentReconciliationCanMutate() else { return false }
 
         self.appendLog("[gateway] launchd job missing; reconciling app-owned service\n")
         self.logger.warning("gateway launchd job missing; reconciling app-owned service")
-        // Reuse the established enable policy. It performs a second launchd status
-        // read and chooses noop/start/install, which prevents a transient first read
-        // from blindly reinstalling a healthy service.
-        await self.ensureLaunchAgentEnabledIfNeeded(allowAttachToHealthyGateway: false)
+        // Reuse the established enable policy. It performs its own action query, so
+        // pass the same authority predicate through for one final check immediately
+        // before every start/install attempt and after any failed-command fallback.
+        await self.ensureLaunchAgentEnabledIfNeeded(
+            allowAttachToHealthyGateway: false,
+            shouldMutate: { [weak self] in
+                self?.launchAgentReconciliationCanMutate() == true
+            })
         return true
+    }
+
+    private func launchAgentReconciliationCanMutate() -> Bool {
+        self.desiredActive &&
+            !CommandResolver.connectionModeIsRemote() &&
+            !Task.isCancelled
     }
 
     private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {

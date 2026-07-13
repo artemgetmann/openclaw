@@ -102,6 +102,187 @@ struct GatewayProcessManagerTests {
             }
     }
 
+    @Test func `reconciliation treats indeterminate launchd status as no-op`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                var loadedChecks = 0
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        return nil
+                    },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(loadedChecks == 1)
+                #expect(daemonCalls.isEmpty)
+            }
+    }
+
+    @Test func `reconciliation revalidates inactive state after launchd action query`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                var loadedChecks = 0
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        // The third read is GatewayLaunchAgentManager's action query,
+                        // after the reconciler's two definitive missing observations.
+                        if loadedChecks == 3 {
+                            manager.setTestingDesiredActive(false)
+                        }
+                        return false
+                    },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(loadedChecks == 3)
+                #expect(daemonCalls.isEmpty)
+            }
+    }
+
+    @Test func `reconciliation revalidates remote mode after launchd action query`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                var loadedChecks = 0
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        if loadedChecks == 3 {
+                            UserDefaults.standard.set(
+                                AppState.ConnectionMode.remote.rawValue,
+                                forKey: connectionModeKey)
+                        }
+                        return false
+                    },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(loadedChecks == 3)
+                #expect(daemonCalls.isEmpty)
+            }
+    }
+
+    @Test func `reconciliation suppresses mutation when cancelled during launchd action query`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager()
+                manager.setTestingDesiredActive(true)
+                var loadedChecks = 0
+                var daemonCalls: [[String]] = []
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: {
+                        loadedChecks += 1
+                        if loadedChecks == 3 {
+                            withUnsafeCurrentTask { $0?.cancel() }
+                        }
+                        return false
+                    },
+                    runDaemonCommand: { args, _, _ in
+                        daemonCalls.append(args)
+                        return nil
+                    })
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingDesiredActive(false)
+                }
+
+                let reconciliation = Task { @MainActor in
+                    await manager.testingReconcileLaunchAgentRegistrationNow()
+                }
+                await reconciliation.value
+
+                #expect(loadedChecks == 3)
+                #expect(daemonCalls.isEmpty)
+            }
+    }
+
     @Test func `reconciliation task stops and no longer checks launchd when inactive`() async {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)

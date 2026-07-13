@@ -112,11 +112,22 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLoaded() async -> Bool {
-        guard let loaded = await self.readDaemonLoaded() else { return false }
-        return loaded
+        await self.loadedState() == true
     }
 
-    static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
+    /// Preserve the difference between a definitively unloaded job and a status
+    /// command that failed or returned an unrecognized payload. Callers deciding
+    /// whether to mutate launchd must treat `nil` as unknown, never as unloaded.
+    static func loadedState() async -> Bool? {
+        await self.readDaemonLoaded()
+    }
+
+    static func set(
+        enabled: Bool,
+        bundlePath: String,
+        port: Int,
+        shouldMutate: (@MainActor @Sendable () -> Bool)? = nil) async -> String?
+    {
         _ = bundlePath
         guard !CommandResolver.connectionModeIsRemote() else {
             self.logger.info("launchd change skipped (remote mode)")
@@ -135,12 +146,14 @@ enum GatewayLaunchAgentManager {
             case .noop:
                 return nil
             case .restart:
+                guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
                 } else {
                     return nil
                 }
             case .start:
+                guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
                 if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
                     self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
                 } else {
@@ -150,6 +163,10 @@ enum GatewayLaunchAgentManager {
                 break
             }
 
+            // A failed start/restart suspends before falling back to install. Check
+            // the caller's authority again so a mode change during that command
+            // cannot turn the fallback into a late launchd mutation.
+            guard await self.mutationIsStillAllowed(shouldMutate) else { return nil }
             return await self.install(port: port)
         }
 
@@ -332,6 +349,17 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return loaded
+    }
+
+    private static func mutationIsStillAllowed(
+        _ shouldMutate: (@MainActor @Sendable () -> Bool)?) async -> Bool
+    {
+        guard let shouldMutate else { return true }
+        let allowed = await shouldMutate()
+        if !allowed {
+            self.logger.info("launchd mutation skipped because caller authority changed")
+        }
+        return allowed
     }
 
     private static func desiredEnableAction() async -> DesiredAction {
