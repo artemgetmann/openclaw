@@ -29,11 +29,18 @@ const mocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn(() => ({ baseSessionKey: null, threadId: undefined })),
   loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
   resolveAnnounceTargetFromKey: vi.fn(() => null),
-  deliveryContextFromSession: vi.fn(() => undefined),
-  mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
-    ...b,
-    ...a,
-  })),
+  deliveryContextFromSession: vi.fn<
+    (entry?: Record<string, unknown>) => Record<string, unknown> | undefined
+  >(() => undefined),
+  mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => {
+    const merged = { ...b };
+    for (const [key, value] of Object.entries(a ?? {})) {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+    return merged;
+  }),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn<(params?: MockOutboundParams) => Promise<unknown[]>>(
@@ -131,6 +138,8 @@ describe("scheduleRestartSentinelWake", () => {
 
   function installOperation(overrides?: {
     sessionKey?: string;
+    channel?: string;
+    to?: string;
     expiresAt?: number;
     receipt?: "pending" | "delivering" | "delivered" | "skipped";
     continuation?: "pending" | "delivering" | "delivered" | "skipped";
@@ -156,8 +165,8 @@ describe("scheduleRestartSentinelWake", () => {
         id: "op-1",
         sessionKey:
           overrides && "sessionKey" in overrides ? overrides.sessionKey : "agent:main:main",
-        channel: "telegram",
-        to: "-100123",
+        channel: overrides && "channel" in overrides ? overrides.channel : "telegram",
+        to: overrides && "to" in overrides ? overrides.to : "-100123",
         accountId: "acct-1",
         topicId: "42",
         reason: "apply update",
@@ -208,6 +217,61 @@ describe("scheduleRestartSentinelWake", () => {
     expect(readState().operation?.delivery).toEqual(
       expect.objectContaining({ receipt: "delivered", continuation: "delivering" }),
     );
+  });
+
+  it("falls back to the current session's legacy route for the restart receipt", async () => {
+    const readState = installOperation({ channel: undefined, to: undefined });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        lastChannel: "telegram",
+        lastTo: "-100456",
+        lastAccountId: "acct-legacy",
+        lastThreadId: "84",
+      },
+    });
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "telegram",
+      to: "-100456",
+      accountId: "acct-legacy",
+      threadId: "84",
+    });
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "-100456" });
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliveryContextFromSession.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliveryContextFromSession).toHaveBeenCalledWith(
+      expect.objectContaining({ lastChannel: "telegram", lastTo: "-100456" }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "-100456",
+        accountId: "acct-1",
+        threadId: "42",
+      }),
+    );
+    expect(readState().operation?.delivery.receipt).toBe("delivered");
+  });
+
+  it("keeps the restart receipt pending when no valid route is available", async () => {
+    const readState = installOperation({ channel: undefined, to: undefined });
+    mocks.loadSessionEntry.mockReturnValue({ cfg: {}, entry: {} });
+    mocks.deliveryContextFromSession.mockReturnValue(undefined);
+    mocks.resolveAnnounceTargetFromKey.mockReturnValue(null);
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(readState().operation?.delivery.receipt).toBe("pending");
+    expect(readState().operation?.delivery.lastError).toContain(
+      "restart receipt route is unavailable",
+    );
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("is idempotent when startup reconciliation runs twice", async () => {

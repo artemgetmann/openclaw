@@ -19,6 +19,23 @@ const MAX_PROCESSED_MESSAGES = 10_000;
 export const DURABLE_FOLLOWUP_RETRY_BASE_MS = 1_000;
 export const DURABLE_FOLLOWUP_RETRY_MAX_MS = 5 * 60_000;
 
+type ProcessedMessagePruneState = {
+  estimatedLiveCount?: number;
+  nextExpiryAt?: number;
+  writesDuringPrune: number;
+  nextExpiryDuringPrune?: number;
+  inFlight?: Promise<boolean>;
+};
+
+type ProcessedMessagePruneResult = {
+  liveCount: number;
+  nextExpiryAt?: number;
+};
+
+// Startup seeds exact pressure/expiry state. Normal completions then avoid a
+// directory scan until the known max-size or TTL boundary actually becomes due.
+const processedMessagePruneStates = new Map<string, ProcessedMessagePruneState>();
+
 type DurableFollowupCancellation = {
   version: typeof STORE_VERSION;
   id: string;
@@ -180,19 +197,22 @@ export async function isDurableFollowupMessageProcessed(params: {
   );
 }
 
-async function pruneDurableProcessedMessages(env: NodeJS.ProcessEnv, now: number): Promise<void> {
+async function pruneDurableProcessedMessages(
+  env: NodeJS.ProcessEnv,
+  now: number,
+): Promise<ProcessedMessagePruneResult> {
   const dir = resolveDurableProcessedMessageDir(env);
   let names: string[];
   try {
     names = await fs.readdir(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
+      return { liveCount: 0 };
     }
     throw err;
   }
 
-  const live: Array<{ name: string; processedAt: number }> = [];
+  const live: Array<{ name: string; processedAt: number; expiresAt: number }> = [];
   for (const name of names) {
     if (!name.endsWith(".json")) {
       continue;
@@ -212,7 +232,7 @@ async function pruneDurableProcessedMessages(env: NodeJS.ProcessEnv, now: number
         await fs.rm(filePath, { force: true });
         continue;
       }
-      live.push({ name, processedAt: parsed.processedAt });
+      live.push({ name, processedAt: parsed.processedAt, expiresAt: parsed.expiresAt });
     } catch {
       await fs.rm(filePath, { force: true }).catch(() => undefined);
     }
@@ -220,10 +240,88 @@ async function pruneDurableProcessedMessages(env: NodeJS.ProcessEnv, now: number
 
   // Keep the newest bounded set. Cleanup is intentionally independent of raw
   // provider identifiers because filenames and file contents are opaque hashes.
-  const overflow = live
-    .toSorted((a, b) => b.processedAt - a.processedAt || b.name.localeCompare(a.name))
-    .slice(MAX_PROCESSED_MESSAGES);
+  const sorted = live.toSorted(
+    (a, b) => b.processedAt - a.processedAt || b.name.localeCompare(a.name),
+  );
+  const kept = sorted.slice(0, MAX_PROCESSED_MESSAGES);
+  const overflow = sorted.slice(MAX_PROCESSED_MESSAGES);
   await Promise.all(overflow.map(({ name }) => fs.rm(path.join(dir, name), { force: true })));
+  const nextExpiryAt = kept.reduce<number | undefined>(
+    (earliest, receipt) =>
+      earliest === undefined ? receipt.expiresAt : Math.min(earliest, receipt.expiresAt),
+    undefined,
+  );
+  return { liveCount: kept.length, nextExpiryAt };
+}
+
+async function maybePruneDurableProcessedMessages(
+  env: NodeJS.ProcessEnv,
+  now: number,
+  writtenReceiptCount: number,
+): Promise<void> {
+  const dir = resolveDurableProcessedMessageDir(env);
+  const state = processedMessagePruneStates.get(dir) ?? { writesDuringPrune: 0 };
+  processedMessagePruneStates.set(dir, state);
+  if (writtenReceiptCount > 0) {
+    const writtenExpiryAt = now + PROCESSED_MESSAGE_TTL_MS;
+    if (state.inFlight) {
+      // A write may land after the scan captured its directory snapshot. Count
+      // it conservatively so the completed scan cannot understate pressure.
+      state.writesDuringPrune += writtenReceiptCount;
+      state.nextExpiryDuringPrune = Math.min(
+        state.nextExpiryDuringPrune ?? writtenExpiryAt,
+        writtenExpiryAt,
+      );
+    } else {
+      // Missing startup state deliberately starts at the limit, forcing one
+      // lazy scan instead of assuming an inherited directory is empty.
+      state.estimatedLiveCount =
+        (state.estimatedLiveCount ?? MAX_PROCESSED_MESSAGES) + writtenReceiptCount;
+      state.nextExpiryAt = Math.min(state.nextExpiryAt ?? writtenExpiryAt, writtenExpiryAt);
+    }
+  }
+
+  while (
+    state.estimatedLiveCount === undefined ||
+    state.estimatedLiveCount > MAX_PROCESSED_MESSAGES ||
+    (state.nextExpiryAt !== undefined && state.nextExpiryAt <= now)
+  ) {
+    // Concurrent completions share the scan. The owner loops again if enough
+    // additional writes landed while that scan was in progress.
+    if (state.inFlight) {
+      if (!(await state.inFlight)) {
+        return;
+      }
+      continue;
+    }
+
+    state.writesDuringPrune = 0;
+    state.nextExpiryDuringPrune = undefined;
+    let prune: Promise<boolean>;
+    prune = pruneDurableProcessedMessages(env, now)
+      .then((result) => {
+        state.estimatedLiveCount = result.liveCount + state.writesDuringPrune;
+        state.nextExpiryAt = [result.nextExpiryAt, state.nextExpiryDuringPrune]
+          .filter((value): value is number => value !== undefined)
+          .reduce<number | undefined>(
+            (earliest, value) => (earliest === undefined ? value : Math.min(earliest, value)),
+            undefined,
+          );
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        if (state.inFlight === prune) {
+          state.inFlight = undefined;
+        }
+      });
+    state.inFlight = prune;
+    if (!(await prune)) {
+      // Receipt publication is already durable. Leave pressure/expiry due so
+      // a later successful publication retries storage hygiene.
+      return;
+    }
+  }
 }
 
 /** Startup maintenance for the bounded processed-message receipt directory. */
@@ -231,16 +329,22 @@ export async function cleanupDurableProcessedMessages(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): Promise<void> {
-  await pruneDurableProcessedMessages(env, now);
+  const result = await pruneDurableProcessedMessages(env, now);
+  processedMessagePruneStates.set(resolveDurableProcessedMessageDir(env), {
+    estimatedLiveCount: result.liveCount,
+    nextExpiryAt: result.nextExpiryAt,
+    writesDuringPrune: 0,
+  });
 }
 
 async function persistDurableProcessedMessageKeys(
   keys: Iterable<string>,
   env: NodeJS.ProcessEnv,
   now: number,
-): Promise<void> {
+): Promise<number> {
+  const uniqueKeys = [...new Set(keys)];
   await Promise.all(
-    [...new Set(keys)].map((key) => {
+    uniqueKeys.map((key) => {
       const receipt: DurableProcessedMessage = {
         version: STORE_VERSION,
         key,
@@ -254,6 +358,7 @@ async function persistDurableProcessedMessageKeys(
       });
     }),
   );
+  return uniqueKeys.length;
 }
 
 function loadDurableFollowupCancellationSync(
@@ -592,7 +697,11 @@ export async function completeDurableFollowup(
   const processedMessageKeys = [
     ...new Set([record.processedMessageKey, ...(record.delivery?.processedMessageKeys ?? [])]),
   ].filter((key): key is string => Boolean(key));
-  await persistDurableProcessedMessageKeys(processedMessageKeys, env, now);
+  const writtenReceiptCount = await persistDurableProcessedMessageKeys(
+    processedMessageKeys,
+    env,
+    now,
+  );
 
   // Once every receipt is durable, a leftover input file is harmless: restore
   // checks the same receipts before enqueue. Best-effort cleanup avoids turning
@@ -603,8 +712,8 @@ export async function completeDurableFollowup(
     ),
   );
   // Receipt publication is the correctness boundary; pruning is storage hygiene.
-  // A later successful completion retries cleanup if this best-effort pass fails.
-  await pruneDurableProcessedMessages(env, now).catch(() => undefined);
+  // Startup prunes unconditionally, then successful writes amortize later scans.
+  await maybePruneDurableProcessedMessages(env, now, writtenReceiptCount);
 }
 
 export async function isDurableFollowupRecordProcessed(
@@ -625,7 +734,9 @@ export async function isDurableFollowupRecordProcessed(
   // operation. Any landed receipt proves this carrier passed successful drain;
   // repair the missing siblings before suppressing restore/redelivery. If that
   // repair fails, startup/enqueue fails closed instead of rerunning side effects.
-  await persistDurableProcessedMessageKeys(keys, env, Date.now());
+  const now = Date.now();
+  const writtenReceiptCount = await persistDurableProcessedMessageKeys(keys, env, now);
+  await maybePruneDurableProcessedMessages(env, now, writtenReceiptCount);
   return true;
 }
 

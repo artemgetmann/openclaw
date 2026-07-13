@@ -186,42 +186,67 @@ async function reconcileRestartOperation(params: {
   if (fresh.delivery.receipt === "pending") {
     await markOperationDelivery({ operationId: fresh.id, field: "receipt", state: "delivering" });
     try {
-      if (fresh.channel && fresh.to) {
-        const { cfg } = loadSessionEntry(fresh.sessionKey ?? resolveMainSessionKeyFromConfig());
-        const channel = normalizeChannelId(fresh.channel);
-        const resolved = channel
+      const sessionKey = fresh.sessionKey ?? resolveMainSessionKeyFromConfig();
+      const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
+      const { cfg, entry } = loadSessionEntry(sessionKey);
+      const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? sessionKey);
+
+      // A restart request can predate route capture. Recover from the current
+      // session entry, including legacy lastChannel/lastTo fields, while still
+      // treating any captured operation fields as authoritative.
+      let sessionDeliveryContext = deliveryContextFromSession(entry);
+      if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
+        const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
+        sessionDeliveryContext = deliveryContextFromSession(baseEntry);
+      }
+      const route = mergeDeliveryContext(
+        {
+          channel: fresh.channel,
+          to: fresh.to,
+          accountId: fresh.accountId,
+          threadId: fresh.topicId,
+        },
+        mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
+      );
+      const channel = route?.channel ? normalizeChannelId(route.channel) : null;
+      const resolved =
+        channel && route?.to
           ? resolveOutboundTarget({
               channel,
-              to: fresh.to,
+              to: route.to,
               cfg,
-              accountId: fresh.accountId,
+              accountId: route.accountId,
               mode: "implicit",
             })
           : null;
-        if (!channel || !resolved?.ok) {
-          throw new Error("restart receipt route is unavailable");
-        }
-        let receiptError: unknown;
-        await deliverOutboundPayloads({
-          cfg,
-          channel,
-          to: resolved.to,
-          accountId: fresh.accountId,
-          threadId: channel === "slack" ? undefined : fresh.topicId,
-          replyToId: channel === "slack" ? fresh.topicId : undefined,
-          payloads: [{ text: buildRecoveryReceipt(fresh) }],
-          session: buildOutboundSessionContext({ cfg, sessionKey: fresh.sessionKey }),
-          bestEffort: true,
-          // bestEffort reports provider failures here instead of rejecting.
-          // Capture the first one so durable receipt state cannot advance to a
-          // false success merely because the outer promise resolved.
-          onError: (err) => {
-            receiptError ??= err;
-          },
-        });
-        if (receiptError) {
-          throw receiptError;
-        }
+      if (!route || !channel || !resolved?.ok) {
+        throw new Error("restart receipt route is unavailable");
+      }
+      const threadId =
+        fresh.topicId ??
+        parsedTarget?.threadId ??
+        sessionThreadId ??
+        (route.threadId != null ? String(route.threadId) : undefined);
+      let receiptError: unknown;
+      await deliverOutboundPayloads({
+        cfg,
+        channel,
+        to: resolved.to,
+        accountId: route.accountId,
+        threadId: channel === "slack" ? undefined : threadId,
+        replyToId: channel === "slack" ? threadId : undefined,
+        payloads: [{ text: buildRecoveryReceipt(fresh) }],
+        session: buildOutboundSessionContext({ cfg, sessionKey: fresh.sessionKey }),
+        bestEffort: true,
+        // bestEffort reports provider failures here instead of rejecting.
+        // Capture the first one so durable receipt state cannot advance to a
+        // false success merely because the outer promise resolved.
+        onError: (err) => {
+          receiptError ??= err;
+        },
+      });
+      if (receiptError) {
+        throw receiptError;
       }
       await markOperationDelivery({ operationId: fresh.id, field: "receipt", state: "delivered" });
       clearRestartOperationRetry(fresh.id);

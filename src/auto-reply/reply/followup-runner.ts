@@ -341,6 +341,15 @@ export function createFollowupRunner(params: {
         return;
       }
 
+      // An aborted embedded run is not a completed durable turn, even when it
+      // happens to contain partial text. Reject before publishing a delivery
+      // stage so recovery retries the original input instead of acknowledging
+      // or sending an incomplete result. RAM-only followups intentionally keep
+      // their historical best-effort behavior.
+      if (durableIds.length > 0 && runResult.meta?.aborted === true) {
+        throw new Error("Durable followup agent run aborted");
+      }
+
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
@@ -355,31 +364,7 @@ export function createFollowupRunner(params: {
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 
-      if (storePath && sessionKey) {
-        await persistRunSessionUsage({
-          storePath,
-          sessionKey,
-          usage,
-          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-          promptTokens,
-          modelUsed,
-          providerUsed: fallbackProvider,
-          contextTokensUsed,
-          systemPromptReport: runResult.meta?.systemPromptReport,
-          logLabel: "followup",
-        });
-      }
-
       const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) {
-        if (durableIds.length > 0) {
-          // The agent completed successfully with no reply at all. Persist that
-          // stage before drain acknowledgement so restart cannot interpret an
-          // intentionally empty result as work that never ran.
-          await persistDeliveryStage(queued, []);
-        }
-        return;
-      }
       const sanitizedPayloads = payloadArray.flatMap((payload) => {
         const text = payload.text;
         if (!text || !text.includes("HEARTBEAT_OK")) {
@@ -433,18 +418,48 @@ export function createFollowupRunner(params: {
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
-      if (finalPayloads.length === 0) {
-        if (durableIds.length > 0) {
-          // Persist the completed empty stage before the queue acknowledges its
-          // input. A crash in this tiny window must not replay agent tools merely
-          // because there is intentionally nothing to send.
-          await persistDeliveryStage(queued, []);
+      if (autoCompactionCount > 0) {
+        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
+          // Compute the same count incrementRunCompactionCount will publish,
+          // but do it without touching session storage. The exact outbound
+          // envelope must be durable before any fallible bookkeeping begins.
+          const compactionEntry =
+            sessionStore && sessionKey ? (sessionStore[sessionKey] ?? sessionEntry) : undefined;
+          const projectedCount = compactionEntry
+            ? (compactionEntry.compactionCount ?? 0) + autoCompactionCount
+            : undefined;
+          const suffix = typeof projectedCount === "number" ? ` (count ${projectedCount})` : "";
+          finalPayloads.unshift({
+            text: `🧹 Auto-compaction complete${suffix}.`,
+          });
         }
-        return;
+      }
+
+      if (durableIds.length > 0) {
+        // Commit the exact model-complete output before session usage,
+        // compaction bookkeeping, or outbound delivery. Any later failure can
+        // now retry this payload without replaying tools or other agent-side
+        // effects. Empty is also a completed delivery stage.
+        await persistDeliveryStage(queued, finalPayloads);
+      }
+
+      if (storePath && sessionKey) {
+        await persistRunSessionUsage({
+          storePath,
+          sessionKey,
+          usage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          promptTokens,
+          modelUsed,
+          providerUsed: fallbackProvider,
+          contextTokensUsed,
+          systemPromptReport: runResult.meta?.systemPromptReport,
+          logLabel: "followup",
+        });
       }
 
       if (autoCompactionCount > 0) {
-        const count = await incrementRunCompactionCount({
+        await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
@@ -453,19 +468,10 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
-          const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
-        }
       }
 
-      if (durableIds.length > 0) {
-        // Commit model-complete output before touching the outbound provider.
-        // A routing error can now retry this payload without replaying tools or
-        // any other side effects from the already-completed agent turn.
-        await persistDeliveryStage(queued, finalPayloads);
+      if (finalPayloads.length === 0) {
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, queued);

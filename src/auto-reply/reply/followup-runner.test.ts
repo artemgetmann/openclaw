@@ -720,6 +720,40 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it.each([
+    { label: "empty", payloads: [] },
+    { label: "partial", payloads: [{ text: "incomplete result" }] },
+  ])("rejects an aborted $label durable result before staging or sending", async ({ payloads }) => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const input = await persistDurableFollowup({
+      queueKey: `aborted-${payloads.length ? "partial" : "empty"}`,
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads,
+      meta: { aborted: true },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow(
+      "Durable followup agent run aborted",
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const [record] = await loadDurableFollowups();
+    expect(record?.id).toBe(input.id);
+    expect(record?.delivery).toBeUndefined();
+  });
+
   it("restores model-complete output and retries delivery without rerunning the agent", async () => {
     const settings = { mode: "collect" as const, debounceMs: 0, cap: 20 };
     const firstRun = createQueuedRun({
@@ -838,6 +872,66 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await runner(hydrateDurableFollowup(deliveryRecord, {}));
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("retries staged compaction output after bookkeeping failure without rerunning tools", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+      run: { verboseLevel: "on" },
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "bookkeeping-retry",
+      run: queued,
+      settings,
+    });
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    // A directory cannot be atomically replaced by the JSON session writer.
+    // This deterministically fails compaction bookkeeping after delivery stage
+    // publication, exercising the crash/retry boundary without mocking it.
+    const invalidStorePath = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-store-dir-"));
+    mockCompactionRun({
+      willRetry: true,
+      result: {
+        payloads: [{ text: "agent finished once" }],
+        meta: { agentMeta: { lastCallUsage: { input: 100, output: 20, total: 120 } } },
+      },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath: invalidStorePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([
+      { text: "🧹 Auto-compaction complete (count 1)." },
+      { text: "agent finished once" },
+    ]);
+
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ payload: { text: "🧹 Auto-compaction complete (count 1)." } }),
+    );
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ payload: { text: "agent finished once" } }),
+    );
+    await fs.rm(invalidStorePath, { recursive: true, force: true });
   });
 });
 

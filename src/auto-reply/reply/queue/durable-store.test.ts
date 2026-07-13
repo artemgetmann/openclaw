@@ -198,6 +198,64 @@ describe("durable followup queue", () => {
     await expect(fs.readdir(receiptDir)).resolves.toEqual([]);
   });
 
+  it("skips ordinary receipt scans and retries due maintenance failures", async () => {
+    const receiptDir = path.join(stateDir, "followup-queue-processed");
+    await cleanupDurableProcessedMessages();
+    await fs.mkdir(receiptDir, { recursive: true });
+    const malformedReceiptPath = path.join(receiptDir, "malformed.json");
+    await fs.writeFile(malformedReceiptPath, "not-json");
+
+    const first = await persistDurableFollowup({
+      queueKey: "amortized-pruning",
+      run: { ...createRun(), messageId: "telegram:prune-0" },
+      settings,
+    });
+    await completeDurableFollowup(first.id);
+
+    // An ordinary success publishes its receipt without parsing the directory.
+    await expect(fs.stat(malformedReceiptPath)).resolves.toBeDefined();
+
+    // Seed startup's exact state with an expiry boundary that is due now.
+    await fs.rm(malformedReceiptPath);
+    const expiredKey = "a".repeat(64);
+    await fs.writeFile(
+      path.join(receiptDir, `${expiredKey}.json`),
+      JSON.stringify({ version: 1, key: expiredKey, processedAt: 0, expiresAt: 1 }),
+    );
+    await cleanupDurableProcessedMessages(process.env, 0);
+    await fs.writeFile(malformedReceiptPath, "not-json");
+
+    const readdir = vi
+      .spyOn(fs, "readdir")
+      .mockRejectedValueOnce(new Error("simulated maintenance failure"));
+    const due = await persistDurableFollowup({
+      queueKey: "amortized-pruning",
+      run: { ...createRun(), messageId: "telegram:prune-due" },
+      settings,
+    });
+    await completeDurableFollowup(due.id);
+
+    // Maintenance is best effort after the receipts are durable, but the
+    // threshold remains armed so the next completion retries the failed scan.
+    await expect(fs.stat(malformedReceiptPath)).resolves.toBeDefined();
+    expect(readdir).toHaveBeenCalledTimes(1);
+    const retry = await persistDurableFollowup({
+      queueKey: "amortized-pruning",
+      run: {
+        ...createRun(),
+        messageId: "telegram:prune-retry",
+      },
+      settings,
+    });
+    await completeDurableFollowup(retry.id);
+
+    // The bounded retry performs the full TTL/max-size maintenance pass.
+    await expect(fs.stat(malformedReceiptPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(readdir).toHaveBeenCalledTimes(2);
+    readdir.mockRestore();
+    await expect(fs.readdir(receiptDir)).resolves.toHaveLength(3);
+  });
+
   it("does not route a carrier rewritten after its queue was cancelled", async () => {
     const carrier = await persistDurableFollowup({
       queueKey: "cancelled-delivery-stage",
