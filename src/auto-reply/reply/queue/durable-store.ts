@@ -106,16 +106,18 @@ function resolveDurableProcessedMessagePath(
  * Hash the complete tuple so dedupe distinguishes genuinely new messages while
  * the durable receipt directory reveals neither chat IDs nor message IDs.
  */
+type DurableFollowupMessageIdentity = Pick<
+  FollowupRun,
+  | "messageId"
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingAccountId"
+  | "originatingThreadId"
+>;
+
 export function buildDurableFollowupMessageKey(
   queueKey: string,
-  run: Pick<
-    FollowupRun,
-    | "messageId"
-    | "originatingChannel"
-    | "originatingTo"
-    | "originatingAccountId"
-    | "originatingThreadId"
-  >,
+  run: DurableFollowupMessageIdentity,
 ): string | undefined {
   const messageId = run.messageId?.trim();
   if (!messageId) {
@@ -167,7 +169,7 @@ async function isDurableProcessedMessageKey(
 
 export async function isDurableFollowupMessageProcessed(params: {
   queueKey: string;
-  run: FollowupRun;
+  run: DurableFollowupMessageIdentity;
   env?: NodeJS.ProcessEnv;
   now?: number;
 }): Promise<boolean> {

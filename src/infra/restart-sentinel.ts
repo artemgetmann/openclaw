@@ -84,6 +84,8 @@ export type RestartOperationRecord = {
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
 const RESTART_OPERATION_TTL_MS = 10 * 60 * 1000;
+const WATCHER_POLL_PID_DEATH_MS = 100;
+const WATCHER_POLL_TTL_MS = 250;
 const withRestartSentinelLock = createAsyncLock();
 
 function isRestartOperationTerminal(operation: RestartOperationRecord): boolean {
@@ -102,9 +104,12 @@ function resolveRestartRecoveryMarkerPath(
 function buildRestartOperation(
   payload: RestartSentinelPayload,
 ): RestartOperationRecord | undefined {
-  if (payload.kind !== "restart") {
+  const triggersRestart =
+    payload.kind === "restart" ? payload.status === "requested" : payload.status === "ok";
+  if (!triggersRestart) {
     return undefined;
   }
+
   const requestedAt = payload.ts || Date.now();
   return {
     id: generateSecureUuid(),
@@ -145,17 +150,62 @@ function scheduleDetachedRestartRecoveryWatcher(params: {
     return;
   }
   const markerPath = resolveRestartRecoveryMarkerPath(params.operation.id, params.env);
+  const sentinelPath = resolveRestartSentinelPath(params.env);
   const script = String.raw`
     const fs = require("node:fs");
     const net = require("node:net");
-    const [markerPath, operationId, oldPidRaw, portRaw, expiresAtRaw] = process.argv.slice(1);
+    const [
+      markerPath,
+      operationId,
+      sentinelPath,
+      oldPidRaw,
+      portRaw,
+      expiresAtRaw,
+    ] = process.argv.slice(1);
     const oldPid = Number(oldPidRaw);
     const port = Number(portRaw);
     const expiresAt = Number(expiresAtRaw);
+    const isTerminalDelivery = (state) => state === "delivered" || state === "skipped";
+    const isTerminal = (state) => {
+      if (!state || typeof state !== "object") {
+        return false;
+      }
+      return isTerminalDelivery(state.receipt) && isTerminalDelivery(state.continuation);
+    };
+    const resolveOperationState = () => {
+      try {
+        const raw = fs.readFileSync(sentinelPath, "utf8");
+        const parsed = JSON.parse(raw);
+        if (
+          parsed?.version !== 1 ||
+          !parsed.operation ||
+          parsed.operation.id !== operationId ||
+          !parsed.operation.delivery
+        ) {
+          return { kind: "gone" };
+        }
+        return { kind: "active", delivery: parsed.operation.delivery };
+      } catch (error) {
+        // Only a missing file proves startup consumed the operation. Parse and
+        // transient I/O failures are inconclusive, so keep the supervisor
+        // watcher alive and let a later poll observe durable state.
+        return error?.code === "ENOENT" ? { kind: "gone" } : { kind: "unknown" };
+      }
+    };
+    const shouldAbort = () => {
+      const state = resolveOperationState();
+      return state.kind === "gone" ||
+        (state.kind === "active" && isTerminal(state.delivery));
+    };
     const write = (state, error) => {
       const tmp = markerPath + "." + process.pid + ".tmp";
       fs.writeFileSync(tmp, JSON.stringify({ operationId, state, observedAt: Date.now(), ...(error ? { error } : {}) }) + "\n", { mode: 0o600 });
       fs.renameSync(tmp, markerPath);
+      // Startup may consume the operation between the pre-write state check and
+      // rename. A final check removes a marker that lost that race.
+      if (shouldAbort()) {
+        try { fs.unlinkSync(markerPath); } catch {}
+      }
     };
     const oldPidAlive = () => {
       try { process.kill(oldPid, 0); return true; } catch { return false; }
@@ -168,13 +218,43 @@ function scheduleDetachedRestartRecoveryWatcher(params: {
       socket.once("error", () => finish(false));
     });
     (async () => {
-      while (oldPidAlive() && Date.now() < expiresAt) await new Promise((r) => setTimeout(r, 100));
+      // Keep polling on in-process SIGUSR1 restarts where oldPid is still alive,
+      // but leave early if startup already removed the operation or marked it
+      // terminal. This prevents orphan markers after a recovery path already
+      // reconciled the restart in-process.
       while (Date.now() < expiresAt) {
-        if (await probe()) { write("ok"); return; }
-        await new Promise((r) => setTimeout(r, 250));
+        if (shouldAbort()) {
+          return;
+        }
+        if (!oldPidAlive()) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, ${WATCHER_POLL_PID_DEATH_MS}));
       }
-      write("error", "gateway did not recover before restart operation expiry");
-    })().catch((error) => write("error", String(error)));
+      // After old process death, preserve old supervisor behavior by probing for a
+      // listening gateway before marking recovery successful.
+      while (Date.now() < expiresAt) {
+        if (shouldAbort()) {
+          return;
+        }
+        if (await probe()) {
+          // Startup can finish reconciliation while the socket probe is in
+          // flight. Re-check before writing so cleanup always wins the race.
+          if (!shouldAbort()) {
+            write("ok");
+          }
+          return;
+        }
+        await new Promise((r) => setTimeout(r, ${WATCHER_POLL_TTL_MS}));
+      }
+      if (!shouldAbort()) {
+        write("error", "gateway did not recover before restart operation expiry");
+      }
+    })().catch((error) => {
+      if (!shouldAbort()) {
+        write("error", String(error));
+      }
+    });
   `;
   try {
     const child = spawn(
@@ -184,6 +264,7 @@ function scheduleDetachedRestartRecoveryWatcher(params: {
         script,
         markerPath,
         params.operation.id,
+        sentinelPath,
         String(process.pid),
         String(port),
         String(params.operation.expiresAt),

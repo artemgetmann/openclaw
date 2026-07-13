@@ -77,7 +77,6 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRunDurable, type FollowupRun, type QueueSettings } from "./queue.js";
-import { isDurableFollowupMessageProcessed } from "./queue/durable-store.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
@@ -271,15 +270,6 @@ export async function runReplyAgent(params: {
       });
     }
   };
-
-  // Telegram can redeliver after a successful busy-queue drain but before its
-  // update offset reaches disk. On the replacement process the session may be
-  // idle, so this must guard the common inbound boundary before steer, queue,
-  // or direct model/tool execution—not only durable followup enqueue.
-  if (await isDurableFollowupMessageProcessed({ queueKey, run: followupRun })) {
-    typing.cleanup();
-    return undefined;
-  }
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);

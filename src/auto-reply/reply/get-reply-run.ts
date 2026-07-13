@@ -47,6 +47,7 @@ import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./i
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { hasFollowupQueueOwnership, resolveQueueSettings } from "./queue.js";
+import { isDurableFollowupMessageProcessed } from "./queue/durable-store.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
@@ -378,6 +379,24 @@ export async function runPreparedReply(
   const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
     : "[User sent media without caption]";
+  const processedMessageIdentity = {
+    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    originatingChannel: ctx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo,
+    originatingAccountId: ctx.AccountId,
+    originatingThreadId: ctx.MessageThreadId,
+  };
+  // Processed provider redeliveries must stop before any one-shot state is
+  // consumed. Both deferred queueing and immediate execution pass this gate.
+  if (
+    await isDurableFollowupMessageProcessed({
+      queueKey: sessionKey,
+      run: processedMessageIdentity,
+    })
+  ) {
+    typing.cleanup();
+    return undefined;
+  }
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
