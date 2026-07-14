@@ -1,6 +1,6 @@
 ---
 name: jarvis-computer-use
-description: "Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with hard stops for auth, payment, final purchase/booking, destructive delete, account/security settings, and software install/update."
+description: "Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with reversible pre-auth navigation allowed but hard stops for credential use, payment, final purchase/booking, destructive delete, account/security settings, and software install/update."
 metadata:
   {
     "openclaw":
@@ -77,11 +77,21 @@ openclaw gui-control observe --runtime open-computer-use --app TextEdit --json
 Founder-local trusted mode allows useful local GUI progress by default, but the
 following are hard stops unless the user has explicitly approved the exact step:
 
-- login, sign-in, password, passkey, OTP, CAPTCHA, or other auth steps
+- entering or submitting a password, passkey assertion, OTP/verification-code
+  entry or submission, CAPTCHA, security-key assertion, or sign-in approval
+  prompt
 - payment, card entry, checkout, final purchase, final booking, or final order
 - destructive delete/remove/erase actions
 - account, privacy, security, permission, or profile-setting changes
 - software install, update, relaunch-to-update, or package-manager mutation
+
+Reversible navigation before an authentication act is allowed. This includes
+selecting a known signed-out account on an account chooser, using
+`Try another way` to discover available methods, and dismissing an
+unavailable-passkey dialog with `Close`, `Cancel`, or `Back`. This does not
+authorize generic `Next` or `Continue` controls on a password, passkey, OTP,
+CAPTCHA, security-key, or approval challenge; those controls may submit an
+autofilled or already-entered credential and remain hard stops.
 
 If a command reports the wrong app/window, ambiguous target, stale element ref,
 blocked policy risk, or missing post-state verification, stop and report the

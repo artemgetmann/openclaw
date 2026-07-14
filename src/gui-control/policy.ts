@@ -50,8 +50,22 @@ export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "log in",
   "sign in",
   "auth",
+  "authentication",
   "password",
   "passkey",
+  "otp",
+  "one-time password",
+  "verification code",
+  "two-factor",
+  "2fa",
+  "captcha",
+  "security key",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
   "payment",
   "billing",
   "account settings",
@@ -66,10 +80,6 @@ const TRUSTED_LOCAL_GUI_HARD_STOP_TERMS = [
   "oauth",
   "token",
   "secret",
-  "otp",
-  "one-time password",
-  "two-factor",
-  "2fa",
   "payment method",
   "change payment",
   "add payment",
@@ -245,8 +255,18 @@ const COMMERCE_HARD_STOP_CONTEXT_TERMS = [
   "log in",
   "sign in",
   "auth",
+  "authentication",
   "password",
   "passkey",
+  "verification code",
+  "captcha",
+  "security key",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
   "payment",
   "billing",
   "account settings",
@@ -533,15 +553,76 @@ function visibleContextText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
-function commerceHardStopContextText(input: GuiPolicyInput): string {
+function sanitizeAccountChooserManagementSibling(part: string): string {
+  const normalized = normalizeText(part);
+  const match =
+    /^(?:(?:\d+\s+)?(?:button|link|row|cell|list item)\s+)?remove (?:an )?account(?<metadata>\s+(?:id|value|description|secondary actions|frame):.*)?$/.exec(
+      normalized,
+    );
+  if (!match) {
+    // Unknown formats and prose remain intact so provider schema drift cannot
+    // silently erase future safety evidence.
+    return part;
+  }
+
+  const metadata = normalizeText(match.groups?.metadata);
+  if (!metadata) {
+    return "";
+  }
+
+  // OCU sometimes duplicates the element label into Description or Value.
+  // Remove only an exact duplicate at recognized field boundaries. Distinct
+  // values, actions/frame data, and unknown trailing formats remain available
+  // to the normal hard-stop scan.
+  return normalizeText(
+    metadata.replace(
+      /(?:^|\s)(?:description|value):\s*remove (?:an )?account(?=\s+(?:id|value|description|secondary actions|frame):|$)/g,
+      " ",
+    ),
+  );
+}
+
+function preAuthHardStopContextParts(input: GuiPolicyInput): Array<string | undefined> {
+  const selectedSafeChooserTarget = isSafeAccountChooserSelection(input);
+  const visibleText = (input.snapshot?.visibleText ?? [])
+    .map((part) => {
+      if (!selectedSafeChooserTarget) {
+        return part;
+      }
+
+      // Google account choosers expose this management affordance beside normal
+      // rows. Sanitize only when the selected target is independently proven
+      // safe; selected removal controls never enter this branch.
+      return sanitizeAccountChooserManagementSibling(part);
+    })
+    .filter(Boolean);
+  const summary = selectedSafeChooserTarget
+    ? input.snapshot?.summary
+        ?.split(/\r?\n/)
+        // Text-only OCU snapshots duplicate every accessible element into the
+        // fallback summary. Strip the sibling label but retain metadata, titles,
+        // prose, and every other source of risk evidence.
+        .map(sanitizeAccountChooserManagementSibling)
+        .filter(Boolean)
+        .join("\n")
+    : input.snapshot?.summary;
+
   return [
     input.target.appName,
     input.target.windowTitle,
     input.snapshot?.appName,
     input.snapshot?.windowTitle,
-    input.snapshot?.summary,
-    ...(input.snapshot?.visibleText ?? []),
-  ]
+    summary,
+    ...visibleText,
+  ];
+}
+
+function preAuthHardStopContextText(input: GuiPolicyInput): string {
+  return preAuthHardStopContextParts(input).map(normalizeText).filter(Boolean).join(" ");
+}
+
+function commerceHardStopContextText(input: GuiPolicyInput): string {
+  return preAuthHardStopContextParts(input)
     .map(commerceHardStopContextPart)
     .filter(Boolean)
     .join(" ");
@@ -637,6 +718,102 @@ function selectedMutationSurfaceText(input: GuiPolicyInput): string {
     .map(normalizeText)
     .filter(Boolean)
     .join(" ");
+}
+
+const AUTHENTICATION_BOUNDARY_TERMS = [
+  "login",
+  "log in",
+  "sign in",
+  "sign-in",
+  "auth",
+  "authentication",
+  "oauth",
+  "token",
+  "secret",
+  "password",
+  "passkey",
+  "otp",
+  "one-time password",
+  "verification code",
+  "two-factor",
+  "2fa",
+  "captcha",
+  "security key",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
+];
+
+function selectedMutationSurfaceParts(input: GuiPolicyInput): string[] {
+  return [
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    input.element?.description,
+    input.element?.value,
+    input.secondaryAction,
+  ]
+    .map(normalizeText)
+    .filter(Boolean);
+}
+
+function isSafeAccountChooserSelection(input: GuiPolicyInput): boolean {
+  if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
+    return false;
+  }
+
+  const visibleContext = visibleContextText(input);
+  if (!/\b(?:choose|select|pick) an account\b|\baccount chooser\b/.test(visibleContext)) {
+    return false;
+  }
+
+  const role = normalizeText(input.element?.role);
+  const selectedSurface = selectedMutationSurfaceText(input);
+
+  // A signed-out row is navigation to a later credential gate, not a credential
+  // itself. Require explicit signed-out state (or the non-auth "Use another
+  // account" option): an email address alone may represent an active session
+  // whose selection would complete sign-in immediately.
+  return (
+    /\b(button|row|cell|link|list item)\b/.test(role) &&
+    /\b(?:signed out|use another account)\b/.test(selectedSurface) &&
+    !hasAnyTerm(selectedSurface, AUTHENTICATION_BOUNDARY_TERMS)
+  );
+}
+
+function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
+  if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
+    return false;
+  }
+
+  const selectedParts = selectedMutationSurfaceParts(input);
+
+  // These controls change only which challenge is shown, or dismiss it. Match
+  // complete accessibility fields rather than substrings so "Close account"
+  // can never borrow the safe semantics of a plain "Close" button.
+  if (
+    selectedParts.some((part) =>
+      ["close", "cancel", "back", "go back", "try another way"].includes(part),
+    )
+  ) {
+    return true;
+  }
+
+  return isSafeAccountChooserSelection(input);
+}
+
+function isAuthenticationBoundaryTerm(term: string): boolean {
+  return AUTHENTICATION_BOUNDARY_TERMS.includes(normalizeText(term));
+}
+
+function hasNonAuthenticationBoundaryTerm(haystack: string, deniedTerms: string[]): boolean {
+  return deniedTerms.some(
+    (term) => !isAuthenticationBoundaryTerm(term) && surfaceTermPattern(term).test(haystack),
+  );
 }
 
 function intendedActionText(input: GuiPolicyInput): string {
@@ -868,6 +1045,24 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   ) {
     blockedSurface = undefined;
   }
+  if (
+    blockedSurface &&
+    isAuthenticationBoundaryTerm(blockedSurface) &&
+    !hasNonAuthenticationBoundaryTerm(text, taskPolicy.deniedSurfaceTerms) &&
+    // Scan broad visible context for mixed risks, excluding only a proven-safe
+    // account chooser's unrelated management sibling.
+    !hasNonAuthenticationBoundaryTerm(
+      preAuthHardStopContextText(input),
+      taskPolicy.deniedSurfaceTerms,
+    ) &&
+    isReversiblePreAuthNavigation(input)
+  ) {
+    // Window titles and challenge summaries provide the context needed to
+    // block generic commit controls such as Next. They must not turn every
+    // control in that window into authentication: chooser rows, method
+    // discovery, and dismissal remain reversible until a credential is used.
+    blockedSurface = undefined;
+  }
   if (blockedSurface) {
     return {
       allowed: false,
@@ -911,10 +1106,16 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   }
 
   if (taskPolicy.taskId === "commerce_flow_until_final_confirmation") {
-    const hardStopContext = hasAnyTerm(
-      commerceHardStopContextText(input),
-      COMMERCE_HARD_STOP_CONTEXT_TERMS,
-    );
+    const hardStopContextText = commerceHardStopContextText(input);
+    let hardStopContext = hasAnyTerm(hardStopContextText, COMMERCE_HARD_STOP_CONTEXT_TERMS);
+    if (
+      hardStopContext &&
+      isAuthenticationBoundaryTerm(hardStopContext) &&
+      !hasNonAuthenticationBoundaryTerm(hardStopContextText, COMMERCE_HARD_STOP_CONTEXT_TERMS) &&
+      isReversiblePreAuthNavigation(input)
+    ) {
+      hardStopContext = undefined;
+    }
     if (hardStopContext) {
       return {
         allowed: false,
