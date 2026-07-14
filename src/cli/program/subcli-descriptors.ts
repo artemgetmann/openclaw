@@ -124,6 +124,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "browser-monitor",
+    description: "Opt-in browser page reply observer",
+    hasSubcommands: true,
+  },
+  {
     name: "media",
     description: "Generic local media tools",
     hasSubcommands: true,

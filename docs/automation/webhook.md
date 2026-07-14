@@ -263,6 +263,30 @@ to manage it. The service wraps `whatsapp-monitor poll --watch`; bounded smoke
 runs still belong on the foreground poll command via `--max-runs`, not the
 installed service.
 
+Browser-only reply surfaces without an API can use the opt-in foreground
+observer. It reads exactly one selector from one selected tab and posts only
+hash evidence to the generic monitor hook:
+
+```bash
+OPENCLAW_HOOKS_TOKEN='dedicated-hooks-secret' \
+  openclaw browser-monitor observe --watch \
+  --profile isolated-browser \
+  --target-id TAB_ID \
+  --url-pattern 'https://example.com/thread/*' \
+  --selector '[data-reply]' \
+  --match-mode contains \
+  --match-value 'Replied:' \
+  --monitor-id MONITOR_ID \
+  --hook-url http://127.0.0.1:18789/hooks/monitor-event
+```
+
+`OPENCLAW_HOOKS_TOKEN` must resolve to the dedicated `hooks.token`; the command
+does not accept secrets in process arguments. Watch mode logs a bounded error
+and retries transient browser or hook failures, but stops for invalid static
+configuration or permanent hook client errors, including HTTP 401/403. Without
+`--watch`, failures remain fail-fast. This observer does not scan other tabs or
+persist raw page text.
+
 If a monitor has no explicit cursor seed such as `afterId`, the first poll
 checkpoints the current visible Telegram history and emits no wake. This avoids
 turning old chat history into a fresh monitor event when the listener starts.
