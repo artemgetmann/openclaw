@@ -1152,6 +1152,87 @@ function createChromeMcpPdfNetworkCapture(params: {
   return { promise, observeEvent, cancel };
 }
 
+function createChromeMcpTriggeredPdfResourceCapture(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs: number;
+}) {
+  let cancelled = false;
+  let started = false;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollTimerResolve: (() => void) | undefined;
+  let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
+  const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
+    resolvePdf = resolve;
+  });
+
+  const cancel = (): void => {
+    cancelled = true;
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
+    }
+    pollTimerResolve?.();
+    pollTimerResolve = undefined;
+  };
+
+  const start = (): void => {
+    if (started || cancelled) {
+      return;
+    }
+    started = true;
+
+    // Chrome replaces the original DevTools target when a navigation enters
+    // its built-in PDF viewer. Re-resolve the logical tab on each poll instead
+    // of assuming the pre-click WebSocket can still expose the viewer cache.
+    void (async () => {
+      const deadline = Date.now() + params.timeoutMs;
+      while (!cancelled && Date.now() <= deadline) {
+        try {
+          const resource = await readChromeMcpPdfResource({
+            profileName: params.profileName,
+            userDataDir: params.userDataDir,
+            targetId: params.targetId,
+            timeoutMs: Math.min(2_000, Math.max(1_000, deadline - Date.now())),
+          });
+          if (cancelled) {
+            return;
+          }
+          resolvePdf?.({
+            ...resource,
+            suggestedFilename: inferPdfResponseFilename({
+              url: resource.url,
+              headers: {},
+              mimeType: "application/pdf",
+            }),
+          });
+          return;
+        } catch {
+          // The clicked tab can briefly disappear while Chrome swaps in the
+          // viewer target. Retry until either bytes appear or the main wait
+          // reaches its caller-owned timeout.
+        }
+        if (cancelled || Date.now() >= deadline) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          pollTimerResolve = resolve;
+          pollTimer = setTimeout(() => {
+            pollTimer = undefined;
+            pollTimerResolve = undefined;
+            resolve();
+          }, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS);
+        });
+      }
+    })().catch(() => {
+      // This is a best-effort race alongside the normal download waiter.
+    });
+  };
+
+  return { promise, start, cancel };
+}
+
 export const chromeMcpPdfResourceInternalsForTest = {
   assertNativePdfBuffer,
   collectPdfResourceCandidates,
@@ -1561,6 +1642,14 @@ async function runChromeMcpDownloadSession(params: {
     send: async (method, commandParams) => await send(method, commandParams),
     timeoutMs,
   });
+  const triggeredPdfResourceCapture = params.trigger
+    ? createChromeMcpTriggeredPdfResourceCapture({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+        timeoutMs,
+      })
+    : undefined;
 
   ws.on("message", (data: RawData) => {
     let message: CdpEvent;
@@ -1647,6 +1736,7 @@ async function runChromeMcpDownloadSession(params: {
     });
 
     await params.trigger?.();
+    triggeredPdfResourceCapture?.start();
     let downloadWaitCancelled = false;
     const downloadPromise = waitForChromeDownloadFile({
       directory: downloadDir,
@@ -1660,6 +1750,9 @@ async function runChromeMcpDownloadSession(params: {
     const result = await Promise.race([
       downloadPromise,
       pdfNetworkCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf })),
+      ...(triggeredPdfResourceCapture
+        ? [triggeredPdfResourceCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf }))]
+        : []),
     ]);
     if (result.kind === "pdf") {
       downloadWaitCancelled = true;
@@ -1687,6 +1780,7 @@ async function runChromeMcpDownloadSession(params: {
     };
   } finally {
     pdfNetworkCapture.cancel();
+    triggeredPdfResourceCapture?.cancel();
     failAll(new Error("Chrome DevTools WebSocket closed"));
     ws.close();
   }

@@ -1336,7 +1336,7 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the matching Chrome resource when the network PDF body is empty", async () => {
+  it("re-resolves a tab when Chrome replaces it with the PDF viewer", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
     const downloadDir = path.join(tempDir, "downloads");
     const finalPath = path.join(downloadDir, "statement.pdf");
@@ -1347,25 +1347,20 @@ describe("chrome MCP page parsing", () => {
     let httpServer: ReturnType<typeof createServer> | undefined;
     let wsServer: WebSocketServer | undefined;
     let resourceTreeCalls = 0;
+    let viewerReady = false;
 
     try {
       wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
       await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
       const wsPort = (wsServer.address() as { port: number }).port;
-      wsServer.on("connection", (socket) => {
-        activeSocket = socket;
+      wsServer.on("connection", (socket, request) => {
+        const isViewerTarget = request.url === "/devtools/page/viewer";
+        if (!isViewerTarget) {
+          activeSocket = socket;
+        }
         socket.on("message", (data) => {
           const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
-          if (message.method === "Network.getResponseBody") {
-            socket.send(
-              JSON.stringify({
-                id: message.id,
-                result: { body: "", base64Encoded: true },
-              }),
-            );
-            return;
-          }
-          if (message.method === "Page.getResourceTree") {
+          if (isViewerTarget && message.method === "Page.getResourceTree") {
             resourceTreeCalls += 1;
             socket.send(
               JSON.stringify({
@@ -1374,20 +1369,17 @@ describe("chrome MCP page parsing", () => {
                   frameTree: {
                     frame: {
                       id: "pdf-frame",
-                      url: "chrome-extension://pdf-viewer/index.html",
-                      mimeType: "text/html",
+                      url: responseUrl,
+                      mimeType: "application/pdf",
                     },
-                    resources:
-                      resourceTreeCalls >= 2
-                        ? [{ url: responseUrl, mimeType: "application/pdf" }]
-                        : [],
+                    resources: [],
                   },
                 },
               }),
             );
             return;
           }
-          if (message.method === "Page.getResourceContent") {
+          if (isViewerTarget && message.method === "Page.getResourceContent") {
             expect(message.params).toEqual({ frameId: "pdf-frame", url: responseUrl });
             socket.send(
               JSON.stringify({
@@ -1413,8 +1405,8 @@ describe("chrome MCP page parsing", () => {
             JSON.stringify([
               {
                 type: "page",
-                url: "https://example.com/statement",
-                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/1`,
+                url: viewerReady ? responseUrl : "https://example.com/statement",
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/${viewerReady ? "viewer" : "initial"}`,
               },
             ]),
           );
@@ -1433,35 +1425,14 @@ describe("chrome MCP page parsing", () => {
             content: [
               {
                 type: "text",
-                text: "## Pages\n1: https://example.com/statement [selected]",
+                text: `## Pages\n1: ${viewerReady ? responseUrl : "https://example.com/statement"} [selected]`,
               },
             ],
           };
         }
         if (name === "click") {
-          activeSocket?.send(
-            JSON.stringify({
-              method: "Network.responseReceived",
-              params: {
-                requestId: "pdf-request-1",
-                type: "Fetch",
-                response: {
-                  url: responseUrl,
-                  mimeType: "application/pdf",
-                  headers: {
-                    "content-type": "application/pdf",
-                    "content-disposition": 'attachment; filename="statement.pdf"',
-                  },
-                },
-              },
-            }),
-          );
-          activeSocket?.send(
-            JSON.stringify({
-              method: "Network.loadingFinished",
-              params: { requestId: "pdf-request-1" },
-            }),
-          );
+          viewerReady = true;
+          activeSocket?.close();
           return { content: [{ type: "text", text: "ok" }] };
         }
         throw new Error(`unexpected tool ${name}`);
@@ -1491,10 +1462,10 @@ describe("chrome MCP page parsing", () => {
 
       expect(result).toEqual({
         url: responseUrl,
-        suggestedFilename: "statement.pdf",
+        suggestedFilename: "download.pdf",
         path: finalPath,
       });
-      expect(resourceTreeCalls).toBeGreaterThanOrEqual(2);
+      expect(resourceTreeCalls).toBeGreaterThanOrEqual(1);
       expect(await fs.readFile(finalPath)).toEqual(pdfBytes);
     } finally {
       if (previousBrowserUrl === undefined) {
