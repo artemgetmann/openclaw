@@ -3,6 +3,54 @@ import { detectImageReferences } from "../agents/pi-embedded-runner/run/images.j
 import { buildMonitorWakeMessage } from "./wake.js";
 
 describe("buildMonitorWakeMessage", () => {
+  it("preserves the explicit notify_draft completion contract on every wake", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-14T13:00:00.000Z",
+      wakeReason: "cron:matched-reply",
+      monitor: {
+        monitorId: "monitor-draft",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:group:-1003783709877:topic:21581",
+        monitorSessionKey: "agent:main:monitor:monitor-draft",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "+971552857036" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_draft",
+        status: "active",
+        cronJobId: "cron-draft",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain("explicitly requires a draft");
+    expect(message).toContain("must include the actual draft text");
+    expect(message).toContain("status-only completion is incomplete");
+  });
+
+  it("keeps notify_only wakes free of a mandatory draft", () => {
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-14T13:00:00.000Z",
+      wakeReason: "cron:matched-reply",
+      monitor: {
+        monitorId: "monitor-status",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-status",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "+971552857036" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_only",
+        status: "active",
+        cronJobId: "cron-status",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).not.toContain("status-only completion is incomplete");
+  });
+
   it("keeps checkpoint media references out of the wake prompt without mutating checkpoint state", () => {
     const checkpoint = {
       id: "checkpoint-dld-91f",

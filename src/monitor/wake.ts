@@ -2,7 +2,11 @@ import {
   MEDIA_REFERENCE_PLACEHOLDER,
   sanitizePromptMediaReferences,
 } from "./media-reference-sanitizer.js";
-import { buildMonitorAutonomyLines, buildMonitorNotificationLines } from "./prompt-contract.js";
+import {
+  buildMonitorAutonomyLines,
+  buildMonitorDraftCompletionLines,
+  buildMonitorNotificationLines,
+} from "./prompt-contract.js";
 import type { MonitorRecord } from "./types.js";
 
 const CHECKPOINT_LIMIT_PLACEHOLDER = "[checkpoint content omitted: wake prompt limit reached]";
@@ -251,6 +255,7 @@ export function buildMonitorWakeMessage(params: {
       policy: monitor.notificationPolicy,
       state: monitor.notificationState,
     }),
+    ...buildMonitorDraftCompletionLines(monitor.actionPolicy),
     "Evaluate after this wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
     ...(monitor.actionPolicy === "auto_send" &&

@@ -1506,21 +1506,23 @@ describe("monitor gateway handlers", () => {
 
   it("preserves telegram topic routing when creating monitor delivery", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+    const originSessionKey = "agent:main:telegram:group:-1003783709877:topic:21581";
 
     await monitorHandlers["monitor.create"]({
       params: {
-        instructions: "Watch this Telegram topic for replies.",
+        instructions: "Quote the matching reply and draft the next response for approval.",
         agentId: "main",
-        originSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+        originSessionKey,
         originDelivery: {
           mode: "announce",
           channel: "telegram",
-          to: "-1001234567890:topic:99",
+          to: "-1003783709877:topic:21581",
           accountId: "default",
         },
-        sourceType: "gmail",
-        sourceTarget: { account: "me@example.com", threadId: "thread-topic" },
+        sourceType: "whatsapp",
+        sourceTarget: { target: "+971552857036" },
         cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_draft",
       },
       respond: respond as never,
       context: {
@@ -1540,11 +1542,26 @@ describe("monitor gateway handlers", () => {
         delivery: expect.objectContaining({
           mode: "announce",
           channel: "telegram",
-          to: "-1001234567890:topic:99",
+          to: "-1003783709877:topic:21581",
           accountId: "default",
         }),
       }),
     );
+    const monitorStore = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
+    expect(monitorStore.monitors).toHaveLength(1);
+    expect(monitorStore.monitors[0]).toMatchObject({
+      originSessionKey,
+      originDelivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1003783709877:topic:21581",
+        accountId: "default",
+      },
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_draft",
+    });
   });
 
   it("derives telegram topic routing from the origin session key when the stored delivery is bare", async () => {
