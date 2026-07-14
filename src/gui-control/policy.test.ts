@@ -60,6 +60,201 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain(`Blocked sensitive GUI surface: ${blockedTerm}`);
   });
 
+  it("allows selecting a known signed-out account from a Google account chooser", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Choose an account - Sign in",
+        summary: "Choose an account to continue to Google",
+        visibleText: ["Artem", "artem@example.com", "Signed out", "Use another account"],
+      }),
+      element: {
+        ref: "@known-account",
+        role: "button",
+        label: "Artem artem@example.com Signed out",
+      },
+      reason: "Select the known signed-out Google account.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it("allows method discovery from a password challenge", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge for artem@example.com",
+        visibleText: ["Enter your password", "Try another way", "Next"],
+      }),
+      element: { ref: "@other-way", role: "button", label: "Try another way" },
+      reason: "Discover the available authentication methods without using one.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it("allows dismissing an unavailable-passkey dialog", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "SecurityAgent", windowTitle: "No passkeys available" },
+      snapshot: snapshot({
+        appName: "SecurityAgent",
+        windowTitle: "No passkeys available",
+        summary: "No passkeys are available for this sign-in request",
+        visibleText: ["No passkeys available", "Close"],
+      }),
+      element: { ref: "@close", role: "button", label: "Close" },
+      reason: "Dismiss the unavailable-passkey dialog.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each([
+    ["Sign in to delete account", "Delete account requires authentication"],
+    ["Sign in to payment", "Payment authorization requires authentication"],
+  ])(
+    "does not let safe auth navigation bypass a mixed hard-stop context: %s",
+    (windowTitle, summary) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle,
+          summary,
+          visibleText: ["Close"],
+        }),
+        element: { ref: "@close", role: "button", label: "Close" },
+        reason: "Close this authentication dialog.",
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it("blocks writing into a password field", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge",
+      }),
+      element: { ref: "@password", role: "secure text field", label: "Password" },
+      reason: "Enter the password.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
+
+  it.each(["Use passkey", "Assert passkey"])("blocks the passkey act %s", (label) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Passkey challenge",
+      }),
+      element: { ref: "@passkey", role: "button", label },
+      reason: `Click ${label}.`,
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
+
+  it.each([
+    {
+      name: "OTP entry",
+      actionType: "setValue" as const,
+      windowTitle: "Verify it's you",
+      summary: "Enter the verification code",
+      element: { ref: "@otp", role: "text field", label: "OTP verification code" },
+    },
+    {
+      name: "CAPTCHA assertion",
+      actionType: "click" as const,
+      windowTitle: "Security check",
+      summary: "Complete the CAPTCHA challenge",
+      element: { ref: "@captcha", role: "checkbox", label: "I'm not a robot" },
+    },
+    {
+      name: "security-key assertion",
+      actionType: "click" as const,
+      windowTitle: "Security key",
+      summary: "Use your security key to continue",
+      element: { ref: "@security-key", role: "button", label: "Use security key" },
+    },
+    {
+      name: "sign-in approval",
+      actionType: "click" as const,
+      windowTitle: "Approve sign in",
+      summary: "Approve this sign-in request",
+      element: { ref: "@approve", role: "button", label: "Approve" },
+    },
+  ])(
+    "blocks the actual authentication act: $name",
+    ({ actionType, windowTitle, summary, element }) => {
+      const decision = evaluateGuiPolicy({
+        actionType,
+        target: { appName: "Safari", windowTitle },
+        snapshot: snapshot({ appName: "Safari", windowTitle, summary }),
+        element,
+        reason: `Perform ${summary}.`,
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it("blocks a generic Next button on a password challenge", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge with an autofilled password",
+        visibleText: ["Password", "Next"],
+      }),
+      element: { ref: "@next", role: "button", label: "Next" },
+      reason: "Continue to the next step.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface: sign in");
+  });
+
   it("still requires post-state verification under the trusted local default", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",

@@ -50,8 +50,22 @@ export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "log in",
   "sign in",
   "auth",
+  "authentication",
   "password",
   "passkey",
+  "otp",
+  "one-time password",
+  "verification code",
+  "two-factor",
+  "2fa",
+  "captcha",
+  "security key",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
   "payment",
   "billing",
   "account settings",
@@ -66,10 +80,6 @@ const TRUSTED_LOCAL_GUI_HARD_STOP_TERMS = [
   "oauth",
   "token",
   "secret",
-  "otp",
-  "one-time password",
-  "two-factor",
-  "2fa",
   "payment method",
   "change payment",
   "add payment",
@@ -245,8 +255,18 @@ const COMMERCE_HARD_STOP_CONTEXT_TERMS = [
   "log in",
   "sign in",
   "auth",
+  "authentication",
   "password",
   "passkey",
+  "verification code",
+  "captcha",
+  "security key",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
   "payment",
   "billing",
   "account settings",
@@ -639,6 +659,96 @@ function selectedMutationSurfaceText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+const AUTHENTICATION_BOUNDARY_TERMS = [
+  "login",
+  "log in",
+  "sign in",
+  "sign-in",
+  "auth",
+  "authentication",
+  "oauth",
+  "token",
+  "secret",
+  "password",
+  "passkey",
+  "otp",
+  "one-time password",
+  "verification code",
+  "two-factor",
+  "2fa",
+  "captcha",
+  "security key",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
+];
+
+function selectedMutationSurfaceParts(input: GuiPolicyInput): string[] {
+  return [
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    input.element?.description,
+    input.element?.value,
+    input.secondaryAction,
+  ]
+    .map(normalizeText)
+    .filter(Boolean);
+}
+
+function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
+  if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
+    return false;
+  }
+
+  const selectedParts = selectedMutationSurfaceParts(input);
+
+  // These controls change only which challenge is shown, or dismiss it. Match
+  // complete accessibility fields rather than substrings so "Close account"
+  // can never borrow the safe semantics of a plain "Close" button.
+  if (
+    selectedParts.some((part) =>
+      ["close", "cancel", "back", "go back", "try another way"].includes(part),
+    )
+  ) {
+    return true;
+  }
+
+  const visibleContext = visibleContextText(input);
+  if (!/\b(?:choose|select|pick) an account\b|\baccount chooser\b/.test(visibleContext)) {
+    return false;
+  }
+
+  const role = normalizeText(input.element?.role);
+  const selectedSurface = selectedMutationSurfaceText(input);
+
+  // Account rows are navigation to a later credential gate, not credentials
+  // themselves. Require both a chooser-shaped page and a row-shaped target;
+  // this prevents a generic button on an account/security settings page from
+  // being mistaken for harmless account selection.
+  return (
+    /\b(button|row|cell|link|list item)\b/.test(role) &&
+    /(?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}|\bsigned out\b|\buse another account\b|\baccount\b)/.test(
+      selectedSurface,
+    ) &&
+    !hasAnyTerm(selectedSurface, AUTHENTICATION_BOUNDARY_TERMS)
+  );
+}
+
+function isAuthenticationBoundaryTerm(term: string): boolean {
+  return AUTHENTICATION_BOUNDARY_TERMS.includes(normalizeText(term));
+}
+
+function hasNonAuthenticationBoundaryTerm(haystack: string, deniedTerms: string[]): boolean {
+  return deniedTerms.some(
+    (term) => !isAuthenticationBoundaryTerm(term) && surfaceTermPattern(term).test(haystack),
+  );
+}
+
 function intendedActionText(input: GuiPolicyInput): string {
   return [
     input.target.appName,
@@ -868,6 +978,18 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   ) {
     blockedSurface = undefined;
   }
+  if (
+    blockedSurface &&
+    isAuthenticationBoundaryTerm(blockedSurface) &&
+    !hasNonAuthenticationBoundaryTerm(text, taskPolicy.deniedSurfaceTerms) &&
+    isReversiblePreAuthNavigation(input)
+  ) {
+    // Window titles and challenge summaries provide the context needed to
+    // block generic commit controls such as Next. They must not turn every
+    // control in that window into authentication: chooser rows, method
+    // discovery, and dismissal remain reversible until a credential is used.
+    blockedSurface = undefined;
+  }
   if (blockedSurface) {
     return {
       allowed: false,
@@ -911,10 +1033,16 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
   }
 
   if (taskPolicy.taskId === "commerce_flow_until_final_confirmation") {
-    const hardStopContext = hasAnyTerm(
-      commerceHardStopContextText(input),
-      COMMERCE_HARD_STOP_CONTEXT_TERMS,
-    );
+    const hardStopContextText = commerceHardStopContextText(input);
+    let hardStopContext = hasAnyTerm(hardStopContextText, COMMERCE_HARD_STOP_CONTEXT_TERMS);
+    if (
+      hardStopContext &&
+      isAuthenticationBoundaryTerm(hardStopContext) &&
+      !hasNonAuthenticationBoundaryTerm(hardStopContextText, COMMERCE_HARD_STOP_CONTEXT_TERMS) &&
+      isReversiblePreAuthNavigation(input)
+    ) {
+      hardStopContext = undefined;
+    }
     if (hardStopContext) {
       return {
         allowed: false,
