@@ -84,6 +84,30 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.risk).toBe("allowed-mutation");
   });
 
+  it("blocks selecting an active-session account from an account chooser", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Choose an account - Sign in",
+        summary: "Choose an account to continue to Google",
+        visibleText: ["Artem", "artem@example.com", "Use another account"],
+      }),
+      element: {
+        ref: "@active-account",
+        role: "button",
+        label: "Artem artem@example.com",
+      },
+      reason: "Select the active Google account.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface: sign in");
+  });
+
   it("allows method discovery from a password challenge", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",
@@ -141,6 +165,34 @@ describe("evaluateGuiPolicy", () => {
         }),
         element: { ref: "@close", role: "button", label: "Close" },
         reason: "Close this authentication dialog.",
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it.each([
+    ["payment", "Payment authorization requires authentication"],
+    ["delete", "Delete account requires authentication"],
+    ["account", "Account settings require authentication"],
+    ["security", "Security settings require authentication"],
+  ])(
+    "does not let Try another way bypass mixed %s risk visible outside the selected control",
+    (_risk, mixedRiskContext) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Sign in" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Sign in",
+          summary: mixedRiskContext,
+          visibleText: [mixedRiskContext, "Try another way"],
+        }),
+        element: { ref: "@other-way", role: "button", label: "Try another way" },
+        reason: "Discover the available authentication methods without using one.",
         approvedPolicyRisk: true,
         verificationMode: "post_state",
       });

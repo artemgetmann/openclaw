@@ -726,15 +726,13 @@ function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
   const role = normalizeText(input.element?.role);
   const selectedSurface = selectedMutationSurfaceText(input);
 
-  // Account rows are navigation to a later credential gate, not credentials
-  // themselves. Require both a chooser-shaped page and a row-shaped target;
-  // this prevents a generic button on an account/security settings page from
-  // being mistaken for harmless account selection.
+  // A signed-out row is navigation to a later credential gate, not a credential
+  // itself. Require explicit signed-out state (or the non-auth "Use another
+  // account" option): an email address alone may represent an active session
+  // whose selection would complete sign-in immediately.
   return (
     /\b(button|row|cell|link|list item)\b/.test(role) &&
-    /(?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}|\bsigned out\b|\buse another account\b|\baccount\b)/.test(
-      selectedSurface,
-    ) &&
+    /\b(?:signed out|use another account)\b/.test(selectedSurface) &&
     !hasAnyTerm(selectedSurface, AUTHENTICATION_BOUNDARY_TERMS)
   );
 }
@@ -982,6 +980,11 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     blockedSurface &&
     isAuthenticationBoundaryTerm(blockedSurface) &&
     !hasNonAuthenticationBoundaryTerm(text, taskPolicy.deniedSurfaceTerms) &&
+    // Mutation text intentionally excludes broad AX snapshot content to avoid
+    // unrelated-control false positives. Before waiving an auth boundary,
+    // inspect that visible context separately so a reversible-looking control
+    // cannot bypass payment, deletion, account, or security hard stops.
+    !hasNonAuthenticationBoundaryTerm(visibleContextText(input), taskPolicy.deniedSurfaceTerms) &&
     isReversiblePreAuthNavigation(input)
   ) {
     // Window titles and challenge summaries provide the context needed to
