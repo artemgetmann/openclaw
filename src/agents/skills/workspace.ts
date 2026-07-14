@@ -115,6 +115,7 @@ const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
+const CRITICAL_PRODUCT_POLICY_SKILL = "goal-mode";
 
 function resolvePromptSourcePriority(source?: string): number {
   switch (source) {
@@ -152,13 +153,24 @@ function resolvePromptEntryPriority(entry: SkillEntry, config?: OpenClawConfig):
   if (isConfigSelectedSkillForPrompt(entry, config)) {
     return 0;
   }
-  if (entry.skill.source === "openclaw-workspace") {
+
+  // `goal-mode` is the sole product policy skill that must remain routable when
+  // the prompt inventory is trimmed. Keep this exception source-specific: a
+  // workspace override still wins during merge, and every other product-managed
+  // skill retains the established source ranking below workspace inventory.
+  if (
+    entry.skill.name === CRITICAL_PRODUCT_POLICY_SKILL &&
+    entry.skill.source === "openclaw-product-managed"
+  ) {
     return 1;
   }
-  if (entry.skill.source === "agents-skills-project") {
+  if (entry.skill.source === "openclaw-workspace") {
     return 2;
   }
-  return 3 + resolvePromptSourcePriority(entry.skill.source);
+  if (entry.skill.source === "agents-skills-project") {
+    return 3;
+  }
+  return 4 + resolvePromptSourcePriority(entry.skill.source);
 }
 
 function rankSkillsForPrompt(entries: SkillEntry[], config?: OpenClawConfig): Skill[] {
