@@ -2,10 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readRestartSentinel } from "../../../infra/restart-sentinel.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import { resolveSessionRunActive } from "../get-reply-run.js";
 import { resolveActiveRunQueueAction } from "../queue-policy.js";
-import { persistDurableFollowup, scheduleDurableFollowupRetries } from "./durable-store.js";
+import { clearFollowupDrainCallback, scheduleFollowupDrain } from "./drain.js";
+import {
+  loadDurableFollowups,
+  persistDurableFollowup,
+  scheduleDurableFollowupRetries,
+} from "./durable-store.js";
 import { enqueueFollowupRunDurable, restoreDurableFollowupRuns } from "./enqueue.js";
 import { clearFollowupQueue, FOLLOWUP_QUEUES, hasFollowupQueueOwnership } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
@@ -48,6 +54,7 @@ describe("startup durable queue ownership", () => {
   });
 
   afterEach(async () => {
+    clearFollowupDrainCallback(queueKey);
     clearFollowupQueue(queueKey);
     FOLLOWUP_QUEUES.delete(queueKey);
     vi.useRealTimers();
@@ -103,5 +110,74 @@ describe("startup durable queue ownership", () => {
       interval: 1,
       timeout: 100,
     });
+  });
+
+  it("restores an active durable followup exactly once after an external restart", async () => {
+    await expect(
+      enqueueFollowupRunDurable(
+        queueKey,
+        createRun("finish the accepted task", "telegram:active"),
+        settings,
+      ),
+    ).resolves.toBe(true);
+
+    let markOriginalRunStarted!: () => void;
+    const originalRunStarted = new Promise<void>((resolve) => {
+      markOriginalRunStarted = resolve;
+    });
+    const originalRun = vi.fn(async () => {
+      markOriginalRunStarted();
+      // This promise deliberately never resolves. It models SIGTERM arriving
+      // while the old process owns the item and is inside model/tool work.
+      await new Promise<void>(() => {});
+    });
+    scheduleFollowupDrain(queueKey, originalRun);
+    await originalRunStarted;
+
+    expect(originalRun).toHaveBeenCalledTimes(1);
+    expect(FOLLOWUP_QUEUES.get(queueKey)?.draining).toBe(true);
+    await expect(loadDurableFollowups()).resolves.toHaveLength(1);
+    // The incident restart came from the macOS service reconciler, not the
+    // gateway restart tool. Recovery must not depend on a prepared sentinel.
+    await expect(readRestartSentinel()).resolves.toBeNull();
+
+    // Simulate the process boundary without calling explicit queue cleanup:
+    // cleanup is user cancellation and intentionally deletes durable intent.
+    FOLLOWUP_QUEUES.delete(queueKey);
+    clearFollowupDrainCallback(queueKey);
+
+    let markRecoveredRunStarted!: () => void;
+    let finishRecoveredRun!: () => void;
+    const recoveredRunStarted = new Promise<void>((resolve) => {
+      markRecoveredRunStarted = resolve;
+    });
+    const recoveredRunGate = new Promise<void>((resolve) => {
+      finishRecoveredRun = resolve;
+    });
+    const recoveredRun = vi.fn(async (run: FollowupRun) => {
+      expect(run.prompt).toBe("finish the accepted task");
+      markRecoveredRunStarted();
+      await recoveredRunGate;
+    });
+
+    // Startup restores and arms the queue without awaiting task completion.
+    // At this point the gateway may report that it is back online, but that
+    // service receipt is not proof that the accepted user task has finished.
+    await expect(restoreDurableFollowupRuns({ runFollowup: recoveredRun })).resolves.toBe(1);
+    await recoveredRunStarted;
+    expect(recoveredRun).toHaveBeenCalledTimes(1);
+    await expect(loadDurableFollowups()).resolves.toHaveLength(1);
+
+    finishRecoveredRun();
+    await vi.waitFor(() => expect(FOLLOWUP_QUEUES.has(queueKey)).toBe(false), {
+      interval: 1,
+      timeout: 100,
+    });
+    await expect(loadDurableFollowups()).resolves.toHaveLength(0);
+
+    // A later startup scan must observe the durable completion and avoid a
+    // duplicate model/tool turn or second user-facing delivery.
+    await expect(restoreDurableFollowupRuns({ runFollowup: recoveredRun })).resolves.toBe(0);
+    expect(recoveredRun).toHaveBeenCalledTimes(1);
   });
 });
