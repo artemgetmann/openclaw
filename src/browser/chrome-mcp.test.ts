@@ -1336,6 +1336,190 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the matching Chrome resource when the network PDF body is empty", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
+    const downloadDir = path.join(tempDir, "downloads");
+    const finalPath = path.join(downloadDir, "statement.pdf");
+    const pdfBytes = Buffer.from("%PDF-1.7\nresource-cache pdf\n%%EOF\n");
+    const responseUrl = "https://example.com/api/export-statement";
+    const previousBrowserUrl = process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+    let activeSocket: WebSocket | undefined;
+    let httpServer: ReturnType<typeof createServer> | undefined;
+    let wsServer: WebSocketServer | undefined;
+    let resourceTreeCalls = 0;
+
+    try {
+      wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+      const wsPort = (wsServer.address() as { port: number }).port;
+      wsServer.on("connection", (socket) => {
+        activeSocket = socket;
+        socket.on("message", (data) => {
+          const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
+          if (message.method === "Network.getResponseBody") {
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: { body: "", base64Encoded: true },
+              }),
+            );
+            return;
+          }
+          if (message.method === "Page.getResourceTree") {
+            resourceTreeCalls += 1;
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: {
+                  frameTree: {
+                    frame: {
+                      id: "pdf-frame",
+                      url: "chrome-extension://pdf-viewer/index.html",
+                      mimeType: "text/html",
+                    },
+                    resources:
+                      resourceTreeCalls >= 2
+                        ? [{ url: responseUrl, mimeType: "application/pdf" }]
+                        : [],
+                  },
+                },
+              }),
+            );
+            return;
+          }
+          if (message.method === "Page.getResourceContent") {
+            expect(message.params).toEqual({ frameId: "pdf-frame", url: responseUrl });
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: {
+                  content: pdfBytes.toString("base64"),
+                  base64Encoded: true,
+                },
+              }),
+            );
+            return;
+          }
+          if (typeof message.id === "number") {
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
+          }
+        });
+      });
+
+      httpServer = createServer((req, res) => {
+        if (req.url === "/json/list") {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify([
+              {
+                type: "page",
+                url: "https://example.com/statement",
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/1`,
+              },
+            ]),
+          );
+          return;
+        }
+        res.statusCode = 404;
+        res.end("not found");
+      });
+      await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+      const httpPort = (httpServer.address() as { port: number }).port;
+      process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
+
+      const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name === "list_pages") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "## Pages\n1: https://example.com/statement [selected]",
+              },
+            ],
+          };
+        }
+        if (name === "click") {
+          activeSocket?.send(
+            JSON.stringify({
+              method: "Network.responseReceived",
+              params: {
+                requestId: "pdf-request-1",
+                type: "Fetch",
+                response: {
+                  url: responseUrl,
+                  mimeType: "application/pdf",
+                  headers: {
+                    "content-type": "application/pdf",
+                    "content-disposition": 'attachment; filename="statement.pdf"',
+                  },
+                },
+              },
+            }),
+          );
+          activeSocket?.send(
+            JSON.stringify({
+              method: "Network.loadingFinished",
+              params: { requestId: "pdf-request-1" },
+            }),
+          );
+          return { content: [{ type: "text", text: "ok" }] };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      setChromeMcpSessionFactoryForTest(
+        async () =>
+          ({
+            client: {
+              callTool,
+              listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+              close: vi.fn().mockResolvedValue(undefined),
+              connect: vi.fn().mockResolvedValue(undefined),
+            },
+            transport: { pid: 123 },
+            ready: Promise.resolve(),
+          }) as unknown as ChromeMcpSession,
+      );
+
+      const result = await downloadChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "download-button",
+        downloadDir,
+        path: finalPath,
+        timeoutMs: 5_000,
+      });
+
+      expect(result).toEqual({
+        url: responseUrl,
+        suggestedFilename: "statement.pdf",
+        path: finalPath,
+      });
+      expect(resourceTreeCalls).toBeGreaterThanOrEqual(2);
+      expect(await fs.readFile(finalPath)).toEqual(pdfBytes);
+    } finally {
+      if (previousBrowserUrl === undefined) {
+        delete process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+      } else {
+        process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = previousBrowserUrl;
+      }
+      await new Promise<void>((resolve) => {
+        if (!wsServer) {
+          resolve();
+          return;
+        }
+        wsServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        if (!httpServer) {
+          resolve();
+          return;
+        }
+        httpServer.close(() => resolve());
+      });
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves an existing inferred filename for implicit network PDF captures", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-collision-"));
     const originalPath = path.join(tempDir, "account-statement.pdf");

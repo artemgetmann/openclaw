@@ -986,16 +986,107 @@ function assertNativePdfBuffer(buffer: Buffer, url: string): void {
 
 function createChromeMcpPdfNetworkCapture(params: {
   send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
+  timeoutMs?: number;
 }) {
   const candidates = new Map<
     string,
     { url: string; headers: Record<string, unknown>; mimeType?: unknown }
   >();
   let resolved = false;
+  let cancelled = false;
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let fallbackTimerResolve: (() => void) | undefined;
+  let resourceFallbackPromise: Promise<void> | undefined;
   let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
   const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
     resolvePdf = resolve;
   });
+
+  const cancel = (): void => {
+    cancelled = true;
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = undefined;
+    }
+    fallbackTimerResolve?.();
+    fallbackTimerResolve = undefined;
+  };
+
+  const settle = (payload: ChromeMcpCapturedPdfResponse): void => {
+    if (cancelled || resolved) {
+      return;
+    }
+    resolved = true;
+    cancel();
+    resolvePdf?.(payload);
+  };
+
+  const startResourceFallback = (candidate: {
+    url: string;
+    headers: Record<string, unknown>;
+    mimeType?: unknown;
+  }): void => {
+    if (resourceFallbackPromise || cancelled || resolved) {
+      return;
+    }
+
+    // Network.getResponseBody can return an empty body after a POST-backed PDF
+    // has already moved into Chrome's viewer cache. Poll that cache briefly,
+    // but only accept a resource whose URL matches the eligible response. This
+    // prevents a pre-existing/background PDF in the same tab from becoming a
+    // false download success.
+    const deadline = Date.now() + Math.max(1_000, params.timeoutMs ?? 30_000);
+    resourceFallbackPromise = (async () => {
+      while (!cancelled && !resolved && Date.now() <= deadline) {
+        try {
+          const resourceTreeResult = asRecord(await params.send("Page.getResourceTree"));
+          const resourceCandidates = collectPdfResourceCandidates(
+            resourceTreeResult?.frameTree,
+          ).filter((resource) => resource.url === candidate.url);
+          for (const resource of resourceCandidates) {
+            if (cancelled || resolved) {
+              return;
+            }
+            try {
+              const contentResult = await params.send("Page.getResourceContent", {
+                frameId: resource.frameId,
+                url: resource.url,
+              });
+              const buffer = decodeChromeResourceContent(contentResult);
+              if (!hasPdfSignature(buffer)) {
+                continue;
+              }
+              settle({
+                url: candidate.url,
+                suggestedFilename: inferPdfResponseFilename(candidate),
+                buffer,
+              });
+              return;
+            } catch {
+              // The resource can disappear while Chrome swaps viewer frames;
+              // retry the tree instead of failing the ordinary download waiter.
+            }
+          }
+        } catch {
+          // Page.getResourceTree is best-effort across Chrome versions. Keep
+          // polling while the response remains eligible and the session lives.
+        }
+        if (cancelled || resolved || Date.now() >= deadline) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          fallbackTimerResolve = resolve;
+          fallbackTimer = setTimeout(() => {
+            fallbackTimer = undefined;
+            fallbackTimerResolve = undefined;
+            resolve();
+          }, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS);
+        });
+      }
+    })().catch(() => {
+      // Resource fallback must never reject the Promise.race loser.
+    });
+  };
 
   const observeEvent = (method: string, event: Record<string, unknown> | undefined) => {
     if (!event) {
@@ -1035,26 +1126,30 @@ function createChromeMcpPdfNetworkCapture(params: {
       try {
         const bodyResult = await params.send("Network.getResponseBody", { requestId });
         const buffer = decodeCdpResponseBody(bodyResult);
-        if (resolved || !hasPdfSignature(buffer)) {
+        if (resolved) {
           return;
         }
-        resolved = true;
-        resolvePdf?.({
-          url: candidate.url,
-          suggestedFilename: inferPdfResponseFilename(candidate),
-          buffer,
-        });
+        if (hasPdfSignature(buffer)) {
+          settle({
+            url: candidate.url,
+            suggestedFilename: inferPdfResponseFilename(candidate),
+            buffer,
+          });
+        } else {
+          startResourceFallback(candidate);
+        }
       } catch {
         // Keep the normal filesystem download waiter alive. Some Chrome
         // versions do not retain every response body even when metadata says
         // PDF, and that should not break ordinary downloads.
+        startResourceFallback(candidate);
       } finally {
         candidates.delete(requestId);
       }
     })();
   };
 
-  return { promise, observeEvent };
+  return { promise, observeEvent, cancel };
 }
 
 export const chromeMcpPdfResourceInternalsForTest = {
@@ -1464,6 +1559,7 @@ async function runChromeMcpDownloadSession(params: {
   };
   const pdfNetworkCapture = createChromeMcpPdfNetworkCapture({
     send: async (method, commandParams) => await send(method, commandParams),
+    timeoutMs,
   });
 
   ws.on("message", (data: RawData) => {
@@ -1590,6 +1686,7 @@ async function runChromeMcpDownloadSession(params: {
       path: savedPath,
     };
   } finally {
+    pdfNetworkCapture.cancel();
     failAll(new Error("Chrome DevTools WebSocket closed"));
     ws.close();
   }
