@@ -147,6 +147,49 @@ describe("evaluateGuiPolicy", () => {
     },
   );
 
+  it.each(
+    [
+      ["delete", "Description: Delete account requires authentication"],
+      ["payment", "Value: Payment authorization requires authentication"],
+      ["account", "Description: Account settings require authentication"],
+      ["security", "Value: Security settings require authentication"],
+    ].flatMap(([risk, metadata]) => [
+      { profile: "trusted", risk, metadata, taskPolicy: undefined },
+      {
+        profile: "commerce",
+        risk,
+        metadata,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      },
+    ]),
+  )(
+    "keeps $risk metadata from a truncated chooser summary under $profile policy",
+    ({ metadata, taskPolicy }) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+        snapshot: snapshot({
+          appName: "Google Chrome",
+          windowTitle: "Choose an account - Sign in",
+          summary: `102 button Remove an account ${metadata}`,
+          visibleText: ["button Artem artem@example.com Signed out"],
+        }),
+        element: {
+          ref: "@101",
+          role: "button",
+          label: "Artem artem@example.com Signed out",
+        },
+        reason: "Select the known signed-out account without using credentials.",
+        approvedPolicyRisk: true,
+        taskPolicy,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI");
+    },
+  );
+
   it("blocks selecting an active-session account from an account chooser", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",

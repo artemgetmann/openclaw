@@ -553,31 +553,46 @@ function visibleContextText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
-function isAccountChooserManagementSibling(part: string): boolean {
-  // Match either a structured label or one complete OCU text-envelope element
-  // line. Do not match prose such as "Remove an account requires approval";
-  // that remains risk-bearing page context.
-  return /^(?:(?:\d+\s+)?(?:button|link|row|cell|list item)\s+)?remove (?:an )?account(?:\s+(?:id|value|description|secondary actions|frame):.*)?$/.test(
-    normalizeText(part),
-  );
+function sanitizeAccountChooserManagementSibling(part: string): string {
+  const normalized = normalizeText(part);
+  const match =
+    /^(?:(?:\d+\s+)?(?:button|link|row|cell|list item)\s+)?remove (?:an )?account(?<metadata>\s+(?:id|value|description|secondary actions|frame):.*)?$/.exec(
+      normalized,
+    );
+  if (!match) {
+    // Unknown formats and prose remain intact so provider schema drift cannot
+    // silently erase future safety evidence.
+    return part;
+  }
+
+  // Strip only the independently classified sibling label. Known metadata is
+  // returned for normal hard-stop scanning: benign AX actions pass, while a
+  // Description/Value containing payment or deletion remains blocking.
+  return normalizeText(match.groups?.metadata);
 }
 
 function preAuthHardStopContextParts(input: GuiPolicyInput): Array<string | undefined> {
   const selectedSafeChooserTarget = isSafeAccountChooserSelection(input);
-  const visibleText = (input.snapshot?.visibleText ?? []).filter((part) => {
-    // Google account choosers expose this management affordance beside normal
-    // rows. Ignore only the exact sibling and only when the selected target is
-    // independently proven safe; selected removal controls and risk-bearing
-    // page copy continue through the hard-stop scan.
-    return !(selectedSafeChooserTarget && isAccountChooserManagementSibling(part));
-  });
+  const visibleText = (input.snapshot?.visibleText ?? [])
+    .map((part) => {
+      if (!selectedSafeChooserTarget) {
+        return part;
+      }
+
+      // Google account choosers expose this management affordance beside normal
+      // rows. Sanitize only when the selected target is independently proven
+      // safe; selected removal controls never enter this branch.
+      return sanitizeAccountChooserManagementSibling(part);
+    })
+    .filter(Boolean);
   const summary = selectedSafeChooserTarget
     ? input.snapshot?.summary
         ?.split(/\r?\n/)
         // Text-only OCU snapshots duplicate every accessible element into the
-        // fallback summary. Remove only the structurally complete management
-        // sibling line; titles, prose, and all other risk evidence survive.
-        .filter((line) => !isAccountChooserManagementSibling(line))
+        // fallback summary. Strip the sibling label but retain metadata, titles,
+        // prose, and every other source of risk evidence.
+        .map(sanitizeAccountChooserManagementSibling)
+        .filter(Boolean)
         .join("\n")
     : input.snapshot?.summary;
 
