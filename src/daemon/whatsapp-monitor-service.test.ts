@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const baseService = vi.hoisted(() => ({
@@ -39,5 +42,34 @@ describe("resolveWhatsAppMonitorService", () => {
         OPENCLAW_SYSTEMD_UNIT: "openclaw-whatsapp-monitor-consumer-lane",
       }),
     });
+  });
+
+  it("removes and verifies a residual profile service command after uninstall", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-whatsapp-monitor-uninstall-"),
+    );
+    const sourcePath = path.join(tempDir, "ai.openclaw.consumer-lane.whatsapp-monitor.plist");
+    await fs.writeFile(sourcePath, "<plist/>");
+    baseService.uninstall.mockResolvedValueOnce(undefined);
+    baseService.readCommand.mockImplementation(async () => {
+      try {
+        await fs.access(sourcePath);
+        return {
+          programArguments: ["openclaw", "whatsapp-monitor", "poll"],
+          sourcePath,
+        };
+      } catch {
+        return null;
+      }
+    });
+
+    const service = resolveWhatsAppMonitorService();
+    await service.uninstall({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "consumer-lane" },
+      stdout: process.stdout,
+    });
+
+    await expect(fs.access(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 });
