@@ -83,10 +83,16 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: vi.fn(),
-  scheduleFollowupDrain: vi.fn(),
-}));
+vi.mock("./queue.js", () => {
+  // Both exports share one spy so older queue-policy assertions continue to
+  // observe the durable enqueue boundary used by production.
+  const enqueue = vi.fn();
+  return {
+    enqueueFollowupRun: enqueue,
+    enqueueFollowupRunDurable: enqueue,
+    scheduleFollowupDrain: vi.fn(),
+  };
+});
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
@@ -160,6 +166,7 @@ function createMinimalRun(params?: {
   return {
     typing,
     opts,
+    followupRun,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({

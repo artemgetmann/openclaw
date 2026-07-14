@@ -46,7 +46,8 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { resolveQueueSettings } from "./queue.js";
+import { hasFollowupQueueOwnership, resolveQueueSettings } from "./queue.js";
+import { isDurableFollowupMessageProcessed } from "./queue/durable-store.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
@@ -57,6 +58,13 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+export function resolveSessionRunActive(params: {
+  embeddedRunActive: boolean;
+  queueOwned: boolean;
+}): boolean {
+  return params.embeddedRunActive || params.queueOwned;
+}
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -371,6 +379,24 @@ export async function runPreparedReply(
   const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
     : "[User sent media without caption]";
+  const processedMessageIdentity = {
+    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    originatingChannel: ctx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo,
+    originatingAccountId: ctx.AccountId,
+    originatingThreadId: ctx.MessageThreadId,
+  };
+  // Processed provider redeliveries must stop before any one-shot state is
+  // consumed. Both deferred queueing and immediate execution pass this gate.
+  if (
+    await isDurableFollowupMessageProcessed({
+      queueKey: sessionKey,
+      run: processedMessageIdentity,
+    })
+  ) {
+    typing.cleanup();
+    return undefined;
+  }
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
@@ -506,10 +532,18 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const queueKey = sessionKey ?? sessionIdFinal;
-  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
+  const queueOwned = hasFollowupQueueOwnership(queueKey);
+  // A restored durable queue owns this session before its provider/model turn
+  // completes. Treat that ownership like an active run so newer inbound work
+  // is persisted behind it instead of starting concurrently.
+  const isActive = resolveSessionRunActive({
+    embeddedRunActive: isEmbeddedPiRunActive(sessionIdFinal),
+    queueOwned,
+  });
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
+    queueOwned ||
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";

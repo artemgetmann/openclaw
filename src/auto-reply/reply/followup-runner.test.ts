@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -29,6 +29,15 @@ vi.mock("./route-reply.js", async (importOriginal) => {
 });
 
 import { createFollowupRunner } from "./followup-runner.js";
+import { scheduleFollowupDrain } from "./queue/drain.js";
+import {
+  ackDurableFollowup,
+  hydrateDurableFollowup,
+  loadDurableFollowups,
+  persistDurableFollowup,
+} from "./queue/durable-store.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -595,6 +604,83 @@ describe("createFollowupRunner typing cleanup", () => {
     expectTypingCleanup(typing);
   });
 
+  it("rejects model failures in recovery mode so durable work is not acknowledged", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(
+      runner({ ...baseQueuedRun(), durableId: "durable-model-failure" }),
+    ).rejects.toThrow("agent exploded");
+    expectTypingCleanup(typing);
+  });
+
+  it("rejects model failures for a synthetic turn backed by constituent durable records", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("synthetic agent exploded"));
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(
+      runner({ ...baseQueuedRun(), durableIds: ["durable-a", "durable-b"] }),
+    ).rejects.toThrow("synthetic agent exploded");
+    expectTypingCleanup(typing);
+  });
+
+  it("keeps absorbing non-durable model failures in durable-only recovery mode", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("legacy agent failure"));
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner(baseQueuedRun())).resolves.toBeUndefined();
+    expectTypingCleanup(typing);
+  });
+
+  it("rejects unrecovered route failures in recovery mode", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+    const queued = {
+      ...baseQueuedRun("webchat"),
+      durableId: "durable-route-failure",
+      // A restored delivery stage routes directly and must still reject so its
+      // carrier record is not acknowledged by the drain.
+      deliveryPayloads: [{ text: "hello world!" }],
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    } as FollowupRun;
+
+    await expect(runner(queued)).rejects.toThrow("adapter unavailable");
+    expectTypingCleanup(typing);
+  });
+
   it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {
     const typing = createMockTypingController();
     const onBlockReply = vi.fn(async () => {});
@@ -614,6 +700,356 @@ describe("createFollowupRunner typing cleanup", () => {
 
     expect(onBlockReply).toHaveBeenCalled();
     expectTypingCleanup(typing);
+  });
+});
+
+describe("createFollowupRunner durable delivery recovery", () => {
+  let stateDir: string;
+  let previousStateDir: string | undefined;
+
+  beforeEach(async () => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-delivery-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    runEmbeddedPiAgentMock.mockReset();
+  });
+
+  afterEach(async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    { label: "empty", payloads: [] },
+    { label: "partial", payloads: [{ text: "incomplete result" }] },
+  ])("rejects an aborted $label durable result before staging or sending", async ({ payloads }) => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const input = await persistDurableFollowup({
+      queueKey: `aborted-${payloads.length ? "partial" : "empty"}`,
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads,
+      meta: { aborted: true },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow(
+      "Durable followup agent run aborted",
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const [record] = await loadDurableFollowups();
+    expect(record?.id).toBe(input.id);
+    expect(record?.delivery).toBeUndefined();
+  });
+
+  it("restores model-complete output and retries delivery without rerunning the agent", async () => {
+    const settings = { mode: "collect" as const, debounceMs: 0, cap: 20 };
+    const firstRun = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      run: { config: { channels: { discord: { token: "runtime-secret" } } } },
+    });
+    const secondRun = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const first = await persistDurableFollowup({
+      queueKey: "delivery-retry",
+      run: firstRun,
+      settings,
+    });
+    const second = await persistDurableFollowup({
+      queueKey: "delivery-retry",
+      run: secondRun,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "agent finished once" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+    const synthetic = {
+      ...firstRun,
+      durableIds: [first.id, second.id],
+      prompt: "synthetic collected prompt",
+    };
+
+    await expect(runner(synthetic)).rejects.toThrow("adapter unavailable");
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.sourceDurableIds).toEqual([first.id, second.id]);
+
+    // Simulate process restart: hydrate from disk with current runtime config,
+    // then retry the route. The model/tool executor must remain untouched.
+    routeReplyMock.mockResolvedValueOnce({ ok: true });
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ payload: { text: "agent finished once" } }),
+    );
+    await Promise.all([first.id, second.id].map((id) => ackDurableFollowup(id)));
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("drains a same-process staged FIFO prefix before later collected input", async () => {
+    const settings = { mode: "collect" as const, debounceMs: 0, cap: 20 };
+    const queueKey = `delivery-retry-fifo-${Date.now()}`;
+    const firstRun = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const secondRun = createQueuedRun({
+      messageId: "discord:second",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const first = await persistDurableFollowup({
+      queueKey,
+      run: firstRun,
+      settings,
+    });
+    const second = await persistDurableFollowup({
+      queueKey,
+      run: secondRun,
+      settings,
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    enqueueFollowupRun(queueKey, { ...firstRun, durableId: first.id }, settings, "none");
+    enqueueFollowupRun(queueKey, { ...secondRun, durableId: second.id }, settings, "none");
+
+    // The collect drain builds A+B itself. Their agent/tool turn completes,
+    // stages its delivery, then the first provider call fails while both
+    // original items remain at the in-memory FIFO head.
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "original staged output" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    scheduleFollowupDrain(queueKey, runner);
+    await vi.waitFor(() => {
+      expect(routeReplyMock).toHaveBeenCalledTimes(1);
+      // The drain immediately schedules its bounded retry, so `draining`
+      // becomes true again. The persisted retry boundary proves the failed
+      // attempt finished while its replacement is still waiting.
+      expect(getExistingFollowupQueue(queueKey)?.nextAttemptAt).toBeTypeOf("number");
+    });
+    expect(getExistingFollowupQueue(queueKey)?.items.map((item) => item.durableId)).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    await expect(loadDurableFollowups()).resolves.toEqual([
+      expect.objectContaining({
+        id: first.id,
+        delivery: expect.objectContaining({ sourceDurableIds: [first.id, second.id] }),
+      }),
+    ]);
+
+    // C arrives before the scheduled retry. Exact-prefix discovery must select
+    // only [A,B], even though collect mode now sees an expanded [A,B,C] queue.
+    const laterRun = createQueuedRun({
+      messageId: "discord:later",
+      prompt: "later durable input",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+    const later = await persistDurableFollowup({
+      queueKey,
+      run: laterRun,
+      settings,
+    });
+    enqueueFollowupRun(queueKey, hydrateDurableFollowup(later, {}), settings, "none");
+    let releaseLaterModel!: () => void;
+    const laterModelGate = new Promise<void>((resolve) => {
+      releaseLaterModel = resolve;
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      // Hold C at model entry so the assertion below can prove that the staged
+      // carrier completed by itself: C remains durable and has no outbound
+      // delivery or acknowledgement until this distinct turn is released.
+      await laterModelGate;
+      return { payloads: [{ text: "later input output" }], meta: {} };
+    });
+    routeReplyMock.mockResolvedValue({ ok: true });
+
+    scheduleFollowupDrain(queueKey, runner);
+    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2));
+    await expect(loadDurableFollowups()).resolves.toEqual([later]);
+    expect(getExistingFollowupQueue(queueKey)?.items.map((item) => item.durableId)).toEqual([
+      later.id,
+    ]);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ payload: { text: "original staged output" } }),
+    );
+
+    releaseLaterModel();
+    await vi.waitFor(async () => {
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+      await expect(loadDurableFollowups()).resolves.toEqual([]);
+    });
+
+    // First retry sends A+B's staged payload without a second old model turn.
+    // Only then does C execute and deliver in a distinct second model turn.
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ payload: { text: "later input output" } }),
+    );
+    expect(getExistingFollowupQueue(queueKey)).toBeUndefined();
+    clearFollowupQueue(queueKey);
+  });
+
+  it("restores an empty completed stage without rerunning the agent", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "empty-delivery-retry",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner({ ...queued, durableId: input.id });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([]);
+
+    // Restart hydration must preserve stage presence even though the payload
+    // array is empty. NO_REPLY/suppressed work is complete, not missing.
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("restores a suppressed automatic reply without rerunning the agent", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      run: { messageProvider: "heartbeat" },
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "suppressed-delivery-retry",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "automatic reply that must be suppressed" }],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner({ ...queued, durableId: input.id });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([]);
+
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("retries staged compaction output after bookkeeping failure without rerunning tools", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+      run: { verboseLevel: "on" },
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "bookkeeping-retry",
+      run: queued,
+      settings,
+    });
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    // A directory cannot be atomically replaced by the JSON session writer.
+    // This deterministically fails compaction bookkeeping after delivery stage
+    // publication, exercising the crash/retry boundary without mocking it.
+    const invalidStorePath = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-store-dir-"));
+    mockCompactionRun({
+      willRetry: true,
+      result: {
+        payloads: [{ text: "agent finished once" }],
+        meta: { agentMeta: { lastCallUsage: { input: 100, output: 20, total: 120 } } },
+      },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath: invalidStorePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([
+      { text: "🧹 Auto-compaction complete (count 1)." },
+      { text: "agent finished once" },
+    ]);
+
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ payload: { text: "🧹 Auto-compaction complete (count 1)." } }),
+    );
+    expect(routeReplyMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ payload: { text: "agent finished once" } }),
+    );
+    await fs.rm(invalidStorePath, { recursive: true, force: true });
   });
 });
 

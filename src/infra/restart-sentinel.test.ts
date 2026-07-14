@@ -1,18 +1,32 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   consumeRestartSentinel,
+  consumeRestartSentinelIfTerminal,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
+  markRestartContinuationConsumed,
+  markRestartContinuationFailed,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
   trimLogTail,
+  updateRestartSentinel,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
+
+const mockSpawn = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) => mockSpawn(...args),
+  };
+});
 
 describe("restart sentinel", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -22,6 +36,8 @@ describe("restart sentinel", () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sentinel-"));
     process.env.OPENCLAW_STATE_DIR = tempDir;
+    mockSpawn.mockReset();
+    mockSpawn.mockReturnValue({ unref: vi.fn() });
   });
 
   afterEach(async () => {
@@ -49,6 +65,174 @@ describe("restart sentinel", () => {
     const empty = await readRestartSentinel();
     expect(empty).toBeNull();
   });
+
+  it.each([
+    {
+      kind: "config-apply" as const,
+      status: "ok" as const,
+      expectsOperation: true,
+      label: "config apply ok",
+    },
+    {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      expectsOperation: true,
+      label: "config patch ok",
+    },
+    {
+      kind: "update" as const,
+      status: "ok" as const,
+      expectsOperation: true,
+      label: "update ok",
+    },
+    {
+      kind: "restart" as const,
+      status: "requested" as const,
+      expectsOperation: true,
+      label: "restart requested",
+    },
+    {
+      kind: "config-apply" as const,
+      status: "error" as const,
+      expectsOperation: false,
+      label: "config apply failed",
+    },
+    {
+      kind: "config-patch" as const,
+      status: "error" as const,
+      expectsOperation: false,
+      label: "config patch failed",
+    },
+    {
+      kind: "update" as const,
+      status: "error" as const,
+      expectsOperation: false,
+      label: "update failed",
+    },
+    {
+      kind: "update" as const,
+      status: "skipped" as const,
+      expectsOperation: false,
+      label: "update skipped",
+    },
+    {
+      kind: "restart" as const,
+      status: "error" as const,
+      expectsOperation: false,
+      label: "restart failed",
+    },
+  ])("builds restart operations only for restart-producing payloads: $label", async (fixture) => {
+    const env = {
+      OPENCLAW_STATE_DIR: tempDir,
+      OPENCLAW_GATEWAY_PORT: "18789",
+      NODE_ENV: "development",
+    };
+    await writeRestartSentinel(
+      {
+        kind: fixture.kind,
+        status: fixture.status,
+        ts: Date.now(),
+        sessionKey: "agent:main:telegram:dm:+15555550123",
+      } as const,
+      env,
+    );
+
+    const read = await readRestartSentinel(env);
+    if (fixture.expectsOperation) {
+      expect(read?.operation).toBeDefined();
+      expect(read?.operation?.id).toBeTruthy();
+      expect(read?.operation?.delivery.receipt).toBe("pending");
+      expect(read?.operation?.delivery.continuation).toBe("pending");
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+    } else {
+      expect(read?.operation).toBeUndefined();
+      expect(mockSpawn).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it.each([
+    { cleanup: "terminal", consume: false },
+    { cleanup: "consumed", consume: true },
+  ])(
+    "exits the in-process watcher without a marker after startup cleanup: $cleanup",
+    async ({ consume }) => {
+      const env = {
+        OPENCLAW_STATE_DIR: tempDir,
+        OPENCLAW_GATEWAY_PORT: "18789",
+        NODE_ENV: "development",
+      };
+      await writeRestartSentinel(
+        {
+          kind: "config-apply",
+          status: "ok",
+          ts: Date.now(),
+          sessionKey: "agent:main:telegram:dm:+15555550123",
+        },
+        env,
+      );
+      const operation = (await readRestartSentinel(env))?.operation;
+      expect(operation).toBeDefined();
+      if (!operation) {
+        throw new Error("restart operation was not created");
+      }
+      const markerPath = path.join(tempDir, `restart-recovery-${operation.id}.json`);
+
+      const spawnedCall = mockSpawn.mock.calls.at(-1);
+      expect(spawnedCall).toBeDefined();
+      const [, watcherArgs] = spawnedCall as [
+        string,
+        string[],
+        { env: Record<string, string | undefined> },
+      ];
+      expect(Array.isArray(watcherArgs)).toBe(true);
+      const [flag, script, ...scriptArgs] = watcherArgs;
+      expect(flag).toBe("-e");
+      expect(typeof script).toBe("string");
+
+      const watcher = new Promise<void>((resolve, reject) => {
+        execFile(process.execPath, [flag, script, ...scriptArgs], { env }, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+      // Let the child observe the active operation and enter its old-PID wait.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      await updateRestartSentinel(
+        (current) => ({
+          ...current,
+          operation: current.operation
+            ? {
+                ...current.operation,
+                delivery: {
+                  ...current.operation.delivery,
+                  receipt: "delivered",
+                  continuation: "delivered",
+                },
+              }
+            : undefined,
+        }),
+        env,
+      );
+      if (consume) {
+        await expect(consumeRestartSentinelIfTerminal(operation.id, env)).resolves.toBe(true);
+      }
+      await watcher;
+      await expect(fs.stat(markerPath)).rejects.toThrow();
+
+      const reconciledSentinel = await readRestartSentinel(env);
+      if (consume) {
+        expect(reconciledSentinel).toBeNull();
+      } else {
+        expect(reconciledSentinel?.operation?.delivery).toEqual(
+          expect.objectContaining({ receipt: "delivered", continuation: "delivered" }),
+        );
+      }
+    },
+  );
 
   it("drops invalid sentinel payloads", async () => {
     const filePath = resolveRestartSentinelPath();
@@ -145,6 +329,130 @@ describe("restart sentinel", () => {
     expect(textA).toBe(textB);
     expect(textA).toContain("Gateway restart restart requested");
     expect(textA).not.toContain('"ts"');
+  });
+
+  it("marks only the matching session continuation consumed", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "requested",
+      ts: Date.now(),
+      sessionKey: "agent:main:telegram:dm:123",
+    });
+    const operationId = (await readRestartSentinel())?.operation?.id;
+    expect(operationId).toBeTruthy();
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            delivery: { ...current.operation.delivery, continuation: "delivering" },
+          }
+        : undefined,
+    }));
+
+    await expect(
+      markRestartContinuationConsumed({
+        sessionKey: "agent:main:telegram:dm:other",
+        contextKeys: [`restart:${operationId}`],
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      markRestartContinuationConsumed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+      }),
+    ).resolves.toBe(true);
+    expect((await readRestartSentinel())?.operation?.delivery.continuation).toBe("delivered");
+  });
+
+  it("consumes the sentinel after receipt delivery and continuation completion are terminal", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "requested",
+      ts: Date.now(),
+      sessionKey: "agent:main:telegram:dm:123",
+    });
+    const operationId = (await readRestartSentinel())?.operation?.id;
+    expect(operationId).toBeTruthy();
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            delivery: {
+              ...current.operation.delivery,
+              receipt: "delivered",
+              continuation: "delivering",
+            },
+          }
+        : undefined,
+    }));
+
+    await expect(
+      markRestartContinuationConsumed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+      }),
+    ).resolves.toBe(true);
+    await expect(readRestartSentinel()).resolves.toBeNull();
+  });
+
+  it("restores failed continuation state only before the operation expires", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "requested",
+      ts: Date.now(),
+      sessionKey: "agent:main:telegram:dm:123",
+    });
+    const operationId = (await readRestartSentinel())?.operation?.id;
+    expect(operationId).toBeTruthy();
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            delivery: { ...current.operation.delivery, continuation: "delivering" },
+          }
+        : undefined,
+    }));
+
+    await expect(
+      markRestartContinuationFailed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+        error: "agent execution failed",
+      }),
+    ).resolves.toBe(`restart:${operationId}`);
+    expect((await readRestartSentinel())?.operation?.delivery).toEqual(
+      expect.objectContaining({
+        continuation: "pending",
+        lastError: "agent execution failed",
+      }),
+    );
+
+    await updateRestartSentinel((current) => ({
+      ...current,
+      operation: current.operation
+        ? {
+            ...current.operation,
+            expiresAt: Date.now() - 1,
+            delivery: { ...current.operation.delivery, continuation: "delivering" },
+          }
+        : undefined,
+    }));
+    await expect(
+      markRestartContinuationFailed({
+        sessionKey: "agent:main:telegram:dm:123",
+        contextKeys: [`restart:${operationId}`],
+        error: "agent execution failed again",
+      }),
+    ).resolves.toBeNull();
+    expect((await readRestartSentinel())?.operation?.delivery).toEqual(
+      expect.objectContaining({
+        continuation: "skipped",
+        lastError: "restart operation expired after continuation failure",
+      }),
+    );
   });
 
   it("summarizes restart payloads and trims log tails without trailing whitespace", () => {

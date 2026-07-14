@@ -5,7 +5,7 @@ import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -23,6 +23,10 @@ import {
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import {
+  loadDurableFollowupDelivery,
+  persistDurableFollowupDelivery,
+} from "./queue/durable-store.js";
+import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
@@ -32,7 +36,42 @@ import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import type { TypingController } from "./typing.js";
+import { createTypingController, type TypingController } from "./typing.js";
+
+/**
+ * Build the process-start callback used for disk-backed followups.
+ *
+ * Unlike the normal callback, this cannot inherit a live inbound dispatcher or
+ * typing lifecycle from the pre-restart process. Every queued record already
+ * carries its original routing, model, and session input, so reconstruct only
+ * the local session bookkeeping and let routeReply deliver to that origin.
+ */
+export function createRestoredFollowupRunner(): (queued: FollowupRun) => Promise<void> {
+  return async (queued) => {
+    const sessionKey = queued.run.sessionKey;
+    const storePath = sessionKey
+      ? resolveStorePath(queued.run.config.session?.store, { agentId: queued.run.agentId })
+      : undefined;
+    const sessionStore = storePath ? loadSessionStore(storePath) : undefined;
+    const typing = createTypingController({});
+    const run = createFollowupRunner({
+      typing,
+      // Recovery has no transport-owned typing callback. Disabling it avoids
+      // inventing a stale indicator while preserving the actual reply route.
+      typingMode: "never",
+      sessionEntry: sessionKey ? sessionStore?.[sessionKey] : undefined,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: queued.run.model,
+      // A fulfilled callback is the queue's durable acknowledgement boundary.
+      // Recovery must reject model or unrecovered route failures so the record
+      // remains available for the next drain/restart attempt.
+      failureMode: "throw-durable",
+    });
+    await run(queued);
+  };
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -44,6 +83,8 @@ export function createFollowupRunner(params: {
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
+  /** Preserve legacy behavior for RAM-only work; durable drains opt into rejection. */
+  failureMode?: "absorb" | "throw-durable";
 }): (queued: FollowupRun) => Promise<void> {
   const {
     opts,
@@ -55,7 +96,23 @@ export function createFollowupRunner(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    failureMode = "absorb",
   } = params;
+  const resolveDurableIds = (queued: FollowupRun): string[] =>
+    [...new Set([queued.durableId, ...(queued.durableIds ?? [])])].filter((id): id is string =>
+      Boolean(id?.trim()),
+    );
+  const shouldThrowProcessingFailure = (queued: FollowupRun): boolean =>
+    failureMode === "throw-durable" && resolveDurableIds(queued).length > 0;
+  const persistDeliveryStage = async (queued: FollowupRun, payloads: ReplyPayload[]) => {
+    const deliveryRecord = await persistDurableFollowupDelivery({ run: queued, payloads });
+    if (!deliveryRecord?.delivery) {
+      return;
+    }
+    queued.durableId = deliveryRecord.id;
+    queued.durableIds = deliveryRecord.delivery.sourceDurableIds;
+    queued.deliveryPayloads = deliveryRecord.delivery.payloads;
+  };
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -77,6 +134,9 @@ export function createFollowupRunner(params: {
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
+      if (shouldThrowProcessingFailure(queued)) {
+        throw new Error("Followup reply routing failed: no delivery handler");
+      }
       return;
     }
 
@@ -121,6 +181,8 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply && origin && origin === provider) {
             await opts.onBlockReply(payload);
+          } else if (shouldThrowProcessingFailure(queued)) {
+            throw new Error(`Followup reply routing failed: ${errorMsg}`);
           }
         }
       } else if (opts?.onBlockReply) {
@@ -131,6 +193,27 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
+      const durableIds = resolveDurableIds(queued);
+      const stagedDelivery =
+        queued.deliveryPayloads !== undefined
+          ? undefined
+          : await loadDurableFollowupDelivery(durableIds);
+      if (stagedDelivery?.delivery) {
+        // A prior attempt completed the agent/tool turn. Mutate this in-memory
+        // wrapper as well as using the disk payload so immediate retry and
+        // restart recovery both remain delivery-only.
+        queued.durableId = stagedDelivery.id;
+        queued.durableIds = stagedDelivery.delivery.sourceDurableIds;
+        queued.deliveryPayloads = stagedDelivery.delivery.payloads;
+      }
+      if (queued.deliveryPayloads !== undefined) {
+        // Empty is a valid completed stage (NO_REPLY or messaging-tool
+        // suppression). Its presence must skip model/tool execution just like
+        // a non-empty outbound retry.
+        await sendFollowupPayloads(queued.deliveryPayloads, queued);
+        return;
+      }
+
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -252,7 +335,19 @@ export function createFollowupRunner(params: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
+        if (shouldThrowProcessingFailure(queued)) {
+          throw err;
+        }
         return;
+      }
+
+      // An aborted embedded run is not a completed durable turn, even when it
+      // happens to contain partial text. Reject before publishing a delivery
+      // stage so recovery retries the original input instead of acknowledging
+      // or sending an incomplete result. RAM-only followups intentionally keep
+      // their historical best-effort behavior.
+      if (durableIds.length > 0 && runResult.meta?.aborted === true) {
+        throw new Error("Durable followup agent run aborted");
       }
 
       const usage = runResult.meta?.agentMeta?.usage;
@@ -269,25 +364,7 @@ export function createFollowupRunner(params: {
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 
-      if (storePath && sessionKey) {
-        await persistRunSessionUsage({
-          storePath,
-          sessionKey,
-          usage,
-          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-          promptTokens,
-          modelUsed,
-          providerUsed: fallbackProvider,
-          contextTokensUsed,
-          systemPromptReport: runResult.meta?.systemPromptReport,
-          logLabel: "followup",
-        });
-      }
-
       const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) {
-        return;
-      }
       const sanitizedPayloads = payloadArray.flatMap((payload) => {
         const text = payload.text;
         if (!text || !text.includes("HEARTBEAT_OK")) {
@@ -341,12 +418,48 @@ export function createFollowupRunner(params: {
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
-      if (finalPayloads.length === 0) {
-        return;
+      if (autoCompactionCount > 0) {
+        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
+          // Compute the same count incrementRunCompactionCount will publish,
+          // but do it without touching session storage. The exact outbound
+          // envelope must be durable before any fallible bookkeeping begins.
+          const compactionEntry =
+            sessionStore && sessionKey ? (sessionStore[sessionKey] ?? sessionEntry) : undefined;
+          const projectedCount = compactionEntry
+            ? (compactionEntry.compactionCount ?? 0) + autoCompactionCount
+            : undefined;
+          const suffix = typeof projectedCount === "number" ? ` (count ${projectedCount})` : "";
+          finalPayloads.unshift({
+            text: `🧹 Auto-compaction complete${suffix}.`,
+          });
+        }
+      }
+
+      if (durableIds.length > 0) {
+        // Commit the exact model-complete output before session usage,
+        // compaction bookkeeping, or outbound delivery. Any later failure can
+        // now retry this payload without replaying tools or other agent-side
+        // effects. Empty is also a completed delivery stage.
+        await persistDeliveryStage(queued, finalPayloads);
+      }
+
+      if (storePath && sessionKey) {
+        await persistRunSessionUsage({
+          storePath,
+          sessionKey,
+          usage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          promptTokens,
+          modelUsed,
+          providerUsed: fallbackProvider,
+          contextTokensUsed,
+          systemPromptReport: runResult.meta?.systemPromptReport,
+          logLabel: "followup",
+        });
       }
 
       if (autoCompactionCount > 0) {
-        const count = await incrementRunCompactionCount({
+        await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
@@ -355,12 +468,10 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
-          const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
-        }
+      }
+
+      if (finalPayloads.length === 0) {
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, queued);
