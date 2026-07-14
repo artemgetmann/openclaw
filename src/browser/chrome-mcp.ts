@@ -1157,7 +1157,7 @@ function createChromeMcpPdfNetworkCapture(params: {
 
 function createChromeMcpTriggeredPdfResourceCapture(params: {
   browserHttpUrl: string;
-  beforeWebSocketUrls: Set<string>;
+  beforeTargets: Map<string, string>;
   timeoutMs: number;
 }) {
   let cancelled = false;
@@ -1185,21 +1185,24 @@ function createChromeMcpTriggeredPdfResourceCapture(params: {
     }
     started = true;
 
-    // Chrome can replace the clicked DevTools target when a navigation enters
-    // its built-in PDF viewer. Inspect only targets created after the click so
-    // an older PDF tab with the same response URL cannot satisfy this capture.
+    // Chrome can replace the clicked DevTools target or navigate it in place
+    // when entering its PDF viewer. Inspect only new targets or targets whose
+    // URL changed after the click, excluding unchanged older PDF tabs.
     void (async () => {
       const deadline = Date.now() + params.timeoutMs;
       while (!cancelled && Date.now() <= deadline) {
         try {
-          const newTargets = (await fetchChromeCdpTargets(params.browserHttpUrl)).filter(
-            (target) =>
-              target.type === "page" &&
-              typeof target.webSocketDebuggerUrl === "string" &&
-              target.webSocketDebuggerUrl.trim() &&
-              !params.beforeWebSocketUrls.has(target.webSocketDebuggerUrl),
+          const changedTargets = (await fetchChromeCdpTargets(params.browserHttpUrl)).filter(
+            (target) => {
+              const wsUrl = target.webSocketDebuggerUrl?.trim();
+              if (target.type !== "page" || !wsUrl) {
+                return false;
+              }
+              const previousUrl = params.beforeTargets.get(wsUrl);
+              return previousUrl === undefined || previousUrl !== target.url;
+            },
           );
-          for (const target of newTargets) {
+          for (const target of changedTargets) {
             if (cancelled || !target.webSocketDebuggerUrl) {
               return;
             }
@@ -1824,14 +1827,15 @@ async function runChromeMcpDownloadSession(params: {
         params.userDataDir,
       );
       if (browserHttpUrl) {
-        const beforeWebSocketUrls = new Set(
-          (await fetchChromeCdpTargets(browserHttpUrl))
-            .map((target) => target.webSocketDebuggerUrl)
-            .filter((url): url is string => typeof url === "string" && Boolean(url.trim())),
+        const beforeTargets = new Map(
+          (await fetchChromeCdpTargets(browserHttpUrl)).flatMap((target) => {
+            const wsUrl = target.webSocketDebuggerUrl?.trim();
+            return wsUrl ? [[wsUrl, target.url ?? ""] as const] : [];
+          }),
         );
         triggeredPdfResourceCapture = createChromeMcpTriggeredPdfResourceCapture({
           browserHttpUrl,
-          beforeWebSocketUrls,
+          beforeTargets,
           timeoutMs,
         });
       }

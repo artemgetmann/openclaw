@@ -1336,7 +1336,7 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("captures the new PDF viewer when an older viewer has the same URL", async () => {
+  it("captures a navigated PDF viewer when an older viewer has the same URL", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
     const downloadDir = path.join(tempDir, "downloads");
     const finalPath = path.join(downloadDir, "statement.pdf");
@@ -1355,7 +1355,7 @@ describe("chrome MCP page parsing", () => {
       await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket, request) => {
-        const isViewerTarget = request.url === "/devtools/page/viewer";
+        const isViewerTarget = viewerReady && request.url === "/devtools/page/initial";
         if (!isViewerTarget) {
           activeSocket = socket;
         }
@@ -1443,7 +1443,7 @@ describe("chrome MCP page parsing", () => {
               {
                 type: "page",
                 url: viewerReady ? responseUrl : "https://example.com/statement",
-                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/${viewerReady ? "viewer" : "initial"}`,
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/initial`,
               },
             ]),
           );
