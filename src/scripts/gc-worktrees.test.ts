@@ -168,7 +168,9 @@ function runGc(
     findFails?: boolean;
   },
 ) {
-  return spawnSync("bash", [path.join(repoRoot, "scripts/gc-worktrees.sh"), "--auto"], {
+  // The macOS scheduler invokes /bin/bash (Apple Bash 3.2). Pin the integration
+  // fixture to that shell so Homebrew Bash cannot hide nounset/array regressions.
+  return spawnSync("/bin/bash", [path.join(repoRoot, "scripts/gc-worktrees.sh"), "--auto"], {
     cwd: main,
     env: {
       ...process.env,
@@ -211,6 +213,29 @@ afterEach(() => {
 });
 
 describePosix("gc-worktrees LaunchAgent retirement", () => {
+  it("removes a merged worktree under /bin/bash when LaunchAgent inventory is empty", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(false);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
   it("preserves a locked missing worktree and its owned LaunchAgent", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
@@ -320,6 +345,77 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     expect(fs.existsSync(tools.launchctlLog)).toBe(false);
     expect(result.stderr).toContain("symlink target is inside the worktree");
     expect(result.stderr).toContain("LaunchAgent retirement failed");
+  });
+
+  it("rejects a relative owned plist symlink before quarantine changes its meaning", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const plistTarget = path.join(root, "relative-target.plist");
+    const ownedPlist = path.join(launchAgents, "owned-relative.plist");
+    writePlistFixture(
+      plistTarget,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.symlinkSync(path.relative(launchAgents, plistTarget), ownedPlist);
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.lstatSync(ownedPlist).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(plistTarget)).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    expect(result.stderr).toContain("relative LaunchAgent plist symlink");
+  });
+
+  it("rejects a multi-hop owned plist symlink before worktree removal", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const plistTarget = path.join(root, "multi-hop-target.plist");
+    const intermediateLink = path.join(root, "intermediate.plist");
+    const ownedPlist = path.join(launchAgents, "owned-multi-hop.plist");
+    writePlistFixture(
+      plistTarget,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.symlinkSync(plistTarget, intermediateLink);
+    fs.symlinkSync(intermediateLink, ownedPlist);
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.lstatSync(ownedPlist).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(intermediateLink).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(plistTarget)).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    expect(result.stderr).toContain("multi-hop LaunchAgent plist symlink");
   });
 
   it("fails closed on a broken plist symlink before worktree removal", () => {
@@ -631,11 +727,13 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
     );
 
-    // Canonical services stay protected even when every other metadata field is
-    // hostile or stale. GC must never turn malformed canonical state into an
-    // authority grant to unload the daily Jarvis runtime.
+    // Non-referencing canonical services stay untouched. A canonical service
+    // that references this lane is covered separately and blocks deletion.
     const jarvisPlist = path.join(launchAgents, "ai.jarvis.gateway.plist");
-    writePlistFixture(jarvisPlist, ownedConsumerGatewayFields("ai.jarvis.gateway", lane));
+    writePlistFixture(
+      jarvisPlist,
+      ownedConsumerGatewayFields("ai.jarvis.gateway", path.join(root, "other-runtime")),
+    );
 
     // A prefix collision is not ownership: /lane-old must not be claimed by
     // /lane. This proves the path check has a directory boundary.
@@ -645,12 +743,10 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       ownedConsumerGatewayFields("ai.openclaw.consumer.sibling.gateway", `${lane}-old`, "sibling"),
     );
 
-    // Even complete consumer-looking metadata is insufficient when the label
-    // is custom. Only the generated per-instance identity contract is within
-    // GC's authority.
+    // A non-referencing custom service is outside this cleanup scope.
     const customPlist = path.join(launchAgents, "custom.plist");
     writePlistFixture(customPlist, {
-      ...ownedConsumerGatewayFields("com.example.gateway", lane),
+      ...ownedConsumerGatewayFields("com.example.gateway", path.join(root, "custom-runtime")),
       "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL": "com.example.gateway",
     });
 
@@ -676,6 +772,57 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     expect(fs.readFileSync(tools.launchctlLog, "utf8")).not.toContain("ai.jarvis.gateway");
     expect(result.stdout).toContain("Quarantined worktree LaunchAgent");
   });
+
+  it.each(["canonical", "custom", "malformed"] as const)(
+    "blocks deletion when a %s LaunchAgent references the worktree without retirement authority",
+    (kind) => {
+      const root = makeTempRoot();
+      const { main, lane } = initRepoWithMergedWorktree(root);
+      const home = path.join(root, "home");
+      const launchAgents = path.join(home, "Library/LaunchAgents");
+      const quarantine = path.join(launchAgents, "gc-quarantine");
+      const tools = makeToolFixtures(root);
+      fs.mkdirSync(launchAgents, { recursive: true });
+
+      const blockingPlist = path.join(launchAgents, `${kind}.plist`);
+      let fields: Record<string, string>;
+      if (kind === "canonical") {
+        fields = ownedConsumerGatewayFields("ai.jarvis.gateway", lane);
+      } else if (kind === "custom") {
+        fields = {
+          ...ownedConsumerGatewayFields("com.example.gateway", lane),
+          "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL": "com.example.gateway",
+        };
+      } else {
+        fields = {
+          Label: "ai.openclaw.consumer.malformed.gateway",
+          "ProgramArguments:0": "/usr/bin/node",
+          "ProgramArguments:1": path.join(lane, "dist/index.js"),
+          "ProgramArguments:2": "gateway",
+          WorkingDirectory: lane,
+        };
+      }
+      writePlistFixture(blockingPlist, fields);
+
+      const result = runGc(main, {
+        home,
+        launchAgents,
+        launchctl: tools.launchctl,
+        plistBuddy: tools.plistBuddy,
+        quarantine,
+      });
+
+      expect(result.status).toBe(1);
+      expect(fs.existsSync(lane)).toBe(true);
+      expect(fs.existsSync(blockingPlist)).toBe(true);
+      expect(fs.existsSync(quarantine)).toBe(false);
+      expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+      expect(result.stderr).toContain(
+        "LaunchAgent references worktree without authorized consumer gateway identity",
+      );
+      expect(result.stderr).toContain("LaunchAgent retirement failed");
+    },
+  );
 
   it("preserves the worktree when its owned LaunchAgent cannot be quarantined", () => {
     const root = makeTempRoot();

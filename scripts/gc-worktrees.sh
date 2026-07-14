@@ -72,13 +72,35 @@ path_belongs_to_worktree() {
   [[ "$candidate" == "$worktree_path" || "$candidate" == "$worktree_path/"* ]]
 }
 
-# A plist belongs to a removable consumer/test lane only when all independent
-# signals agree:
+# Detect a worktree reference independently from retirement authorization. A
+# service can be unsafe to ignore even when its label or consumer metadata is
+# malformed, custom, or explicitly preserved.
+plist_references_worktree() {
+  local plist_path="$1"
+  local worktree_path="$2"
+  local working_directory=""
+  local arg=""
+  local index=0
+
+  working_directory="$(plist_value "$plist_path" "WorkingDirectory")"
+  path_belongs_to_worktree "$working_directory" "$worktree_path" && return 0
+
+  while true; do
+    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
+    [[ -n "$arg" ]] || break
+    path_belongs_to_worktree "$arg" "$worktree_path" && return 0
+    index=$((index + 1))
+  done
+  return 1
+}
+
+# A referencing plist is authorized for retirement only when all independent
+# identity and command signals agree:
 #   1. its label, profile, and instance id exactly match the generated identity
 #      contract for a named consumer lane;
 #   2. its explicit Label matches OPENCLAW_LAUNCHD_LABEL;
 #   3. ProgramArguments contain the gateway subcommand; and
-#   4. WorkingDirectory or one ProgramArgument is inside this exact worktree.
+#   4. the plist references this exact worktree.
 #
 # Requiring exact identity agreement matters: OPENCLAW_CONSUMER_INSTANCE_ID is
 # ordinary environment metadata that may also appear in a custom developer
@@ -94,11 +116,9 @@ worktree_owns_consumer_gateway_plist() {
   local profile=""
   local expected_label=""
   local expected_profile=""
-  local working_directory=""
   local arg=""
   local index=0
   local has_gateway_subcommand=0
-  local has_worktree_path=0
 
   label="$(plist_value "$plist_path" "Label")"
   env_label="$(plist_value "$plist_path" "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL")"
@@ -112,22 +132,15 @@ worktree_owns_consumer_gateway_plist() {
   expected_profile="consumer-${instance_id}"
   [[ "$label" == "$expected_label" && "$profile" == "$expected_profile" ]] || return 1
 
-  working_directory="$(plist_value "$plist_path" "WorkingDirectory")"
-  if path_belongs_to_worktree "$working_directory" "$worktree_path"; then
-    has_worktree_path=1
-  fi
-
   while true; do
     arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
     [[ -n "$arg" ]] || break
     [[ "$arg" == "gateway" ]] && has_gateway_subcommand=1
-    if path_belongs_to_worktree "$arg" "$worktree_path"; then
-      has_worktree_path=1
-    fi
     index=$((index + 1))
   done
 
-  [[ "$has_gateway_subcommand" == "1" && "$has_worktree_path" == "1" ]]
+  [[ "$has_gateway_subcommand" == "1" ]] || return 1
+  plist_references_worktree "$plist_path" "$worktree_path"
 }
 
 # Put a quarantined plist back without overwriting anything that appeared while
@@ -317,17 +330,29 @@ retire_worktree_consumer_launchagents() {
 
   while IFS= read -r -d '' plist_path; do
     duplicate_plist=0
-    for existing_plist_path in "${plist_paths[@]}"; do
-      if [[ "$existing_plist_path" == "$plist_path" ]]; then
-        duplicate_plist=1
-        break
-      fi
-    done
+    # Apple Bash 3.2 treats "${empty_array[@]}" as an unbound variable under
+    # `set -u`. Guard the first-item dedupe pass instead of relying on newer
+    # Bash behavior that happens to make the same expansion a no-op.
+    if (( ${#plist_paths[@]} > 0 )); then
+      for existing_plist_path in "${plist_paths[@]}"; do
+        if [[ "$existing_plist_path" == "$plist_path" ]]; then
+          duplicate_plist=1
+          break
+        fi
+      done
+    fi
     [[ "$duplicate_plist" == "1" ]] || plist_paths+=("$plist_path")
   done < "$inventory_path"
   if ! rm -f "$inventory_path"; then
     echo "Error: cannot remove LaunchAgent inventory; preserving worktree: ${worktree_path}" >&2
     return 1
+  fi
+
+  # All remaining passes expand the array directly. Return before those passes
+  # when inventory is empty so scheduled GC remains safe under Apple Bash 3.2
+  # with nounset enabled.
+  if (( ${#plist_paths[@]} == 0 )); then
+    return 0
   fi
 
   # `find -type l` inventories the plist link itself without following symlinked
@@ -337,6 +362,17 @@ retire_worktree_consumer_launchagents() {
   for plist_path in "${plist_paths[@]}"; do
     if [[ -L "$plist_path" && ( ! -e "$plist_path" || ! -r "$plist_path" ) ]]; then
       echo "Error: broken or unreadable LaunchAgent plist symlink at ${plist_path}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+  done
+
+  # Reference detection is deliberately broader than retirement authority. A
+  # canonical, custom, or malformed service that points into this lane cannot
+  # be unloaded by GC, but deleting its entrypoint would still create a cached
+  # KeepAlive loop. Preserve the worktree and require manual ownership repair.
+  for plist_path in "${plist_paths[@]}"; do
+    if plist_references_worktree "$plist_path" "$worktree_path" && ! worktree_owns_consumer_gateway_plist "$plist_path" "$worktree_path"; then
+      echo "Error: LaunchAgent references worktree without authorized consumer gateway identity: ${plist_path}; preserving worktree: ${worktree_path}" >&2
       return 1
     fi
   done
@@ -360,9 +396,10 @@ retire_worktree_consumer_launchagents() {
   done
 
 
-  # Moving a symlink whose target lives inside the lane would leave a broken,
-  # non-reversible quarantine artifact after Git deletion. Reject that shape
-  # before any plist or launchd mutation; external symlink targets remain safe.
+  # Relative symlinks change meaning when moved into quarantine, and multi-hop
+  # links can hide a final target that disappears with the lane. Keep the safe
+  # supported shape deliberately narrow: one direct absolute link to an
+  # external target.
   for plist_path in "${plist_paths[@]}"; do
     plist_parent="$(dirname "$plist_path")"
     [[ "$plist_parent" == "$LAUNCH_AGENTS_DIR" && -L "$plist_path" ]] || continue
@@ -372,7 +409,12 @@ retire_worktree_consumer_launchagents() {
       return 1
     fi
     if [[ "$symlink_target" != /* ]]; then
-      symlink_target="${plist_parent}/${symlink_target}"
+      echo "Error: relative LaunchAgent plist symlink cannot be quarantined reversibly: ${plist_path} -> ${symlink_target}" >&2
+      return 1
+    fi
+    if [[ -L "$symlink_target" ]]; then
+      echo "Error: multi-hop LaunchAgent plist symlink cannot be quarantined safely: ${plist_path} -> ${symlink_target}" >&2
+      return 1
     fi
     if path_belongs_to_worktree "$symlink_target" "$worktree_path"; then
       echo "Error: LaunchAgent plist symlink target is inside the worktree and cannot be quarantined reversibly: ${plist_path} -> ${symlink_target}" >&2
