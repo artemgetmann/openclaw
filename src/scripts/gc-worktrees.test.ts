@@ -66,8 +66,15 @@ function makeToolFixtures(root: string) {
     plistBuddy,
     `#!/usr/bin/env bash
 set -euo pipefail
-key="\${2#Print :}"
+command="\${2}"
 file="\${3}"
+if [[ -n "\${OPENCLAW_TEST_PLISTBUDDY_FATAL_PATH:-}" && "$file" == "$OPENCLAW_TEST_PLISTBUDDY_FATAL_PATH" ]]; then
+  exit 65
+fi
+if [[ "$command" == "Print" ]]; then
+  exit 0
+fi
+key="\${command#Print :}"
 /usr/bin/awk -F '\\t' -v key="$key" '
   $1 == key {
     sub(/^[^\\t]*\\t/, "")
@@ -166,6 +173,7 @@ function runGc(
     launchctlPrintMode?: "loaded" | "absent" | "ambiguous-error" | "second-ambiguous";
     gitRemoveFails?: boolean;
     findFails?: boolean;
+    plistBuddyFatalPath?: string;
   },
 ) {
   // The macOS scheduler invokes /bin/bash (Apple Bash 3.2). Pin the integration
@@ -186,6 +194,7 @@ function runGc(
       OPENCLAW_TEST_LAUNCHCTL_PRINT_MODE: env.launchctlPrintMode ?? "loaded",
       OPENCLAW_TEST_GIT_REMOVE_FAIL: env.gitRemoveFails ? "1" : "0",
       OPENCLAW_TEST_FIND_FAIL: env.findFails ? "1" : "0",
+      OPENCLAW_TEST_PLISTBUDDY_FATAL_PATH: env.plistBuddyFatalPath ?? "",
     },
     encoding: "utf8",
   });
@@ -709,6 +718,38 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       fs.readdirSync(home).some((entry) => entry.startsWith("openclaw-worktree-gc-launchagents.")),
     ).toBe(false);
     expect(result.stderr).toContain("LaunchAgent inventory failed");
+    expect(result.stderr).toContain("LaunchAgent retirement failed");
+  });
+
+  it("fails closed before mutation when PlistBuddy cannot parse an inventoried plist", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    // Inject a fatal root-read failure for a regular file. This is deliberately
+    // different from a missing optional key, which plist_value may ignore.
+    const invalidPlist = path.join(launchAgents, "invalid.plist");
+    fs.writeFileSync(invalidPlist, "not a parseable plist\n");
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      plistBuddyFatalPath: invalidPlist,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.existsSync(invalidPlist)).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    expect(result.stderr).toContain("LaunchAgent plist is unreadable or invalid");
     expect(result.stderr).toContain("LaunchAgent retirement failed");
   });
 

@@ -16,6 +16,15 @@ plist_value() {
   "$PLISTBUDDY_BIN" -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
 }
 
+# Missing optional fields are normal and handled by plist_value. Failure to
+# read/parse the plist root is different: ownership and reference attribution
+# become unknowable, so GC must preserve every candidate worktree.
+plist_is_readable_and_parseable() {
+  local plist_path="$1"
+  [[ -r "$plist_path" ]] || return 1
+  "$PLISTBUDDY_BIN" -c "Print" "$plist_path" >/dev/null 2>&1
+}
+
 # These labels own canonical/shared product services. Preserve them even if a
 # malformed plist happens to contain a worktree path; GC is not a runtime repair
 # tool and therefore has no authority to unload a canonical service.
@@ -362,6 +371,16 @@ retire_worktree_consumer_launchagents() {
   for plist_path in "${plist_paths[@]}"; do
     if [[ -L "$plist_path" && ( ! -e "$plist_path" || ! -r "$plist_path" ) ]]; then
       echo "Error: broken or unreadable LaunchAgent plist symlink at ${plist_path}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+  done
+
+  # Validate the complete inventory before any field inspection or mutation.
+  # plist_value intentionally swallows missing-key failures, so this root read
+  # is the fail-closed boundary for corrupt or genuinely unreadable plists.
+  for plist_path in "${plist_paths[@]}"; do
+    if ! plist_is_readable_and_parseable "$plist_path"; then
+      echo "Error: LaunchAgent plist is unreadable or invalid at ${plist_path}; preserving worktree: ${worktree_path}" >&2
       return 1
     fi
   done
