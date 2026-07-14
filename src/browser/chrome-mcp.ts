@@ -1291,7 +1291,12 @@ async function readChromeMcpPdfResourceFromWebSocket(params: {
     targetId: "",
     wsUrl: params.wsUrl,
     timeoutMs: params.timeoutMs,
-    run: readChromeMcpPdfResourceWithSend,
+    run: async (send) => {
+      // Replacement viewer targets start with no Page agent attached. Enable
+      // the domain on this fresh connection before reading its resource cache.
+      await send("Page.enable");
+      return await readChromeMcpPdfResourceWithSend(send);
+    },
   });
 }
 
