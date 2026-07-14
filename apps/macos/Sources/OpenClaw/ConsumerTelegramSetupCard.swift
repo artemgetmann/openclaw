@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct ConsumerTelegramSetupCardContent: View {
-    static let firstTaskInstruction = "Telegram connected. Send any text message to Jarvis, then click Verify Telegram."
+    static let firstTaskInstruction =
+        "Telegram connected. In Telegram, press Start, then send “Wake up, my friend!” and click Verify Telegram."
 
     enum Presentation {
         case onboarding
