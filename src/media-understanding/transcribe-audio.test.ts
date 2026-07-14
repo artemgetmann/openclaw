@@ -3,19 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaUnderstandingDecisionOutcome } from "./types.js";
 
 const MB = 1024 * 1024;
-const UNAVAILABLE_AUDIO_CONFIGS: Array<[string, OpenClawConfig]> = [
-  ["disabled", { tools: { media: { audio: { enabled: false, maxBytes: 10 } } } }],
-  [
-    "unsupported provider",
-    {
-      tools: {
-        media: { audio: { maxBytes: 10, models: [{ provider: "unsupported-provider" }] } },
-      },
-    },
-  ],
-  ["no provider", { tools: { media: { audio: { maxBytes: 10 } } } }],
+const UNAVAILABLE_AUDIO_OUTCOMES: Array<[string, MediaUnderstandingDecisionOutcome]> = [
+  ["disabled", "disabled"],
+  ["unsupported provider", "skipped"],
+  ["no provider", "skipped"],
 ];
 
 const { runAudioTranscription, runFfmpeg, runFfprobe } = vi.hoisted(() => {
@@ -72,6 +66,17 @@ describe("transcribeAudioFile", () => {
         }),
       );
     });
+  }
+
+  function transcriptionResult(
+    transcript: string | undefined,
+    outcome: MediaUnderstandingDecisionOutcome = "success",
+  ) {
+    return {
+      transcript,
+      attachments: [],
+      decision: { capability: "audio" as const, outcome, attachments: [] },
+    };
   }
 
   it("does not force audio/wav when mime is omitted", async () => {
@@ -152,8 +157,8 @@ describe("transcribeAudioFile", () => {
     } as unknown as OpenClawConfig;
     mockChunkFiles(2);
     runAudioTranscription
-      .mockResolvedValueOnce({ transcript: "first chunk", attachments: [] })
-      .mockResolvedValueOnce({ transcript: "second chunk", attachments: [] });
+      .mockResolvedValueOnce(transcriptionResult("first chunk"))
+      .mockResolvedValueOnce(transcriptionResult("second chunk"));
 
     await expect(
       transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
@@ -183,7 +188,7 @@ describe("transcribeAudioFile", () => {
     mockChunkFiles(1);
     runAudioTranscription
       .mockResolvedValueOnce({ transcript: undefined, attachments: [] })
-      .mockResolvedValueOnce({ transcript: "long transcript", attachments: [] });
+      .mockResolvedValueOnce(transcriptionResult("long transcript"));
 
     await expect(
       transcribeAudioFile({ filePath, cfg: {} as OpenClawConfig, localPathRoots: [tempDir] }),
@@ -201,8 +206,8 @@ describe("transcribeAudioFile", () => {
     } as unknown as OpenClawConfig;
     mockChunkFiles(2);
     runAudioTranscription
-      .mockResolvedValueOnce({ transcript: "first chunk", attachments: [] })
-      .mockResolvedValueOnce({ transcript: undefined, attachments: [] });
+      .mockResolvedValueOnce(transcriptionResult("first chunk"))
+      .mockResolvedValueOnce(transcriptionResult(undefined, "skipped"));
 
     await expect(transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] })).rejects.toThrow(
       /chunk 2 returned no text; no partial transcript/i,
@@ -241,12 +246,13 @@ describe("transcribeAudioFile", () => {
     expect(runFfmpeg).not.toHaveBeenCalled();
   });
 
-  it.each(UNAVAILABLE_AUDIO_CONFIGS)(
-    "preserves undefined when the first chunk has no text (%s)",
-    async (_label, cfg) => {
+  it.each(UNAVAILABLE_AUDIO_OUTCOMES)(
+    "preserves undefined when the first chunk is unavailable (%s)",
+    async (_label, outcome) => {
       const filePath = await writeAudioFile("unavailable.mp3", "this is larger than ten bytes");
+      const cfg = { tools: { media: { audio: { maxBytes: 10 } } } } as OpenClawConfig;
       mockChunkFiles(1);
-      runAudioTranscription.mockResolvedValue({ transcript: undefined, attachments: [] });
+      runAudioTranscription.mockResolvedValue(transcriptionResult(undefined, outcome));
 
       await expect(
         transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
@@ -264,7 +270,7 @@ describe("transcribeAudioFile", () => {
     } as unknown as OpenClawConfig;
     runFfprobe.mockResolvedValue("audio\nN/A");
     mockChunkFiles(1);
-    runAudioTranscription.mockResolvedValue({ transcript: "recovered", attachments: [] });
+    runAudioTranscription.mockResolvedValue(transcriptionResult("recovered"));
 
     await expect(
       transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
@@ -272,5 +278,38 @@ describe("transcribeAudioFile", () => {
       text: "recovered",
     });
     expect(runFfmpeg).toHaveBeenCalledWith(expect.any(Array), { timeoutMs: 600_000 });
+  });
+
+  it("continues after a successful silent chunk and preserves later speech", async () => {
+    const filePath = await writeAudioFile(
+      "silent-then-speech.mp3",
+      "this is larger than ten bytes",
+    );
+    const cfg = { tools: { media: { audio: { maxBytes: 10 } } } } as OpenClawConfig;
+    mockChunkFiles(2);
+    runAudioTranscription
+      .mockResolvedValueOnce(transcriptionResult(undefined, "success"))
+      .mockResolvedValueOnce(transcriptionResult("heard after silence", "success"));
+
+    await expect(
+      transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
+    ).resolves.toEqual({
+      text: "heard after silence",
+    });
+    expect(runAudioTranscription).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns undefined when every chunk is successful silence", async () => {
+    const filePath = await writeAudioFile("all-silent.mp3", "this is larger than ten bytes");
+    const cfg = { tools: { media: { audio: { maxBytes: 10 } } } } as OpenClawConfig;
+    mockChunkFiles(2);
+    runAudioTranscription.mockResolvedValue(transcriptionResult(undefined, "success"));
+
+    await expect(
+      transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
+    ).resolves.toEqual({
+      text: undefined,
+    });
+    expect(runAudioTranscription).toHaveBeenCalledTimes(2);
   });
 });

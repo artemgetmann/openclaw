@@ -7,7 +7,11 @@ import {
   normalizeMediaAttachments,
   runCapability,
 } from "./runner.js";
-import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
+import type {
+  MediaAttachment,
+  MediaUnderstandingDecision,
+  MediaUnderstandingProvider,
+} from "./types.js";
 
 export async function runAudioTranscription(params: {
   ctx: MsgContext;
@@ -17,10 +21,18 @@ export async function runAudioTranscription(params: {
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
   localPathRoots?: readonly string[];
-}): Promise<{ transcript: string | undefined; attachments: MediaAttachment[] }> {
+}): Promise<{
+  transcript: string | undefined;
+  attachments: MediaAttachment[];
+  decision: MediaUnderstandingDecision;
+}> {
   const attachments = params.attachments ?? normalizeMediaAttachments(params.ctx);
   if (attachments.length === 0) {
-    return { transcript: undefined, attachments };
+    return {
+      transcript: undefined,
+      attachments,
+      decision: { capability: "audio", outcome: "no-attachment", attachments: [] },
+    };
   }
 
   const providerRegistry = buildProviderRegistry(params.providers);
@@ -43,7 +55,9 @@ export async function runAudioTranscription(params: {
     });
     const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
     const transcript = output?.text?.trim();
-    return { transcript: transcript || undefined, attachments };
+    // Keep the decision alongside text so explicit file transcription can
+    // distinguish successful silence from an unavailable provider.
+    return { transcript: transcript || undefined, attachments, decision: result.decision };
   } finally {
     await cache.cleanup();
   }

@@ -13,6 +13,7 @@ import {
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.js";
+import type { MediaUnderstandingDecisionOutcome } from "./types.js";
 
 const MAX_AUDIO_CHUNK_DURATION_SECONDS = 15 * 60;
 const AUDIO_CHUNK_BITRATE_KBPS = 32;
@@ -192,15 +193,15 @@ async function transcribeAudioChunk(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   localPathRoots: readonly string[];
-}): Promise<string | undefined> {
+}): Promise<{ text: string | undefined; outcome: MediaUnderstandingDecisionOutcome }> {
   try {
-    const { transcript } = await runAudioTranscription({
+    const { transcript, decision } = await runAudioTranscription({
       ctx: { MediaPath: params.chunkPath, MediaType: "audio/mpeg" },
       cfg: params.cfg,
       agentDir: params.agentDir,
       localPathRoots: params.localPathRoots,
     });
-    return transcript?.trim();
+    return { text: transcript?.trim(), outcome: decision.outcome };
   } catch (err) {
     // Do not return a plausible-looking partial transcript when one interval
     // failed or was skipped by the configured provider/model fallback path.
@@ -236,14 +237,19 @@ async function transcribeAudioChunks(params: {
     const localPathRoots = [...(params.localPathRoots ?? []), outputDir];
     const transcripts: string[] = [];
     for (const [chunkIndex, chunkPath] of chunkPaths.entries()) {
-      const text = await transcribeAudioChunk({
+      const result = await transcribeAudioChunk({
         chunkPath,
         chunkIndex,
         cfg: params.cfg,
         agentDir: params.agentDir,
         localPathRoots,
       });
-      if (!text) {
+      if (!result.text) {
+        // A successful provider call can legitimately produce silence. Keep
+        // scanning later chunks instead of mistaking silence for unavailability.
+        if (result.outcome === "success") {
+          continue;
+        }
         if (transcripts.length === 0) {
           return { text: undefined };
         }
@@ -251,9 +257,9 @@ async function transcribeAudioChunks(params: {
           `Audio chunk ${chunkIndex + 1} returned no text; no partial transcript was returned.`,
         );
       }
-      transcripts.push(text);
+      transcripts.push(result.text);
     }
-    return { text: transcripts.join("\n") };
+    return { text: transcripts.length > 0 ? transcripts.join("\n") : undefined };
   } finally {
     await fs.rm(outputDir, { recursive: true, force: true });
   }
