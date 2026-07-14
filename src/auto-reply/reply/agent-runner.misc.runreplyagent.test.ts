@@ -2613,7 +2613,7 @@ describe("runReplyAgent reply liveness", () => {
     expect(result).toBeUndefined();
   });
 
-  it("auto-continues when a user run times out before any final visible reply", async () => {
+  it("auto-continues an explicit timeout even when the embedded run reports aborted", async () => {
     const onBlockReply = vi.fn();
     runEmbeddedPiAgentMock
       .mockResolvedValueOnce({
@@ -2623,7 +2623,7 @@ describe("runReplyAgent reply liveness", () => {
             isError: true,
           },
         ],
-        meta: {},
+        meta: { aborted: true },
       })
       .mockResolvedValueOnce({
         payloads: [{ text: "done after continuing" }],
@@ -2638,6 +2638,16 @@ describe("runReplyAgent reply liveness", () => {
     });
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(result).toMatchObject({ text: "done after continuing" });
+  });
+
+  it("keeps a genuine aborted run silent", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cancelled before completion", isError: true }],
+      meta: { aborted: true },
+    });
+
+    await expect(createRun()).resolves.toBeUndefined();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the default five total attempts before surfacing an honest exhausted failure", async () => {
