@@ -153,6 +153,7 @@ describe("evaluateGuiPolicy", () => {
       ["payment", "Value: Payment authorization requires authentication"],
       ["account", "Description: Account settings require authentication"],
       ["security", "Value: Security settings require authentication"],
+      ["unknown", "Description: Remove an account Custom: Delete account requires authentication"],
     ].flatMap(([risk, metadata]) => [
       { profile: "trusted", risk, metadata, taskPolicy: undefined },
       {
@@ -187,6 +188,47 @@ describe("evaluateGuiPolicy", () => {
 
       expect(decision.allowed).toBe(false);
       expect(decision.reason).toContain("Blocked sensitive GUI");
+    },
+  );
+
+  it.each(
+    [
+      ["description", "Description: Remove an account Secondary Actions: AXPress"],
+      ["value", "Value: Remove an account Frame: x=10, y=20, w=30, h=40"],
+    ].flatMap(([metadataKind, metadata]) => [
+      { profile: "trusted", metadataKind, metadata, taskPolicy: undefined },
+      {
+        profile: "commerce",
+        metadataKind,
+        metadata,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      },
+    ]),
+  )(
+    "allows duplicate $metadataKind chooser metadata under $profile policy",
+    ({ metadata, taskPolicy }) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+        snapshot: snapshot({
+          appName: "Google Chrome",
+          windowTitle: "Choose an account - Sign in",
+          summary: `102 button Remove an account ${metadata}`,
+          visibleText: ["button Artem artem@example.com Signed out"],
+        }),
+        element: {
+          ref: "@101",
+          role: "button",
+          label: "Artem artem@example.com Signed out",
+        },
+        reason: "Select the known signed-out account without using credentials.",
+        approvedPolicyRisk: true,
+        taskPolicy,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(true);
+      expect(decision.risk).toBe("allowed-mutation");
     },
   );
 

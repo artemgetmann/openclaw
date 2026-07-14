@@ -565,10 +565,21 @@ function sanitizeAccountChooserManagementSibling(part: string): string {
     return part;
   }
 
-  // Strip only the independently classified sibling label. Known metadata is
-  // returned for normal hard-stop scanning: benign AX actions pass, while a
-  // Description/Value containing payment or deletion remains blocking.
-  return normalizeText(match.groups?.metadata);
+  const metadata = normalizeText(match.groups?.metadata);
+  if (!metadata) {
+    return "";
+  }
+
+  // OCU sometimes duplicates the element label into Description or Value.
+  // Remove only an exact duplicate at recognized field boundaries. Distinct
+  // values, actions/frame data, and unknown trailing formats remain available
+  // to the normal hard-stop scan.
+  return normalizeText(
+    metadata.replace(
+      /(?:^|\s)(?:description|value):\s*remove (?:an )?account(?=\s+(?:id|value|description|secondary actions|frame):|$)/g,
+      " ",
+    ),
+  );
 }
 
 function preAuthHardStopContextParts(input: GuiPolicyInput): Array<string | undefined> {
