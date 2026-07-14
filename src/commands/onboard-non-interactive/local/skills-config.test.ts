@@ -162,13 +162,35 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
   it("renames legacy Jarvis GUI Control allowlist entries without widening custom allowlists", () => {
     const repaired = repairConsumerDefaultBundledSkillAllowlist({
-      skills: { allowBundled: ["peekaboo", "jarvis-gui-control"] },
+      skills: { allowBundled: ["jarvis-gui-control"] },
     });
 
     expect(repaired.changes).toEqual([
       "skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use",
     ]);
+    expect(repaired.config.skills?.allowBundled).toEqual(["jarvis-computer-use"]);
+  });
+
+  it("deduplicates old and new Jarvis Computer Use allowlist entries", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["peekaboo", "jarvis-gui-control", "jarvis-computer-use"] },
+    });
+
     expect(repaired.config.skills?.allowBundled).toEqual(["peekaboo", "jarvis-computer-use"]);
+  });
+
+  it("keeps the renamed skill disabled when legacy config explicitly opts out", () => {
+    const legacyOptOut: OpenClawConfig = {
+      skills: {
+        allowBundled: ["jarvis-gui-control"],
+        entries: { "jarvis-gui-control": { enabled: false } },
+      },
+    };
+
+    expect(buildConsumerBundledSkillAllowlist(legacyOptOut)).not.toContain("jarvis-computer-use");
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist(legacyOptOut);
+    expect(repaired.config.skills?.allowBundled).not.toContain("jarvis-computer-use");
   });
 
   it("does not repair custom bundled skill allowlists", () => {

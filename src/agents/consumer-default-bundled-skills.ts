@@ -37,7 +37,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "nano-pdf",
 ] as const;
 
-const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Record<string, string> = {
+export const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Readonly<Record<string, string>> = {
   "jarvis-gui-control": "jarvis-computer-use",
 };
 
@@ -46,11 +46,11 @@ export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): stri
   if (existingAllowlist?.includes("__none__")) {
     return [...existingAllowlist];
   }
-  const allowlist = normalizeLegacyBundledSkillNames(existingAllowlist ?? []);
+  const allowlist = normalizeLegacyBundledSkillNames(existingAllowlist ?? [], config);
   const allowed = new Set(allowlist);
 
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
-    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
+    const explicitlyDisabled = isBundledSkillExplicitlyDisabled(config, skillName);
     if (explicitlyDisabled || allowed.has(skillName)) {
       continue;
     }
@@ -70,7 +70,7 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     return { config, changes: [] };
   }
 
-  const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist);
+  const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist, config);
   const renameChanged = !sameStringArray(currentAllowlist, normalizedAllowlist);
   const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
   const current = new Set(normalizedAllowlist);
@@ -98,7 +98,7 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   const nextAllowlist = [...normalizedAllowlist];
   const added: string[] = [];
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
-    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
+    const explicitlyDisabled = isBundledSkillExplicitlyDisabled(config, skillName);
     if (explicitlyDisabled || current.has(skillName)) {
       continue;
     }
@@ -131,11 +131,18 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   };
 }
 
-function normalizeLegacyBundledSkillNames(allowlist: string[]): string[] {
+function normalizeLegacyBundledSkillNames(allowlist: string[], config: OpenClawConfig): string[] {
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const skillName of allowlist) {
     const nextName = LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES[skillName] ?? skillName;
+
+    // A renamed allowlist entry is an implicit enable under the new key. Drop
+    // that selection when the legacy key explicitly opted out, or the rename
+    // would silently reverse the user's disabled setting at the next startup.
+    if (isLegacyBundledSkillExplicitlyDisabled(config, nextName)) {
+      continue;
+    }
     if (seen.has(nextName)) {
       continue;
     }
@@ -143,6 +150,28 @@ function normalizeLegacyBundledSkillNames(allowlist: string[]): string[] {
     seen.add(nextName);
   }
   return normalized;
+}
+
+function isBundledSkillExplicitlyDisabled(config: OpenClawConfig, skillName: string): boolean {
+  if (config.skills?.entries?.[skillName]?.enabled === false) {
+    return true;
+  }
+
+  // Compatibility aliases must participate in selection until persisted user
+  // configs have naturally migrated. Explicit false wins because enabling a
+  // capability the user disabled is the risky direction for a product rename.
+  return isLegacyBundledSkillExplicitlyDisabled(config, skillName);
+}
+
+function isLegacyBundledSkillExplicitlyDisabled(
+  config: OpenClawConfig,
+  currentSkillName: string,
+): boolean {
+  return Object.entries(LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES).some(
+    ([legacySkillName, renamedSkillName]) =>
+      renamedSkillName === currentSkillName &&
+      config.skills?.entries?.[legacySkillName]?.enabled === false,
+  );
 }
 
 function sameStringArray(left: string[], right: string[]): boolean {

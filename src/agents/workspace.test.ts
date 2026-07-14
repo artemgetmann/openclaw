@@ -88,6 +88,38 @@ async function readWorkspaceSkillMarker(skillDir: string): Promise<{
   };
 }
 
+async function seedManagedWorkspaceSkillCopy(params: {
+  workspaceDir: string;
+  bundledSkillsDir: string;
+  skillName: string;
+}) {
+  const bundledSkillDir = path.join(params.bundledSkillsDir, params.skillName);
+  const workspaceSkillDir = path.join(params.workspaceDir, "skills", params.skillName);
+
+  await writeSkill({
+    dir: bundledSkillDir,
+    name: params.skillName,
+    description: `Bundled ${params.skillName}`,
+    metadata: '{"openclaw":{"requires":{"bins":["./scripts/run.sh"]}}}',
+    body: `# ${params.skillName}\n`,
+  });
+  await fs.mkdir(path.join(bundledSkillDir, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(bundledSkillDir, "scripts", "run.sh"), "#!/bin/sh\n", "utf-8");
+  await fs.cp(bundledSkillDir, workspaceSkillDir, { recursive: true });
+  await fs.mkdir(path.join(workspaceSkillDir, ".clawhub"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceSkillDir, ".clawhub", "origin.json"),
+    JSON.stringify({ slug: params.skillName, version: 1 }),
+    "utf-8",
+  );
+
+  await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: params.bundledSkillsDir }, async () => {
+    await ensureAgentWorkspace({ dir: params.workspaceDir, ensureBootstrapFiles: false });
+  });
+  await readWorkspaceSkillMarker(workspaceSkillDir);
+  return { bundledSkillDir, workspaceSkillDir };
+}
+
 describe("ensureAgentWorkspace", () => {
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
@@ -402,6 +434,67 @@ describe("ensureAgentWorkspace", () => {
     await expect(
       fs.readFile(path.join(workspaceSkillDir, "scripts", "wacli-recent-reply.sh"), "utf-8"),
     ).resolves.toContain("#!/usr/bin/env bash");
+  });
+
+  it("retires a clean managed workspace mirror when its bundled skill is renamed", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const { bundledSkillDir: legacyBundledSkillDir, workspaceSkillDir: legacyWorkspaceSkillDir } =
+      await seedManagedWorkspaceSkillCopy({
+        workspaceDir,
+        bundledSkillsDir,
+        skillName: "jarvis-gui-control",
+      });
+    const renamedBundledSkillDir = path.join(bundledSkillsDir, "jarvis-computer-use");
+    const renamedWorkspaceSkillDir = path.join(workspaceDir, "skills", "jarvis-computer-use");
+
+    await fs.rm(legacyBundledSkillDir, { recursive: true, force: true });
+    await writeSkill({
+      dir: renamedBundledSkillDir,
+      name: "jarvis-computer-use",
+      description: "Jarvis Computer Use",
+      body: "# Jarvis Computer Use\n",
+    });
+
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+
+    await expect(fs.access(legacyWorkspaceSkillDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.readFile(path.join(renamedWorkspaceSkillDir, "SKILL.md"), "utf-8"),
+    ).resolves.toContain("# Jarvis Computer Use");
+    const marker = await readWorkspaceSkillMarker(renamedWorkspaceSkillDir);
+    expect(marker.source).toBe("openclaw-bundled");
+    expect(marker.bundledTreeHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("preserves a locally edited managed workspace mirror across a bundled rename", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const { bundledSkillDir: legacyBundledSkillDir, workspaceSkillDir: legacyWorkspaceSkillDir } =
+      await seedManagedWorkspaceSkillCopy({
+        workspaceDir,
+        bundledSkillsDir,
+        skillName: "jarvis-gui-control",
+      });
+    const legacySkillPath = path.join(legacyWorkspaceSkillDir, "SKILL.md");
+    const renamedBundledSkillDir = path.join(bundledSkillsDir, "jarvis-computer-use");
+
+    await fs.appendFile(legacySkillPath, "\nUser customization\n", "utf-8");
+    await fs.rm(legacyBundledSkillDir, { recursive: true, force: true });
+    await writeSkill({
+      dir: renamedBundledSkillDir,
+      name: "jarvis-computer-use",
+      description: "Jarvis Computer Use",
+      body: "# Jarvis Computer Use\n",
+    });
+
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+
+    await expect(fs.readFile(legacySkillPath, "utf-8")).resolves.toContain("User customization");
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 name: peekaboo
-description: Capture/inspect macOS UI with the Peekaboo CLI. Use for screenshots, video/capture artifacts, diagnostics, explicit Peekaboo requests, or fallback after Jarvis Computer Use is unavailable; do not use as the default for Jarvis GUI-operation proof.
+description: Capture/inspect macOS UI with the Peekaboo CLI. Use for screenshots, video/capture artifacts, diagnostics, explicit Peekaboo requests, or fallback after Jarvis Computer Use is unavailable; do not use as the default for Jarvis Computer Use proof.
 homepage: https://peekaboo.boo
 metadata:
   {

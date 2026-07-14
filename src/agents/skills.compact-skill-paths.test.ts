@@ -102,7 +102,7 @@ describe("compactSkillPaths", () => {
       {
         skill: {
           name: "jarvis-computer-use",
-          description: "Jarvis GUI control",
+          description: "Jarvis Computer Use",
           filePath: bundledPath,
           baseDir: path.dirname(bundledPath),
           source: "openclaw-bundled",

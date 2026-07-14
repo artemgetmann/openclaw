@@ -1,6 +1,6 @@
 ---
 name: jarvis-computer-use
-description: Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with hard stops for auth, payment, final purchase/booking, destructive delete, account/security settings, and software install/update.
+description: "Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with hard stops for auth, payment, final purchase/booking, destructive delete, account/security settings, and software install/update."
 metadata:
   {
     "openclaw":

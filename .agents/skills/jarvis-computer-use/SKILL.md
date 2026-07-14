@@ -1,20 +1,20 @@
 ---
-name: jarvis-gui-control
-description: Use when asked to test or operate macOS apps through Jarvis GUI Control, OpenComputerUse, or the OpenClaw gui-control/gui-benchmark CLI. Proactively use for natural-language GUI tasks and GUI proof requests.
+name: jarvis-computer-use
+description: Use when asked to test or operate macOS apps through Jarvis Computer Use, OpenComputerUse, or the OpenClaw gui-control/gui-benchmark CLI. Proactively use for natural-language computer-use tasks and visible GUI proof requests.
 ---
 
-# Jarvis GUI Control
+# Jarvis Computer Use
 
 Canonical instructions live in the product-bundled skill when this skill is
 loaded from the repository:
 
 ```text
-../../../skills/jarvis-gui-control/SKILL.md
+../../../skills/jarvis-computer-use/SKILL.md
 ```
 
 Read that file and follow it when the path exists. This repo-local skill exists
-so dev agents and Codex select the same Jarvis GUI-control runbook that ships to
-Jarvis users.
+so dev agents and Codex select the same Jarvis Computer Use runbook that ships
+to Jarvis users.
 
 If this skill has been copied into an isolated worker workspace and the
 canonical file is not reachable, use this portable fallback:
@@ -24,12 +24,12 @@ canonical file is not reachable, use this portable fallback:
 - Use the `screen-record` skill and `openclaw screen record` for target-aware
   video proof. Do not use Peekaboo as the default GUI-operation proof path.
   Peekaboo is only for still screenshots, UI maps, diagnostics, explicit
-  Peekaboo requests, or fallback after GUI Control or screen recording is
-  unavailable.
+  Peekaboo requests, or fallback after Jarvis Computer Use or screen recording
+  is unavailable.
 - Do not use benchmark scripts as product behavior. They are proof tools, not
   live assistant workflows.
 - Do not use raw coordinates, AppleScript/JXA, browser plugins, or clipboard
-  fallback as proof of Jarvis GUI-control capability.
+  fallback as proof of Jarvis Computer Use capability.
 - Hard-stop unless the user explicitly approves the exact step: auth/login,
   payment/card/checkout/final purchase/final booking/final order, destructive
   delete/remove/erase, account/privacy/security/profile settings, and software
