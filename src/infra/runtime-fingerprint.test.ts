@@ -31,6 +31,45 @@ async function createRepoFixture(params?: { detached?: boolean; guiCapabilities?
   return root;
 }
 
+async function createJarvisRuntimeFixture(params: {
+  runtimeCommit: string;
+  manifestCommit?: string;
+  protection?: {
+    protectedRuntimeGitCommit: string;
+    compatibilityManifestGitCommit: string;
+    compatibilityManifestBundleVersion: string;
+  };
+}) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-jarvis-runtime-fingerprint-"));
+  const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+  const runtimeRoot = path.join(stateDir, "lib", "openclaw-bundled");
+  await fs.mkdir(runtimeRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(runtimeRoot, "package.json"),
+    JSON.stringify({ name: "openclaw" }),
+    "utf8",
+  );
+  if (params.manifestCommit) {
+    await fs.writeFile(
+      path.join(stateDir, ".consumer-bundled-runtime.json"),
+      JSON.stringify({
+        format: 1,
+        bundleVersion: "300",
+        gitCommit: params.manifestCommit,
+      }),
+      "utf8",
+    );
+  }
+  if (params.protection) {
+    await fs.writeFile(
+      path.join(stateDir, ".consumer-bundled-runtime.protection.json"),
+      JSON.stringify({ format: 1, ...params.protection }),
+      "utf8",
+    );
+  }
+  return { home, stateDir, runtimeRoot, runtimeCommit: params.runtimeCommit };
+}
+
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
@@ -49,10 +88,17 @@ describe("runtime-fingerprint", () => {
         OPENCLAW_PROFILE: "ops",
         OPENCLAW_STATE_DIR: path.join(root, ".state"),
         OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
+        OPENCLAW_SERVICE_LABEL: undefined,
+        OPENCLAW_SERVICE_VERSION: undefined,
       },
       async () => {
         const fingerprint = resolveRuntimeFingerprint({
           cwd: path.join(root, "src"),
+          env: {
+            OPENCLAW_PROFILE: "ops",
+            OPENCLAW_STATE_DIR: path.join(root, ".state"),
+            OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
+          },
           platform: "darwin",
         });
 
@@ -191,5 +237,84 @@ describe("runtime-fingerprint", () => {
     expect(fingerprint.launchServiceVersion).toBe("launch-service-version");
     expect(fingerprint.runtimePackageVersion).not.toBe("app-wrapper-version");
     expect(fingerprint.runtimePackageVersion).not.toBe("launch-service-version");
+  });
+
+  it("proves a Jarvis managed bundle from matching runtime and seed receipt commits", async () => {
+    const fixture = await createJarvisRuntimeFixture({
+      runtimeCommit: "ce3ed18",
+      manifestCommit: "ce3ed18f04a1",
+    });
+    cleanupPaths.push(fixture.home);
+
+    const fingerprint = resolveRuntimeFingerprint({
+      cwd: fixture.runtimeRoot,
+      env: {
+        HOME: fixture.home,
+        GIT_COMMIT: fixture.runtimeCommit,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+      },
+    });
+
+    expect(fingerprint.runtimeCommit).toBe("ce3ed18");
+    expect(fingerprint.runtimeSource).toBe("jarvis-managed-bundle");
+  });
+
+  it("labels an active protected Jarvis source refresh as a break-glass hotfix", async () => {
+    const fixture = await createJarvisRuntimeFixture({
+      runtimeCommit: "dd8a89b",
+      manifestCommit: "ce3ed18",
+      protection: {
+        protectedRuntimeGitCommit: "dd8a89b53f21",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+      },
+    });
+    cleanupPaths.push(fixture.home);
+
+    const fingerprint = resolveRuntimeFingerprint({
+      cwd: fixture.runtimeRoot,
+      env: {
+        HOME: fixture.home,
+        GIT_COMMIT: fixture.runtimeCommit,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+      },
+    });
+
+    expect(fingerprint.runtimeSource).toBe("jarvis-break-glass-hotfix");
+  });
+
+  it("labels an unprotected Jarvis receipt mismatch as a break-glass hotfix", async () => {
+    const fixture = await createJarvisRuntimeFixture({
+      runtimeCommit: "dd8a89b",
+      manifestCommit: "ce3ed18",
+    });
+    cleanupPaths.push(fixture.home);
+
+    const fingerprint = resolveRuntimeFingerprint({
+      cwd: fixture.runtimeRoot,
+      env: {
+        HOME: fixture.home,
+        GIT_COMMIT: fixture.runtimeCommit,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+      },
+    });
+
+    expect(fingerprint.runtimeSource).toBe("jarvis-break-glass-hotfix");
+  });
+
+  it("fails closed when a Jarvis app-support runtime has no seed receipt", async () => {
+    const fixture = await createJarvisRuntimeFixture({ runtimeCommit: "dd8a89b" });
+    cleanupPaths.push(fixture.home);
+
+    const fingerprint = resolveRuntimeFingerprint({
+      cwd: fixture.runtimeRoot,
+      env: {
+        HOME: fixture.home,
+        GIT_COMMIT: fixture.runtimeCommit,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+      },
+    });
+
+    expect(fingerprint.runtimeSource).toBe("unknown");
   });
 });

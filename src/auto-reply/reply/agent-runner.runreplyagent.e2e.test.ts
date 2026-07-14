@@ -21,7 +21,7 @@ import {
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+  onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
@@ -83,10 +83,16 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: vi.fn(),
-  scheduleFollowupDrain: vi.fn(),
-}));
+vi.mock("./queue.js", () => {
+  // Both exports share one spy so older queue-policy assertions continue to
+  // observe the durable enqueue boundary used by production.
+  const enqueue = vi.fn();
+  return {
+    enqueueFollowupRun: enqueue,
+    enqueueFollowupRunDurable: enqueue,
+    scheduleFollowupDrain: vi.fn(),
+  };
+});
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
@@ -160,6 +166,7 @@ function createMinimalRun(params?: {
   return {
     typing,
     opts,
+    followupRun,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
@@ -546,6 +553,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(onReasoningStream).toHaveBeenCalled();
     expect(onPartialReply).toHaveBeenCalledWith({ text: "answer chunk", mediaUrls: undefined });
+  });
+
+  it("preserves assistant phase metadata on forwarded partial replies", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({
+        text: "The final story begins.",
+        channelData: { openclaw: { assistantPhase: "final_answer" } },
+      });
+      return { payloads: [{ text: "The final story begins." }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({ opts: { onPartialReply } });
+    await run();
+
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "The final story begins.",
+      mediaUrls: undefined,
+      channelData: { openclaw: { assistantPhase: "final_answer" } },
+    });
   });
 
   it("suppresses typing in never mode", async () => {

@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
+source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -865,8 +866,9 @@ ensure_consumer_uv_runtime() {
 resolve_matrix_crypto_package_root() {
   local package_root=""
 
-  # pnpm can hoist the Matrix package, so resolve the installed package path
-  # instead of assuming a flat repo-local node_modules layout.
+  # The Matrix extension owns this dependency. Resolve from its manifest so
+  # pnpm's workspace-local node_modules link is visible even when the package
+  # is not hoisted into the repo root.
   package_root="$(
     "$VALIDATED_NODE_BIN" -e '
       const path = require("node:path");
@@ -883,7 +885,7 @@ resolve_matrix_crypto_package_root() {
         );
         process.exit(1);
       }
-    ' "$ROOT_DIR/package.json"
+    ' "$ROOT_DIR/extensions/matrix/package.json"
   )"
 
   printf '%s\n' "$package_root"
@@ -1144,6 +1146,16 @@ NODE
 }
 
 refresh_bundled_runtime_metadata() {
+  local manifest_path="${BUNDLED_RUNTIME_RESOURCE_DIR}/manifest.json"
+
+  # Cache/reuse retains payload code but refreshes build-info from the current
+  # checkout. Move the package receipt to the same commit/build in the same
+  # step, otherwise legitimate reused packages look like source hotfix drift.
+  openclaw_refresh_consumer_runtime_manifest \
+    "$VALIDATED_NODE_BIN" \
+    "$manifest_path" \
+    "$GIT_COMMIT" \
+    "$APP_BUILD"
   refresh_bundled_runtime_build_info
   sync_bundled_runtime_package_version
 }

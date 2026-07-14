@@ -217,14 +217,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
-  it("instructs models to call update_plan early for multi-step work", () => {
+  it("instructs models to orient users before update_plan for multi-step work", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["update_plan"],
     });
 
     expect(prompt).toContain("## Planning");
-    expect(prompt).toContain("call update_plan before the first non-trivial tool call");
+    const orientationInstruction = "first send one short natural-language status note";
+    const planInstruction = "then call update_plan before the first non-trivial tool call";
+    expect(prompt).toContain(orientationInstruction);
+    expect(prompt).toContain(planInstruction);
+    expect(prompt.indexOf(orientationInstruction)).toBeLessThan(prompt.indexOf(planInstruction));
+    expect(prompt).toContain("what you are doing now/next");
+    expect(prompt).toContain("avoid repeating the checklist verbatim");
     expect(prompt).toContain("two or more meaningful steps");
     expect(prompt).toContain("update_plan is not /goal");
     expect(prompt).toContain(DURABLE_PLAN_FILE_POLICY_PROMPT);
@@ -308,6 +314,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not forward raw internal metadata");
   });
 
+  it("requires live-thread freshness before external outreach drafts and sends", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("external outreach/reply drafts");
+    expect(prompt).toContain("trackers, memory, docs");
+    expect(prompt).toContain("stale indexes");
+    expect(prompt).toContain("read the latest relevant thread/person first");
+    expect(prompt).toContain("quote the latest relevant inbound message text");
+    expect(prompt).toContain("new, already sent, optional, or do-not-send");
+    expect(prompt).toContain("Before any approved send, refresh the same live thread again");
+    expect(prompt).toContain(
+      "stop if newer relevant thread movement, inbound or outbound, changes or duplicates the reply",
+    );
+    expect(prompt).toContain("state that freshness is not verified");
+    expect(prompt).toContain(
+      "label any optional sketch as stale/tracker-based and not ready to send",
+    );
+    expect(prompt).not.toContain("wacli-recent-reply.sh");
+    expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
+  });
+
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -361,14 +390,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("do not inspect Telethon internals");
   });
 
-  it("classifies cron as the default for reminders and explicit monitors", () => {
+  it("uses consumer terminology for reminders and explicit monitors", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["cron"],
     });
 
-    expect(prompt).toContain("default to cron for reminders, exact scheduled checks");
-    expect(prompt).toContain("watching an inbox, thread, or person until something happens");
+    expect(prompt).toContain("use reminder or scheduled task for one-time/generic scheduling");
+    expect(prompt).toContain(
+      "use monitor or monitoring for a watched inbox, thread, person, or condition",
+    );
+    expect(prompt).toContain("never call a consumer-facing monitor a cron job");
+    expect(prompt).toContain(
+      "a watched inbox, thread, person, or condition until something changes",
+    );
     expect(prompt).toContain("cadence, stop condition, and expiry");
     expect(prompt).toContain("use the relevant skill/helper script for detection");
     expect(prompt).toContain("pin that exact command or a tiny wrapper script");
@@ -389,7 +424,7 @@ describe("buildAgentSystemPrompt", () => {
       "It is not the default engine for ad hoc scoped monitors or per-inbox/per-thread/per-person watches.",
     );
     expect(prompt).toContain(
-      "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer cron",
+      "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer a monitor/monitoring flow",
     );
     expect(prompt).toContain(
       "Heartbeat can still cover broad periodic checks when the user wants them, including 30-minute sweeps",
@@ -864,16 +899,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
 
-  it("guides restart confirmation via session-scoped pending state", () => {
+  it("requires arming session-scoped restart confirmation before asking the user", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway"],
     });
+    const armInstruction =
+      "when this session does not already have a pending restart confirmation, you MUST first call the gateway tool with action `restart.request_confirmation`";
+    const askInstruction =
+      'Only after that tool call succeeds, ask exactly: "This will interrupt other tasks that you have running in other chats. Restart now?"';
 
+    expect(prompt.indexOf(armInstruction)).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf(askInstruction)).toBeGreaterThan(prompt.indexOf(armInstruction));
     expect(prompt).toContain(
-      "This will interrupt other tasks that you have running in other chats. Restart now?",
+      "Never ask the restart confirmation question before the gateway tool successfully records the pending confirmation.",
     );
-    expect(prompt).toContain("record the pending confirmation with the gateway tool");
+    expect(prompt).toContain(
+      "If a pending restart confirmation already exists, do not call `restart.request_confirmation` again",
+    );
     expect(prompt).toContain("Only proceed on a later user turn");
     expect(prompt).toContain("`/restart` remains the escape hatch");
   });
@@ -884,6 +927,9 @@ describe("buildPendingRestartConfirmationPromptHint", () => {
     const hint = buildPendingRestartConfirmationPromptHint();
 
     expect(hint).toContain("A pending restart confirmation exists for this session.");
+    expect(hint).toContain(
+      "Do not call `restart.request_confirmation` again while this pending confirmation exists.",
+    );
     expect(hint).toContain("current user turn clearly confirms");
     expect(hint).toContain("Do not treat your own prior message");
   });

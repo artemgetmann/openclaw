@@ -1,12 +1,20 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { resolveSessionGoalAutonomy } from "../config/sessions/goals.js";
+import type { CronSchedule } from "../cron/types.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { CONFIG_DIR } from "../utils.js";
+import { resolveMonitorNotificationPolicy } from "./notifications.js";
 import type {
   MonitorCreateInput,
   MonitorActionPolicy,
+  MonitorDisclosure,
+  MonitorGoalSnapshot,
+  MonitorListenerEvidence,
+  MonitorEventEnvelope,
+  MonitorNotificationPolicy,
   MonitorRecord,
   MonitorSourceTarget,
   MonitorStoreFile,
@@ -18,6 +26,7 @@ export const DEFAULT_MONITOR_STORE_PATH = path.join(DEFAULT_MONITOR_DIR, "monito
 
 const serializedStoreCache = new Map<string, string>();
 const monitorStoreWriteLocks = new Map<string, Promise<void>>();
+const MAX_LISTENER_EVIDENCE_IDENTIFIER_LENGTH = 512;
 
 type MonitorIdentityInput = {
   agentId: string;
@@ -176,7 +185,37 @@ export async function saveMonitorStore(storePath: string, store: MonitorStoreFil
   serializedStoreCache.set(storePath, json);
 }
 
+export function buildMonitorDisclosure(input: {
+  purpose?: string;
+  name?: string;
+  sourceType: string;
+  sourceTarget: MonitorSourceTarget;
+  cadence: CronSchedule;
+  expiryAt?: string;
+  stopCondition?: string;
+  actionPolicy: MonitorActionPolicy;
+  goal?: MonitorGoalSnapshot;
+  notificationPolicy?: MonitorNotificationPolicy;
+}): MonitorDisclosure {
+  const notificationPolicy = resolveMonitorNotificationPolicy(input.notificationPolicy);
+  return {
+    purpose: input.purpose?.trim() || input.name?.trim() || `${input.sourceType.trim()} monitor`,
+    source: { type: input.sourceType.trim(), target: input.sourceTarget },
+    checkCadence: input.cadence,
+    noChangeCadence: {
+      noticeAfterChecks: notificationPolicy.unchangedNoticeAfterChecks,
+      reminderIntervalMs: notificationPolicy.unchangedReminderIntervalMs,
+    },
+    expiryAt: input.expiryAt?.trim() || null,
+    stopCondition: input.stopCondition?.trim() || null,
+    autonomy: resolveSessionGoalAutonomy(input.goal),
+    actionPolicy: input.actionPolicy,
+  };
+}
+
 export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): MonitorRecord {
+  const actionPolicy = input.actionPolicy ?? "notify_draft";
+  const notificationPolicy = resolveMonitorNotificationPolicy(input.notificationPolicy);
   return {
     monitorId: input.monitorId ?? randomBytes(12).toString("hex"),
     agentId: input.agentId,
@@ -191,8 +230,11 @@ export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): M
     trigger: input.trigger ?? { kind: "schedule", cadence: input.cadence },
     ...(input.expiryAt?.trim() ? { expiryAt: input.expiryAt.trim() } : {}),
     ...(input.stopCondition?.trim() ? { stopCondition: input.stopCondition.trim() } : {}),
-    actionPolicy: input.actionPolicy ?? "notify_draft",
+    actionPolicy,
     ...(input.goal ? { goal: input.goal } : {}),
+    notificationPolicy,
+    notificationState: { consecutiveUnchangedChecks: 0 },
+    disclosure: buildMonitorDisclosure({ ...input, actionPolicy, notificationPolicy }),
     status: "active",
     ...(input.lastCheckpoint ? { lastCheckpoint: input.lastCheckpoint } : {}),
     cronJobId: input.cronJobId,
@@ -213,6 +255,50 @@ export function updateMonitorRecord(
   return {
     ...monitor,
     ...patch,
+    updatedAtMs: nowMs,
+  };
+}
+
+function readBoundedIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return undefined;
+  }
+  const normalized = String(value).trim();
+  return normalized && normalized.length <= MAX_LISTENER_EVIDENCE_IDENTIFIER_LENGTH
+    ? normalized
+    : undefined;
+}
+
+/**
+ * Extract only a small listener receipt from an already-routed event. Inbound
+ * evidence is never routing authority and may contain private message content.
+ */
+export function createMonitorListenerEvidence(
+  event: MonitorEventEnvelope,
+  nowMs: number,
+): MonitorListenerEvidence | undefined {
+  if (event.triggerKind !== "local_listener") {
+    return undefined;
+  }
+  const sourceType = event.sourceType.trim().toLowerCase();
+  if (sourceType !== "telegram-user" && sourceType !== "whatsapp") {
+    return undefined;
+  }
+
+  const idempotencyKey = readBoundedIdentifier(event.idempotencyKey);
+  const receivedAtMs = event.receivedAtMs;
+  if (!idempotencyKey) {
+    return undefined;
+  }
+
+  return {
+    sourceKind: "local_listener",
+    sourceType,
+    idempotencyKeyHash: createHash("sha256").update(idempotencyKey).digest("hex"),
+    receivedAtMs:
+      typeof receivedAtMs === "number" && Number.isSafeInteger(receivedAtMs) && receivedAtMs >= 0
+        ? receivedAtMs
+        : nowMs,
     updatedAtMs: nowMs,
   };
 }

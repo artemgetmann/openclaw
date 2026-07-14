@@ -347,6 +347,7 @@
     "test:install:e2e:anthropic": "OPENCLAW_E2E_MODELS=anthropic CLAWDBOT_E2E_MODELS=anthropic bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:e2e:openai": "OPENCLAW_E2E_MODELS=openai CLAWDBOT_E2E_MODELS=openai bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
+    "test:install:verify": "bash scripts/test-install-sh-cli-verify.sh",
     "test:live": "OPENCLAW_LIVE_TEST=1 CLAWDBOT_LIVE_TEST=1 vitest run --config vitest.live.config.ts",
     "test:macmini": "OPENCLAW_TEST_VM_FORKS=0 OPENCLAW_TEST_PROFILE=serial node scripts/test-parallel.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
@@ -499,6 +500,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "@mariozechner/pi-ai@0.58.0": "patches/@mariozechner__pi-ai@0.58.0.patch"
     }
   }
 }

@@ -65,6 +65,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
     currentAssistantPhase: undefined,
+    activeAssistantContentIndex: undefined,
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
@@ -148,7 +149,24 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.currentAssistantPhase = undefined;
+    state.activeAssistantContentIndex = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+  };
+
+  const resetAssistantContentState = (contentIndex: number) => {
+    // A single assistant message can contain multiple signed text blocks. The
+    // cumulative partial snapshot must restart at each block boundary so a
+    // final answer never inherits the preceding commentary text. Keep the
+    // block-reply buffers intact: text_end already flushed those chunks and
+    // those buffers represent the user-visible work log, not this snapshot.
+    state.activeAssistantContentIndex = contentIndex;
+    state.deltaBuffer = "";
+    state.lastStreamedAssistant = undefined;
+    state.lastStreamedAssistantCleaned = undefined;
+    partialReplyDirectiveAccumulator.reset();
+    state.partialBlockState.thinking = false;
+    state.partialBlockState.final = false;
+    state.partialBlockState.inlineCode = createInlineCodeState();
   };
 
   const rememberAssistantText = (text: string) => {
@@ -646,6 +664,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     emitReasoningStream,
     consumeReplyDirectives,
     consumePartialReplyDirectives,
+    resetAssistantContentState,
     resetAssistantMessageState,
     resetForCompactionRetry,
     finalizeAssistantTexts,

@@ -11,6 +11,8 @@ JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
 JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
 JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
 JARVIS_RUNTIME_ROOT="$(dirname -- "$(dirname -- "${JARVIS_ENTRYPOINT}")")"
+JARVIS_INSTALLED_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
+JARVIS_PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
 LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
 LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
 JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
@@ -84,10 +86,29 @@ pid_for_label() {
 
 require_single_jarvis_gateway_owner() {
   local labels="$1"
+  local list_available="$2"
   local jarvis_pid=""
   local openclaw_pid=""
   jarvis_pid="$(pid_for_label "${labels}" "${JARVIS_LABEL}")"
   openclaw_pid="$(pid_for_label "${labels}" "${OPENCLAW_SHARED_LABEL}")"
+
+  if [[ "${list_available}" != "1" ]]; then
+    local domain=""
+    local jarvis_print=""
+    local openclaw_print=""
+    domain="gui/$("${ID_BIN}" -u)"
+    jarvis_print="$("${LAUNCHCTL_BIN}" print "${domain}/${JARVIS_LABEL}" 2>/dev/null || true)"
+    openclaw_print="$("${LAUNCHCTL_BIN}" print "${domain}/${OPENCLAW_SHARED_LABEL}" 2>/dev/null || true)"
+
+    # Managed execution can deny `launchctl list` while direct service lookup
+    # remains available. Recover ownership from that stronger scoped query
+    # instead of misreporting an unavailable list as an unloaded gateway.
+    jarvis_pid="$(awk '$1 == "pid" && $2 == "=" { print $3; exit }' <<<"${jarvis_print}")"
+    if [[ -n "${openclaw_print}" ]]; then
+      openclaw_pid="$(awk '$1 == "pid" && $2 == "=" { print $3; exit }' <<<"${openclaw_print}")"
+      openclaw_pid="${openclaw_pid:-loaded}"
+    fi
+  fi
 
   [[ -n "${jarvis_pid}" ]] || die "${JARVIS_LABEL} is not loaded; Jarvis runtime proof cannot use ${OPENCLAW_SHARED_LABEL}"
   if [[ -n "${openclaw_pid}" ]]; then
@@ -164,6 +185,46 @@ commit_matches() {
   [[ "${expected}" == "${actual}"* || "${actual}" == "${expected}"* ]]
 }
 
+is_git_commit() {
+  [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]
+}
+
+assert_packaged_runtime_provenance() {
+  local installed_commit=""
+  local installed_version=""
+  local protected_commit=""
+  local compatibility_commit=""
+  local compatibility_version=""
+
+  [[ -r "${JARVIS_INSTALLED_MANIFEST}" ]] || \
+    die "installed Jarvis runtime manifest is not readable: ${JARVIS_INSTALLED_MANIFEST}"
+  installed_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${JARVIS_INSTALLED_MANIFEST}")"
+  installed_version="$("${JQ_BIN}" -r '.bundleVersion // empty' "${JARVIS_INSTALLED_MANIFEST}")"
+  is_git_commit "${installed_commit}" || die "installed Jarvis runtime manifest has missing or invalid gitCommit"
+  [[ -n "${installed_version}" ]] || die "installed Jarvis runtime manifest is missing bundleVersion"
+
+  if commit_matches "${installed_commit}" "${LIVE_RUNTIME_COMMIT}"; then
+    return 0
+  fi
+
+  if [[ -r "${JARVIS_PROTECTION_MARKER}" ]]; then
+    protected_commit="$("${JQ_BIN}" -r '.protectedRuntimeGitCommit // empty' "${JARVIS_PROTECTION_MARKER}")"
+    compatibility_commit="$("${JQ_BIN}" -r '.compatibilityManifestGitCommit // empty' "${JARVIS_PROTECTION_MARKER}")"
+    compatibility_version="$("${JQ_BIN}" -r '.compatibilityManifestBundleVersion // empty' "${JARVIS_PROTECTION_MARKER}")"
+  fi
+
+  if is_git_commit "${protected_commit}" && is_git_commit "${compatibility_commit}" && \
+      commit_matches "${protected_commit}" "${LIVE_RUNTIME_COMMIT}" && \
+      commit_matches "${compatibility_commit}" "${installed_commit}" && \
+      [[ -n "${compatibility_version}" && "${compatibility_version}" == "${installed_version}" ]]; then
+    die "runtimeSource=jarvis-break-glass-hotfix: live commit ${LIVE_RUNTIME_COMMIT} is protected behind compatibility manifest ${installed_commit}; packaged Jarvis proof refused"
+  fi
+
+  # An Application Support path is not provenance. Refuse inconsistent receipt
+  # state even when an older running build still self-reports managed-bundle.
+  die "Jarvis runtime commit ${LIVE_RUNTIME_COMMIT} does not match installed package manifest ${installed_commit}; packaged Jarvis proof refused"
+}
+
 identity_field() {
   local line="$1"
   local key="$2"
@@ -202,6 +263,9 @@ assert_live_runtime_identity() {
   LIVE_CONFIG_PATH="$(identity_field "${line}" "configPath" || true)"
 
   assert_identity_field "serviceLabel" "${LIVE_SERVICE_LABEL}" "${JARVIS_LABEL}"
+  if [[ "${LIVE_RUNTIME_SOURCE}" == "jarvis-break-glass-hotfix" ]]; then
+    die "runtimeSource=jarvis-break-glass-hotfix; packaged Jarvis proof refused"
+  fi
   assert_identity_field "runtimeSource" "${LIVE_RUNTIME_SOURCE}" "jarvis-managed-bundle"
   assert_identity_field "stateDir" "${LIVE_STATE_DIR}" "${JARVIS_STATE_DIR}"
   assert_identity_field "configPath" "${LIVE_CONFIG_PATH}" "${JARVIS_CONFIG_PATH}"
@@ -306,15 +370,21 @@ main() {
   require_readonly_tools
 
   local labels=""
+  local list_available="0"
   local jarvis_pid=""
   local listener_output=""
-  labels="$("${LAUNCHCTL_BIN}" list 2>/dev/null || true)"
-  jarvis_pid="$(require_single_jarvis_gateway_owner "${labels}")"
+  if labels="$("${LAUNCHCTL_BIN}" list 2>/dev/null)"; then
+    list_available="1"
+  else
+    labels=""
+  fi
+  jarvis_pid="$(require_single_jarvis_gateway_owner "${labels}" "${list_available}")"
   require_loaded_launchctl_config "${jarvis_pid}"
   listener_output="$("${LSOF_BIN}" -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
   require_jarvis_listener_owner "${jarvis_pid}" "${listener_output}"
   require_live_gateway_log_owner "${jarvis_pid}"
   assert_live_runtime_identity
+  assert_packaged_runtime_provenance
 
   STATUS_STDOUT_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-runtime-status.XXXXXX")"
   STATUS_STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-runtime-status.err.XXXXXX")"

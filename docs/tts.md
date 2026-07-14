@@ -30,6 +30,18 @@ as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenL
 Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
 does not publish limits, so assume similar or lower limits. citeturn0search3
 
+When neither `messages.tts.edge.voice` nor `messages.tts.edge.lang` is explicitly
+configured, Edge TTS automatically splits mixed English/Russian text into contiguous
+speech spans. English uses `en-US-MichelleNeural`/`en-US`; Russian uses
+`ru-RU-SvetlanaNeural`/`ru-RU`. The spans are synthesized in order and re-encoded
+into one audio file with FFmpeg, which is already an OpenClaw media prerequisite.
+
+This initial automatic mode covers Latin-script English and Russian Cyrillic. Words
+containing Ukrainian- or Belarusian-specific letters are left with the surrounding
+span instead of being classified as Russian. It is not general language detection.
+Setting either `edge.voice` or `edge.lang` disables automatic switching; the resolved
+configured voice and language remain authoritative for the whole message.
+
 ## Optional keys
 
 If you want OpenAI or ElevenLabs:

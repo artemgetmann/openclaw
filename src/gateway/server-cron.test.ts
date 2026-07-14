@@ -61,7 +61,7 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
-import { buildGatewayCronService } from "./server-cron.js";
+import { buildGatewayCronService, formatCronFailureMessage } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
   const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
@@ -82,6 +82,27 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+  });
+
+  it("uses monitor terminology for monitorWake failure destinations", () => {
+    expect(
+      formatCronFailureMessage(
+        {
+          name: "Watch support replies",
+          payload: { kind: "monitorWake", monitorId: "monitor-1" },
+        },
+        "source check timed out",
+      ),
+    ).toBe('Monitor "Watch support replies" failed: source check timed out');
+    expect(
+      formatCronFailureMessage(
+        {
+          name: "Daily report",
+          payload: { kind: "agentTurn", message: "send report" },
+        },
+        "provider unavailable",
+      ),
+    ).toBe('Cron job "Daily report" failed: provider unavailable');
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -357,6 +378,10 @@ describe("buildGatewayCronService", () => {
 
   it("keeps goal tools available when a monitor wake is bound to an origin goal", async () => {
     const cfg = createCronConfig("server-cron-monitor-bound-goal-tools");
+    cfg.session = {
+      ...cfg.session,
+      store: path.join(path.dirname(cfg.cron!.store!), "sessions.json"),
+    };
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -366,6 +391,28 @@ describe("buildGatewayCronService", () => {
     });
     const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
     await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      cfg.session.store!,
+      JSON.stringify({
+        "agent:main:telegram:direct:user-1": {
+          sessionId: "origin-session",
+          updatedAt: 1,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-1",
+            objective: "Get the refund confirmed.",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 1,
+            tokenStart: 0,
+            tokenStartFresh: true,
+            tokensUsed: 0,
+            continuationTurns: 0,
+          },
+        },
+      }),
+      "utf-8",
+    );
     await fs.writeFile(
       monitorStorePath,
       JSON.stringify({
@@ -410,6 +457,8 @@ describe("buildGatewayCronService", () => {
           disableGoalTools: false,
         }),
       );
+      const sessions = JSON.parse(await fs.readFile(cfg.session.store!, "utf-8"));
+      expect(sessions["agent:main:telegram:direct:user-1"].goal.continuationTurns).toBe(1);
     } finally {
       state.cron.stop();
     }
@@ -706,6 +755,81 @@ describe("buildGatewayCronService", () => {
         lastWakeStatus: "active",
       });
       expect(typeof store.monitors[0].lastWakeAtMs).toBe("number");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("preserves a completion persisted during the wake and keeps cron disabled", async () => {
+    const cfg = createCronConfig("server-cron-monitor-preserve-completion");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    let jobId = "";
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      const store = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      store.monitors[0] = {
+        ...store.monitors[0],
+        status: "completed",
+        lastCheckpoint: { evaluation: "done", evidence: "reply-confirmed" },
+        updatedAtMs: 2,
+      };
+      await fs.writeFile(monitorStorePath, JSON.stringify(store), "utf-8");
+      // This mirrors monitor.update's terminal transition: the persisted
+      // completion owns the cron lifecycle before the wake runner returns.
+      await state.cron.update(jobId, { enabled: false });
+      return { status: "ok" as const, summary: "done" };
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake preserve completion",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:agent:main:monitor:monitor-preserve-completion",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-preserve-completion" },
+      });
+      jobId = job.id;
+      await fs.writeFile(
+        monitorStorePath,
+        JSON.stringify({
+          version: 1,
+          monitors: [
+            {
+              monitorId: "monitor-preserve-completion",
+              agentId: "main",
+              originSessionKey: "agent:main:main",
+              monitorSessionKey: "agent:main:monitor:monitor-preserve-completion",
+              sourceType: "synthetic",
+              sourceTarget: { source: "proof" },
+              cadence: { kind: "every", everyMs: 60_000 },
+              actionPolicy: "notify_draft",
+              status: "active",
+              cronJobId: job.id,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      await state.cron.run(job.id, "force");
+
+      const store = JSON.parse(await fs.readFile(monitorStorePath, "utf-8"));
+      expect(store.monitors[0]).toMatchObject({
+        status: "completed",
+        lastWakeStatus: "completed",
+        lastCheckpoint: { evaluation: "done", evidence: "reply-confirmed" },
+      });
+      expect(state.cron.getJob(job.id)?.enabled).toBe(false);
     } finally {
       state.cron.stop();
     }

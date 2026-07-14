@@ -98,17 +98,16 @@ Email fallback policy
   configured account is the same mailbox the user intended.
 - For sends, never silently fall back to a different sender identity. If the
   same-mailbox identity is unclear, stop and ask the user which account to use.
-- Before sending a Gmail reply from a draft that sat for a meaningful amount of
-  time, re-read or re-search the thread/person first and check for newer
-  messages. Email is usually less volatile than chat, but stale drafts can still
-  answer the wrong state.
+- Before drafting a Gmail reply, re-read or re-search the thread/person first
+  and check for newer messages. Email is usually less volatile than chat, but
+  stale drafts can still answer the wrong state.
 - When presenting a Gmail thread context for a reply decision, include the exact
   full text of the latest relevant inbound email from the other person when it
   is available, then add a concise summary only if useful. Do not force the user
   to rely on a summary when the sender's actual wording matters.
-- If you draft and send in the same short flow, normal thread reading before the
-  draft is enough unless the user delayed approval, the thread is active, or the
-  last read is no longer trustworthy.
+- Before any approved Gmail send, refresh the same thread/person again. Stop if
+  newer relevant thread movement, inbound or outbound, changes or duplicates the
+  reply, even when the draft and approval happen in the same short flow.
 - If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
   report the blocker clearly and ask whether the user wants to reconnect Google.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
@@ -137,8 +136,8 @@ Gmail triage pattern
   what was excluded or only sampled.
 - Treat "needs reply" as an inference unless the thread context clearly shows
   the user is the next responder.
-- Before sending a Gmail reply, re-search or re-read the target thread/person if
-  approval was delayed, the thread is active, or the last read may be stale.
+- Before sending a Gmail reply, always re-search or re-read the target
+  thread/person and compare against the context used for the approved draft.
 
 Setup Routing
 
@@ -151,20 +150,19 @@ Setup Routing
   `gmail,calendar,drive,contacts,docs,sheets`.
 - Do not default to Drive-only or make the user come back later for Calendar
   unless they explicitly want a narrower scope.
-- For local browser OAuth, prefer a direct safe-bin invocation first:
-  `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`.
-  `gog` can open the browser itself on this Mac, and that path avoids repo-local
-  helper allowlist problems.
-- If `gog --version` reports v0.31.0 or newer, `gog auth setup` is the better
-  first guided path than reconstructing the older flow by hand.
-- If repo-local helper execution is denied, fall back to direct `gog auth add`
-  instead of telling the user to use Terminal or detouring to a node.
-- For local consumer OAuth setup, prefer
+- For local consumer OAuth setup, use
   `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`
-  when the runtime allows repo-local helper scripts and you need resumable
-  polling across turns. It launches `gog auth add` on this Mac in the
-  background so the Google consent screen can open in the local browser while
-  you keep chatting.
+  and its resumable polling flow. On macOS, the helper serializes auth across
+  sessions, bounds Keychain waits, and launches `gog auth add` in the
+  background so the Google consent screen can open while you keep chatting.
+  Other platforms use a direct background worker and do not provide the macOS
+  single-flight guarantee.
+- Do not start `gog auth setup`, `gog auth add`, `gog auth list`, or another
+  helper session in parallel with an active helper session. Continue, wait,
+  reopen, or stop the existing session so macOS shows at most one Keychain
+  approval prompt.
+- If the helper is unavailable or blocked, report that setup is blocked instead
+  of bypassing its macOS single-flight protection with a direct auth command.
 - Prefer opening the real Google consent tab in Google Chrome when available.
   If Chrome handoff is not available, fall back to the default browser instead
   of stalling on auth errors.
@@ -186,16 +184,20 @@ Setup Routing
   account added as a test user, required API not enabled, missed localhost
   callback handoff, local Keychain approval still pending, or a corrupt token
   that v0.31.0+ can recover from automatically.
+- When Keychain approval times out, tell the user to unlock the Mac, retry once,
+  enter their Mac login password in the single macOS Keychain prompt, and choose
+  Always Allow. Never capture, store, type, or bypass that password.
 - Once auth completes, verify with `gog auth list` before moving into Gmail,
   Calendar, Drive, Docs, Sheets, or Contacts actions.
 - Treat successful auth as a resume point. After `gog auth list` or another
   read-only probe succeeds, continue the user’s original Gmail/Calendar/Drive
   task automatically instead of asking them to restate it.
 
-Setup (once)
+Setup (terminal-only reference)
 
-- Current preferred path on `gog` v0.31.0 or newer:
-  `gog auth setup`
+- Consumer/Jarvis setup must use the guarded helper above. The raw commands here
+  are only for a user who explicitly requested an unguarded terminal workflow;
+  never run them beside an active helper session.
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`

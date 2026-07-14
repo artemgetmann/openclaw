@@ -1,6 +1,6 @@
 ---
 name: cross-channel-triage
-description: Use when the user asks to triage messages, emails, chats, inboxes, unread messages, recent messages, open replies, or who they owe replies to across one or more channels such as WhatsApp, Telegram, Gmail/email, Slack, Signal, iMessage, browser portals, or files. First produce a scoped prioritized triage list, then handle items one by one with user approval before any external reply/send.
+description: Use when the user asks to triage messages, emails, chats, inboxes, unread messages, recent messages, open replies, who they owe replies to, outreach, or reply drafting across one or more channels such as WhatsApp, Telegram, Gmail/email, Slack, Signal, iMessage, browser portals, or files. For broad sweeps, first produce a scoped prioritized triage list; for one known target, use single-thread draft mode. Always require user approval before any external reply/send.
 metadata: { "openclaw": { "emoji": "📬", "displayName": "Cross-Channel Triage" } }
 ---
 
@@ -10,6 +10,9 @@ Use this for messy inbox or communication triage across one channel or many:
 email, Telegram, WhatsApp, Signal, iMessage, Slack, browser portals, or files.
 The same protocol applies to a single inbox when there are multiple threads to
 prioritize.
+
+For a one-off outreach or reply-draft request tied to one known person, thread,
+or support case, use single-thread draft mode instead of a broad inbox sweep.
 
 ## Core Rule
 
@@ -83,16 +86,41 @@ End with the next concrete step:
 
 For each selected item:
 
-1. Fetch enough fresh context to understand the latest ask, participants, tone,
+1. Treat trackers, memory, docs, and old chat context as stale indexes only.
+   If live access exists, read the latest relevant source, thread, or person
+   before drafting.
+2. Fetch enough fresh context to understand the latest ask, participants, tone,
    and whether the conversation moved forward.
-2. Include the exact latest relevant inbound text when available and useful.
+3. Include the exact latest relevant inbound text when available and useful.
    Summaries are helpful, but they must not replace the sender's wording when
    wording matters.
-3. Draft in the user's voice.
-4. Ask: send, edit, skip, schedule, delegate, archive, or next?
-5. If approval is delayed, re-check the thread before sending.
-6. Update compact status: pending, drafted, sent, skipped, scheduled,
+4. If live access is unavailable, or the only live path would require costly
+   browser work, state that freshness is not verified. If you provide an
+   optional sketch, label it stale/tracker-based and not ready to send, then ask
+   whether to inspect the live source when freshness matters.
+5. Draft in the user's voice.
+6. Label every draft as new, already sent, optional, or do-not-send.
+7. Ask: send, edit, skip, schedule, delegate, archive, or next?
+8. If the user approves sending, refresh the same thread immediately before
+   sending. Stop if newer relevant thread movement, inbound or outbound, changes
+   or duplicates the reply.
+9. Update compact status: pending, drafted, sent, skipped, scheduled,
    delegated, archived, waiting, or blocked.
+
+## Single-Thread Draft Mode
+
+Use this mode when the user asks for a draft for one known contact, thread,
+case, or channel target rather than a broad triage sweep.
+
+1. Identify the target and the channel/source you can inspect.
+2. Skip broad inbox discovery unless the target is ambiguous.
+3. Apply the Reply Loop freshness rules before drafting.
+4. If live access is unavailable, or the only live path would require costly
+   browser work, state that freshness is not verified. Label any optional sketch
+   as stale/tracker-based and not ready to send, then ask whether to inspect the
+   live source when freshness matters.
+5. Do not send anything until the user approves a draft and you refresh the same
+   thread immediately before sending.
 
 ## Modes
 
@@ -143,3 +171,5 @@ Track only status and refs, not private transcripts:
 - next action
 
 Fetch fresh source context when acting.
+
+Never treat the tracker itself as current enough for outreach or reply drafting.

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 
 const { callGatewayToolMock, resolveAnnounceTargetMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(async (_method: string, _opts: unknown, params: unknown) => params),
@@ -62,6 +63,44 @@ describe("monitor tool", () => {
     );
   });
 
+  it("preserves the enumerable create receipt marker through serialization without changing content", async () => {
+    const disclosure = {
+      purpose: "Watch support replies",
+      source: { type: "gmail", target: { threadId: "thread-1" } },
+      checkCadence: { kind: "every", everyMs: 300_000 },
+      noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+      expiryAt: null,
+      stopCondition: null,
+      autonomy: { level: "observe_only" },
+      actionPolicy: "notify_draft",
+    };
+    callGatewayToolMock.mockResolvedValueOnce({ monitorId: "monitor-1", disclosure });
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    const result = await tool.execute?.("call-receipt-marker", {
+      action: "create",
+      instructions: disclosure.purpose,
+      sourceType: "gmail",
+      sourceTarget: disclosure.source.target,
+      cadence: disclosure.checkCadence,
+    });
+
+    expect(result).toBeDefined();
+    if (!result) {
+      throw new Error("monitor.create did not return a tool result");
+    }
+    const serializedResult = JSON.parse(JSON.stringify(result));
+    expect(serializedResult.content).toEqual(result.content);
+    expect(serializedResult.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({ monitorId: "monitor-1", disclosure }, null, 2),
+      },
+    ]);
+    expect(serializedResult.details[MONITOR_RECEIPT_DETAILS_KEY]).toBe(true);
+    expect(serializedResult.details.disclosure).toEqual(disclosure);
+  });
+
   it("adds announce mode to explicit bare origin delivery", async () => {
     const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
 
@@ -103,6 +142,11 @@ describe("monitor tool", () => {
     expect(tool.description).toContain("only reporting status");
     expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
     expect(tool.description).toContain("if there is an active goal");
+    expect(tool.description).toContain("exact check cadence");
+    expect(tool.description).toContain("successful unchanged checks 1-2 are silent");
+    expect(tool.description).toContain("actionPolicy controls delivery only");
+    expect(tool.description).toContain("Do not repeat the cadence, expiry, stop condition");
+    expect(tool.description).toContain("Never call a consumer monitor a cron job");
   });
 
   it("passes explicit goal snapshots through monitor.create", async () => {
@@ -114,14 +158,30 @@ describe("monitor tool", () => {
       sourceType: "whatsapp",
       sourceTarget: { target: "+15551234567" },
       cadence: { kind: "every", everyMs: 300_000 },
-      goal: { id: "goal-1", objective: "Organize dinner between 7 and 8." },
+      goal: {
+        id: "goal-1",
+        objective: "Organize dinner between 7 and 8.",
+        autonomy: {
+          level: "act_within_scope",
+          allowedActions: ["confirm a time between 7 and 8"],
+          approvalRequired: ["accept another time"],
+        },
+      },
     });
 
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "monitor.create",
       expect.any(Object),
       expect.objectContaining({
-        goal: { id: "goal-1", objective: "Organize dinner between 7 and 8." },
+        goal: {
+          id: "goal-1",
+          objective: "Organize dinner between 7 and 8.",
+          autonomy: {
+            level: "act_within_scope",
+            allowedActions: ["confirm a time between 7 and 8"],
+            approvalRequired: ["accept another time"],
+          },
+        },
       }),
     );
   });
@@ -163,6 +223,21 @@ describe("monitor tool", () => {
         status: "completed",
         lastCheckpoint: { lastSeenMessageId: "msg-9" },
       },
+    });
+  });
+
+  it("passes notification events for gateway-owned quiet-tick state", async () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    await tool.execute?.("call-notification", {
+      action: "update",
+      monitorId: "monitor-1",
+      patch: { notificationEvent: "unchanged", notificationState: { forged: true } },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith("monitor.update", expect.any(Object), {
+      monitorId: "monitor-1",
+      patch: { notificationEvent: "unchanged" },
     });
   });
 

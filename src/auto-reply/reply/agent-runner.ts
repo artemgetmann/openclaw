@@ -76,13 +76,14 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import { enqueueFollowupRunDurable, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
+  isExplicitAgentTimeoutPayload,
   REPLY_TIMEOUT_CONTINUATION_PROMPT,
   resolveReplyTimeoutContinuationConfig,
   shouldContinueAfterReplyTimeout,
@@ -293,7 +294,9 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    // Await the atomic disk record before returning to channel middleware. For
+    // Telegram this is what makes advancing the update offset crash-safe.
+    await enqueueFollowupRunDurable(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
@@ -500,6 +503,10 @@ export async function runReplyAgent(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    // The same callback drains RAM-only and persisted items. Preserve legacy
+    // best-effort behavior for the former, but reject failed durable work so
+    // the queue cannot acknowledge its disk record as successfully processed.
+    failureMode: "throw-durable",
   });
 
   const initialHardReservePayload = buildHardReserveOverflowPayload(followupRun.prompt);
@@ -559,7 +566,13 @@ export async function runReplyAgent(params: {
     recordDurableTaskAttemptStart(durableTask);
     let runOutcome = await runSingleTurn(commandBody);
     while (runOutcome.kind !== "final") {
-      if (runOutcome.runResult.meta?.aborted) {
+      const runPayloads = runOutcome.runResult.payloads ?? [];
+      const isExplicitTimeout =
+        runPayloads.length === 1 && isExplicitAgentTimeoutPayload(runPayloads[0]);
+      // The embedded runner marks provider timeouts as aborted after cancelling
+      // their work. Let the explicit timeout payload reach continuation policy;
+      // every other abort remains an immediate, silent user/system cancellation.
+      if (runOutcome.runResult.meta?.aborted && !isExplicitTimeout) {
         exhaustDurableReplyTask(durableTask);
         return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
       }
@@ -572,12 +585,12 @@ export async function runReplyAgent(params: {
       if (pendingToolTasks.size > 0) {
         await Promise.allSettled(pendingToolTasks);
       }
-      recordDurableTaskPayloadEvidence(durableTask, runOutcome.runResult.payloads);
+      recordDurableTaskPayloadEvidence(durableTask, runPayloads);
       const timeoutContinuation = shouldContinueAfterReplyTimeout({
         cfg,
         opts: runOpts,
         isHeartbeat,
-        payloads: runOutcome.runResult.payloads ?? [],
+        payloads: runPayloads,
         didSendFinalVisibleReply: didSendFinalVisibleReply.value,
         messagingToolSentTargets: runOutcome.runResult.messagingToolSentTargets,
         messageProvider: followupRun.run.messageProvider,

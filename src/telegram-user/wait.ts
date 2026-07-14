@@ -9,6 +9,7 @@ import {
   buildTelegramUserWaitResult,
   buildTelegramUserWaitTimeoutError,
   matchTelegramUserMessage,
+  shouldRecheckTelegramUserWaitCandidate,
 } from "./match.js";
 import type { TelegramUserBackendOptions, TelegramUserWaitResult } from "./types.js";
 
@@ -52,8 +53,6 @@ export async function runTelegramUserWait(
       if (seenMessageIds.has(message.message_id)) {
         continue;
       }
-      seenMessageIds.add(message.message_id);
-
       const match = matchTelegramUserMessage(message, {
         afterId,
         contains,
@@ -72,6 +71,9 @@ export async function runTelegramUserWait(
       }
 
       ignoredRecent = appendIgnoredTelegramUserCandidate(ignoredRecent, message, match.reason);
+      if (!shouldRecheckTelegramUserWaitCandidate(match.reason)) {
+        seenMessageIds.add(message.message_id);
+      }
     }
 
     await sleep(pollIntervalMs);

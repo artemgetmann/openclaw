@@ -49,7 +49,12 @@ function initMainRepo(root: string) {
 
 function jarvisLaunchctlFixture(
   stateDir: string,
-  options: { wrongRuntime?: boolean; prefixOnlyRuntime?: boolean } = {},
+  options: {
+    wrongRuntime?: boolean;
+    prefixOnlyRuntime?: boolean;
+    listUnavailable?: boolean;
+    openclawLoadedOnPrint?: boolean;
+  } = {},
 ) {
   const jarvisHome = path.dirname(stateDir);
   const nodeBin = options.wrongRuntime
@@ -73,9 +78,20 @@ function jarvisLaunchctlFixture(
 set -euo pipefail
 case "$1" in
   list)
-    printf '%s\\n' '85294	0	ai.jarvis.gateway'
+    ${options.listUnavailable ? "exit 1" : "printf '%s\\n' '85294 0 ai.jarvis.gateway'"}
     ;;
   print)
+    case "\${2:-}" in
+      *ai.openclaw.gateway)
+        ${
+          options.openclawLoadedOnPrint
+            ? "printf '%s\\n' 'gui/501/ai.openclaw.gateway = {' '  state = running' '  pid = 11111' '}'"
+            : "exit 113"
+        }
+        ;;
+      *ai.jarvis.gateway) ;;
+      *) exit 113 ;;
+    esac
     cat <<'EOF'
 gui/501/ai.jarvis.gateway = {
   state = running
@@ -136,9 +152,70 @@ function writeJarvisRuntimeLog(
   fields.push(`runtimeSource=${options.runtimeSource ?? "jarvis-managed-bundle"}`);
   fs.mkdirSync(logDir, { recursive: true });
   fs.writeFileSync(
+    path.join(stateDir, ".consumer-bundled-runtime.json"),
+    JSON.stringify({
+      format: 1,
+      bundleVersion: "300",
+      gitCommit: options.commit ?? "389c0513cf",
+    }),
+  );
+  fs.writeFileSync(
     path.join(logDir, "gateway.log"),
     `2026-06-29T17:24:27.009+08:00 [gateway] runtime identity: ${fields.join(" ")}\n`,
   );
+}
+
+function writeJarvisProofFixture(
+  options: {
+    commit?: string;
+    manifestCommit?: string;
+    protection?: {
+      protectedRuntimeGitCommit: string;
+      compatibilityManifestGitCommit: string;
+      compatibilityManifestBundleVersion: string;
+    };
+    launchctl?: Parameters<typeof jarvisLaunchctlFixture>[1];
+  } = {},
+) {
+  const root = makeTempRoot();
+  const home = path.join(root, "home");
+  const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+  const nodeBin = path.join(stateDir, "tools", "node", "bin", "node");
+  const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
+  const binDir = path.join(root, "bin");
+  const commit = options.commit ?? "389c0513cf";
+  fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(entrypoint, "fixture\n");
+  writeExecutable(
+    nodeBin,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"jarvis-managed-bundle","runtimeCommit":"${commit}","runtimePackageVersion":"2026.6.28","launchServiceVersion":"2026.6.28","stateDir":"${stateDir}","configPath":"${stateDir}/openclaw.json"},"rpc":{"ok":true},"health":{"healthy":true}}'
+`,
+  );
+  writeExecutable(
+    path.join(binDir, "launchctl"),
+    jarvisLaunchctlFixture(stateDir, options.launchctl),
+  );
+  writeExecutable(path.join(binDir, "lsof"), jarvisLsofFixture(stateDir));
+  writeJarvisRuntimeLog(stateDir, { commit });
+  fs.writeFileSync(
+    path.join(stateDir, ".consumer-bundled-runtime.json"),
+    JSON.stringify({
+      format: 1,
+      bundleVersion: "300",
+      gitCommit: options.manifestCommit ?? commit,
+    }),
+  );
+  if (options.protection) {
+    fs.writeFileSync(
+      path.join(stateDir, ".consumer-bundled-runtime.protection.json"),
+      JSON.stringify({ format: 1, ...options.protection }),
+    );
+  }
+  return { home, stateDir, binDir };
 }
 
 function jarvisLsofFixture(stateDir: string, options: { includeGatewayLog?: boolean } = {}) {
@@ -192,7 +269,11 @@ esac
 }
 
 function writeJarvisUnlockProofFixture(
-  options: { wrongRuntime?: boolean; missingNoAutoLeaseSupport?: boolean } = {},
+  options: {
+    wrongRuntime?: boolean;
+    missingNoAutoLeaseSupport?: boolean;
+    runtimeSource?: string;
+  } = {},
 ) {
   const root = makeTempRoot();
   const home = path.join(root, "home");
@@ -218,7 +299,7 @@ function writeJarvisUnlockProofFixture(
     nodeBin,
     `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"jarvis-managed-bundle","runtimeCommit":"389c0513cf","runtimePackageVersion":"2026.6.28","launchServiceVersion":"2026.6.28","stateDir":"${stateDir}","configPath":"${stateDir}/openclaw.json"},"rpc":{"ok":true},"health":{"healthy":true}}'
+printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"${options.runtimeSource ?? "jarvis-managed-bundle"}","runtimeCommit":"389c0513cf","runtimePackageVersion":"2026.6.28","launchServiceVersion":"2026.6.28","stateDir":"${stateDir}","configPath":"${stateDir}/openclaw.json"},"rpc":{"ok":true},"health":{"healthy":true}}'
 `,
   );
   writeExecutable(
@@ -517,6 +598,55 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
     expect(result.stdout).toContain("applications_jarvis_app=untouched");
   });
 
+  it("falls back to direct launchctl print when list is unavailable", () => {
+    const fixture = writeJarvisProofFixture({ launchctl: { listUnavailable: true } });
+
+    const result = runScript("scripts/prove-jarvis-runtime.sh", ["--expected-commit", "389c051"], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("jarvis_runtime_proof=true");
+    expect(result.stdout).toContain("pid=85294");
+  });
+
+  it("keeps the shared-gateway ambiguity guard in direct-print fallback", () => {
+    const fixture = writeJarvisProofFixture({
+      launchctl: { listUnavailable: true, openclawLoadedOnPrint: true },
+    });
+
+    const result = runScript("scripts/prove-jarvis-runtime.sh", [], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("both ai.jarvis.gateway");
+    expect(result.stderr).toContain("ai.openclaw.gateway");
+  });
+
+  it("rejects protected source hotfix drift as packaged Jarvis proof", () => {
+    const fixture = writeJarvisProofFixture({
+      commit: "dd8a89b",
+      manifestCommit: "ce3ed18",
+      protection: {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+      },
+    });
+
+    const result = runScript("scripts/prove-jarvis-runtime.sh", [], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("runtimeSource=jarvis-break-glass-hotfix");
+    expect(result.stderr).toContain("packaged Jarvis proof refused");
+  });
+
   it("accepts target-level rpc and health fields in Jarvis status JSON", () => {
     const root = makeTempRoot();
     const home = path.join(root, "home");
@@ -753,6 +883,26 @@ exit 9
     expect(result.stdout).toContain("unlock_wrapper_no_auto_lease=supported");
     expect(result.stdout).toContain("unlock_wrapper_no_auto_lease_auto_lock=supported");
     expect(result.stdout).toContain("lease_cleanup=ok");
+    expect(result.stdout).toContain("gateway_rpc_health=ok");
+    expect(result.stdout).toContain("runtime_mutation=none");
+    expect(result.stdout).toContain("lock_unlock_mutation=none");
+  });
+
+  it("accepts an explicit break-glass Jarvis runtime for unrelated unlock preflight", () => {
+    const fixture = writeJarvisUnlockProofFixture({
+      runtimeSource: "jarvis-break-glass-hotfix",
+    });
+
+    const result = runScript("scripts/prove-jarvis-unlock-runtime.sh", [], {
+      HOME: fixture.home,
+      PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+      OPENCLAW_PLISTBUDDY_BIN: path.join(fixture.binDir, "plistbuddy"),
+      OPENCLAW_SQLITE3_BIN: path.join(fixture.binDir, "sqlite3"),
+      OPENCLAW_ID_BIN: "id",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("launchagent_active_matches_plist=true");
     expect(result.stdout).toContain("gateway_rpc_health=ok");
     expect(result.stdout).toContain("runtime_mutation=none");
     expect(result.stdout).toContain("lock_unlock_mutation=none");

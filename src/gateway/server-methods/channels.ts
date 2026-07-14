@@ -446,10 +446,26 @@ export const channelsHandlers: GatewayRequestHandlers = {
         config: cfg,
         runtime: defaultRuntime,
       });
-      await withTimeout(
-        bot.handleUpdate(update as Parameters<typeof bot.handleUpdate>[0]),
-        replayParams.timeoutMs,
-      );
+      // This standalone replay bot does not pass through polling or webhook
+      // startup, so grammY has not populated botInfo before handleUpdate.
+      const initAbort = new AbortController();
+      try {
+        await withTimeout(
+          (async () => {
+            await bot.init(initAbort.signal as unknown as Parameters<typeof bot.init>[0]);
+            // A timed-out init may ignore cancellation and resolve later. Check
+            // the shared signal before replaying so it cannot start a stale
+            // handleUpdate after the RPC has already returned a timeout.
+            initAbort.signal.throwIfAborted();
+            await bot.handleUpdate(update as Parameters<typeof bot.handleUpdate>[0]);
+          })(),
+          replayParams.timeoutMs,
+        );
+      } finally {
+        // Abort getMe when the shared replay deadline wins. Aborting after a
+        // successful replay is harmless and releases any init-side resources.
+        initAbort.abort();
+      }
       const after = getChannelActivity({ channel: "telegram", accountId: account.accountId });
       // The Telegram delivery layer records outbound activity after a reply is
       // actually sent. Return that as the app-visible setup completion signal.

@@ -22,8 +22,21 @@ import type { TelegramThreadSpec } from "./helpers.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
+const RICH_ENTITY_INVALID_RE =
+  /RICH_MESSAGE_(?:EMAIL|URL|MENTION|HASHTAG|CASHTAG|BOT_COMMAND|PHONE|BANK_CARD)_INVALID/i;
+const RICH_CONTENT_INVALID_RE =
+  /RICH_MESSAGE_CONTENT_REQUIRED|Telegram rich_message payload is empty|Telegram sendRichMessage returned (?:no message_id|empty (?:rich_message content|text|caption))/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
 const QUOTE_PARAM_RE = /\bquote not found\b/i;
+
+function isTelegramRichPlainFallbackError(err: unknown): boolean {
+  const errText = formatErrorMessage(err);
+  return (
+    RICH_ENTITY_INVALID_RE.test(errText) ||
+    RICH_CONTENT_INVALID_RE.test(errText) ||
+    PARSE_ERR_RE.test(errText)
+  );
+}
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
   if (err instanceof GrammyError) {
@@ -206,11 +219,19 @@ export async function sendTelegramText(
         runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
         return Math.trunc(res.message_id);
       } catch (err) {
+        if (!isTelegramRichPlainFallbackError(err) || !hasFallbackText) {
+          // Network and unknown rich-send failures are not evidence that a
+          // second send is safe. Throw instead of silently duplicating or
+          // degrading a delivery whose outcome may be unknown.
+          throw err;
+        }
         runtime.log?.(
-          `telegram sendRichMessage failed; retrying with legacy sendMessage: ${formatErrorMessage(
-            err,
-          )}`,
+          `telegram sendRichMessage validation/content failure; retrying without formatting: ${formatErrorMessage(err)}`,
         );
+        // The rich chunk may contain tags that parse_mode=HTML rejects. Go
+        // directly to the already-computed plain projection and never replay
+        // rich-only HTML through the legacy transport.
+        return await sendPlainFallback();
       }
     }
   }

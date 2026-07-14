@@ -30,6 +30,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { readMonitorReceiptDisclosure } from "../../monitor/receipt.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -259,6 +260,10 @@ function isSourcePreviewToolPayload(payload: ReplyPayload): boolean {
   return (openclaw as { sourcePreview?: unknown }).sourcePreview === true;
 }
 
+function isMonitorReceiptToolPayload(payload: ReplyPayload): boolean {
+  return readMonitorReceiptDisclosure(payload.channelData) !== undefined;
+}
+
 const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE =
   /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 
@@ -468,14 +473,14 @@ export async function dispatchReplyFromConfig(params: {
       : telegramTtsCommandAction === "off"
         ? "off"
         : undefined;
-  // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
-  // as-is, but let inbound audio override typed-message modes like `off` or
-  // `tagged` without writing a new preference.
+  // Voice-in gets voice-out for this turn when the user has not chosen an
+  // explicit session mode. `/tts off` is a hard output opt-out and must not be
+  // overridden by inbound audio; transcription and model input are unaffected.
   const turnTtsAuto = commandTtsAuto
     ? commandTtsAuto
     : isControlCommandReply && !isTelegramTtsControlCommand
       ? "off"
-      : inboundAudio && sessionTtsAuto !== "always"
+      : inboundAudio && sessionTtsAuto === undefined
         ? "inbound"
         : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();
@@ -867,6 +872,11 @@ export async function dispatchReplyFromConfig(params: {
         // instead of dropping them with internal tool/status chatter.
         return payload;
       }
+      if (isMonitorReceiptToolPayload(payload)) {
+        // Monitor receipts carry trusted channel data for downstream rendering
+        // and deterministic text for delivery paths that require a text body.
+        return payload;
+      }
       if (shouldSendToolSummaries) {
         const text =
           typeof payload.text === "string"
@@ -1061,15 +1071,27 @@ export async function dispatchReplyFromConfig(params: {
       logInfo(
         `telegram: block-stream final text ready; finalizing block preview before tts textLength=${blockFinalTextForDelivery.length}`,
       );
-      await dispatcher.finalizeBlockReply?.();
+      const finalizedBlockAnswerText = await dispatcher.finalizeBlockReply?.();
+      // Telegram removes acknowledged progress from the accumulated block
+      // transcript while finalizing the visible answer. Use that exact accepted
+      // text for voice synthesis; the raw transcript can still contain every
+      // acknowledgment and progress update from the turn.
+      const blockFinalTextForTts =
+        typeof finalizedBlockAnswerText === "string" && finalizedBlockAnswerText.trim()
+          ? finalizedBlockAnswerText.trim()
+          : blockFinalTextForDelivery;
+      const blockFinalCaptionText =
+        typeof finalizedBlockAnswerText === "string" && finalizedBlockAnswerText.trim()
+          ? finalizedBlockAnswerText.trim()
+          : visibleDurableBlockFinalText;
       logInfo(
-        `telegram: block-stream final preview finalized before tts textLength=${blockFinalTextForDelivery.length}`,
+        `telegram: block-stream final preview finalized before tts textLength=${blockFinalTextForTts.length}`,
       );
       const ttsAttemptStartedAt = Date.now();
       logInfo(
-        `tts: final supplement synthesis start path=block-stream textLength=${blockFinalTextForDelivery.length} channel=${ttsChannel ?? "unknown"}`,
+        `tts: final supplement synthesis start path=block-stream textLength=${blockFinalTextForTts.length} channel=${ttsChannel ?? "unknown"}`,
       );
-      const ttsReply = await maybeApplyAutomaticTts({ text: blockFinalTextForDelivery }, "final");
+      const ttsReply = await maybeApplyAutomaticTts({ text: blockFinalTextForTts }, "final");
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsPayload = {
@@ -1078,7 +1100,7 @@ export async function dispatchReplyFromConfig(params: {
           // from the final bubble. Telegram snippets must describe the visible
           // final answer, not an earlier progress draft or speech-only variant.
           text: shouldCaptionFinalTtsSupplement
-            ? buildFinalTtsCaptionPreview(visibleDurableBlockFinalText)
+            ? buildFinalTtsCaptionPreview(blockFinalCaptionText)
             : undefined,
         };
         const ttsSupplement = sanitizeTelegramVisiblePayload(
@@ -1109,7 +1131,7 @@ export async function dispatchReplyFromConfig(params: {
           queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
         }
         logInfo(
-          `tts: final supplement media send queued path=block-stream textLength=${durableBlockFinalText.trim().length}`,
+          `tts: final supplement media send queued path=block-stream textLength=${blockFinalTextForTts.length}`,
         );
       } else if (
         shouldCaptionFinalTtsSupplement &&

@@ -68,7 +68,12 @@ vi.mock("./inbound-meta.js", () => ({
 }));
 
 vi.mock("./queue.js", () => ({
+  hasFollowupQueueOwnership: vi.fn().mockReturnValue(false),
   resolveQueueSettings: vi.fn().mockReturnValue({ mode: "followup" }),
+}));
+
+vi.mock("./queue/durable-store.js", () => ({
+  isDurableFollowupMessageProcessed: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("./route-reply.js", () => ({
@@ -89,6 +94,7 @@ vi.mock("./typing-mode.js", () => ({
 }));
 
 import { runReplyAgent } from "./agent-runner.js";
+import { isDurableFollowupMessageProcessed } from "./queue/durable-store.js";
 import { routeReply } from "./route-reply.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -179,6 +185,49 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it("rejects processed redelivery before draining pending system events", async () => {
+    vi.mocked(isDurableFollowupMessageProcessed)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const duplicate = baseParams();
+    duplicate.ctx = {
+      ...duplicate.ctx,
+      OriginatingChannel: "telegram",
+      OriginatingTo: "-100123",
+      AccountId: "primary",
+      MessageThreadId: 17,
+    };
+    duplicate.sessionCtx = {
+      ...duplicate.sessionCtx,
+      MessageSid: "telegram:101",
+    };
+
+    await expect(runPreparedReply(duplicate)).resolves.toBeUndefined();
+
+    expect(isDurableFollowupMessageProcessed).toHaveBeenNthCalledWith(1, {
+      queueKey: "session-key",
+      run: {
+        messageId: "telegram:101",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+        originatingAccountId: "primary",
+        originatingThreadId: 17,
+      },
+    });
+    expect(drainFormattedSystemEvents).not.toHaveBeenCalled();
+    expect(runReplyAgent).not.toHaveBeenCalled();
+    expect(duplicate.typing.cleanup).toHaveBeenCalledTimes(1);
+
+    const newMessage = baseParams();
+    newMessage.sessionCtx = {
+      ...newMessage.sessionCtx,
+      MessageSid: "telegram:102",
+    };
+    await expect(runPreparedReply(newMessage)).resolves.toEqual({ text: "ok" });
+    expect(drainFormattedSystemEvents).toHaveBeenCalledTimes(1);
+    expect(runReplyAgent).toHaveBeenCalledTimes(1);
   });
 
   it("keeps thread history context on follow-up turns", async () => {

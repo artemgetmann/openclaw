@@ -7,7 +7,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
-import { getSessionGoal } from "../config/sessions/goals.js";
+import { getSessionGoal, recordSessionGoalContinuation } from "../config/sessions/goals.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
@@ -19,6 +19,7 @@ import {
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -52,6 +53,14 @@ export type GatewayCronState = {
 };
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
+
+export function formatCronFailureMessage(
+  job: Pick<CronJob, "name" | "payload">,
+  error?: string,
+): string {
+  const label = job.payload.kind === "monitorWake" ? "Monitor" : "Cron job";
+  return `${label} "${job.name}" failed: ${error ?? "unknown error"}`;
+}
 
 function trimToOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -411,6 +420,18 @@ export function buildGatewayCronService(params: {
           stopJob: true,
         };
       }
+      if (monitor.goal) {
+        // Count real bound-monitor wake activity on the user-facing goal. The
+        // helper refuses stale goal ids and non-active/terminal goal states.
+        await recordSessionGoalContinuation({
+          sessionKey: monitor.originSessionKey,
+          storePath: resolveStorePath(runtimeConfig.session?.store, {
+            agentId: monitor.agentId,
+          }),
+          expectedGoalId: monitor.goal.id,
+          now: nowMs,
+        });
+      }
       const monitorExecution = resolveMonitorExecutionPlan({
         actionPolicy: monitor.actionPolicy,
         originSessionKey: monitor.originSessionKey,
@@ -474,13 +495,19 @@ export function buildGatewayCronService(params: {
             currentMonitor,
             runtimeConfig,
           );
-          const nextStatus = shouldStopForGoalCompletion
-            ? "stopped"
-            : result.status === "error"
-              ? "degraded"
-              : result.status === "ok"
-                ? "active"
-                : currentMonitor.status;
+          // The monitor agent may have persisted a terminal checkpoint/status
+          // (and disabled this cron job) during the wake. Preserve that newer
+          // durable decision instead of deriving "active" from the runner's
+          // successful return value and resurrecting a completed monitor.
+          const nextStatus = isTerminalMonitorStatus(currentMonitor.status)
+            ? currentMonitor.status
+            : shouldStopForGoalCompletion
+              ? "stopped"
+              : result.status === "error"
+                ? "degraded"
+                : result.status === "ok"
+                  ? "active"
+                  : currentMonitor.status;
           const updated = updateMonitorRecord(
             currentMonitor,
             {
@@ -619,7 +646,7 @@ export function buildGatewayCronService(params: {
               (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
 
             if (!isBestEffort) {
-              const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
+              const failureMessage = formatCronFailureMessage(job, evt.error);
               const failurePayload = {
                 jobId: job.id,
                 jobName: job.name,

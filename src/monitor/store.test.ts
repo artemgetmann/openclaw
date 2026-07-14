@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createMonitorIdentityKey, findActiveMonitorByIdentity } from "./store.js";
+import {
+  createMonitorIdentityKey,
+  createMonitorRecord,
+  findActiveMonitorByIdentity,
+} from "./store.js";
 import type { MonitorRecord, MonitorStoreFile } from "./types.js";
 
 function monitorRecord(overrides: Partial<MonitorRecord> = {}): MonitorRecord {
@@ -22,6 +26,82 @@ function monitorRecord(overrides: Partial<MonitorRecord> = {}): MonitorRecord {
 }
 
 describe("monitor store identity", () => {
+  it("stores a normalized operational disclosure and notification defaults", () => {
+    const monitor = createMonitorRecord(
+      {
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:new",
+        purpose: "  Watch the support thread until resolved.  ",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        stopCondition: "Stop when support confirms resolution.",
+        expiryAt: "2026-07-11T00:00:00.000Z",
+        goal: { id: "goal-1", objective: "Resolve support." },
+        cronJobId: "cron-new",
+      },
+      100,
+    );
+
+    expect(monitor).toMatchObject({
+      notificationPolicy: {
+        unchangedNoticeAfterChecks: 3,
+        unchangedReminderIntervalMs: 43_200_000,
+      },
+      notificationState: { consecutiveUnchangedChecks: 0 },
+      disclosure: {
+        purpose: "Watch the support thread until resolved.",
+        checkCadence: { kind: "every", everyMs: 300_000 },
+        noChangeCadence: { noticeAfterChecks: 3, reminderIntervalMs: 43_200_000 },
+        expiryAt: "2026-07-11T00:00:00.000Z",
+        stopCondition: "Stop when support confirms resolution.",
+        autonomy: { level: "observe_only" },
+        actionPolicy: "notify_draft",
+      },
+    });
+  });
+
+  it("keeps the short disclosure purpose separate from execution instructions", () => {
+    const monitor = createMonitorRecord(
+      {
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:short-purpose",
+        name: "Customer reply",
+        purpose: "Customer reply",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        cronJobId: "cron-short-purpose",
+      },
+      100,
+    );
+
+    expect(monitor.name).toBe("Customer reply");
+    expect(monitor.disclosure?.purpose).toBe("Customer reply");
+  });
+
+  it("discloses missing expiry and stop condition explicitly", () => {
+    const monitor = createMonitorRecord(
+      {
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:no-expiry",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "support" },
+        cadence: { kind: "every", everyMs: 60_000 },
+        cronJobId: "cron-no-expiry",
+      },
+      100,
+    );
+
+    expect(monitor.disclosure).toMatchObject({
+      expiryAt: null,
+      stopCondition: null,
+    });
+  });
+
   it("normalizes sourceTarget object key order", () => {
     const firstKey = createMonitorIdentityKey({
       agentId: "main",

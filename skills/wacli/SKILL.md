@@ -83,9 +83,10 @@ Automation Rule
   person's wording with only an AI summary when the actual message text is
   available.
 - Immediately before sending any WhatsApp-as-me message, refresh the same target
-  again and compare it with the context used for the draft. If a newer inbound
-  message arrived, stop and update the reply or ask the user before sending.
-  This is mandatory even if the user already approved an older draft.
+  again and compare it with the context used for the draft. If newer relevant
+  thread movement, inbound or outbound, changes or duplicates the reply, stop
+  and update the reply or ask the user before sending. This is mandatory even if
+  the user already approved an older draft.
 - Treat raw `wacli doctor` as fallback/debug-only.
   Under a live OpenClaw-owned lock it can report `CONNECTED false` even when
   `wacli sync --follow` is healthy, so do not use it as the primary readiness
@@ -147,7 +148,7 @@ Safety
 - Confirm recipient + message before sending.
 - Confirmation does not replace the final thread refresh. Re-check the target
   conversation immediately before `wacli-send-safe.sh` so approval cannot send a
-  stale reply over a newer inbound message.
+  stale or duplicate reply over newer relevant thread movement.
 - If anything is ambiguous, ask a clarifying question.
 
 Auth + sync

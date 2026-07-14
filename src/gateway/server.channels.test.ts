@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { listGatewayMethods } from "./server-methods-list.js";
@@ -10,6 +10,20 @@ import {
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
+
+const telegramBotInit = vi.hoisted(() =>
+  vi.fn(async (_signal?: AbortSignal): Promise<void> => undefined),
+);
+const telegramBotHandleUpdate = vi.hoisted(() =>
+  vi.fn(async (_update: unknown): Promise<void> => undefined),
+);
+
+vi.mock("../../extensions/telegram/src/bot.js", () => ({
+  createTelegramBot: vi.fn(() => ({
+    init: telegramBotInit,
+    handleUpdate: telegramBotHandleUpdate,
+  })),
+}));
 
 let readConfigFileSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
@@ -112,6 +126,13 @@ afterAll(async () => {
   await server.close();
 });
 
+afterEach(() => {
+  telegramBotInit.mockReset();
+  telegramBotInit.mockImplementation(async (_signal?: AbortSignal) => undefined);
+  telegramBotHandleUpdate.mockReset();
+  telegramBotHandleUpdate.mockImplementation(async (_update: unknown) => undefined);
+});
+
 describe("gateway server channels", () => {
   test("channels.status returns snapshot without probe", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
@@ -176,8 +197,14 @@ describe("gateway server channels", () => {
   });
 
   test("channels.telegram.setup-replay is registered and reports missing setup token", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     expect(listGatewayMethods()).toContain("channels.telegram.setup-replay");
     await writeConfigFile({ channels: { telegram: {} } });
+
+    // Keep a worktree-local .env.local from overriding the intentionally empty token.
+    const cwdSpy = vi
+      .spyOn(process, "cwd")
+      .mockReturnValue(process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? "/tmp");
 
     const res = await rpcReq<{
       ok?: boolean;
@@ -193,7 +220,7 @@ describe("gateway server channels", () => {
         date: 1_700_000_000,
         text: "Wake up my friend",
       },
-    });
+    }).finally(() => cwdSpy.mockRestore());
 
     expect(res.ok).toBe(true);
     expect(res.error?.message).toBeUndefined();
@@ -236,6 +263,60 @@ describe("gateway server channels", () => {
     expect(res.payload).toMatchObject({
       replyStarted: true,
     });
+    expect(res.payload?.error).not.toContain("Bot not initialized!");
+  });
+
+  test("channels.telegram.setup-replay never handles an update after init times out", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    await writeConfigFile({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+        },
+      },
+    });
+
+    let releaseInit: (() => void) | undefined;
+    let initSignal: AbortSignal | undefined;
+    telegramBotInit.mockImplementationOnce(async (signal?: AbortSignal) => {
+      initSignal = signal;
+      // Model a getMe request that ignores cancellation and resolves late. The
+      // production guard must still stop the subsequent handleUpdate call.
+      await new Promise<void>((resolve) => {
+        releaseInit = resolve;
+      });
+    });
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      replyStarted?: boolean;
+      replyCompleted?: boolean;
+      error?: string;
+    }>(ws, "channels.telegram.setup-replay", {
+      timeoutMs: 1000,
+      payload: {
+        updateId: 1001,
+        messageId: 42,
+        chatId: 1336356696,
+        senderId: 1336356696,
+        date: 1_700_000_000,
+        text: "Wake up my friend",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      ok: false,
+      replyStarted: true,
+      replyCompleted: false,
+    });
+    expect(res.payload?.error).toContain("timeout");
+    expect(initSignal?.aborted).toBe(true);
+    expect(telegramBotHandleUpdate).not.toHaveBeenCalled();
+
+    releaseInit?.();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(telegramBotHandleUpdate).not.toHaveBeenCalled();
   });
 
   test("channels.telegram.setup-replay reads token saved after runtime snapshot initialization", async () => {

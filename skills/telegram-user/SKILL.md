@@ -101,10 +101,10 @@ Automation Rule
   available.
 - Immediately before sending any Telegram-as-me message, re-read the target
   chat with `read --chat <chat> --limit 5 --format compact` (or the narrowest
-  equivalent) and compare it with the context used for the draft. If a newer
-  inbound message arrived, stop and update the draft or ask the user before
-  sending. This is the same basic safety step a human would take before replying
-  in Telegram.
+  equivalent) and compare it with the context used for the draft. If newer
+  relevant thread movement, inbound or outbound, changes or duplicates the
+  reply, stop and update the draft or ask the user before sending. This is the
+  same basic safety step a human would take before replying in Telegram.
 - If `read` shows `media_kind` for a voice/audio message, download the payload
   with `telegram-user download`, then use the generic `media transcribe`
   command. Do not inspect Telethon internals or write a one-off downloader.

@@ -309,7 +309,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   it("starts final-looking partials in a separate answer bubble after transient progress", async () => {
     const progressStream = createDraftStream(9010);
     const answerStream = createDraftStream(9011);
-    createTelegramDraftStream.mockReturnValueOnce(progressStream);
+    createTelegramDraftStream.mockReturnValueOnce(progressStream).mockReturnValueOnce(answerStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({
@@ -354,7 +354,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
     expect(progressStream.update).toHaveBeenCalledWith(
       "I'll inspect browser support, write a report, and clean up the temp file.",
     );
@@ -369,20 +369,18 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(progressStream.flush).toHaveBeenCalledTimes(1);
     expect(progressStream.clear).not.toHaveBeenCalled();
     expect(progressStream.materialize.mock.invocationCallOrder[0]).toBeLessThan(
-      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      answerStream.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(answerStream.update).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        richMessages: false,
-        replies: [
-          expect.objectContaining({
-            text: "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
-          }),
-        ],
-      }),
+    expect(answerStream.update).toHaveBeenCalledWith(
+      "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
     );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9011,
+      "Ran it.\n\nWhat I tested:\n\nBrowser, Notes, and Desktop temp-file cleanup.",
+      expect.objectContaining({ richMessages: false }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("routes sourcePreview tool text through transient progress", async () => {
@@ -435,11 +433,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(progressStream.update).toHaveBeenNthCalledWith(
       1,
-      "Plan updated\n\n- [x] Inspect files\n\n- [~] Render checklist\n\n- [ ] Run tests",
+      "Plan updated\n- [x] Inspect files\n- [~] Render checklist\n- [ ] Run tests",
     );
     expect(progressStream.update).toHaveBeenNthCalledWith(
       2,
-      "Plan updated\n\n- [x] Inspect files\n\n- [x] Render checklist\n\n- [~] Run tests",
+      "Plan updated\n- [x] Inspect files\n- [x] Render checklist\n- [~] Run tests",
     );
     expect(progressStream.update).toHaveBeenCalledWith("Work log");
     expect(progressStream.update).toHaveBeenCalledTimes(3);
@@ -448,6 +446,48 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Done." })],
       }),
+    );
+  });
+
+  it("folds a progress acknowledgment into the plan without materializing a second message", async () => {
+    const progressStream = createDraftStream();
+    progressStream.materialize.mockResolvedValue(undefined);
+    createTelegramDraftStream.mockReturnValue(progressStream);
+    const acknowledgment = "I’ll inspect the files first, then run the focused tests.";
+    const planText = "Plan updated\n- [~] Inspect files\n- [ ] Run tests";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await dispatcherOptions.deliver(
+          {
+            text: acknowledgment,
+            channelData: { openclaw: { assistantPhase: "commentary" } },
+          },
+          { kind: "block" },
+        );
+        await replyOptions?.onToolStart?.({ name: "update_plan" });
+        await replyOptions?.onToolResult?.({
+          text: planText,
+          channelData: { openclaw: { sourcePreview: true, progressKind: "plan" } },
+        });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "plan-materialize-fallback" },
+      }),
+      streamMode: "partial",
+      telegramCfg: { blockStreaming: true },
+    });
+
+    expect(progressStream.update).toHaveBeenCalledWith(acknowledgment);
+    expect(progressStream.materialize).toHaveBeenCalledTimes(1);
+    expect(progressStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(progressStream.update).toHaveBeenCalledWith(
+      `${acknowledgment}\n\nPlan updated\n- [~] Inspect files\n- [ ] Run tests`,
     );
   });
 
@@ -482,20 +522,14 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(progressStream.update).toHaveBeenCalledWith(
-      "Plan updated\n\n- [~] Inspect files\n\n- [ ] Write temp report\n\n- [ ] Summarize",
+      "Plan updated\n- [~] Inspect files\n- [ ] Write temp report\n- [ ] Summarize",
     );
     expect(progressStream.update).not.toHaveBeenCalledWith(finalText);
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
     expect(progressStream.update).toHaveBeenCalledWith("Work log");
     expect(progressStream.clear).not.toHaveBeenCalled();
-    expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        richMessages: false,
-        replies: [expect.objectContaining({ text: finalText })],
-      }),
-    );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expectFinalPreviewEditedInPlace(9105, finalText);
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "" })],
@@ -632,7 +666,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(answerStream.update).toHaveBeenCalledWith("Inspecting the workspace state.");
     expect(answerStream.update).toHaveBeenCalledWith(
-      "Checking the current branch and recent edits.",
+      "Inspecting the workspace state.\n\nChecking the current branch and recent edits.",
     );
     expect(answerStream.update).toHaveBeenCalledWith("Work log");
     expect(answerStream.clear).not.toHaveBeenCalled();
@@ -653,7 +687,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
-  it("sends final answer text separately after retained progress and strips transient prefixes", async () => {
+  it("finalizes visible final preview after retained progress and strips transient prefixes", async () => {
     const speculativeAnswerStream = createTestDraftStream({
       messageId: 9401,
       clearMessageIdOnForceNew: true,
@@ -697,24 +731,14 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
     expect(speculativeAnswerStream.update).toHaveBeenCalledWith(
-      "Checking the current branch and recent edits.",
+      "Inspecting the workspace state.\n\nChecking the current branch and recent edits.",
     );
     expect(speculativeAnswerStream.forceNewMessage).not.toHaveBeenCalled();
     expect(finalAnswerStream.update).toHaveBeenCalledWith(
       "The branch is clean enough to patch safely.",
     );
-    expect(finalAnswerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        richMessages: false,
-        replies: [
-          expect.objectContaining({
-            text: "The branch is clean enough to patch safely.",
-          }),
-        ],
-      }),
-    );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(finalAnswerStream.clear).not.toHaveBeenCalled();
+    expectFinalPreviewEditedInPlace(9403, "The branch is clean enough to patch safely.");
     expect(speculativeAnswerStream.update).toHaveBeenCalledWith("Work log");
     expect(speculativeAnswerStream.clear).not.toHaveBeenCalled();
   });
@@ -1609,40 +1633,46 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
-  it("sends visible final text before a media-only voice supplement in the same thread", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        {
-          text: "Final answer.",
+  it("finalizes an explicitly phased partial before a media-only voice supplement", async () => {
+    const answerStream = createDraftStream(111);
+    createTelegramDraftStream.mockReturnValue(answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Final answer",
           channelData: { openclaw: { assistantPhase: "final_answer" } },
-        },
-        { kind: "final" },
-      );
-      await dispatcherOptions.deliver(
-        {
-          mediaUrl: "file:///tmp/final-voice.ogg",
-          audioAsVoice: true,
-        },
-        { kind: "final" },
-      );
-      return { queuedFinal: true };
-    });
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Final answer.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            mediaUrl: "file:///tmp/final-voice.ogg",
+            audioAsVoice: true,
+            channelData: { openclaw: { finalTtsSupplement: true } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(deliverReplies).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        thread: { id: 777, scope: "dm" },
-        replies: [expect.objectContaining({ text: "Final answer." })],
-      }),
-    );
-    expect(deliverReplies.mock.calls[0]?.[0]).toEqual(
+    expect(answerStream.update).toHaveBeenCalledWith("Final answer");
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      111,
+      "Final answer.",
       expect.objectContaining({ richMessages: false }),
     );
-    expect(deliverReplies).toHaveBeenNthCalledWith(
-      2,
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
         replies: [
@@ -1652,6 +1682,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
           }),
         ],
       }),
+    );
+    expect(editMessageTelegram.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 

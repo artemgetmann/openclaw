@@ -7,12 +7,19 @@ const scheduleGatewaySigusr1RestartMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
 const isSafeLocalRestartScriptAvailableMock = vi.hoisted(() => vi.fn());
 const abortReplyWorkForCommandTargetMock = vi.hoisted(() => vi.fn());
+const writeRestartSentinelMock = vi.hoisted(() => vi.fn());
+const consumeRestartSentinelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart.js", () => ({
   isSafeLocalRestartScriptAvailable: (...args: unknown[]) =>
     isSafeLocalRestartScriptAvailableMock(...args),
   scheduleGatewaySigusr1Restart: (...args: unknown[]) => scheduleGatewaySigusr1RestartMock(...args),
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
+}));
+
+vi.mock("../../infra/restart-sentinel.js", () => ({
+  consumeRestartSentinel: (...args: unknown[]) => consumeRestartSentinelMock(...args),
+  writeRestartSentinel: (...args: unknown[]) => writeRestartSentinelMock(...args),
 }));
 
 vi.mock("./commands-session-abort.js", async (importOriginal) => {
@@ -52,6 +59,10 @@ beforeEach(() => {
   scheduleGatewaySigusr1RestartMock.mockReset();
   triggerOpenClawRestartMock.mockReset();
   abortReplyWorkForCommandTargetMock.mockReset();
+  writeRestartSentinelMock.mockReset();
+  writeRestartSentinelMock.mockResolvedValue("/tmp/restart-sentinel.json");
+  consumeRestartSentinelMock.mockReset();
+  consumeRestartSentinelMock.mockResolvedValue(null);
   isSafeLocalRestartScriptAvailableMock.mockReturnValue(false);
 });
 
@@ -102,6 +113,7 @@ describe("handleRestartCommand", () => {
       );
 
       expect(callOrder).toEqual(["abort", "script"]);
+      expect(writeRestartSentinelMock).toHaveBeenCalledTimes(1);
       expect(abortReplyWorkForCommandTargetMock).toHaveBeenCalledTimes(1);
       expect(triggerOpenClawRestartMock).toHaveBeenCalledWith({ preferLocalScript: true });
       expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
@@ -134,10 +146,78 @@ describe("handleRestartCommand", () => {
     );
 
     expect(callOrder).toEqual(["abort", "schedule"]);
+    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "restart",
+        status: "requested",
+        sessionKey: "agent:main:main",
+      }),
+    );
     expect(abortReplyWorkForCommandTargetMock).toHaveBeenCalledTimes(1);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({ reason: "/restart" });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toContain("SIGUSR1");
+    expect(result?.reply?.text).toContain("Restart queued");
+  });
+
+  it("persists the current Telegram route before scheduling restart", async () => {
+    setPlatform("darwin");
+    vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
+      signal === "SIGUSR1" ? 1 : 0,
+    );
+
+    const result = await handleRestartCommand(
+      buildParams("/restart", {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "default",
+        MessageThreadId: 77,
+      }),
+      true,
+    );
+
+    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "default",
+        },
+        threadId: "77",
+        stats: expect.objectContaining({ mode: "command.restart" }),
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(result?.reply?.text).toContain("Active work may finish first");
+    expect(result?.reply?.text).toContain("confirm here");
+  });
+
+  it("does not restart when durable recovery state cannot be saved", async () => {
+    writeRestartSentinelMock.mockRejectedValueOnce(new Error("disk full"));
+    vi.spyOn(process, "listenerCount").mockReturnValue(1);
+
+    const result = await handleRestartCommand(buildParams("/restart"), true);
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("Restart not started");
+  });
+
+  it("removes the receipt sentinel when the fallback restart trigger fails", async () => {
+    vi.spyOn(process, "listenerCount").mockReturnValue(0);
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "service unavailable",
+    });
+
+    const result = await handleRestartCommand(buildParams("/restart"), true);
+
+    expect(writeRestartSentinelMock).toHaveBeenCalledTimes(1);
+    expect(consumeRestartSentinelMock).toHaveBeenCalledTimes(1);
+    expect(result?.reply?.text).toContain("Restart failed");
   });
 
   it("keeps SIGUSR1 path for Telegram when no local script is configured", async () => {
@@ -167,7 +247,7 @@ describe("handleRestartCommand", () => {
     expect(abortReplyWorkForCommandTargetMock).toHaveBeenCalledTimes(1);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({ reason: "/restart" });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toContain("SIGUSR1");
+    expect(result?.reply?.text).toContain("Restart queued");
   });
 
   it("ignores explicit natural-language restart approval phrases", async () => {

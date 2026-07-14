@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 import httpx
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 SERVICE_VERSION = "0.1.0"
 FIRECRAWL_API_BASE_URL = "https://api.firecrawl.dev/v2"
@@ -261,6 +261,10 @@ class TelegramManagedStartResponse(BaseModel):
     expiresAt: datetime
     status: Literal["pending"]
 
+    @field_serializer("expiresAt")
+    def serialize_expires_at(self, value: datetime) -> str:
+        return serialize_telegram_managed_expiry(value)
+
 
 class TelegramManagedStatusResponse(BaseModel):
     setupId: str
@@ -270,6 +274,22 @@ class TelegramManagedStatusResponse(BaseModel):
     botId: int | None = None
     botUsername: str | None = None
     managedChildBotToken: str | None = Field(default=None, repr=False)
+
+    @field_serializer("expiresAt")
+    def serialize_expires_at(self, value: datetime) -> str:
+        return serialize_telegram_managed_expiry(value)
+
+
+def serialize_telegram_managed_expiry(value: datetime) -> str:
+    """Keep the app-facing setup-expiry contract compatible with macOS JSON decoding.
+
+    Pydantic's default datetime JSON output preserves microseconds, but the macOS
+    client intentionally uses JSONDecoder.iso8601, which accepts the stable
+    whole-second wire form. Normalize every response to UTC so start and status
+    cannot drift as the backend implementation or host clock changes.
+    """
+
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class TelegramManagedSetupSession(BaseModel):

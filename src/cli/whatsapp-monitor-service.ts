@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
@@ -6,6 +7,7 @@ import {
   buildWhatsAppMonitorServiceInstallPlan,
   resolveDefaultWhatsAppMonitorHookUrl,
 } from "../commands/whatsapp-monitor-service-install-helpers.js";
+import { resolveLocalWhatsAppMonitorHookUrl } from "../commands/whatsapp-monitor.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import {
   resolveWhatsAppMonitorLaunchAgentLabel,
@@ -29,7 +31,7 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "./daemon-cli/lifecycle-core.js";
-import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./daemon-cli/response.js";
+import { buildDaemonServiceSnapshot } from "./daemon-cli/response.js";
 import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
@@ -109,14 +111,114 @@ function buildWhatsAppMonitorRuntimeHints(env: NodeJS.ProcessEnv = process.env):
 function sanitizeServiceCommandForJson(
   command: GatewayServiceCommandConfig | null,
 ): GatewayServiceCommandConfig | null {
-  if (!command?.environment) {
+  if (!command) {
     return command;
   }
-  const safeEnvironment = filterDaemonEnv(command.environment);
+  const safeEnvironment = command.environment ? filterDaemonEnv(command.environment) : undefined;
   return {
     ...command,
-    environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
+    programArguments: redactWhatsAppMonitorSelectorArguments(command.programArguments),
+    environment:
+      safeEnvironment && Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
   };
+}
+
+function redactWhatsAppMonitorSelectorArguments(args: string[]): string[] {
+  const redacted = [...args];
+  const pathFlags = new Set(["--db-path", "--cron-store", "--cursor-store", "--monitor-store"]);
+  for (let index = 0; index < redacted.length; index += 1) {
+    if (pathFlags.has(redacted[index] ?? "") && index + 1 < redacted.length) {
+      redacted[index + 1] = "<configured>";
+      index += 1;
+    }
+  }
+  return redacted;
+}
+
+function readMonitorArgument(programArguments: string[], flag: string): string | undefined {
+  let value: string | undefined;
+  for (let index = 0; index < programArguments.length; index += 1) {
+    if (programArguments[index] !== flag) {
+      continue;
+    }
+    const candidate = programArguments[index + 1]?.trim();
+    if (candidate) {
+      value = candidate;
+    }
+    index += 1;
+  }
+  return value;
+}
+
+function isLoopbackHookUrl(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  try {
+    resolveLocalWhatsAppMonitorHookUrl(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function assertRestorableInstalledCommand(
+  command: GatewayServiceCommandConfig,
+): Promise<void> {
+  if (Object.values(command.environmentValueSources ?? {}).includes("file")) {
+    throw new Error(
+      "installed service uses EnvironmentFile values that cannot be restored faithfully; update the unit explicitly before forcing replacement",
+    );
+  }
+  if (!command.sourcePath) {
+    return;
+  }
+  let source: string;
+  try {
+    source = await fs.readFile(command.sourcePath, "utf8");
+  } catch (err) {
+    throw new Error(`unable to verify installed service source ${command.sourcePath}`, {
+      cause: err,
+    });
+  }
+  // Empty, optional, or unreadable EnvironmentFile targets do not contribute
+  // value-source metadata, but replacing their directive would still change
+  // future service behavior and could inline credentials during rollback.
+  if (/^\s*EnvironmentFile\s*=/m.test(source)) {
+    throw new Error(
+      "installed service uses an EnvironmentFile directive that cannot be restored faithfully; update the unit explicitly before forcing replacement",
+    );
+  }
+}
+
+function summarizeInstalledIdentity(
+  command: GatewayServiceCommandConfig | null,
+  expected: Record<string, string | undefined>,
+  key: "OPENCLAW_PROFILE" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR",
+) {
+  const installed = command?.environment?.[key]?.trim() || undefined;
+  const expectedValue = expected[key]?.trim() || undefined;
+  return {
+    configured: Boolean(installed),
+    matches: command !== null && installed === expectedValue,
+  };
+}
+
+async function restoreInstalledCommand(params: {
+  command: GatewayServiceCommandConfig;
+  env: NodeJS.ProcessEnv;
+  service: ReturnType<typeof resolveWhatsAppMonitorService>;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  // Restore the durable unit, not merely the currently running process. This
+  // keeps a failed forced replacement from taking effect on the next restart.
+  await params.service.install({
+    env: params.env,
+    stdout: params.stdout,
+    programArguments: params.command.programArguments,
+    workingDirectory: params.command.workingDirectory,
+    environment: params.command.environment,
+  });
 }
 
 export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServiceInstallOptions) {
@@ -143,12 +245,32 @@ export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServ
   }
 
   const service = resolveWhatsAppMonitorService();
+  const daemonEnv = resolveWhatsAppMonitorServiceCliEnv(process.env);
   let loaded = false;
+  let previousCommand: GatewayServiceCommandConfig | null = null;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv });
   } catch (err) {
     fail(`WhatsApp monitor service check failed: ${String(err)}`);
     return;
+  }
+
+  if (opts.force) {
+    try {
+      previousCommand = await service.readCommand(daemonEnv as NodeJS.ProcessEnv);
+      if (loaded && !previousCommand) {
+        fail(
+          "WhatsApp monitor replacement refused: unable to capture the installed service command.",
+        );
+        return;
+      }
+      if (previousCommand) {
+        await assertRestorableInstalledCommand(previousCommand);
+      }
+    } catch (err) {
+      fail(`WhatsApp monitor replacement readiness check failed: ${String(err)}`);
+      return;
+    }
   }
   if (loaded && !opts.force) {
     emit({
@@ -171,7 +293,7 @@ export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServ
     cronStore: opts.cronStore,
     cursorStore: opts.cursorStore,
     dbPath,
-    env: process.env,
+    env: daemonEnv,
     hookUrl: opts.hookUrl,
     intervalMs,
     monitorStore: opts.monitorStore,
@@ -185,22 +307,50 @@ export async function runWhatsAppMonitorServiceInstall(opts: WhatsAppMonitorServ
     },
   });
 
-  await installDaemonServiceAndEmit({
-    serviceNoun: "WhatsApp monitor",
-    service,
-    warnings,
-    emit,
-    fail,
-    install: async () => {
-      await service.install({
-        env: process.env,
-        stdout,
-        programArguments: plan.programArguments,
-        workingDirectory: plan.workingDirectory,
-        environment: plan.environment,
-        description: plan.description,
-      });
-    },
+  try {
+    await service.install({
+      env: daemonEnv as NodeJS.ProcessEnv,
+      stdout,
+      programArguments: plan.programArguments,
+      workingDirectory: plan.workingDirectory,
+      environment: plan.environment,
+      description: plan.description,
+    });
+  } catch (installError) {
+    if (previousCommand) {
+      try {
+        await restoreInstalledCommand({
+          command: previousCommand,
+          env: daemonEnv as NodeJS.ProcessEnv,
+          service,
+          stdout,
+        });
+      } catch (rollbackError) {
+        fail(
+          `WhatsApp monitor install failed: ${String(installError)}; durable rollback failed: ${String(rollbackError)}`,
+        );
+        return;
+      }
+      fail(
+        `WhatsApp monitor install failed: ${String(installError)}; the prior durable service command was restored.`,
+      );
+      return;
+    }
+    fail(`WhatsApp monitor install failed: ${String(installError)}`);
+    return;
+  }
+
+  let installed = true;
+  try {
+    installed = await service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv });
+  } catch {
+    installed = true;
+  }
+  emit({
+    ok: true,
+    result: "installed",
+    service: buildDaemonServiceSnapshot(service, installed),
+    warnings: warnings.length ? warnings : undefined,
   });
 }
 
@@ -212,7 +362,7 @@ export async function runWhatsAppMonitorServiceUninstall(
     service: resolveWhatsAppMonitorService(),
     opts,
     stopBeforeUninstall: false,
-    assertNotLoadedAfterUninstall: false,
+    assertNotLoadedAfterUninstall: true,
   });
 }
 
@@ -243,12 +393,22 @@ export async function runWhatsAppMonitorServiceStatus(
   const json = Boolean(opts.json);
   const service = resolveWhatsAppMonitorService();
   const daemonEnv = resolveWhatsAppMonitorServiceCliEnv(process.env);
+  let loadedUnavailable = false;
+  let commandUnavailable = false;
+  let runtimeUnavailable = false;
   const [loaded, command, runtime, cfg] = await Promise.all([
-    service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv }).catch(() => false),
-    service.readCommand(daemonEnv as NodeJS.ProcessEnv).catch(() => null),
-    service
-      .readRuntime(daemonEnv as NodeJS.ProcessEnv)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv }).catch(() => {
+      loadedUnavailable = true;
+      return false;
+    }),
+    service.readCommand(daemonEnv as NodeJS.ProcessEnv).catch(() => {
+      commandUnavailable = true;
+      return null;
+    }),
+    service.readRuntime(daemonEnv as NodeJS.ProcessEnv).catch((err): GatewayServiceRuntime => {
+      runtimeUnavailable = true;
+      return { status: "unknown", detail: String(err) };
+    }),
     readBestEffortConfig(),
   ]);
   const defaultHookUrl = resolveDefaultWhatsAppMonitorHookUrl({
@@ -256,12 +416,40 @@ export async function runWhatsAppMonitorServiceStatus(
     port: resolveGatewayPort(cfg, daemonEnv as NodeJS.ProcessEnv),
   });
 
+  const hookUrl = readMonitorArgument(command?.programArguments ?? [], "--hook-url");
+  const acceptance = {
+    configured: command !== null,
+    loaded,
+    healthy: command !== null && loaded && runtime.status === "running",
+    unavailable: {
+      configured: commandUnavailable,
+      loaded: loadedUnavailable,
+      runtime: runtimeUnavailable,
+    },
+    ownership: {
+      profile: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_PROFILE"),
+      config: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_CONFIG_PATH"),
+      state: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_STATE_DIR"),
+      hook: { configured: Boolean(hookUrl), loopback: isLoopbackHookUrl(hookUrl) },
+      selectors: {
+        dbPath: Boolean(readMonitorArgument(command?.programArguments ?? [], "--db-path")),
+        cronStore: Boolean(readMonitorArgument(command?.programArguments ?? [], "--cron-store")),
+        cursorStore: Boolean(
+          readMonitorArgument(command?.programArguments ?? [], "--cursor-store"),
+        ),
+        monitorStore: Boolean(
+          readMonitorArgument(command?.programArguments ?? [], "--monitor-store"),
+        ),
+      },
+    },
+  };
   const payload = {
     service: {
       ...buildDaemonServiceSnapshot(service, loaded),
       command: json ? sanitizeServiceCommandForJson(command) : command,
       runtime,
       defaultHookUrl,
+      acceptance,
     },
   };
 
@@ -274,8 +462,13 @@ export async function runWhatsAppMonitorServiceStatus(
     createCliStatusTextStyles();
   const serviceStatus = loaded ? okText(service.loadedText) : warnText(service.notLoadedText);
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
+  defaultRuntime.log(
+    `${label("Acceptance:")} ${infoText(`configured=${acceptance.configured} loaded=${acceptance.loaded} healthy=${acceptance.healthy} unavailable=${Object.values(acceptance.unavailable).some(Boolean)}`)}`,
+  );
   if (command?.programArguments?.length) {
-    defaultRuntime.log(`${label("Command:")} ${infoText(command.programArguments.join(" "))}`);
+    defaultRuntime.log(
+      `${label("Command:")} ${infoText(redactWhatsAppMonitorSelectorArguments(command.programArguments).join(" "))}`,
+    );
   }
   if (command?.sourcePath) {
     defaultRuntime.log(`${label("Service file:")} ${infoText(command.sourcePath)}`);

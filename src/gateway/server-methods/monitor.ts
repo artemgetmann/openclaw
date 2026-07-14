@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { loadConfig } from "../../config/config.js";
-import { getSessionGoal } from "../../config/sessions/goals.js";
+import { getSessionGoal, resolveSessionGoalAutonomy } from "../../config/sessions/goals.js";
 import { resolveStorePath as resolveSessionStorePath } from "../../config/sessions/paths.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJobCreate } from "../../cron/types.js";
@@ -10,8 +10,14 @@ import {
   resolveMonitorWatchDelivery,
 } from "../../monitor/delivery.js";
 import { routeMonitorEvent, type MonitorEventRoute } from "../../monitor/event-router.js";
+import {
+  applyMonitorNotificationEvent,
+  resolveMonitorNotificationPolicy,
+} from "../../monitor/notifications.js";
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
+  buildMonitorDisclosure,
+  createMonitorListenerEvidence,
   createMonitorRecord,
   createMonitorIdentityKey,
   findMonitor,
@@ -27,6 +33,8 @@ import {
   type MonitorEventEnvelope,
   type MonitorEventTriggerKind,
   type MonitorGoalSnapshot,
+  type MonitorNotificationEvent,
+  type MonitorNotificationPolicy,
   type MonitorTriggerMatch,
   type MonitorTrigger,
   type MonitorUpdatePatch,
@@ -48,6 +56,54 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function resolveStorePath(cronStorePath: string) {
   return resolveMonitorStorePath({ cronStorePath });
+}
+
+function resolveMonitorDisclosurePurpose(params: {
+  instructions: string;
+  name?: string;
+  existingName?: string;
+}): string {
+  return params.name?.trim() || params.existingName?.trim() || params.instructions;
+}
+
+function normalizeMonitorCreateSource(params: {
+  sourceType: string;
+  sourceTarget: Record<string, unknown>;
+}): { sourceType: string; sourceTarget: Record<string, unknown> } {
+  const normalizedType = params.sourceType.trim().toLowerCase();
+  const isTelegramUserSource =
+    normalizedType === "telegram-user" ||
+    normalizedType === "telegram_user_session" ||
+    normalizedType === "telegram-user-session";
+  if (!isTelegramUserSource) {
+    return params;
+  }
+
+  const sourceTarget = { ...params.sourceTarget };
+  if (sourceTarget.afterId === undefined && sourceTarget.afterMessageId !== undefined) {
+    sourceTarget.afterId = sourceTarget.afterMessageId;
+  }
+  delete sourceTarget.afterMessageId;
+  return { sourceType: "telegram-user", sourceTarget };
+}
+
+function normalizeMonitorCreateTrigger(
+  trigger: MonitorTrigger | undefined,
+  sourceType: string,
+): MonitorTrigger | undefined {
+  if (!trigger || sourceType !== "telegram-user" || trigger.kind === "schedule") {
+    return trigger;
+  }
+  const eventTrigger = trigger.kind === "hybrid" ? trigger.event : trigger;
+  const matchSourceType = eventTrigger.match?.sourceType?.trim().toLowerCase();
+  if (matchSourceType !== "telegram_user_session" && matchSourceType !== "telegram-user-session") {
+    return trigger;
+  }
+  const normalizedEvent = {
+    ...eventTrigger,
+    match: { ...eventTrigger.match, sourceType: "telegram-user" },
+  };
+  return trigger.kind === "hybrid" ? { ...trigger, event: normalizedEvent } : normalizedEvent;
 }
 
 function resolveGoalBoundEventTriggerKind(sourceType: string): MonitorEventTriggerKind | undefined {
@@ -362,6 +418,7 @@ async function resolveMonitorGoalSnapshot(params: {
   return {
     id: snapshot.goal.id,
     objective: snapshot.goal.objective,
+    autonomy: resolveSessionGoalAutonomy(snapshot.goal),
   };
 }
 
@@ -448,8 +505,8 @@ async function dispatchMonitorEventToCronUnlocked(params: {
   const routes = routeMonitorEvent({ monitors: store.monitors, event: params.event }).filter(
     (route) => !params.monitorId || route.monitorId === params.monitorId,
   );
+  let storeChanged = false;
   if (params.event.triggerKind === "process_exit") {
-    let storeChanged = false;
     const eventKey = monitorEventIdentityKey(params.event);
     if (routes.length === 0 && !params.monitorId) {
       // Fast background commands can exit before the monitor record exists.
@@ -500,9 +557,26 @@ async function dispatchMonitorEventToCronUnlocked(params: {
         storeChanged = true;
       }
     }
-    if (storeChanged) {
-      await saveMonitorStore(storePath, store);
+  }
+
+  const listenerEvidence = createMonitorListenerEvidence(params.event, Date.now());
+  if (listenerEvidence) {
+    for (const route of routes) {
+      const index = store.monitors.findIndex((monitor) => monitor.monitorId === route.monitorId);
+      if (index >= 0) {
+        store.monitors[index] = updateMonitorRecord(
+          store.monitors[index],
+          { listenerEvidence },
+          listenerEvidence.updatedAtMs,
+        );
+        storeChanged = true;
+      }
     }
+  }
+  if (storeChanged) {
+    // Commit the evidence receipt before cron enqueue so a restart cannot make
+    // an accepted listener wake look like it never reached this monitor.
+    await saveMonitorStore(storePath, store);
   }
 
   const wakes: MonitorEventDispatchResult["wakes"] = [];
@@ -569,7 +643,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const rawParams = params as {
       instructions: string;
       agentId: string;
       name?: string;
@@ -584,7 +658,15 @@ export const monitorHandlers: GatewayRequestHandlers = {
       stopCondition?: string;
       actionPolicy?: MonitorActionPolicy;
       goal?: MonitorGoalSnapshot;
+      notificationPolicy?: MonitorNotificationPolicy;
       lastCheckpoint?: Record<string, unknown>;
+    };
+    const normalizedSource = normalizeMonitorCreateSource(rawParams);
+    const p = {
+      ...rawParams,
+      sourceType: normalizedSource.sourceType,
+      sourceTarget: normalizedSource.sourceTarget,
+      trigger: normalizeMonitorCreateTrigger(rawParams.trigger, normalizedSource.sourceType),
     };
     const storePath = resolveStorePath(context.cronStorePath);
     await withMonitorStoreWriteLock(storePath, async () => {
@@ -623,21 +705,51 @@ export const monitorHandlers: GatewayRequestHandlers = {
           (!existingMonitor.trigger
             ? buildScheduleMonitorTrigger(existingMonitor.cadence)
             : undefined);
-        const goalChanged = goal
-          ? existingMonitor.goal?.id !== goal.id ||
-            existingMonitor.goal?.objective !== goal.objective
-          : existingMonitor.goal !== undefined;
+        const goalChanged = JSON.stringify(existingMonitor.goal) !== JSON.stringify(goal);
         const triggerChanged =
           nextTrigger !== undefined &&
           shouldUpgradeExistingTrigger(existingMonitor.trigger) &&
           !monitorTriggersEqual(existingMonitor.trigger, nextTrigger);
+        const notificationPolicy = resolveMonitorNotificationPolicy(
+          p.notificationPolicy ?? existingMonitor.notificationPolicy,
+        );
+        const disclosure = buildMonitorDisclosure({
+          purpose: resolveMonitorDisclosurePurpose({
+            instructions: p.instructions,
+            name: p.name,
+            existingName: existingMonitor.name,
+          }),
+          name: existingMonitor.name,
+          sourceType: existingMonitor.sourceType,
+          sourceTarget: existingMonitor.sourceTarget,
+          cadence: existingMonitor.cadence,
+          expiryAt: existingMonitor.expiryAt,
+          stopCondition: existingMonitor.stopCondition,
+          actionPolicy: existingMonitor.actionPolicy,
+          goal,
+          notificationPolicy,
+        });
+        const contractChanged =
+          JSON.stringify(existingMonitor.notificationPolicy) !==
+            JSON.stringify(notificationPolicy) ||
+          JSON.stringify(existingMonitor.disclosure) !== JSON.stringify(disclosure) ||
+          existingMonitor.notificationState === undefined;
         const reconciled =
-          goalChanged || triggerChanged
+          goalChanged || triggerChanged || contractChanged
             ? updateMonitorRecord(
                 existingMonitor,
                 {
                   ...(goalChanged ? { goal } : {}),
                   ...(triggerChanged ? { trigger: nextTrigger } : {}),
+                  ...(contractChanged
+                    ? {
+                        notificationPolicy,
+                        notificationState: existingMonitor.notificationState ?? {
+                          consecutiveUnchangedChecks: 0,
+                        },
+                        disclosure,
+                      }
+                    : {}),
                 },
                 Date.now(),
               )
@@ -710,6 +822,11 @@ export const monitorHandlers: GatewayRequestHandlers = {
           stopCondition: p.stopCondition,
           actionPolicy: p.actionPolicy,
           goal,
+          purpose: resolveMonitorDisclosurePurpose({
+            instructions: p.instructions,
+            name: p.name,
+          }),
+          notificationPolicy: p.notificationPolicy,
           lastCheckpoint: p.lastCheckpoint,
           cronJobId: createdJob.id,
         },
@@ -731,6 +848,8 @@ export const monitorHandlers: GatewayRequestHandlers = {
         expiryAt: p.expiryAt,
         actionPolicy: monitor.actionPolicy,
         goal: monitor.goal,
+        notificationPolicy: monitor.notificationPolicy,
+        notificationState: monitor.notificationState,
         watchDeliveryConfigured: Boolean(actionTarget ?? watchDelivery),
         originSessionKey: p.originSessionKey,
         originDelivery: monitor.originDelivery,
@@ -777,7 +896,10 @@ export const monitorHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { monitorId: string; patch: MonitorUpdatePatch };
+    const p = params as {
+      monitorId: string;
+      patch: MonitorUpdatePatch & { notificationEvent?: MonitorNotificationEvent };
+    };
     const storePath = resolveStorePath(context.cronStorePath);
     await withMonitorStoreWriteLock(storePath, async () => {
       const store = await loadMonitorStore(storePath);
@@ -790,13 +912,50 @@ export const monitorHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const updated = updateMonitorRecord(store.monitors[index], p.patch, Date.now());
+      const nowMs = Date.now();
+      const { notificationEvent, ...recordPatch } = p.patch;
+      const current = store.monitors[index];
+      const notificationDecision = notificationEvent
+        ? applyMonitorNotificationEvent({
+            policy: recordPatch.notificationPolicy ?? current.notificationPolicy,
+            state: current.notificationState,
+            event: notificationEvent,
+            nowMs,
+            actionCapability: resolveSessionGoalAutonomy(recordPatch.goal ?? current.goal).level,
+          })
+        : undefined;
+      const updated = updateMonitorRecord(
+        current,
+        {
+          ...recordPatch,
+          ...(notificationEvent === "completion" && recordPatch.status === undefined
+            ? { status: "completed" }
+            : {}),
+          ...(notificationDecision ? { notificationState: notificationDecision.state } : {}),
+        },
+        nowMs,
+      );
       store.monitors[index] = updated;
       await saveMonitorStore(storePath, store);
       if (isTerminalMonitorStatus(updated.status)) {
         await context.cron.update(updated.cronJobId, { enabled: false });
       }
-      respond(true, updated, undefined);
+      respond(
+        true,
+        notificationDecision
+          ? {
+              ...updated,
+              notificationDecision: {
+                shouldNotify: notificationDecision.shouldNotify,
+                reason: notificationDecision.reason,
+                ...(notificationDecision.nextAction
+                  ? { nextAction: notificationDecision.nextAction }
+                  : {}),
+              },
+            }
+          : updated,
+        undefined,
+      );
     });
   },
   "monitor.stop": async ({ params, respond, context }) => {
