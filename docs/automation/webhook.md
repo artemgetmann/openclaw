@@ -270,7 +270,7 @@ hash evidence to the generic monitor hook:
 ```bash
 OPENCLAW_HOOKS_TOKEN='dedicated-hooks-secret' \
   openclaw browser-monitor observe --watch \
-  --profile isolated-browser \
+  --browser-profile isolated-browser \
   --target-id TAB_ID \
   --url-pattern 'https://example.com/thread/*' \
   --selector '[data-reply]' \

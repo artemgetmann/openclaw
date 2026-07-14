@@ -236,7 +236,7 @@ describe("browser reply observer cursor", () => {
 
   it("dispatches again when a matching DOM state returns after a nonmatch", async () => {
     const cursorStorePath = await tempCursorPath();
-    const dispatchEvent = vi.fn(async () => ({
+    const dispatchEvent = vi.fn(async (_params: { event: { idempotencyKey?: string } }) => ({
       wakes: [{ monitorId: "monitor-browser-1", enqueue: { ok: true, enqueued: true } }],
     }));
     let text = "Replied: first";
@@ -260,9 +260,42 @@ describe("browser reply observer cursor", () => {
     ).resolves.toMatchObject({ dispatched: true, matched: true });
 
     expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    const firstKey = dispatchEvent.mock.calls[0]?.[0].event.idempotencyKey;
+    const secondKey = dispatchEvent.mock.calls[1]?.[0].event.idempotencyKey;
+    expect(firstKey).toMatch(/^browser:[a-f0-9]{64}$/);
+    expect(secondKey).toMatch(/^browser:[a-f0-9]{64}$/);
+    expect(secondKey).not.toBe(firstKey);
     const serialized = await fs.promises.readFile(cursorStorePath, "utf8");
     expect(serialized).not.toContain("Replied: first");
     expect(serialized).not.toContain("Still waiting");
+  });
+
+  it("reuses the transition idempotency key when a failed dispatch is retried", async () => {
+    const cursorStorePath = await tempCursorPath();
+    const config = baseConfig(cursorStorePath);
+    const dispatchEvent = vi
+      .fn(async (_params: { event: { idempotencyKey?: string } }) => ({
+        wakes: [{ monitorId: config.monitorId, enqueue: { ok: true, enqueued: true } }],
+      }))
+      .mockRejectedValueOnce(new Error("temporary hook failure"));
+    const readPage = async () => ({
+      allowed: true,
+      found: true,
+      text: "Replied: retry this transition",
+      url: "https://example.test/thread/42",
+    });
+
+    await expect(observeBrowserReplyOnce(config, { dispatchEvent, readPage })).rejects.toThrow(
+      "temporary hook failure",
+    );
+    await expect(
+      observeBrowserReplyOnce(config, { dispatchEvent, readPage }),
+    ).resolves.toMatchObject({ dispatched: true, matched: true });
+
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    const failedKey = dispatchEvent.mock.calls[0]?.[0].event.idempotencyKey;
+    const retryKey = dispatchEvent.mock.calls[1]?.[0].event.idempotencyKey;
+    expect(retryKey).toBe(failedKey);
   });
 
   it("dispatches again when a missing selector separates identical matches", async () => {
@@ -336,6 +369,7 @@ describe("browser reply observer cursor", () => {
     expect(Object.values(store.cursors)[0]).toMatchObject({
       lastStateHash: expect.stringMatching(/^[a-f0-9]{64}$/),
       ruleHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      transitionGeneration: 1,
       updatedAtMs: 1_720_000_000_000,
     });
 
