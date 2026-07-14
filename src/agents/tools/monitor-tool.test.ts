@@ -140,7 +140,12 @@ describe("monitor tool", () => {
     expect(tool.description).toContain("green-zone replies go to that watched surface");
     expect(tool.description).toContain("approval questions must go back to the origin chat");
     expect(tool.description).toContain("only reporting status");
-    expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
+    expect(tool.description).toContain(
+      "record a short semantic description of relevant image/media contents when first seen",
+    );
+    expect(tool.description).toContain("store raw evidence only as stable ids/refs");
+    expect(tool.description).toContain("never image paths, data URIs, or bytes");
+    expect(tool.description).toContain("do not rely on re-reading media on every wake");
     expect(tool.description).toContain("if there is an active goal");
     expect(tool.description).toContain("exact check cadence");
     expect(tool.description).toContain("successful unchanged checks 1-2 are silent");

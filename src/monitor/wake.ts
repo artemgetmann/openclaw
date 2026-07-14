@@ -1,79 +1,68 @@
+import {
+  MEDIA_REFERENCE_PLACEHOLDER,
+  sanitizePromptMediaReferences,
+} from "./media-reference-sanitizer.js";
 import { buildMonitorAutonomyLines, buildMonitorNotificationLines } from "./prompt-contract.js";
 import type { MonitorRecord } from "./types.js";
 
-const CHECKPOINT_MEDIA_PLACEHOLDER = "[media reference omitted]";
 const CHECKPOINT_LIMIT_PLACEHOLDER = "[checkpoint content omitted: wake prompt limit reached]";
 const CHECKPOINT_MAX_RENDERED_CHARS = 16_000;
-const CHECKPOINT_IMAGE_EXTENSIONS = "(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|svg|ico)";
-const CHECKPOINT_DATA_IMAGE_REGEX = /data:image\/[a-z0-9.+-]+(?:;[^,\s]*)?,[^\s"'`<>]*/giu;
-const CHECKPOINT_WHOLE_DATA_IMAGE_REGEX = /^\s*data:image\//iu;
-const CHECKPOINT_QUOTED_DATA_IMAGE_REGEX =
-  /(["'`])data:image\/[a-z0-9.+-]+(?:;[^,\r\n]*)?,[\s\S]*?\1/giu;
-const CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX =
-  /data:image\/svg\+xml(?:;[^,\r\n]*)?,[\s\S]*?<\/svg\s*>/giu;
-const CHECKPOINT_WRAPPED_DATA_IMAGE_REGEX =
-  /data:image\/[a-z0-9.+-]+(?:;[^,\r\n]*)?,[^\r\n]*[\r\n]/iu;
-// Match the runner's file-URL grammar exactly: spaces are valid until the image extension, while
-// closing markers and ordinary prose after the extension remain untouched.
-const CHECKPOINT_FILE_URL_IMAGE_REGEX = new RegExp(
-  "file://[^<>\"'`\\]]+?\\." + CHECKPOINT_IMAGE_EXTENSIONS,
-  "giu",
-);
-const CHECKPOINT_QUOTED_IMAGE_PATH_REGEX = new RegExp(
-  "([\"'`])((?:\\.\\.?/|[~/])[^\"'`\\r\\n]*?\\." + CHECKPOINT_IMAGE_EXTENSIONS + ")\\1",
-  "giu",
-);
-const CHECKPOINT_IMAGE_REFERENCE_REGEX = new RegExp(
-  `(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~|\\.\\.?\\/|\\/)[^\\s"'<>\\]\\[(){}]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s"'<>\\]\\[(){}]*)?`,
-  "giu",
-);
-const CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX = new RegExp(
-  `^\\s*(?:(?:file|https?):\\/\\/|[a-z]:[\\\\/]|\\\\\\\\|~\\/|\\.\\.?\\/|\\/)[\\s\\S]*\\.${CHECKPOINT_IMAGE_EXTENSIONS}(?:[?#][^\\s]*)?\\s*$`,
-  "iu",
-);
-const CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX = new RegExp(
-  `\\[(?:Image:\\s*source:|media attached(?:\\s+\\d+\\/\\d+)?:)\\s*[^\\]\\r\\n]*?\\.${CHECKPOINT_IMAGE_EXTENSIONS}[^\\]\\r\\n]*\\]`,
-  "giu",
-);
 
 type CheckpointRenderState = {
   remainingChars: number;
   activeReferences: WeakSet<object>;
 };
 
-function replaceCheckpointMediaReferences(value: string): string {
-  // Whole-value matching catches paths containing spaces. Inline matching keeps useful prose around
-  // ordinary path/URL tokens while removing anything a prompt-image scanner could rehydrate.
+function checkpointKeyPriority(key: string): number {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // A checkpoint exists to carry meaning across wakes. These fields explain what happened and what
+  // should happen next, so they must survive even when a producer inserted bulky evidence first.
+  // Suffix matching also promotes domain-specific names such as `paymentOutcome` or `mediaSummary`.
   if (
-    CHECKPOINT_WHOLE_IMAGE_REFERENCE_REGEX.test(value) ||
-    CHECKPOINT_WHOLE_DATA_IMAGE_REGEX.test(value)
+    /(?:summary|description|status|state|outcome|result|conclusion|decision|nextaction|nextstep|actionrequired|reason)$/.test(
+      normalized,
+    ) ||
+    /^(?:resolved|completed|complete|done)$/.test(normalized)
   ) {
-    return CHECKPOINT_MEDIA_PLACEHOLDER;
+    return 0;
   }
-  const boundedMediaSafe = value
-    // Mirror the runner's structured markers before token matching so paths with spaces cannot
-    // survive as `[Image: source: ...]` or `[media attached: ...]` prompt references.
-    .replace(CHECKPOINT_STRUCTURED_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-    // Quotes and the closing SVG tag are reliable inline boundaries. Consume through them before
-    // deciding whether any remaining multiline data URI makes the whole string unsafe.
-    .replace(CHECKPOINT_TEXTUAL_SVG_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-    .replace(CHECKPOINT_QUOTED_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER);
-  if (CHECKPOINT_WRAPPED_DATA_IMAGE_REGEX.test(boundedMediaSafe)) {
-    return CHECKPOINT_MEDIA_PLACEHOLDER;
+
+  // Stable identity, cursors, and observation times let the next wake inspect only genuinely new
+  // source state. IDs/refs are intentionally preferred even when they point to server-held evidence:
+  // they preserve provenance without putting the evidence bytes or local paths back in the prompt.
+  if (/(?:id|ids|ref|refs|cursor)$/.test(normalized) || /(?:at|time|timestamp)$/.test(normalized)) {
+    return 1;
   }
-  return (
-    boundedMediaSafe
-      .replace(CHECKPOINT_DATA_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-      .replace(CHECKPOINT_FILE_URL_IMAGE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-      // Mirror quoted-path detection separately so spaces are allowed only inside matched quotes;
-      // this avoids consuming ordinary prose adjacent to an unquoted checkpoint path.
-      .replace(CHECKPOINT_QUOTED_IMAGE_PATH_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-      .replace(CHECKPOINT_IMAGE_REFERENCE_REGEX, CHECKPOINT_MEDIA_PLACEHOLDER)
-  );
+
+  // Raw material is least valuable in a wake prompt and most likely to consume the safety budget.
+  // A semantic derivative such as `evidenceSummary` already matched above and remains high priority.
+  if (
+    /(?:raw|evidence|media|image|screenshot|photo|thumbnail|attachment|payload|bytes|base64|blob|binary|transcript|html|logs?|content)/.test(
+      normalized,
+    )
+  ) {
+    return 3;
+  }
+
+  return 2;
+}
+
+function prioritizeCheckpointKeys(source: Record<string, unknown>): string[] {
+  // Modern array sorting is stable, but preserve insertion order explicitly so this safety behavior is
+  // obvious and portable: priority changes selection, never the relative meaning of peer fields.
+  return Object.keys(source)
+    .map((key, insertionIndex) => ({ key, insertionIndex }))
+    .toSorted(
+      (left, right) =>
+        checkpointKeyPriority(left.key) - checkpointKeyPriority(right.key) ||
+        left.insertionIndex - right.insertionIndex,
+    )
+    .map(({ key }) => key);
 }
 
 function takeCheckpointText(value: string, state: CheckpointRenderState): string {
-  const safe = replaceCheckpointMediaReferences(value);
+  const safe = sanitizePromptMediaReferences(value);
   const retained = safe.slice(0, Math.max(0, state.remainingChars));
   state.remainingChars -= retained.length;
   return retained.length < safe.length ? `${retained}${CHECKPOINT_LIMIT_PLACEHOLDER}` : retained;
@@ -126,7 +115,7 @@ function sanitizeCheckpointValue(
   // Payload keys are authoritative regardless of representation: base64 strings, byte arrays, and
   // serialized Buffer objects all describe the same image bytes and must stay out of wake prompts.
   if (isInlineImagePayload(keyHint, parentDeclaresImage)) {
-    return CHECKPOINT_MEDIA_PLACEHOLDER;
+    return MEDIA_REFERENCE_PLACEHOLDER;
   }
   if (typeof value === "string") {
     return takeCheckpointText(value, state);
@@ -157,10 +146,9 @@ function sanitizeCheckpointValue(
     // active for descendants so inner payload fields cannot become ordinary checkpoint data again.
     const declaresImage = parentDeclaresImage || objectDeclaresImageContent(source);
     const sanitized: Record<string, unknown> = {};
-    for (const key in source) {
-      if (!Object.hasOwn(source, key)) {
-        continue;
-      }
+    // Selection order is semantic rather than producer insertion order. The global traversal budget
+    // remains the hard guardrail; ordering only decides which safe facts earn that scarce space.
+    for (const key of prioritizeCheckpointKeys(source)) {
       if (state.remainingChars <= 0) {
         sanitized.__wakePromptOmitted = CHECKPOINT_LIMIT_PLACEHOLDER;
         break;

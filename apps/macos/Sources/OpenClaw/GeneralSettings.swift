@@ -124,6 +124,12 @@ struct GeneralSettings: View {
     private var consumerBody: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 20) {
+                if let incident = self.gatewayManager.recoveryIncident {
+                    GatewayRecoveryIncidentCard(incident: incident) {
+                        DebugActions.restartGateway()
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text("\(AppFlavor.current.appName) runs quietly in your menu bar.")
                         .font(.title3.weight(.semibold))

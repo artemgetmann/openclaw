@@ -36,6 +36,7 @@ import type { RecentHeartbeatEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sanitizePromptMediaReferences } from "../monitor/media-reference-sanitizer.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -566,7 +567,10 @@ const MAX_RECENT_HEARTBEATS = 5;
 const MAX_RECENT_HEARTBEAT_PREVIEW_CHARS = 240;
 
 function normalizeRecentHeartbeatPreview(text?: string): string {
-  const collapsed = typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+  // Heartbeat history is both persisted state and future prompt input. Strip media syntax before
+  // whitespace normalization so quoted and multiline data-image boundaries remain detectable.
+  const mediaSafe = typeof text === "string" ? sanitizePromptMediaReferences(text) : "";
+  const collapsed = mediaSafe.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return "";
   }

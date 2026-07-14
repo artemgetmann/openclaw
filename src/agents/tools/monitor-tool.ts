@@ -94,7 +94,16 @@ const MonitorToolSchema = Type.Object(
       }),
     ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
-    checkpoint: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    checkpoint: Type.Optional(
+      Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description:
+            "Compact semantic state for future wakes. When image/media matters, record a short semantic description when first seen. Store raw evidence only as stable ids/refs; never image paths, data URIs, or bytes, and do not rely on re-reading media on every wake.",
+        },
+      ),
+    ),
     originSessionKey: Type.Optional(Type.String()),
     originDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
   },
@@ -141,7 +150,9 @@ For monitor-related user replies/status:
 - act only when exactly one monitor is clear; if multiple active monitors could match, ask a short clarification.
 - when drafting a reply, include the actual draft text in the origin-chat update before asking whether to send, edit, or stop watching.
 - when only reporting status, summarize the status and next step without forcing send/edit language.
-- use update to persist compact status/checkpoint; keep raw evidence behind ids, paths, or refs.`,
+- use update to persist compact semantic status/checkpoint state.
+- if relevant image/media is inspected, record a short semantic description of relevant image/media contents when first seen so later wakes retain the meaning without reopening the asset.
+- store raw evidence only as stable ids/refs; never image paths, data URIs, or bytes, and do not rely on re-reading media on every wake.`,
     parameters: MonitorToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

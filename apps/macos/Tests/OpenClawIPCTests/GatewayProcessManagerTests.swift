@@ -3,6 +3,18 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
+private actor GatewayRecoveryNotificationRecorder {
+    private(set) var incidents: [GatewayRecoveryIncident] = []
+
+    func record(_ incident: GatewayRecoveryIncident) {
+        self.incidents.append(incident)
+    }
+
+    func count() -> Int {
+        self.incidents.count
+    }
+}
+
 /// Process-manager tests share the launch-agent suite because both mutate
 /// `GatewayLaunchAgentManager`'s process-wide DEBUG hooks. One serialized suite
 /// is the scheduler boundary that prevents those hooks from overlapping.
@@ -10,6 +22,131 @@ import Testing
 extension GatewayLaunchAgentManagerTests {
     @Test func `gateway readiness timeout allows real launchd restart budget`() {
         #expect(GatewayProcessManager.gatewayReadinessTimeout >= 20)
+    }
+
+    @Test func `recovery tracker waits for bounded unverifiable observations`() {
+        var tracker = GatewayRecoveryIncidentTracker()
+
+        let firstUnknownRequiresVerification = tracker.recordServiceObservation(nil)
+        #expect(!firstUnknownRequiresVerification)
+        #expect(tracker.consecutiveUnverifiableChecks == 1)
+        let secondUnknownRequiresVerification = tracker.recordServiceObservation(nil)
+        #expect(secondUnknownRequiresVerification)
+        #expect(tracker.consecutiveUnverifiableChecks == GatewayRecoveryIncidentTracker.unverifiableCheckLimit)
+
+        // Any definitive service observation breaks the consecutive-unknown run.
+        let loadedRequiresVerification = tracker.recordServiceObservation(true)
+        #expect(!loadedRequiresVerification)
+        #expect(tracker.consecutiveUnverifiableChecks == 0)
+        let newUnknownRequiresVerification = tracker.recordServiceObservation(nil)
+        #expect(!newUnknownRequiresVerification)
+    }
+
+    @Test func `recovery tracker deduplicates notification until healthy reset`() {
+        var tracker = GatewayRecoveryIncidentTracker()
+
+        let firstFailureShouldNotify = tracker.recordUnavailable()
+        #expect(firstFailureShouldNotify)
+        #expect(tracker.isIncidentActive)
+        let repeatedFailureShouldNotify = tracker.recordUnavailable()
+        #expect(!repeatedFailureShouldNotify)
+
+        tracker.recordHealthy()
+        #expect(!tracker.isIncidentActive)
+        let nextIncidentShouldNotify = tracker.recordUnavailable()
+        #expect(nextIncidentShouldNotify)
+    }
+
+    @Test func `unverifiable service state does not alarm while health RPC works`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
+            ],
+            defaults: [
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                GatewayLaunchAgentManager._setTestingHooks(
+                    launchAgentWriteDisabled: { false },
+                    readDaemonLoaded: { nil })
+                let manager = GatewayProcessManager(
+                    recoveryReadinessTimeout: 0.5,
+                    recoveryNotificationSender: { _ in
+                        Issue.record("healthy RPC must veto the recovery notification")
+                    })
+                manager.setTestingConnection(connection)
+                manager.setTestingDesiredActive(true)
+                defer {
+                    GatewayLaunchAgentManager._clearTestingHooks()
+                    manager.setTestingConnection(nil)
+                    manager.setTestingDesiredActive(false)
+                }
+
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+                await manager.testingReconcileLaunchAgentRegistrationNow()
+
+                #expect(manager.testingRecoveryIncident() == nil)
+            }
+    }
+
+    @Test func `shared recovery incident notification deduplicates and resets after health`() async {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+        let recorder = GatewayRecoveryNotificationRecorder()
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
+            ],
+            defaults: [
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager(
+                    recoveryReadinessTimeout: 0,
+                    recoveryNotificationSender: { incident in
+                        await recorder.record(incident)
+                    })
+                manager.setTestingDesiredActive(true)
+                defer { manager.setTestingDesiredActive(false) }
+
+                await manager.testingPresentRecoveryIncident()
+                await manager.testingPresentRecoveryIncident()
+
+                #expect(manager.testingRecoveryIncident()?.actionTitle == "Restart Jarvis")
+                #expect(await recorder.count() == 1)
+
+                manager.testingRecordHealthyRPC()
+                #expect(manager.testingRecoveryIncident() == nil)
+
+                await manager.testingPresentRecoveryIncident()
+                #expect(await recorder.count() == 2)
+            }
     }
 
     @Test func `reconciliation repairs missing launchd registration while desired active`() async {

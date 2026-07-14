@@ -134,7 +134,7 @@ describe("buildMonitorWakeMessage", () => {
       '"byteArrayImage":{"type":"image","mimeType":"image/png","data":"[media reference omitted]"}',
     );
     expect(message).toContain(
-      '"serializedBufferImage":{"type":"image","source":{"mediaType":"image/png","data":"[media reference omitted]"}}',
+      '"serializedBufferImage":{"type":"image","source":{"data":"[media reference omitted]","mediaType":"image/png"}}',
     );
     expect(message).toContain("ordinary-checkpoint-data");
     expect(message).toContain("ordinary-checkpoint-b64-json");
@@ -163,12 +163,19 @@ describe("buildMonitorWakeMessage", () => {
     expect(checkpoint).toEqual(checkpointBeforeWake);
   });
 
-  it("bounds pathological checkpoint structures while retaining their useful prefix", () => {
+  it("bounds pathological checkpoints while retaining late semantic fields over early raw evidence", () => {
     const checkpoint: Record<string, unknown> = {
-      id: "checkpoint-pathological",
-      summary: "Keep this useful checkpoint prefix.",
-      oversizedText: "x".repeat(100_000),
+      rawEvidence: "x".repeat(100_000),
+      screenshotPath: "/Users/test/proofs/pathological late proof.png",
+      imageBytes: "PATHOLOGICAL-IMAGE-BYTES",
       oversizedList: Array.from({ length: 1_000 }, (_, index) => ({ index })),
+      id: "checkpoint-pathological",
+      checkedAt: "2026-07-13T01:23:45.000Z",
+      cursor: "message-991",
+      status: "waiting_for_reply",
+      outcome: "Vendor acknowledged the corrected invoice.",
+      nextAction: "Check for the promised payment confirmation.",
+      summary: "Late semantic checkpoint state must survive early junk.",
     };
     // Persisted checkpoints are JSON, so cycles should not normally exist. The
     // wake renderer still must fail closed if an in-memory caller supplies one.
@@ -195,7 +202,14 @@ describe("buildMonitorWakeMessage", () => {
     });
 
     expect(message).toContain('"id":"checkpoint-pathological"');
-    expect(message).toContain("Keep this useful checkpoint prefix.");
+    expect(message).toContain('"checkedAt":"2026-07-13T01:23:45.000Z"');
+    expect(message).toContain('"cursor":"message-991"');
+    expect(message).toContain('"status":"waiting_for_reply"');
+    expect(message).toContain("Vendor acknowledged the corrected invoice.");
+    expect(message).toContain("Check for the promised payment confirmation.");
+    expect(message).toContain("Late semantic checkpoint state must survive early junk.");
+    expect(message).not.toContain("pathological late proof.png");
+    expect(message).not.toContain("PATHOLOGICAL-IMAGE-BYTES");
     expect(message).toContain("omitted");
     expect(message.length).toBeLessThan(30_000);
   });
