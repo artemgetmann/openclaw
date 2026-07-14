@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const tempRoots: string[] = [];
+const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function makeTempRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gc-worktrees-"));
@@ -79,6 +80,18 @@ file="\${3}"
 `,
   );
 
+  const find = path.join(binDir, "find");
+  writeExecutable(
+    find,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${OPENCLAW_TEST_FIND_FAIL:-0}" == "1" ]]; then
+  exit 74
+fi
+exec /usr/bin/find "$@"
+`,
+  );
+
   const launchctl = path.join(binDir, "launchctl");
   writeExecutable(
     launchctl,
@@ -131,7 +144,7 @@ exec "${realGit}" "$@"
 `,
   );
 
-  return { binDir, launchctl, launchctlLog, plistBuddy };
+  return { binDir, find, launchctl, launchctlLog, plistBuddy };
 }
 
 function runGc(
@@ -145,6 +158,7 @@ function runGc(
     launchctlBootoutFails?: boolean;
     launchctlPrintMode?: "loaded" | "absent" | "ambiguous-error";
     gitRemoveFails?: boolean;
+    findFails?: boolean;
   },
 ) {
   return spawnSync("bash", [path.join(repoRoot, "scripts/gc-worktrees.sh"), "--auto"], {
@@ -152,7 +166,9 @@ function runGc(
     env: {
       ...process.env,
       HOME: env.home,
+      TMPDIR: env.home,
       PATH: `${path.dirname(env.launchctl)}:${process.env.PATH ?? ""}`,
+      OPENCLAW_FIND_BIN: path.join(path.dirname(env.launchctl), "find"),
       OPENCLAW_LAUNCHCTL_BIN: env.launchctl,
       OPENCLAW_PLISTBUDDY_BIN: env.plistBuddy,
       OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR: env.launchAgents,
@@ -160,6 +176,7 @@ function runGc(
       OPENCLAW_TEST_LAUNCHCTL_BOOTOUT_FAIL: env.launchctlBootoutFails ? "1" : "0",
       OPENCLAW_TEST_LAUNCHCTL_PRINT_MODE: env.launchctlPrintMode ?? "loaded",
       OPENCLAW_TEST_GIT_REMOVE_FAIL: env.gitRemoveFails ? "1" : "0",
+      OPENCLAW_TEST_FIND_FAIL: env.findFails ? "1" : "0",
     },
     encoding: "utf8",
   });
@@ -186,7 +203,7 @@ afterEach(() => {
   }
 });
 
-describe("gc-worktrees LaunchAgent retirement", () => {
+describePosix("gc-worktrees LaunchAgent retirement", () => {
   it("retires an owned agent before pruning a registered worktree whose directory is gone", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
@@ -265,6 +282,60 @@ describe("gc-worktrees LaunchAgent retirement", () => {
     ).toContain(`worktree ${registeredLane}`);
     expect(result.stderr).toContain("worktree entrypoint is missing");
     expect(result.stderr).toContain("skipped Git metadata prune");
+
+    const firstLaunchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
+    const retry = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "absent",
+    });
+
+    expect(retry.status).toBe(1);
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).toBe(firstLaunchctlLog);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
+    ).toContain(`worktree ${registeredLane}`);
+    expect(retry.stderr).toContain("already quarantined");
+    expect(retry.stderr).toContain("skipped Git metadata prune");
+  });
+
+  it("fails closed before mutation when LaunchAgent enumeration fails", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      findFails: true,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.existsSync(ownedPlist)).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    expect(
+      fs.readdirSync(home).some((entry) => entry.startsWith("openclaw-worktree-gc-launchagents.")),
+    ).toBe(false);
+    expect(result.stderr).toContain("LaunchAgent inventory failed");
+    expect(result.stderr).toContain("LaunchAgent retirement failed");
   });
 
   it("quarantines only an explicitly owned consumer gateway before deleting its worktree", () => {

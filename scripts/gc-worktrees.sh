@@ -3,6 +3,7 @@ set -euo pipefail
 
 PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
 LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-/bin/launchctl}"
+FIND_BIN="${OPENCLAW_FIND_BIN:-/usr/bin/find}"
 LAUNCH_AGENTS_DIR="${OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR:-${HOME}/Library/LaunchAgents}"
 LAUNCH_AGENT_QUARANTINE_DIR="${OPENCLAW_WORKTREE_GC_QUARANTINE_DIR:-${LAUNCH_AGENTS_DIR}/openclaw-worktree-gc-disabled-$(date +%Y%m%d-%H%M%S)-$$}"
 
@@ -257,12 +258,49 @@ retire_worktree_consumer_launchagents() {
   local destination=""
   local launchctl_target=""
   local launchctl_print_output=""
+  local inventory_path=""
+  local plist_parent=""
+  local -a plist_paths=()
   local was_loaded=0
   local found=0
 
   [[ -d "$LAUNCH_AGENTS_DIR" ]] || return 0
 
+  # Process substitution hides `find` failures from the parent shell. Capture a
+  # complete, status-checked inventory first, then delete the temp artifact
+  # before touching any plist or launchd job. maxdepth=2 also retains exact-owned
+  # evidence from a prior ambiguous quarantine so a retry cannot prune metadata.
+  if ! inventory_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-worktree-gc-launchagents.XXXXXX")"; then
+    echo "Error: cannot create LaunchAgent inventory; preserving worktree: ${worktree_path}" >&2
+    return 1
+  fi
+  if ! "$FIND_BIN" "$LAUNCH_AGENTS_DIR" -maxdepth 2 -type f -name '*.plist' -print0 > "$inventory_path"; then
+    rm -f "$inventory_path" || true
+    echo "Error: LaunchAgent inventory failed; preserving worktree: ${worktree_path}" >&2
+    return 1
+  fi
   while IFS= read -r -d '' plist_path; do
+    plist_paths+=("$plist_path")
+  done < "$inventory_path"
+  if ! rm -f "$inventory_path"; then
+    echo "Error: cannot remove LaunchAgent inventory; preserving worktree: ${worktree_path}" >&2
+    return 1
+  fi
+
+  # A nested exact-owned plist is a durable record of an earlier ambiguous or
+  # incomplete retirement. Fail before new mutations; manual resolution must
+  # restore or remove that evidence deliberately.
+  for plist_path in "${plist_paths[@]}"; do
+    plist_parent="$(dirname "$plist_path")"
+    if [[ "$plist_parent" != "$LAUNCH_AGENTS_DIR" ]] && worktree_owns_consumer_gateway_plist "$plist_path" "$worktree_path"; then
+      echo "Error: exact-owned LaunchAgent is already quarantined at ${plist_path}; preserving worktree metadata: ${worktree_path}" >&2
+      return 1
+    fi
+  done
+
+  for plist_path in "${plist_paths[@]}"; do
+    plist_parent="$(dirname "$plist_path")"
+    [[ "$plist_parent" == "$LAUNCH_AGENTS_DIR" ]] || continue
     if ! worktree_owns_consumer_gateway_plist "$plist_path" "$worktree_path"; then
       continue
     fi
@@ -308,7 +346,7 @@ retire_worktree_consumer_launchagents() {
     fi
     record_retired_launchagent "$plist_path" "$destination" "$label" "$was_loaded"
     echo "Quarantined worktree LaunchAgent: ${label} -> ${destination}"
-  done < <(find "$LAUNCH_AGENTS_DIR" -maxdepth 1 -type f -name '*.plist' -print0)
+  done
 
   if [[ "$found" == "1" ]]; then
     echo "Retired consumer/test LaunchAgents owned by: ${worktree_path}"
