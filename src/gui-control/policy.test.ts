@@ -208,6 +208,34 @@ describe("evaluateGuiPolicy", () => {
     },
   );
 
+  it.each([
+    ["payment", "Payment authorization requires authentication"],
+    ["delete", "Delete account requires authentication"],
+    ["account", "Account settings require authentication"],
+    ["security", "Security settings require authentication"],
+  ])(
+    "blocks Try another way when mixed %s risk appears only in visible text",
+    (_risk, mixedRiskContext) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Sign in" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Sign in",
+          summary: "Choose an authentication method",
+          visibleText: [mixedRiskContext, "Try another way"],
+        }),
+        element: { ref: "@other-way", role: "button", label: "Try another way" },
+        reason: "Discover the available authentication methods without using one.",
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
   it("blocks writing into a password field", () => {
     const decision = evaluateGuiPolicy({
       actionType: "setValue",
@@ -597,6 +625,87 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.risk).toBe("allowed-mutation");
     expect(decision.requiredCapability).toBe("click_verified_button");
   });
+
+  it("allows a signed-out chooser row with a Remove an account sibling under commerce", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Choose an account - Sign in",
+        summary: "Choose an account to continue to Google",
+        visibleText: [
+          "Artem",
+          "artem@example.com",
+          "Signed out",
+          "Use another account",
+          "Remove an account",
+        ],
+      }),
+      element: {
+        ref: "@known-account",
+        role: "button",
+        label: "Artem artem@example.com Signed out",
+      },
+      reason: "Select the known signed-out account without using credentials.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it("allows Try another way in an auth-only commerce context", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge",
+        visibleText: ["Enter your password", "Try another way", "Next"],
+      }),
+      element: { ref: "@other-way", role: "button", label: "Try another way" },
+      reason: "Show the available methods without selecting one.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each([
+    ["payment", "Payment authorization requires authentication"],
+    ["delete", "Delete account requires authentication"],
+    ["account", "Account settings require authentication"],
+    ["security", "Security settings require authentication"],
+  ])(
+    "blocks commerce pre-auth navigation when mixed %s risk appears only in visible text",
+    (_risk, mixedRiskContext) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Sign in" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Sign in",
+          summary: "Choose a method to continue",
+          visibleText: [mixedRiskContext, "Try another way"],
+        }),
+        element: { ref: "@other-way", role: "button", label: "Try another way" },
+        reason: "Show the available methods without selecting one.",
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI context");
+    },
+  );
 
   it("allows explicitly supplied traveler/contact detail entry under the commerce profile", () => {
     const decision = evaluateGuiPolicy({

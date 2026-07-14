@@ -553,32 +553,32 @@ function visibleContextText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
-function pagePurposeText(input: GuiPolicyInput): string {
-  // Titles and the snapshot summary describe why the page exists. Exclude the
-  // full visible-text inventory because sibling controls can carry unrelated
-  // deny terms (for example, Google shows "Remove an account" next to safe
-  // signed-out account rows).
+function preAuthHardStopContextParts(input: GuiPolicyInput): Array<string | undefined> {
+  const selectedSafeChooserTarget = isSafeAccountChooserSelection(input);
+  const visibleText = (input.snapshot?.visibleText ?? []).filter((part) => {
+    // Google account choosers expose this management affordance beside normal
+    // rows. Ignore only the exact sibling and only when the selected target is
+    // independently proven safe; selected removal controls and risk-bearing
+    // page copy continue through the hard-stop scan.
+    return !(selectedSafeChooserTarget && /^remove (?:an )?account$/.test(normalizeText(part)));
+  });
+
   return [
     input.target.appName,
     input.target.windowTitle,
     input.snapshot?.appName,
     input.snapshot?.windowTitle,
     input.snapshot?.summary,
-  ]
-    .map(normalizeText)
-    .filter(Boolean)
-    .join(" ");
+    ...visibleText,
+  ];
+}
+
+function preAuthHardStopContextText(input: GuiPolicyInput): string {
+  return preAuthHardStopContextParts(input).map(normalizeText).filter(Boolean).join(" ");
 }
 
 function commerceHardStopContextText(input: GuiPolicyInput): string {
-  return [
-    input.target.appName,
-    input.target.windowTitle,
-    input.snapshot?.appName,
-    input.snapshot?.windowTitle,
-    input.snapshot?.summary,
-    ...(input.snapshot?.visibleText ?? []),
-  ]
+  return preAuthHardStopContextParts(input)
     .map(commerceHardStopContextPart)
     .filter(Boolean)
     .join(" ");
@@ -717,22 +717,9 @@ function selectedMutationSurfaceParts(input: GuiPolicyInput): string[] {
     .filter(Boolean);
 }
 
-function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
+function isSafeAccountChooserSelection(input: GuiPolicyInput): boolean {
   if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
     return false;
-  }
-
-  const selectedParts = selectedMutationSurfaceParts(input);
-
-  // These controls change only which challenge is shown, or dismiss it. Match
-  // complete accessibility fields rather than substrings so "Close account"
-  // can never borrow the safe semantics of a plain "Close" button.
-  if (
-    selectedParts.some((part) =>
-      ["close", "cancel", "back", "go back", "try another way"].includes(part),
-    )
-  ) {
-    return true;
   }
 
   const visibleContext = visibleContextText(input);
@@ -752,6 +739,27 @@ function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
     /\b(?:signed out|use another account)\b/.test(selectedSurface) &&
     !hasAnyTerm(selectedSurface, AUTHENTICATION_BOUNDARY_TERMS)
   );
+}
+
+function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
+  if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
+    return false;
+  }
+
+  const selectedParts = selectedMutationSurfaceParts(input);
+
+  // These controls change only which challenge is shown, or dismiss it. Match
+  // complete accessibility fields rather than substrings so "Close account"
+  // can never borrow the safe semantics of a plain "Close" button.
+  if (
+    selectedParts.some((part) =>
+      ["close", "cancel", "back", "go back", "try another way"].includes(part),
+    )
+  ) {
+    return true;
+  }
+
+  return isSafeAccountChooserSelection(input);
 }
 
 function isAuthenticationBoundaryTerm(term: string): boolean {
@@ -997,10 +1005,12 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     blockedSurface &&
     isAuthenticationBoundaryTerm(blockedSurface) &&
     !hasNonAuthenticationBoundaryTerm(text, taskPolicy.deniedSurfaceTerms) &&
-    // Mutation text intentionally excludes broad AX snapshot content. Before
-    // waiving an auth boundary, inspect the page's title/summary separately so
-    // a reversible-looking control cannot bypass mixed hard-stop page purpose.
-    !hasNonAuthenticationBoundaryTerm(pagePurposeText(input), taskPolicy.deniedSurfaceTerms) &&
+    // Scan broad visible context for mixed risks, excluding only a proven-safe
+    // account chooser's unrelated management sibling.
+    !hasNonAuthenticationBoundaryTerm(
+      preAuthHardStopContextText(input),
+      taskPolicy.deniedSurfaceTerms,
+    ) &&
     isReversiblePreAuthNavigation(input)
   ) {
     // Window titles and challenge summaries provide the context needed to
