@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   WHATSAPP_MONITOR_SERVICE_KIND,
   WHATSAPP_MONITOR_SERVICE_MARKER,
@@ -46,6 +47,23 @@ function withWhatsAppMonitorInstallEnv(args: GatewayServiceInstallArgs): Gateway
   };
 }
 
+async function removeResidualWhatsAppMonitorCommand(
+  base: GatewayService,
+  env: Record<string, string | undefined>,
+): Promise<void> {
+  const residual = await base.readCommand(env);
+  if (!residual?.sourcePath) {
+    return;
+  }
+  // A launchd Trash collision can leave the profile plist in LaunchAgents
+  // after the job was unloaded. Remove only the source path reported by the
+  // profile-scoped service, then prove no durable command remains.
+  await fs.rm(residual.sourcePath, { force: true });
+  if (await base.readCommand(env)) {
+    throw new Error(`WhatsApp monitor durable service command remains at ${residual.sourcePath}`);
+  }
+}
+
 export function resolveWhatsAppMonitorService(): GatewayService {
   if (process.platform === "win32") {
     throw new Error(
@@ -56,8 +74,11 @@ export function resolveWhatsAppMonitorService(): GatewayService {
   return {
     ...base,
     install: async (args) => base.install(withWhatsAppMonitorInstallEnv(args)),
-    uninstall: async (args) =>
-      base.uninstall({ ...args, env: withWhatsAppMonitorServiceEnv(args.env) }),
+    uninstall: async (args) => {
+      const env = withWhatsAppMonitorServiceEnv(args.env);
+      await base.uninstall({ ...args, env });
+      await removeResidualWhatsAppMonitorCommand(base, env);
+    },
     stop: async (args) =>
       base.stop({ ...args, env: withWhatsAppMonitorServiceEnv(args.env ?? {}) }),
     restart: async (args) =>

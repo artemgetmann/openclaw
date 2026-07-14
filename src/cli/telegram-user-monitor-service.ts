@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -23,6 +24,7 @@ import type { GatewayServiceCommandConfig } from "../daemon/service.js";
 import { resolveTelegramMonitorService } from "../daemon/telegram-monitor-service.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveLocalTelegramMonitorHookUrl } from "../telegram-user/monitor-hook-url.js";
 import {
   clearTelegramUserMonitorBinding,
   readTelegramUserMonitorBinding,
@@ -153,6 +155,93 @@ function readTelegramMonitorSelectorArgument(
   return selector;
 }
 
+function readMonitorArgument(programArguments: string[], flag: string): string | undefined {
+  let value: string | undefined;
+  for (let index = 0; index < programArguments.length; index += 1) {
+    if (programArguments[index] !== flag) {
+      continue;
+    }
+    const candidate = programArguments[index + 1]?.trim();
+    if (candidate) {
+      value = candidate;
+    }
+    index += 1;
+  }
+  return value;
+}
+
+function isLoopbackHookUrl(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  try {
+    resolveLocalTelegramMonitorHookUrl(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function assertRestorableInstalledCommand(
+  command: GatewayServiceCommandConfig,
+): Promise<void> {
+  if (Object.values(command.environmentValueSources ?? {}).includes("file")) {
+    throw new Error(
+      "installed service uses EnvironmentFile values that cannot be restored faithfully; update the unit explicitly before forcing replacement",
+    );
+  }
+  if (!command.sourcePath) {
+    return;
+  }
+  let source: string;
+  try {
+    source = await fs.readFile(command.sourcePath, "utf8");
+  } catch (err) {
+    throw new Error(`unable to verify installed service source ${command.sourcePath}`, {
+      cause: err,
+    });
+  }
+  // Empty, optional, or unreadable EnvironmentFile targets do not contribute
+  // value-source metadata, but replacing their directive would still change
+  // future service behavior and could inline credentials during rollback.
+  if (/^\s*EnvironmentFile\s*=/m.test(source)) {
+    throw new Error(
+      "installed service uses an EnvironmentFile directive that cannot be restored faithfully; update the unit explicitly before forcing replacement",
+    );
+  }
+}
+
+function summarizeInstalledIdentity(
+  command: GatewayServiceCommandConfig | null,
+  expected: Record<string, string | undefined>,
+  key: "OPENCLAW_PROFILE" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR",
+) {
+  const installed = command?.environment?.[key]?.trim() || undefined;
+  const expectedValue = expected[key]?.trim() || undefined;
+  return {
+    configured: Boolean(installed),
+    matches: command !== null && installed === expectedValue,
+  };
+}
+
+async function restoreInstalledCommand(params: {
+  command: GatewayServiceCommandConfig;
+  env: NodeJS.ProcessEnv;
+  service: ReturnType<typeof resolveTelegramMonitorService>;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  // A forced install may rewrite the durable unit before activation fails.
+  // Reinstall the captured command so the next login/restart cannot boot the
+  // rejected selectors even when the old process is still alive right now.
+  await params.service.install({
+    env: params.env,
+    stdout: params.stdout,
+    programArguments: params.command.programArguments,
+    workingDirectory: params.command.workingDirectory,
+    environment: params.command.environment,
+  });
+}
+
 function readTelegramMonitorBindingFromCommand(
   command: GatewayServiceCommandConfig,
 ): TelegramUserMonitorBinding {
@@ -238,6 +327,7 @@ export async function runTelegramMonitorServiceInstall(opts: TelegramMonitorServ
   const service = resolveTelegramMonitorService();
   const daemonEnv = resolveTelegramMonitorServiceCliEnv(process.env);
   let loaded = false;
+  let previousCommand: GatewayServiceCommandConfig | null = null;
   try {
     loaded = await service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv });
   } catch (err) {
@@ -281,6 +371,24 @@ export async function runTelegramMonitorServiceInstall(opts: TelegramMonitorServ
       );
     }
     return;
+  }
+
+  if (opts.force) {
+    try {
+      previousCommand = await service.readCommand(daemonEnv as NodeJS.ProcessEnv);
+      if (loaded && !previousCommand) {
+        fail(
+          "Telegram monitor replacement refused: unable to capture the installed service command.",
+        );
+        return;
+      }
+      if (previousCommand) {
+        await assertRestorableInstalledCommand(previousCommand);
+      }
+    } catch (err) {
+      fail(`Telegram monitor replacement readiness check failed: ${String(err)}`);
+      return;
+    }
   }
 
   const plan = await buildTelegramMonitorServiceInstallPlan({
@@ -334,10 +442,18 @@ export async function runTelegramMonitorServiceInstall(opts: TelegramMonitorServ
 
     const restorePriorBinding = async () => {
       try {
+        if (previousCommand) {
+          await restoreInstalledCommand({
+            command: previousCommand,
+            env: daemonEnv as NodeJS.ProcessEnv,
+            service,
+            stdout,
+          });
+        }
         await restoreTelegramMonitorBinding({ env: plan.binding.env, previous: previousBinding });
       } catch (rollbackError) {
         fail(
-          `Telegram monitor install failed: ${String(installError)}; replacement was not verified, and binding rollback failed: ${String(rollbackError)}`,
+          `Telegram monitor install failed: ${String(installError)}; replacement was not verified, and durable rollback failed: ${String(rollbackError)}`,
         );
         return;
       }
@@ -452,25 +568,68 @@ export async function runTelegramMonitorServiceStatus(
   const json = Boolean(opts.json);
   const service = resolveTelegramMonitorService();
   const daemonEnv = resolveTelegramMonitorServiceCliEnv(process.env);
+  let loadedUnavailable = false;
+  let commandUnavailable = false;
+  let runtimeUnavailable = false;
+  let bindingUnavailable = false;
   const [loaded, command, runtime, cfg, binding] = await Promise.all([
-    service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv }).catch(() => false),
-    service.readCommand(daemonEnv as NodeJS.ProcessEnv).catch(() => null),
-    service
-      .readRuntime(daemonEnv as NodeJS.ProcessEnv)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.isLoaded({ env: daemonEnv as NodeJS.ProcessEnv }).catch(() => {
+      loadedUnavailable = true;
+      return false;
+    }),
+    service.readCommand(daemonEnv as NodeJS.ProcessEnv).catch(() => {
+      commandUnavailable = true;
+      return null;
+    }),
+    service.readRuntime(daemonEnv as NodeJS.ProcessEnv).catch((err): GatewayServiceRuntime => {
+      runtimeUnavailable = true;
+      return { status: "unknown", detail: String(err) };
+    }),
     readBestEffortConfig(),
-    summarizeTelegramUserMonitorBinding(daemonEnv as NodeJS.ProcessEnv).catch(() => ({
-      configured: false,
-      source: "unavailable" as const,
-      envFile: { configured: false, present: false },
-      session: { configured: false, present: false },
-    })),
+    summarizeTelegramUserMonitorBinding(daemonEnv as NodeJS.ProcessEnv).catch(() => {
+      bindingUnavailable = true;
+      return {
+        configured: false,
+        source: "unavailable" as const,
+        envFile: { configured: false, present: false },
+        session: { configured: false, present: false },
+      };
+    }),
   ]);
   const defaultHookUrl = resolveDefaultTelegramMonitorHookUrl({
     env: daemonEnv,
     port: resolveGatewayPort(cfg, daemonEnv as NodeJS.ProcessEnv),
   });
 
+  const hookUrl = readMonitorArgument(command?.programArguments ?? [], "--hook-url");
+  const acceptance = {
+    configured: command !== null,
+    loaded,
+    healthy: command !== null && loaded && runtime.status === "running",
+    unavailable: {
+      configured: commandUnavailable,
+      loaded: loadedUnavailable,
+      runtime: runtimeUnavailable,
+      binding: bindingUnavailable,
+    },
+    ownership: {
+      profile: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_PROFILE"),
+      config: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_CONFIG_PATH"),
+      state: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_STATE_DIR"),
+      hook: { configured: Boolean(hookUrl), loopback: isLoopbackHookUrl(hookUrl) },
+      selectors: {
+        envFile: Boolean(readMonitorArgument(command?.programArguments ?? [], "--env-file")),
+        session: Boolean(readMonitorArgument(command?.programArguments ?? [], "--session")),
+        cronStore: Boolean(readMonitorArgument(command?.programArguments ?? [], "--cron-store")),
+        cursorStore: Boolean(
+          readMonitorArgument(command?.programArguments ?? [], "--cursor-store"),
+        ),
+        monitorStore: Boolean(
+          readMonitorArgument(command?.programArguments ?? [], "--monitor-store"),
+        ),
+      },
+    },
+  };
   const payload = {
     service: {
       ...buildDaemonServiceSnapshot(service, loaded),
@@ -478,6 +637,7 @@ export async function runTelegramMonitorServiceStatus(
       runtime,
       defaultHookUrl,
       binding,
+      acceptance,
     },
   };
 
@@ -490,6 +650,9 @@ export async function runTelegramMonitorServiceStatus(
     createCliStatusTextStyles();
   const serviceStatus = loaded ? okText(service.loadedText) : warnText(service.notLoadedText);
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
+  defaultRuntime.log(
+    `${label("Acceptance:")} ${infoText(`configured=${acceptance.configured} loaded=${acceptance.loaded} healthy=${acceptance.healthy} unavailable=${Object.values(acceptance.unavailable).some(Boolean)}`)}`,
+  );
   if (command?.programArguments?.length) {
     defaultRuntime.log(
       `${label("Command:")} ${infoText(redactTelegramMonitorSelectorArguments(command.programArguments).join(" "))}`,

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConsumerRuntimeIdentity } from "../consumer/runtime-identity.js";
 
@@ -255,6 +258,15 @@ describe("telegram-user monitor-service cli", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: [
+        "openclaw",
+        "telegram-user",
+        "monitor-poll",
+        "--env-file",
+        "/private/previous.env",
+      ],
+    });
     service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     service.install.mockRejectedValueOnce(new Error("forced install broke"));
 
@@ -274,11 +286,100 @@ describe("telegram-user monitor-service cli", () => {
     });
   });
 
+  it("refuses forced replacement when EnvironmentFile values cannot be restored", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      environment: { OPENCLAW_GATEWAY_TOKEN: "resolved-secret" },
+      environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: "file" },
+      programArguments: ["openclaw", "telegram-user", "monitor-poll"],
+    });
+
+    await runTelegramMonitorServiceInstall({ force: true, json: true });
+
+    expect(buildInstallPlanMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+  });
+
+  it("refuses forced replacement when an empty EnvironmentFile directive is installed", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-unit-"));
+    const sourcePath = path.join(tempDir, "telegram-monitor.service");
+    await fs.writeFile(
+      sourcePath,
+      "[Service]\nEnvironmentFile=-/missing/operator.env\nExecStart=/usr/bin/openclaw\n",
+    );
+    try {
+      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+      service.isLoaded.mockResolvedValueOnce(false);
+      service.readCommand.mockResolvedValueOnce({
+        programArguments: ["openclaw", "telegram-user", "monitor-poll"],
+        sourcePath,
+      });
+
+      await runTelegramMonitorServiceInstall({ force: true, json: true });
+
+      expect(buildInstallPlanMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("restores a stopped prior command and binding after forced replacement fails", async () => {
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    const previousCommand = {
+      programArguments: [
+        "openclaw",
+        "telegram-user",
+        "monitor-poll",
+        "--env-file",
+        "/private/previous.env",
+      ],
+    };
+    readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    service.readCommand.mockResolvedValueOnce(previousCommand).mockResolvedValueOnce(null);
+    service.install
+      .mockRejectedValueOnce(new Error("replacement failed"))
+      .mockResolvedValueOnce(undefined);
+
+    await runTelegramMonitorServiceInstall({
+      force: true,
+      json: true,
+      envFile: "/private/account.env",
+    });
+
+    expect(service.install).toHaveBeenCalledTimes(2);
+    expect(service.install).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ programArguments: previousCommand.programArguments }),
+    );
+    expect(writeBindingMock).toHaveBeenNthCalledWith(2, {
+      env: { OPENCLAW_STATE_DIR: "/state" },
+      envFile: "/private/previous.env",
+    });
+  });
+
   it("restores the prior binding when a failed replacement rewrites the unit file", async () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: [
+        "openclaw",
+        "telegram-user",
+        "monitor-poll",
+        "--env-file",
+        "/private/previous.env",
+      ],
+    });
     service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     service.install.mockRejectedValueOnce(new Error("install reported late failure"));
 
@@ -300,6 +401,15 @@ describe("telegram-user monitor-service cli", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     readBindingMock.mockResolvedValueOnce({ envFile: "/private/previous.env" });
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: [
+        "openclaw",
+        "telegram-user",
+        "monitor-poll",
+        "--env-file",
+        "/private/previous.env",
+      ],
+    });
     service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     service.install.mockRejectedValueOnce(new Error("replacement bootstrap failed"));
 
@@ -375,8 +485,11 @@ describe("telegram-user monitor-service cli", () => {
     service.isLoaded.mockResolvedValueOnce(false);
     service.readCommand.mockResolvedValueOnce({
       environment: {
+        OPENCLAW_CONFIG_PATH: "/wrong/config.json",
         OPENCLAW_GATEWAY_PORT: "9999",
         OPENCLAW_GATEWAY_TOKEN: "secret-token",
+        OPENCLAW_PROFILE: "wrong-lane",
+        OPENCLAW_STATE_DIR: "/wrong/state",
       },
       programArguments: [
         "openclaw",
@@ -396,6 +509,16 @@ describe("telegram-user monitor-service cli", () => {
 
     const payload = readLoggedJson(log) as {
       service?: {
+        acceptance?: {
+          configured?: boolean;
+          healthy?: boolean;
+          ownership?: {
+            config?: { configured?: boolean; matches?: boolean };
+            profile?: { configured?: boolean; matches?: boolean };
+            state?: { configured?: boolean; matches?: boolean };
+            selectors?: { envFile?: boolean; session?: boolean };
+          };
+        };
         binding?: unknown;
         command?: { environment?: Record<string, string>; programArguments?: string[] };
         defaultHookUrl?: string;
@@ -405,9 +528,22 @@ describe("telegram-user monitor-service cli", () => {
       `http://127.0.0.1:${identity.gatewayPort}/hooks/telegram-user-monitor-event`,
     );
     expect(payload.service?.command?.environment).toEqual({
+      OPENCLAW_CONFIG_PATH: "/wrong/config.json",
       OPENCLAW_GATEWAY_PORT: "9999",
+      OPENCLAW_PROFILE: "wrong-lane",
+      OPENCLAW_STATE_DIR: "/wrong/state",
     });
     expect(payload.service?.command?.programArguments).toContain("<configured>");
+    expect(payload.service?.acceptance).toMatchObject({
+      configured: true,
+      healthy: false,
+      ownership: {
+        config: { configured: true, matches: false },
+        profile: { configured: true, matches: false },
+        state: { configured: true, matches: false },
+        selectors: { envFile: true, session: true },
+      },
+    });
     expect(JSON.stringify(payload)).not.toContain("/private/account");
     expect(service.isLoaded).toHaveBeenCalledWith({
       env: expect.objectContaining({
@@ -451,11 +587,56 @@ describe("telegram-user monitor-service cli", () => {
 
     expect(readLoggedJson(log)).toMatchObject({
       service: {
+        acceptance: { unavailable: { binding: true } },
         binding: {
           configured: false,
           source: "unavailable",
           envFile: { configured: false, present: false },
           session: { configured: false, present: false },
+        },
+      },
+    });
+  });
+
+  it("distinguishes a healthy service from unavailable observations", async () => {
+    const healthyLog = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: [
+        "openclaw",
+        "telegram-user",
+        "monitor-poll",
+        "--hook-url",
+        "https://[::1]:18789/hooks/telegram-user-monitor-event",
+      ],
+    });
+    service.readRuntime.mockResolvedValueOnce({ status: "running" });
+
+    await runTelegramMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(healthyLog)).toMatchObject({
+      service: {
+        acceptance: {
+          configured: true,
+          loaded: true,
+          healthy: true,
+          ownership: { hook: { configured: true, loopback: true } },
+        },
+      },
+    });
+
+    healthyLog.mockClear();
+    service.isLoaded.mockRejectedValueOnce(new Error("load unavailable"));
+    service.readCommand.mockRejectedValueOnce(new Error("command unavailable"));
+    service.readRuntime.mockRejectedValueOnce(new Error("runtime unavailable"));
+
+    await runTelegramMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(healthyLog)).toMatchObject({
+      service: {
+        acceptance: {
+          healthy: false,
+          unavailable: { configured: true, loaded: true, runtime: true },
         },
       },
     });
