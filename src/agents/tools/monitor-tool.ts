@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import { loadConfig } from "../../config/config.js";
 import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -34,11 +35,33 @@ function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined
   if (!delivery) {
     return undefined;
   }
+  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
+  const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
+  const threadId =
+    (typeof delivery.threadId === "string" && delivery.threadId.trim()) ||
+    (typeof delivery.threadId === "number" && Number.isSafeInteger(delivery.threadId)
+      ? String(delivery.threadId)
+      : undefined);
+
+  if (channel.toLowerCase() === "telegram" && to && threadId) {
+    // Session routing exposes the topic as transient `threadId` metadata, while
+    // durable cron delivery intentionally stores topics inside `to`. Convert at
+    // this boundary so gateway schema validation and later direct delivery use
+    // the same canonical target instead of forcing the agent to retry.
+    const parsed = parseExplicitTargetForChannel(channel, to);
+    const canonicalThreadId = parsed?.threadId ?? threadId;
+    const canonicalTo = parsed?.to ?? to;
+    const { threadId: _transientThreadId, ...durableDelivery } = delivery;
+    return {
+      ...durableDelivery,
+      mode: typeof delivery.mode === "string" ? delivery.mode : "announce",
+      channel,
+      to: `${canonicalTo}:topic:${canonicalThreadId}`,
+    };
+  }
   if (typeof delivery.mode === "string") {
     return delivery;
   }
-  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
-  const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
   if (!channel || !to) {
     return delivery;
   }

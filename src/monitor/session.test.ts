@@ -2,6 +2,36 @@ import { describe, expect, it } from "vitest";
 import { buildMonitorBootstrapPrompt } from "./session.js";
 
 describe("monitor bootstrap contract", () => {
+  it("requires the actual requested draft for notify_draft completion", () => {
+    const prompt = buildMonitorBootstrapPrompt({
+      instructions: "Quote the matching inbound text and draft the next response for approval.",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_draft",
+      watchDeliveryConfigured: false,
+      originSessionKey: "agent:main:telegram:group:-1003783709877:topic:21581",
+    });
+
+    expect(prompt).toContain("explicitly requires a draft");
+    expect(prompt).toContain("must include the actual draft text");
+    expect(prompt).toContain("status-only completion is incomplete");
+  });
+
+  it("does not impose a draft requirement on notify_only", () => {
+    const prompt = buildMonitorBootstrapPrompt({
+      instructions: "Report whether a matching reply arrived.",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_only",
+      watchDeliveryConfigured: false,
+      originSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).not.toContain("status-only completion is incomplete");
+  });
+
   it("preserves goal autonomy when watched-surface delivery is unavailable", () => {
     const prompt = buildMonitorBootstrapPrompt({
       instructions: "Keep the ticket moving.",

@@ -5,7 +5,11 @@ import { resolveStorePath, updateSessionStore, type SessionEntry } from "../conf
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { CronDelivery } from "../cron/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { buildMonitorAutonomyLines, buildMonitorNotificationLines } from "./prompt-contract.js";
+import {
+  buildMonitorAutonomyLines,
+  buildMonitorDraftCompletionLines,
+  buildMonitorNotificationLines,
+} from "./prompt-contract.js";
 import type {
   MonitorGoalSnapshot,
   MonitorNotificationPolicy,
@@ -84,6 +88,7 @@ export function buildMonitorBootstrapPrompt(params: {
       policy: params.notificationPolicy,
       state: params.notificationState,
     }),
+    ...buildMonitorDraftCompletionLines(params.actionPolicy),
     "Evaluate after each wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
     ...(params.actionPolicy === "auto_send" &&

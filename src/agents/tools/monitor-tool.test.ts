@@ -8,6 +8,7 @@ const { callGatewayToolMock, resolveAnnounceTargetMock } = vi.hoisted(() => ({
       channel: string;
       to: string;
       accountId: string;
+      threadId?: string;
     } | null> => ({
       channel: "telegram",
       to: "19098680",
@@ -125,6 +126,43 @@ describe("monitor tool", () => {
         },
       }),
     );
+  });
+
+  it("canonicalizes a session-resolved Telegram topic before gateway validation", async () => {
+    resolveAnnounceTargetMock.mockResolvedValueOnce({
+      channel: "telegram",
+      to: "-1003783709877",
+      accountId: "default",
+      threadId: "21581",
+    });
+    const originSessionKey = "agent:main:telegram:group:-1003783709877:topic:21581";
+    const tool = createMonitorTool({ agentSessionKey: originSessionKey });
+
+    await tool.execute?.("call-topic", {
+      action: "create",
+      instructions: "Quote the matching reply and draft the next response for approval.",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "monitor.create",
+      expect.any(Object),
+      expect.objectContaining({
+        originSessionKey,
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1003783709877:topic:21581",
+          accountId: "default",
+        },
+      }),
+    );
+    const gatewayParams = callGatewayToolMock.mock.calls.at(-1)?.[2] as
+      | { originDelivery?: Record<string, unknown> }
+      | undefined;
+    expect(gatewayParams?.originDelivery).not.toHaveProperty("threadId");
   });
 
   it("describes natural-language monitor routing safety", () => {
