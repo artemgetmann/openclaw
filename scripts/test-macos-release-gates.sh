@@ -190,6 +190,31 @@ test_sparkle_build_predicate() {
   run_expect "sparkle-beta-counter-regression" fail \
     openclaw_require_incremental_sparkle_build "$built" "$installed"
 
+  make_app "$installed" "2026.5.3" "2026071402"
+  make_app "$built" "2026.5.3-1" "2026071403"
+  run_expect "sparkle-stable-to-correction-upgrade" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.5.3-1" "2026071402"
+  make_app "$built" "2026.5.3" "2026071403"
+  run_expect "sparkle-correction-to-stable-regression" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.5.3-1" "2026071402"
+  make_app "$built" "2026.5.3-2" "2026071403"
+  run_expect "sparkle-correction-counter-upgrade" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.5.3-2" "2026071402"
+  make_app "$built" "2026.5.3-1" "2026071403"
+  run_expect "sparkle-correction-counter-regression" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.5.3-beta.9" "2026071402"
+  make_app "$built" "2026.5.3-1" "2026071403"
+  run_expect "sparkle-prerelease-to-correction-upgrade" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
   /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$built/Contents/Info.plist"
   run_expect "sparkle-built-marketing-version-missing" fail \
     openclaw_require_incremental_sparkle_build "$built" "$installed"
@@ -209,6 +234,37 @@ test_sparkle_build_predicate() {
     _ "$ROOT_DIR/scripts/lib/macos-release-gates.sh" "$built" "$installed"
 }
 
+test_sparkle_phase_gate_selection() {
+  local phase
+
+  for phase in \
+    full \
+    local-proof \
+    post-app-build \
+    build-app-only \
+    trusted-ring-fast \
+    submit-app-notarization \
+    poll-app-notarization \
+    submit-dmg-notarization \
+    poll-dmg-notarization \
+    create-local-release-assets-only \
+    publish-assets-only \
+    publish-sparkle-assets-only; do
+    if ! openclaw_macos_release_phase_requires_version_gate "$phase"; then
+      fail "$phase should require the installed Jarvis version/build gate"
+    fi
+  done
+
+  for phase in verify-public-assets-only verify-sparkle-assets-only; do
+    if openclaw_macos_release_phase_requires_version_gate "$phase"; then
+      fail "$phase should not require the installed Jarvis version/build gate"
+    fi
+  done
+
+  pass "sparkle phase gate selection"
+}
+
 test_prewarm_proof_validation
 test_release_worktree_guard
 test_sparkle_build_predicate
+test_sparkle_phase_gate_selection

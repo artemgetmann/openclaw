@@ -287,6 +287,8 @@ high as the installed app's marketing version and bump `APP_BUILD`. The release
 gate requires `CFBundleShortVersionString` to stay equal or increase and
 `CFBundleVersion` to increase strictly. This prevents a higher build number
 from installing an app whose About screen visibly regresses to an older version.
+For the same CalVer base, release order is `alpha.N`, `beta.N`, stable, then
+legacy numeric corrections such as `-1` and `-2`.
 
 The historical public release acceleration spec is archived at
 `docs/consumer/archive/jarvis-public-release-acceleration-spec.md`. The

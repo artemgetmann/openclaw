@@ -303,12 +303,19 @@ openclaw_parse_marketing_version() {
     return 0
   fi
 
+  # Legacy public releases use -N for same-base corrections. Corrections ship
+  # after stable, so rank them above suffix-free stable and order by N.
+  if [[ "$value" =~ ^([0-9]+([.][0-9]+)*)-([0-9]+)$ ]]; then
+    printf '%s|3|%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
   if [[ "$value" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
     printf '%s|2|0\n' "$value"
     return 0
   fi
 
-  echo "ERROR: unsupported Jarvis CFBundleShortVersionString '$value'; expected numeric CalVer with optional alpha.N or beta.N suffix." >&2
+  echo "ERROR: unsupported Jarvis CFBundleShortVersionString '$value'; expected numeric CalVer with optional alpha.N, beta.N, or numeric correction suffix." >&2
   return 1
 }
 
@@ -336,6 +343,25 @@ openclaw_compare_marketing_versions() {
   openclaw_compare_bundle_versions \
     "$left_rank.$left_prerelease" \
     "$right_rank.$right_prerelease"
+}
+
+openclaw_macos_release_phase_requires_version_gate() {
+  local phase="$1"
+
+  case "$phase" in
+    full|local-proof|post-app-build|build-app-only|trusted-ring-fast|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|publish-sparkle-assets-only)
+      return 0
+      ;;
+    verify-public-assets-only|verify-sparkle-assets-only)
+      # Verification observes already-public assets and must not depend on the
+      # operator's currently installed Jarvis version/build.
+      return 1
+      ;;
+    *)
+      echo "ERROR: unknown macOS release phase for version gate: $phase" >&2
+      return 2
+      ;;
+  esac
 }
 
 openclaw_require_incremental_sparkle_build() {
