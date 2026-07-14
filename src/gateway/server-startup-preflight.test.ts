@@ -335,10 +335,51 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(repairedAllowBundled.indexOf("telegram-chat-management")).toBe(
       repairedAllowBundled.indexOf("notion") - 1,
     );
-    expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill allowlist"));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill config"));
     expect(result.config.skills?.allowBundled).toContain("jarvis-computer-use");
     expect(result.config.skills?.allowBundled).toContain("screen-record");
     expect(result.config.skills?.allowBundled).toContain("telegram-chat-management");
+  });
+
+  it("migrates a legacy Jarvis Computer Use opt-out without an allowlist", async () => {
+    const home = makeTempDir();
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const staleConfig: OpenClawConfig = {
+      skills: {
+        entries: { "jarvis-gui-control": { enabled: false } },
+      },
+    };
+    const repairedConfig: OpenClawConfig = {
+      skills: {
+        entries: { "jarvis-computer-use": { enabled: false } },
+      },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: repairedConfig }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+    });
+
+    expect(writeConfig).toHaveBeenCalledWith(repairedConfig);
+    expect(result.config.skills?.entries?.["jarvis-gui-control"]).toBeUndefined();
+    expect(result.config.skills?.entries?.["jarvis-computer-use"]?.enabled).toBe(false);
+    expect(result.config.skills?.allowBundled).toBeUndefined();
   });
 
   it("syncs bundled skills to shared personal root for Jarvis consumer startup", async () => {

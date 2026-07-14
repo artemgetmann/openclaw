@@ -70,7 +70,12 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     return { config, changes: [] };
   }
 
-  const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist, config);
+  // Entry migration must happen before allowlist normalization. The loader
+  // enforces `enabled` by the current skill key, while a missing/empty bundled
+  // allowlist means unrestricted rather than disabled.
+  const entryMigration = migrateLegacyConsumerBundledSkillEntries(config);
+  const workingConfig = entryMigration.config;
+  const normalizedAllowlist = normalizeLegacyBundledSkillNames(currentAllowlist, workingConfig);
   const renameChanged = !sameStringArray(currentAllowlist, normalizedAllowlist);
   const defaultSkills = new Set<string>(CONSUMER_DEFAULT_BUNDLED_SKILLS);
   const current = new Set(normalizedAllowlist);
@@ -80,25 +85,32 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     normalizedAllowlist.every((skillName) => defaultSkills.has(skillName));
 
   if (!looksLikeGeneratedConsumerDefault) {
-    if (!renameChanged) {
+    if (!renameChanged && entryMigration.changes.length === 0) {
       return { config, changes: [] };
     }
     return {
-      config: {
-        ...config,
-        skills: {
-          ...config.skills,
-          allowBundled: normalizedAllowlist,
-        },
-      },
-      changes: ["skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use"],
+      config: renameChanged
+        ? {
+            ...workingConfig,
+            skills: {
+              ...workingConfig.skills,
+              allowBundled: normalizedAllowlist,
+            },
+          }
+        : workingConfig,
+      changes: [
+        ...entryMigration.changes,
+        ...(renameChanged
+          ? ["skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use"]
+          : []),
+      ],
     };
   }
 
   const nextAllowlist = [...normalizedAllowlist];
   const added: string[] = [];
   for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
-    const explicitlyDisabled = isBundledSkillExplicitlyDisabled(config, skillName);
+    const explicitlyDisabled = isBundledSkillExplicitlyDisabled(workingConfig, skillName);
     if (explicitlyDisabled || current.has(skillName)) {
       continue;
     }
@@ -107,11 +119,11 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
     added.push(skillName);
   }
 
-  if (added.length === 0 && !renameChanged) {
+  if (added.length === 0 && !renameChanged && entryMigration.changes.length === 0) {
     return { config, changes: [] };
   }
 
-  const changes = [];
+  const changes = [...entryMigration.changes];
   if (renameChanged) {
     changes.push("skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use");
   }
@@ -121,10 +133,69 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
 
   return {
     config: {
+      ...workingConfig,
+      skills: {
+        ...workingConfig.skills,
+        allowBundled: nextAllowlist,
+      },
+    },
+    changes,
+  };
+}
+
+function migrateLegacyConsumerBundledSkillEntries(config: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const entries = config.skills?.entries;
+  if (!entries) {
+    return { config, changes: [] };
+  }
+
+  let nextEntries: typeof entries | undefined;
+  const changes: string[] = [];
+  for (const [legacySkillName, renamedSkillName] of Object.entries(
+    LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES,
+  )) {
+    const legacyEntry = entries[legacySkillName];
+    if (!legacyEntry) {
+      continue;
+    }
+
+    const renamedEntry = entries[renamedSkillName];
+    const enabled =
+      legacyEntry.enabled === false || renamedEntry?.enabled === false
+        ? false
+        : (renamedEntry?.enabled ?? legacyEntry.enabled);
+    const mergedEntry = {
+      ...legacyEntry,
+      ...renamedEntry,
+      ...(enabled === undefined ? {} : { enabled }),
+      ...(legacyEntry.env || renamedEntry?.env
+        ? { env: { ...legacyEntry.env, ...renamedEntry?.env } }
+        : {}),
+      ...(legacyEntry.config || renamedEntry?.config
+        ? { config: { ...legacyEntry.config, ...renamedEntry?.config } }
+        : {}),
+    };
+
+    // Canonical-key fields win ordinary conflicts, but either explicit false
+    // wins `enabled`. A rename must never turn an operator opt-out back on.
+    nextEntries ??= { ...entries };
+    nextEntries[renamedSkillName] = mergedEntry;
+    delete nextEntries[legacySkillName];
+    changes.push(`skills.entries renamed ${legacySkillName}->${renamedSkillName}`);
+  }
+
+  if (!nextEntries) {
+    return { config, changes: [] };
+  }
+  return {
+    config: {
       ...config,
       skills: {
         ...config.skills,
-        allowBundled: nextAllowlist,
+        entries: nextEntries,
       },
     },
     changes,
