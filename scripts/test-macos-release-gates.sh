@@ -93,12 +93,14 @@ test_release_worktree_guard() {
 
 make_app() {
   local app_path="$1"
-  local build="$2"
+  local version="$2"
+  local build="$3"
   local plist="$app_path/Contents/Info.plist"
 
   rm -rf "$app_path"
   mkdir -p "$(dirname "$plist")"
   /usr/bin/plutil -create xml1 "$plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $version" "$plist"
   /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $build" "$plist"
 }
 
@@ -126,23 +128,55 @@ test_sparkle_build_predicate() {
   local built="$TMP_DIR/Built/Jarvis.app"
   local installed="$TMP_DIR/Installed/Jarvis.app"
 
-  make_app "$built" "200"
+  make_app "$built" "2026.7.14.1" "200"
   run_expect "sparkle-missing-installed" pass \
     openclaw_require_incremental_sparkle_build "$built" "$TMP_DIR/no-app/Jarvis.app"
 
-  make_app "$installed" "199"
+  make_app "$installed" "2026.7.14.1" "199"
   run_expect "sparkle-older-installed" pass \
     openclaw_require_incremental_sparkle_build "$built" "$installed"
 
-  make_app "$installed" "200"
+  make_app "$installed" "2026.7.14.1" "200"
   run_expect "sparkle-equal-installed" fail \
     openclaw_require_incremental_sparkle_build "$built" "$installed"
 
-  make_app "$installed" "201"
+  make_app "$installed" "2026.7.14.1" "201"
   run_expect "sparkle-newer-installed" fail \
     openclaw_require_incremental_sparkle_build "$built" "$installed"
 
-  make_app "$installed" "200"
+  # Regression shape: a higher build must not mask a visibly older version.
+  make_app "$built" "2026.3.16" "2026071403"
+  make_app "$installed" "2026.7.14.1" "2026071402"
+  run_expect "sparkle-marketing-version-regression" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+  grep -Fq "CFBundleShortVersionString is older" "$TMP_DIR/sparkle-marketing-version-regression.err" || \
+    fail "sparkle-marketing-version-regression should explain the marketing-version failure"
+  run_expect "sparkle-override-marketing-version-regression" pass env ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 \
+    bash -c 'source "$1"; openclaw_require_incremental_sparkle_build "$2" "$3"' \
+    _ "$ROOT_DIR/scripts/lib/macos-release-gates.sh" "$built" "$installed"
+
+  make_app "$built" "2026.7.14.1" "2026071403"
+  run_expect "sparkle-equal-marketing-version-newer-build" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$built" "2026.7.15" "2026071403"
+  run_expect "sparkle-newer-marketing-version-newer-build" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$built/Contents/Info.plist"
+  run_expect "sparkle-built-marketing-version-missing" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+  grep -Fq "built Jarvis app is missing CFBundleShortVersionString" "$TMP_DIR/sparkle-built-marketing-version-missing.err" || \
+    fail "sparkle-built-marketing-version-missing should identify missing metadata"
+
+  make_app "$built" "2026.7.15" "2026071403"
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$installed/Contents/Info.plist"
+  run_expect "sparkle-installed-marketing-version-missing" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+  grep -Fq "installed Jarvis app is missing CFBundleShortVersionString" "$TMP_DIR/sparkle-installed-marketing-version-missing.err" || \
+    fail "sparkle-installed-marketing-version-missing should identify missing metadata"
+
+  make_app "$installed" "2026.7.14.1" "2026071403"
   run_expect "sparkle-override-equal" pass env ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 \
     bash -c 'source "$1"; openclaw_require_incremental_sparkle_build "$2" "$3"' \
     _ "$ROOT_DIR/scripts/lib/macos-release-gates.sh" "$built" "$installed"

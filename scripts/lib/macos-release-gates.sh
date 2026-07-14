@@ -247,6 +247,18 @@ openclaw_read_bundle_version() {
   /usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$info_plist" 2>/dev/null || printf '%s\n' ""
 }
 
+openclaw_read_bundle_marketing_version() {
+  local app_path="$1"
+  local info_plist="$app_path/Contents/Info.plist"
+
+  if [[ ! -f "$info_plist" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$info_plist" 2>/dev/null || printf '%s\n' ""
+}
+
 openclaw_compare_bundle_versions() {
   local left="$1"
   local right="$2"
@@ -278,10 +290,11 @@ openclaw_compare_bundle_versions() {
 openclaw_require_incremental_sparkle_build() {
   local built_app_path="$1"
   local installed_app_path="${2:-${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}}"
-  local built_build installed_build comparison
+  local built_version installed_version version_comparison
+  local built_build installed_build build_comparison
 
   if [[ "${ALLOW_NON_INCREMENTAL_SPARKLE_BUILD:-0}" == "1" ]]; then
-    echo "WARN: ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 bypassed installed Jarvis build comparison." >&2
+    echo "WARN: ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 bypassed installed Jarvis version/build comparison." >&2
     return 0
   fi
 
@@ -290,21 +303,52 @@ openclaw_require_incremental_sparkle_build() {
     return 0
   fi
 
+  built_version="$(openclaw_read_bundle_marketing_version "$built_app_path")"
+  installed_version="$(openclaw_read_bundle_marketing_version "$installed_app_path")"
+
+  # Build numbers drive Sparkle eligibility, but About displays the marketing
+  # version. Guard both identities so a larger build cannot visibly downgrade
+  # an installed Jarvis release through stale APP_VERSION metadata.
+  if [[ -z "$built_version" ]]; then
+    echo "ERROR: built Jarvis app is missing CFBundleShortVersionString: $built_app_path" >&2
+    exit 1
+  fi
+  if [[ -z "$installed_version" ]]; then
+    echo "ERROR: installed Jarvis app is missing CFBundleShortVersionString: $installed_app_path" >&2
+    echo "Set ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only if you intentionally want to bypass this Jarvis version/build guard." >&2
+    exit 1
+  fi
+
+  version_comparison="$(openclaw_compare_bundle_versions "$installed_version" "$built_version")"
+  if [[ "$version_comparison" == "1" ]]; then
+    cat >&2 <<EOF
+ERROR: built Jarvis CFBundleShortVersionString is older than the installed app.
+
+Built app:         $built_app_path
+Built version:     $built_version
+Installed app:     $installed_app_path
+Installed version: $installed_version
+
+A higher CFBundleVersion cannot make a marketing-version downgrade safe.
+Bump APP_VERSION to at least $installed_version, or use ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only for an intentional emergency bypass.
+EOF
+    exit 1
+  fi
+
   built_build="$(openclaw_read_bundle_version "$built_app_path")"
   installed_build="$(openclaw_read_bundle_version "$installed_app_path")"
-
   if [[ -z "$built_build" ]]; then
     echo "ERROR: built Jarvis app is missing CFBundleVersion: $built_app_path" >&2
     exit 1
   fi
   if [[ -z "$installed_build" ]]; then
     echo "ERROR: installed Jarvis app is missing CFBundleVersion: $installed_app_path" >&2
-    echo "Set ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only if you intentionally want to bypass this Sparkle update guard." >&2
+    echo "Set ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only if you intentionally want to bypass this Jarvis version/build guard." >&2
     exit 1
   fi
 
-  comparison="$(openclaw_compare_bundle_versions "$installed_build" "$built_build")"
-  if [[ "$comparison" == "0" || "$comparison" == "1" ]]; then
+  build_comparison="$(openclaw_compare_bundle_versions "$installed_build" "$built_build")"
+  if [[ "$build_comparison" == "0" || "$build_comparison" == "1" ]]; then
     cat >&2 <<EOF
 ERROR: built Jarvis CFBundleVersion is not newer than the installed app.
 
@@ -314,12 +358,14 @@ Installed app: $installed_app_path
 Installed:     $installed_build
 
 Sparkle will not offer an update unless the new CFBundleVersion is higher.
-Bump APP_BUILD/APP_VERSION, or use ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only for an intentional republish.
+Bump APP_BUILD, or use ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only for an intentional emergency bypass.
 EOF
     exit 1
   fi
 
   echo "sparkle_build_incremental=ok"
+  echo "sparkle_built_version=$built_version"
+  echo "sparkle_installed_version=$installed_version"
   echo "sparkle_built_build=$built_build"
   echo "sparkle_installed_build=$installed_build"
 }

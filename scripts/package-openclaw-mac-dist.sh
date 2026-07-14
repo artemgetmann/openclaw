@@ -113,8 +113,9 @@ Env:
                       bash scripts/prewarm-worktree.sh --root "$PWD" --macos
                       This does not bypass the blessed release-worktree guard.
   ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1
-                      Emergency-only bypass when the built CFBundleVersion is
-                      not newer than /Applications/Jarvis.app
+                      Emergency-only bypass when the built marketing version
+                      or CFBundleVersion fails comparison with
+                      /Applications/Jarvis.app
 
 OpenClaw release packaging is intentionally default-instance only.
 Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
