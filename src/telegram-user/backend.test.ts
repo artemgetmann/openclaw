@@ -85,4 +85,145 @@ describe("telegram-user backend defaults", () => {
       }),
     ).toBe("/tmp/from-flag");
   });
+
+  it("discovers a monitor service binding in a later backend import for the same state", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-state-"));
+    tempToolingRoots.push(stateDir);
+    const boundEnvFile = path.join(stateDir, "configured.env");
+    const boundSession = path.join(stateDir, "configured.session");
+    await fs.writeFile(boundEnvFile, "TELEGRAM_API_ID=123\n");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const { writeTelegramUserMonitorBinding } = await import("./monitor-service-binding.js");
+    await writeTelegramUserMonitorBinding({
+      env: process.env,
+      envFile: boundEnvFile,
+      session: boundSession,
+    });
+
+    // Resetting modules models the later CLI/backend process: it gets only the
+    // same profile/state selectors, not the original monitor install arguments.
+    vi.resetModules();
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+    await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
+      envFilePath: boundEnvFile,
+      sessionPath: boundSession,
+    });
+    await expect(
+      resolveTelegramUserBackendSelectors({
+        envFile: path.join(stateDir, "explicit.env"),
+        session: path.join(stateDir, "explicit.session"),
+      }),
+    ).resolves.toEqual({
+      envFilePath: path.join(stateDir, "explicit.env"),
+      sessionPath: path.join(stateDir, "explicit.session"),
+    });
+
+    const explicitEnvFile = path.join(stateDir, "explicit-with-session.env");
+    const envSelectedSession = path.join(stateDir, "env-selected.session");
+    await fs.writeFile(explicitEnvFile, `USERBOT_SESSION=${envSelectedSession}\n`);
+    await expect(
+      resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
+    ).resolves.toEqual({
+      envFilePath: explicitEnvFile,
+      sessionPath: envSelectedSession,
+    });
+  });
+
+  it("normalizes consumer runtime identity before reading the monitor binding", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-consumer-home-"));
+    tempToolingRoots.push(homeDir);
+    const boundEnvFile = path.join(homeDir, "configured.env");
+    const boundSession = path.join(homeDir, "configured.session");
+    await fs.writeFile(boundEnvFile, "TELEGRAM_API_ID=123\n");
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_PROFILE", "consumer-lane");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(homeDir, "raw-profile-state"));
+
+    const { resolveGatewayRuntimeIdentityEnv } = await import("../daemon/service-env.js");
+    const { writeTelegramUserMonitorBinding } = await import("./monitor-service-binding.js");
+    await writeTelegramUserMonitorBinding({
+      env: resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv,
+      envFile: boundEnvFile,
+      session: boundSession,
+    });
+
+    vi.resetModules();
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+    await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
+      envFilePath: boundEnvFile,
+      sessionPath: boundSession,
+    });
+  });
+
+  it("uses canonical consumer state defaults when the monitor binding has no selectors", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-consumer-home-"));
+    tempToolingRoots.push(homeDir);
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_PROFILE", "consumer-lane");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(homeDir, "raw-profile-state"));
+
+    const { resolveConsumerRuntimeIdentity } = await import("../consumer/runtime-identity.js");
+    const { resolveGatewayRuntimeIdentityEnv } = await import("../daemon/service-env.js");
+    const { writeTelegramUserMonitorBinding } = await import("./monitor-service-binding.js");
+    const identity = resolveConsumerRuntimeIdentity({ homeDir, instanceId: "lane" });
+    await writeTelegramUserMonitorBinding({
+      env: resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv,
+    });
+
+    vi.resetModules();
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+
+    await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
+      envFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
+      sessionPath: path.join(identity.stateDir, "telegram-user", "userbot.session"),
+    });
+  });
+
+  it("uses canonical consumer state for mutable Telegram tooling", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-consumer-home-"));
+    tempToolingRoots.push(homeDir);
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_PROFILE", "consumer-lane");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(homeDir, "raw-profile-state"));
+
+    const { resolveConsumerRuntimeIdentity } = await import("../consumer/runtime-identity.js");
+    const identity = resolveConsumerRuntimeIdentity({ homeDir, instanceId: "lane" });
+    const { getTelegramUserDefaults } = await import("./backend.js");
+
+    expect(getTelegramUserDefaults()).toMatchObject({
+      defaultEnvFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
+      defaultSessionPath: path.join(identity.stateDir, "telegram-user", "userbot.session"),
+      telegramUserStateDir: path.join(identity.stateDir, "telegram-user"),
+    });
+  });
+
+  it("uses explicit env-file credentials even when the persisted binding is unreadable", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-state-"));
+    tempToolingRoots.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const { resolveTelegramUserMonitorBindingPath } = await import("./monitor-service-binding.js");
+    await fs.mkdir(resolveTelegramUserMonitorBindingPath(process.env), { recursive: true });
+
+    const explicitEnvFile = path.join(stateDir, "explicit.env");
+    const envSelectedSession = path.join(stateDir, "env-selected.session");
+    await fs.writeFile(explicitEnvFile, `USERBOT_SESSION=${envSelectedSession}\n`);
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+
+    await expect(
+      resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
+    ).resolves.toEqual({
+      envFilePath: explicitEnvFile,
+      sessionPath: envSelectedSession,
+    });
+    await expect(
+      resolveTelegramUserBackendSelectors({
+        envFile: explicitEnvFile,
+        session: path.join(stateDir, "flag.session"),
+      }),
+    ).resolves.toEqual({
+      envFilePath: explicitEnvFile,
+      sessionPath: path.join(stateDir, "flag.session"),
+    });
+  });
 });

@@ -142,6 +142,7 @@ export async function runServiceUninstall(params: {
   opts?: DaemonLifecycleOptions;
   stopBeforeUninstall: boolean;
   assertNotLoadedAfterUninstall: boolean;
+  afterUninstall?: (env: Record<string, string | undefined>) => Promise<void>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "uninstall", json });
@@ -175,11 +176,24 @@ export async function runServiceUninstall(params: {
   loaded = false;
   try {
     loaded = await params.service.isLoaded({ env: daemonEnv });
-  } catch {
+  } catch (err) {
+    if (params.assertNotLoadedAfterUninstall) {
+      fail(`${params.serviceNoun} service check failed after uninstall: ${String(err)}`);
+      return;
+    }
     loaded = false;
   }
   if (loaded && params.assertNotLoadedAfterUninstall) {
     fail(`${params.serviceNoun} service still loaded after uninstall.`);
+    return;
+  }
+  try {
+    // Service-owned state may affect unrelated commands after the unit is gone.
+    // Run cleanup only after removal is confirmed so a failed uninstall keeps
+    // the credentials and metadata required by the still-installed service.
+    await params.afterUninstall?.(daemonEnv);
+  } catch (err) {
+    fail(`${params.serviceNoun} post-uninstall cleanup failed: ${String(err)}`);
     return;
   }
   emit({

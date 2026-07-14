@@ -1,23 +1,23 @@
 ---
-name: jarvis-gui-control
-description: Use for Jarvis macOS GUI-control tasks and GUI proof requests. Prefer this over Peekaboo for operating apps: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with hard stops for auth, payment, final purchase/booking, destructive delete, account/security settings, and software install/update.
+name: jarvis-computer-use
+description: "Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with hard stops for auth, payment, final purchase/booking, destructive delete, account/security settings, and software install/update."
 metadata:
   {
     "openclaw":
       {
         "emoji": "🖥️",
-        "displayName": "Jarvis GUI Control",
+        "displayName": "Jarvis Computer Use",
         "os": ["darwin"],
         "requires": { "bins": ["openclaw"] },
       },
   }
 ---
 
-# Jarvis GUI Control
+# Jarvis Computer Use
 
-Use this skill when the user asks Jarvis to operate a visible macOS app, prove
-GUI control, type into a local app, inspect native app state, or perform a
-bounded local GUI workflow.
+Use this skill when the user asks Jarvis to use the computer: operate a visible
+macOS app, prove GUI control, type into a local app, inspect native app state,
+or perform a bounded local GUI workflow.
 
 The primary control surface is the installed OpenClaw CLI:
 
@@ -32,7 +32,7 @@ openclaw gui-control set-value --runtime open-computer-use --app TextEdit --inte
 
 - Prefer `openclaw gui-control --runtime open-computer-use` for GUI operation.
 - Do not acquire `~/.codex/bin/cua-guard` for this path. That guard is only
-  for the Codex-native Computer Use tool/plugin; Jarvis GUI Control is the
+  for the Codex-native Computer Use tool/plugin; Jarvis Computer Use is the
   product CLI surface and must remain usable even when Codex Computer Use has
   another owner.
 - Do not use Peekaboo as the first choice for normal GUI-operation requests.
@@ -43,7 +43,7 @@ openclaw gui-control set-value --runtime open-computer-use --app TextEdit --inte
 - Do not use benchmark scripts as product behavior. Benchmarks are proof tools,
   not the live assistant workflow.
 - Do not use raw coordinates, AppleScript/JXA, browser plugins, or clipboard
-  fallbacks as proof of Jarvis GUI-control capability.
+  fallbacks as proof of Jarvis Computer Use capability.
 
 ## Workflow
 

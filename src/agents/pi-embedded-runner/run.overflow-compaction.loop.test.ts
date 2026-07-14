@@ -405,6 +405,56 @@ describe("overflow compaction in run loop", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
+  it("returns an explicit timeout payload when prompt submission reports a run timeout", async () => {
+    // Prompt submission can observe the timeout before its abort state is reflected
+    // in the attempt result. The generic prompt-error branch would otherwise throw
+    // this error before the reply runner can see its continuation sentinel.
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: false,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        promptError: new Error("aborted"),
+        assistantTexts: [],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toEqual([
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("Request timed out before a response was generated."),
+      }),
+    ]);
+  });
+
+  it("preserves ordinary prompt errors and user/system aborts", async () => {
+    const promptError = new Error("transport disconnected");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError, assistantTexts: [] }),
+    );
+
+    // A non-timeout prompt failure remains an error for the existing caller and
+    // must not be relabeled as a timeout merely because prompt submission failed.
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toBe(promptError);
+
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: false,
+        promptError: new Error("aborted"),
+        assistantTexts: [],
+      }),
+    );
+
+    // A user/system cancellation is still silent: it neither throws the prompt
+    // error nor creates the timeout sentinel that would schedule continuation.
+    const abortedResult = await runEmbeddedPiAgent(baseParams);
+    expect(abortedResult.payloads).toBeUndefined();
+    expect(abortedResult.meta.aborted).toBe(true);
+  });
+
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({

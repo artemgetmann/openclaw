@@ -1,4 +1,7 @@
-import { buildConsumerBundledSkillAllowlist } from "../../../agents/consumer-default-bundled-skills.js";
+import {
+  buildConsumerBundledSkillAllowlist,
+  repairConsumerDefaultBundledSkillAllowlist,
+} from "../../../agents/consumer-default-bundled-skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 export {
@@ -26,14 +29,15 @@ export function applyNonInteractiveSkillsConfig(params: {
     runtime.exit(1);
     return nextConfig;
   }
+  const migratedConfig = repairConsumerDefaultBundledSkillAllowlist(nextConfig).config;
   return {
-    ...nextConfig,
+    ...migratedConfig,
     skills: {
-      ...nextConfig.skills,
+      ...migratedConfig.skills,
       // Existing allowlists keep operator order while stale consumer configs get repaired.
-      allowBundled: buildConsumerBundledSkillAllowlist(nextConfig),
+      allowBundled: buildConsumerBundledSkillAllowlist(migratedConfig),
       install: {
-        ...nextConfig.skills?.install,
+        ...migratedConfig.skills?.install,
         nodeManager,
       },
     },

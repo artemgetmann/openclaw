@@ -83,7 +83,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries } from "./system-events.js";
+import {
+  markRestartContinuationConsumed,
+  markRestartContinuationFailed,
+} from "./restart-sentinel.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -93,6 +97,7 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
+const RESTART_CONTINUATION_RETRY_MS = 1_000;
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
 export {
@@ -512,6 +517,9 @@ async function resolveHeartbeatPreflight(params: {
     params.forcedSessionKey,
   );
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const hasTaggedRestartEvents = pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("restart:"),
+  );
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -521,7 +529,8 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    hasTaggedRestartEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
@@ -724,23 +733,33 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
-  if (!areHeartbeatsEnabled()) {
+  // Inspect only the explicit in-memory target before ordinary policy gates.
+  // Normal disabled heartbeats retain their old cheap exit and never touch the
+  // session store or HEARTBEAT.md merely to decide they are disabled.
+  const forcedSessionKey = opts.sessionKey?.trim();
+  const isForcedRestartContinuation =
+    opts.reason === "restart-continuation" &&
+    Boolean(forcedSessionKey) &&
+    peekSystemEventEntries(forcedSessionKey ?? "").some((event) =>
+      event.contextKey?.startsWith("restart:"),
+    );
+  if (!isForcedRestartContinuation && !areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (!isForcedRestartContinuation && !isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!isForcedRestartContinuation && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!isForcedRestartContinuation && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
+  if (!isForcedRestartContinuation && queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
@@ -749,7 +768,7 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     agentId,
     heartbeat,
-    forcedSessionKey: opts.sessionKey,
+    forcedSessionKey,
     reason: opts.reason,
   });
   if (preflight.skipReason) {
@@ -768,7 +787,13 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const hasRestartContinuation = preflight.pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("restart:"),
+  );
+  // Restart continuation must reuse the original transcript: that is where the
+  // interrupted task and its safety state live. An isolated heartbeat session
+  // would neither drain the tagged event nor have enough context to resume it.
+  const useIsolatedSession = heartbeat?.isolatedSession === true && !hasRestartContinuation;
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
@@ -786,7 +811,14 @@ export async function runHeartbeatOnce(opts: {
     runStorePath = cronSession.storePath;
   }
 
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const delivery = resolveHeartbeatDeliveryTarget({
+    cfg,
+    entry,
+    // A forced restart continuation is recovered user work, not heartbeat
+    // telemetry. Route it back to the session that accepted the work even
+    // when ordinary heartbeat output is configured as target: "none".
+    heartbeat: isForcedRestartContinuation ? { ...heartbeat, target: "last" } : heartbeat,
+  });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
@@ -836,7 +868,9 @@ export async function runHeartbeatOnce(opts: {
   }).responsePrefix;
 
   const canRelayToUser = Boolean(
-    alertDelivery.channel !== "none" && alertDelivery.to && alertVisibility.showAlerts,
+    alertDelivery.channel !== "none" &&
+    alertDelivery.to &&
+    (isForcedRestartContinuation || alertVisibility.showAlerts),
   );
   const promptResolution = resolveHeartbeatRunPrompt({
     cfg,
@@ -873,7 +907,12 @@ export async function runHeartbeatOnce(opts: {
     SessionKey: runSessionKey,
     SourceReceipt: sourceReceipt,
   };
-  if (!alertVisibility.showAlerts && !okVisibility.showOk && !okVisibility.useIndicator) {
+  if (
+    !isForcedRestartContinuation &&
+    !alertVisibility.showAlerts &&
+    !okVisibility.showOk &&
+    !okVisibility.useIndicator
+  ) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
@@ -921,6 +960,36 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
+  const reconcileDrainedRestartEvents = async (params: {
+    events: typeof preflight.pendingEventEntries;
+    error: string;
+  }) => {
+    if (params.events.length === 0) {
+      return;
+    }
+    // Agent setup drains system events before it knows whether an actual model
+    // run can start. Restore durable replay state first, then put only the
+    // matching tagged event back in RAM and request a bounded retry.
+    const retryContextKey = await markRestartContinuationFailed({
+      sessionKey,
+      contextKeys: params.events.map((event) => event.contextKey),
+      error: params.error,
+    });
+    const retryEvent = retryContextKey
+      ? params.events.find(
+          (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
+        )
+      : undefined;
+    if (retryEvent && retryContextKey) {
+      enqueueSystemEvent(retryEvent.text, { sessionKey, contextKey: retryContextKey });
+      requestHeartbeatNow({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: RESTART_CONTINUATION_RETRY_MS,
+      });
+    }
+  };
+
   try {
     // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK.
     // For isolated sessions, capture the isolated transcript (not the main session's).
@@ -934,15 +1003,76 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    let agentRunStarted = false;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          onAgentRunStart: () => {
+            agentRunStarted = true;
+          },
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : {
+          isHeartbeat: true,
+          suppressToolErrorWarnings,
+          bootstrapContextMode,
+          onAgentRunStart: () => {
+            agentRunStarted = true;
+          },
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    const remainingEventContexts = new Set(
+      peekSystemEventEntries(sessionKey).map((event) => event.contextKey),
+    );
+    const consumedRestartContexts = preflight.pendingEventEntries
+      .map((event) => event.contextKey)
+      .filter(
+        (contextKey): contextKey is string =>
+          Boolean(contextKey?.startsWith("restart:")) && !remainingEventContexts.has(contextKey),
+      );
+    const consumedRestartEvents = preflight.pendingEventEntries.filter((event) =>
+      consumedRestartContexts.includes(event.contextKey ?? ""),
+    );
+    const restartContinuationAwaitingDelivery = consumedRestartEvents.length > 0 && agentRunStarted;
+    if (consumedRestartEvents.length > 0 && !agentRunStarted) {
+      try {
+        await reconcileDrainedRestartEvents({
+          events: consumedRestartEvents,
+          error: "restart continuation agent execution did not start",
+        });
+      } catch (err) {
+        log.warn(`heartbeat: failed to reconcile unstarted restart continuation: ${String(err)}`);
+      }
+    }
+    const reconcileRestartContinuationWithoutDelivery = async (error: string) => {
+      if (!restartContinuationAwaitingDelivery) {
+        return;
+      }
+      // Draining the tagged event is not completion. Any terminal path that
+      // does not resolve an outbound send must restore replay state first.
+      await reconcileDrainedRestartEvents({ events: consumedRestartEvents, error });
+    };
+    const consumeRestartContinuationNoOp = async () => {
+      if (!restartContinuationAwaitingDelivery) {
+        return;
+      }
+      // Empty and heartbeat-ack replies are successful terminal outcomes for
+      // the continuation prompt. They intentionally produce no user payload,
+      // so acknowledge the drained event instead of making it replay forever.
+      try {
+        await markRestartContinuationConsumed({
+          sessionKey,
+          contextKeys: consumedRestartContexts,
+        });
+      } catch (err) {
+        // Keep the run successful when the durable acknowledgement itself
+        // fails; this mirrors the post-delivery acknowledgement path while
+        // preserving the no-op result semantics for the caller.
+        log.warn(`heartbeat: failed to acknowledge restart continuation no-op: ${String(err)}`);
+      }
+    };
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -953,6 +1083,7 @@ export async function runHeartbeatOnce(opts: {
       !replyPayload ||
       (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
+      await consumeRestartContinuationNoOp();
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -989,6 +1120,7 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
+      await consumeRestartContinuationNoOp();
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1027,6 +1159,9 @@ export async function runHeartbeatOnce(opts: {
       startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
 
     if (isDuplicateMain) {
+      await reconcileRestartContinuationWithoutDelivery(
+        "restart continuation response was suppressed as a duplicate heartbeat",
+      );
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1055,6 +1190,9 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (alertDelivery.channel === "none" || !alertDelivery.to) {
+      await reconcileRestartContinuationWithoutDelivery(
+        `restart continuation has no outbound route: ${alertDelivery.reason ?? "no-target"}`,
+      );
       emitHeartbeatEvent({
         status: "skipped",
         reason: alertDelivery.reason ?? "no-target",
@@ -1066,7 +1204,10 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!alertVisibility.showAlerts) {
+    if (!isForcedRestartContinuation && !alertVisibility.showAlerts) {
+      await reconcileRestartContinuationWithoutDelivery(
+        "restart continuation delivery was suppressed by heartbeat visibility",
+      );
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1094,6 +1235,9 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        await reconcileRestartContinuationWithoutDelivery(
+          `restart continuation outbound route is not ready: ${readiness.reason}`,
+        );
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -1132,6 +1276,20 @@ export async function runHeartbeatOnce(opts: {
       deps: opts.deps,
     });
 
+    if (restartContinuationAwaitingDelivery) {
+      try {
+        // This is deliberately after the awaited send. Agent execution proves
+        // the work ran; only resolved outbound delivery proves the recovered
+        // result crossed the user-visible boundary.
+        await markRestartContinuationConsumed({
+          sessionKey,
+          contextKeys: consumedRestartContexts,
+        });
+      } catch (err) {
+        log.warn(`heartbeat: failed to acknowledge restart continuation: ${String(err)}`);
+      }
+    }
+
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
       const store = loadSessionStore(storePath);
@@ -1166,6 +1324,21 @@ export async function runHeartbeatOnce(opts: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
+    const remainingEventContexts = new Set(
+      peekSystemEventEntries(sessionKey).map((event) => event.contextKey),
+    );
+    const consumedRestartEvents = preflight.pendingEventEntries.filter(
+      (event) =>
+        Boolean(event.contextKey?.startsWith("restart:")) &&
+        !remainingEventContexts.has(event.contextKey),
+    );
+    if (consumedRestartEvents.length > 0) {
+      try {
+        await reconcileDrainedRestartEvents({ events: consumedRestartEvents, error: reason });
+      } catch (reconcileError) {
+        log.warn(`heartbeat: failed to reconcile restart continuation: ${String(reconcileError)}`);
+      }
+    }
     emitHeartbeatEvent({
       status: "failed",
       reason,
@@ -1294,22 +1467,28 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (!areHeartbeatsEnabled()) {
+    const reason = params?.reason;
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const isForcedRestartContinuation =
+      reason === "restart-continuation" &&
+      Boolean(requestedSessionKey) &&
+      peekSystemEventEntries(requestedSessionKey ?? "").some((event) =>
+        event.contextKey?.startsWith("restart:"),
+      );
+    if (!isForcedRestartContinuation && !areHeartbeatsEnabled()) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+    if (!isForcedRestartContinuation && state.agents.size === 0) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
 
-    const reason = params?.reason;
-    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1318,21 +1497,23 @@ export function startHeartbeatRunner(opts: {
     if (requestedSessionKey || requestedAgentId) {
       const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
       const targetAgent = state.agents.get(targetAgentId);
-      if (!targetAgent) {
+      if (!targetAgent && !isForcedRestartContinuation) {
         scheduleNext();
         return { status: "skipped", reason: "disabled" };
       }
       try {
         const res = await runOnce({
           cfg: state.cfg,
-          agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
+          agentId: targetAgent?.agentId ?? targetAgentId,
+          heartbeat: targetAgent?.heartbeat ?? resolveHeartbeatConfig(state.cfg, targetAgentId),
           reason,
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },
         });
         if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(targetAgent, now);
+          if (targetAgent) {
+            advanceAgentSchedule(targetAgent, now);
+          }
         }
         scheduleNext();
         return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
@@ -1341,7 +1522,9 @@ export function startHeartbeatRunner(opts: {
         log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
           error: errMsg,
         });
-        advanceAgentSchedule(targetAgent, now);
+        if (targetAgent) {
+          advanceAgentSchedule(targetAgent, now);
+        }
         scheduleNext();
         return { status: "failed", reason: errMsg };
       }

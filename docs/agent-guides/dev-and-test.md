@@ -51,7 +51,7 @@ Use the lowest layer that proves the behavior under test.
    - Use when visible app state is the behavior under test.
    - Follow `docs/agent-guides/gui-control-live-smoke.md` and use
      `openclaw gui-control --runtime open-computer-use`.
-   - Do not acquire `~/.codex/bin/cua-guard` for Jarvis GUI Control. That guard
+   - Do not acquire `~/.codex/bin/cua-guard` for Jarvis Computer Use. That guard
      is only for Codex-native Computer Use, not the OpenClaw product CLI path.
 
 When validating unmerged code, every runtime proof above must use an isolated

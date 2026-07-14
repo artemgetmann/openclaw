@@ -215,10 +215,11 @@ struct ChannelsSettingsSmokeTests {
             presentation: .settings).body
     }
 
-    @Test func `consumer telegram first task requires text and accepts legacy status`() {
-        #expect(
-            ConsumerTelegramSetupCardContent.firstTaskInstruction
-                == "Telegram connected. Send any text message to Jarvis, then click Verify Telegram.")
+    @Test func `consumer telegram first task guides wake up message and accepts legacy status`() {
+        let expectedInstruction =
+            "Telegram connected. In Telegram, press Start, then send " +
+            "“Wake up, my friend!” and click Verify Telegram."
+        #expect(ConsumerTelegramSetupCardContent.firstTaskInstruction == expectedInstruction)
         #expect(
             ChannelsStore.consumerTelegramFirstTaskAccessApprovedStatus
                 == "Access approved. Now send any text message to Jarvis in Telegram.")

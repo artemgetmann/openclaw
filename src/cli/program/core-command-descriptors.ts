@@ -93,7 +93,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "gui-benchmark",
-    description: "Experimental dev-only Jarvis GUI-control benchmark harness",
+    description: "Experimental dev-only Jarvis Computer Use benchmark harness",
     hasSubcommands: false,
   },
   {

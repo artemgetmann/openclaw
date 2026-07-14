@@ -201,6 +201,9 @@ export const mockedGetApiKeyForModel = vi.fn(async () => ({
 export const mockedResolveAuthProfileOrder = vi.fn(() => []);
 
 vi.mock("../model-auth.js", () => ({
+  // Preserve the resolved test model; the runner applies this production-only
+  // header override before every attempt, so the fixture must expose it.
+  applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
   ensureAuthProfileStore: mockedEnsureAuthProfileStore,
   getApiKeyForModel: mockedGetApiKeyForModel,
   resolveAuthProfileOrder: mockedResolveAuthProfileOrder,

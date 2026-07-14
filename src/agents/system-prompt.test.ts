@@ -271,6 +271,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Use /goal as a recovery/control surface");
     expect(prompt).not.toContain("Scoped autonomy");
     expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
+    expect(prompt).toContain(
+      "Before finalizing, after an important external send/action whose useful next step depends on a later reply/status, offer once in the same final response to watch and continue;",
+    );
   });
 
   it("omits monitor-specific goal guidance when monitor is unavailable", () => {
@@ -280,7 +283,25 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Goal Tools");
-    expect(prompt).not.toContain("create or reuse a durable monitor");
+    expect(prompt).not.toContain("offer once in the same final response to watch and continue");
+  });
+
+  it("keeps the proactive monitor cue compact", () => {
+    const promptWithMonitor = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["get_goal", "create_goal", "update_goal", "monitor"],
+    });
+    const goalToolsSection = promptWithMonitor.split("## Goal Tools")[1]?.split("\n## ")[0] ?? "";
+
+    expect(goalToolsSection).toContain("Before finalizing");
+    expect(goalToolsSection).toContain("important external send/action");
+    expect(goalToolsSection).toContain(
+      "offer once in the same final response to watch and continue",
+    );
+    expect(goalToolsSection).toContain("skip casual sends");
+    expect(goalToolsSection).toContain("do not start monitoring without approval");
+    expect(goalToolsSection).not.toContain("default notify with a drafted next response");
+    expect(goalToolsSection).not.toContain("buttons, settings, or commands");
   });
 
   it("adds reasoning tag hint when enabled", () => {
@@ -374,7 +395,7 @@ describe("buildAgentSystemPrompt", () => {
       "keep those channel-specific procedures there instead of copying command playbooks into the prompt",
     );
     expect(prompt).toContain(
-      "For macOS GUI-operation or GUI-proof requests, prefer the `jarvis-gui-control` skill",
+      "For macOS computer-use, GUI-operation, or GUI-proof requests, prefer the `jarvis-computer-use` skill",
     );
     expect(prompt).toContain("use the `screen-record` skill and `openclaw screen record`");
     expect(prompt).toContain(

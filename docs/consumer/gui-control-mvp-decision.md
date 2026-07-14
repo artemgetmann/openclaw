@@ -1,7 +1,7 @@
 # Consumer GUI Control MVP Decision
 
 Last updated: 2026-06-12
-Status: deferred for launch; active bakeoff for a later Jarvis GUI-control lane
+Status: deferred for launch; active bakeoff for a later Jarvis Computer Use lane
 
 ## Decision
 
@@ -537,7 +537,7 @@ until live proof beats the Codex Computer Use quality bar.
 
 Default path:
 
-1. Use agent-desktop for the next Jarvis GUI-control integration spike.
+1. Use agent-desktop for the next Jarvis Computer Use integration spike.
 2. Keep Peekaboo as the immediate fallback/bridge host, with strict scoped
    actions and no default `--analyze`.
 3. Use Codex Computer Use as the benchmark for what good should feel like, not

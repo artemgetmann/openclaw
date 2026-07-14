@@ -271,7 +271,6 @@ export async function runGatewayStartupConfigPreflight(
   }
 
   if (
-    Array.isArray(configSnapshot.config.skills?.allowBundled) &&
     isConsumerJarvisRuntime({
       config: configSnapshot.config,
       configPath: configSnapshot.path,
@@ -283,19 +282,27 @@ export async function runGatewayStartupConfigPreflight(
       if (deps.isNixMode) {
         throw new GatewayStartupPreflightError(
           "config_legacy_migration",
-          "Stale consumer bundled skill allowlist detected while running in Nix mode. Update skills.allowBundled and restart.",
+          "Stale consumer bundled skill config detected while running in Nix mode. Update skills entries/allowBundled and restart.",
         );
       }
       try {
         await deps.writeConfig(consumerSkillRepair.config);
         deps.log.info(
-          `gateway: repaired consumer bundled skill allowlist:\n${consumerSkillRepair.changes
+          `gateway: repaired consumer bundled skill config:\n${consumerSkillRepair.changes
             .map((entry) => `- ${entry}`)
             .join("\n")}`,
         );
         configSnapshot = await deps.readSnapshot();
       } catch (err) {
-        deps.log.warn(`gateway: failed to repair consumer bundled skill allowlist: ${String(err)}`);
+        deps.log.warn(`gateway: failed to repair consumer bundled skill config: ${String(err)}`);
+        // Persistence and reread are best-effort, but the current boot must not
+        // fall back to the stale entry key. Empty/missing allowlists are
+        // unrestricted, so keep the repaired config in memory and retry the
+        // durable write naturally on the next startup.
+        configSnapshot = {
+          ...configSnapshot,
+          config: consumerSkillRepair.config,
+        };
       }
     }
   }
