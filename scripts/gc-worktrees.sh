@@ -1,6 +1,191 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
+LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-/bin/launchctl}"
+LAUNCH_AGENTS_DIR="${OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR:-${HOME}/Library/LaunchAgents}"
+LAUNCH_AGENT_QUARANTINE_DIR="${OPENCLAW_WORKTREE_GC_QUARANTINE_DIR:-${LAUNCH_AGENTS_DIR}/openclaw-worktree-gc-disabled-$(date +%Y%m%d-%H%M%S)-$$}"
+
+# Read one explicit plist field. Missing fields are intentionally empty: GC
+# requires positive ownership evidence and never falls back to a filename or a
+# broad label pattern when deciding that it may retire a service.
+plist_value() {
+  local plist_path="$1"
+  local key_path="$2"
+  "$PLISTBUDDY_BIN" -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
+}
+
+# These labels own canonical/shared product services. Preserve them even if a
+# malformed plist happens to contain a worktree path; GC is not a runtime repair
+# tool and therefore has no authority to unload a canonical service.
+is_preserved_launchagent_label() {
+  case "$1" in
+    ai.jarvis.gateway|\
+    ai.openclaw.gateway|\
+    ai.openclaw.gateway-watchdog|\
+    ai.openclaw.consumer.mac)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Use a slash boundary so /tmp/lane does not claim /tmp/lane-old. Git worktree
+# paths are physically normalized, while launchd may preserve a lexical macOS
+# alias such as /var instead of /private/var. Resolve existing candidates before
+# comparison so that harmless filesystem aliases do not hide an owned service.
+# Missing candidates remain lexical; guessing how a nonexistent path would
+# resolve could create false ownership.
+path_belongs_to_worktree() {
+  local candidate="$1"
+  local worktree_path="$2"
+  local candidate_parent=""
+  local candidate_name=""
+  local normalized_candidate=""
+
+  [[ -n "$candidate" ]] || return 1
+
+  if [[ -d "$candidate" ]]; then
+    normalized_candidate="$(cd "$candidate" 2>/dev/null && pwd -P)" || normalized_candidate=""
+  elif [[ -e "$candidate" || -L "$candidate" ]]; then
+    candidate_parent="$(dirname "$candidate")"
+    candidate_name="$(basename "$candidate")"
+    normalized_candidate="$(cd "$candidate_parent" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$candidate_name")" || normalized_candidate=""
+  fi
+  if [[ -n "$normalized_candidate" ]]; then
+    candidate="$normalized_candidate"
+  fi
+
+  [[ "$candidate" == "$worktree_path" || "$candidate" == "$worktree_path/"* ]]
+}
+
+# A plist belongs to a removable consumer/test lane only when all independent
+# signals agree:
+#   1. its label, profile, and instance id exactly match the generated identity
+#      contract for a named consumer lane;
+#   2. its explicit Label matches OPENCLAW_LAUNCHD_LABEL;
+#   3. ProgramArguments contain the gateway subcommand; and
+#   4. WorkingDirectory or one ProgramArgument is inside this exact worktree.
+#
+# Requiring exact identity agreement matters: OPENCLAW_CONSUMER_INSTANCE_ID is
+# ordinary environment metadata that may also appear in a custom developer
+# service. It is not, by itself, authority to unload that service. A stale job
+# we cannot prove ownership for is noisy, but unloading somebody else's service
+# is worse.
+worktree_owns_consumer_gateway_plist() {
+  local plist_path="$1"
+  local worktree_path="$2"
+  local label=""
+  local env_label=""
+  local instance_id=""
+  local profile=""
+  local expected_label=""
+  local expected_profile=""
+  local working_directory=""
+  local arg=""
+  local index=0
+  local has_gateway_subcommand=0
+  local has_worktree_path=0
+
+  label="$(plist_value "$plist_path" "Label")"
+  env_label="$(plist_value "$plist_path" "EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL")"
+  [[ -n "$label" && "$env_label" == "$label" ]] || return 1
+  is_preserved_launchagent_label "$label" && return 1
+
+  instance_id="$(plist_value "$plist_path" "EnvironmentVariables:OPENCLAW_CONSUMER_INSTANCE_ID")"
+  profile="$(plist_value "$plist_path" "EnvironmentVariables:OPENCLAW_PROFILE")"
+  [[ -n "$instance_id" ]] || return 1
+  expected_label="ai.openclaw.consumer.${instance_id}.gateway"
+  expected_profile="consumer-${instance_id}"
+  [[ "$label" == "$expected_label" && "$profile" == "$expected_profile" ]] || return 1
+
+  working_directory="$(plist_value "$plist_path" "WorkingDirectory")"
+  if path_belongs_to_worktree "$working_directory" "$worktree_path"; then
+    has_worktree_path=1
+  fi
+
+  while true; do
+    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
+    [[ -n "$arg" ]] || break
+    [[ "$arg" == "gateway" ]] && has_gateway_subcommand=1
+    if path_belongs_to_worktree "$arg" "$worktree_path"; then
+      has_worktree_path=1
+    fi
+    index=$((index + 1))
+  done
+
+  [[ "$has_gateway_subcommand" == "1" && "$has_worktree_path" == "1" ]]
+}
+
+# Quarantine and boot out only gateway plists positively owned by this
+# worktree. Moving the plist is the first mutation: if quarantine fails, the
+# service stays exactly as it was and worktree deletion is blocked. Once moved,
+# a loaded job must then boot out successfully; otherwise the plist is restored
+# and worktree deletion is blocked. An already-unloaded job needs no bootout.
+# The move is reversible by restoring the plist manually.
+retire_worktree_consumer_launchagents() {
+  local worktree_path="$1"
+  local plist_path=""
+  local label=""
+  local destination=""
+  local found=0
+
+  [[ -d "$LAUNCH_AGENTS_DIR" ]] || return 0
+
+  while IFS= read -r -d '' plist_path; do
+    if ! worktree_owns_consumer_gateway_plist "$plist_path" "$worktree_path"; then
+      continue
+    fi
+
+    found=1
+    label="$(plist_value "$plist_path" "Label")"
+    destination="${LAUNCH_AGENT_QUARANTINE_DIR}/$(basename "$plist_path")"
+
+    if ! mkdir -p "$LAUNCH_AGENT_QUARANTINE_DIR"; then
+      echo "Error: cannot create LaunchAgent quarantine; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+
+    # Never overwrite an older quarantine artifact. Losing the previous plist
+    # would make this cleanup destructive instead of reversible.
+    if [[ -e "$destination" || -L "$destination" ]]; then
+      echo "Error: quarantine destination already exists for ${label}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+
+    if ! mv "$plist_path" "$destination"; then
+      echo "Error: could not quarantine ${label}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+
+    # launchd caches loaded job definitions independently of the plist file. If
+    # the job is still loaded, moving the plist alone cannot stop a KeepAlive
+    # loop. Restore the plist and preserve the worktree when bootout fails so
+    # the service never points at an entrypoint GC subsequently deletes.
+    if "$LAUNCHCTL_BIN" print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+      if ! "$LAUNCHCTL_BIN" bootout "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+        # Do not overwrite a plist that appeared during the cleanup window.
+        # Preserve both copies and the worktree if another actor raced GC.
+        if [[ -e "$plist_path" || -L "$plist_path" ]]; then
+          echo "Error: could not boot out ${label}; ${plist_path} reappeared, so quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
+        elif mv "$destination" "$plist_path"; then
+          echo "Error: could not boot out ${label}; restored plist and preserved worktree: ${worktree_path}" >&2
+        else
+          echo "Error: could not boot out ${label} or restore ${plist_path}; quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
+        fi
+        return 1
+      fi
+    fi
+    echo "Quarantined worktree LaunchAgent: ${label} -> ${destination}"
+  done < <(find "$LAUNCH_AGENTS_DIR" -maxdepth 1 -type f -name '*.plist' -print0)
+
+  if [[ "$found" == "1" ]]; then
+    echo "Retired consumer/test LaunchAgents owned by: ${worktree_path}"
+  fi
+}
+
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
   local value="$1"
@@ -134,7 +319,6 @@ declare -a display_classes=()
 declare -a display_paths=()
 declare -a display_tokens=()
 declare -a remove_paths=()
-declare -a release_paths=()
 
 finalize_block() {
   if [[ -z "${current_path:-}" ]]; then
@@ -224,7 +408,6 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
 
   class="active"
   should_remove=0
-  should_release=0
 
   if [[ "$is_prunable" == "1" ]]; then
     class="prunable"
@@ -256,23 +439,11 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
     active_count=$((active_count + 1))
   fi
 
-  # Release is only meaningful when the worktree still exists and has its own
-  # env-local claim file. Prunable entries often point at already-missing paths.
-  if [[ "$should_remove" == "1" && -d "$normalized_path" && -f "$env_local_path" ]]; then
-    claimed_token="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
-    if [[ -n "$claimed_token" ]]; then
-      should_release=1
-    fi
-  fi
-
   display_classes+=("$class")
   display_paths+=("$normalized_path")
   display_tokens+=("$token_display")
   if [[ "$should_remove" == "1" ]]; then
     remove_paths+=("$normalized_path")
-  fi
-  if [[ "$should_release" == "1" ]]; then
-    release_paths+=("$normalized_path")
   fi
 done
 
@@ -285,13 +456,24 @@ for ((i = 0; i < ${#display_paths[@]}; i++)); do
 done
 
 if [[ "$AUTO" == "1" ]]; then
-  for path in "${release_paths[@]}"; do
-    if [[ -d "$path" ]]; then
-      (cd "$path" && bash scripts/telegram-live-runtime.sh release) || true
-    fi
-  done
-
+  cleanup_failed_count=0
   for path in "${remove_paths[@]}"; do
+    # Retire launchd ownership before either the tester runtime release or Git
+    # deletion. If quarantine fails, leave the worktree intact; deleting its
+    # entrypoint would turn a recoverable stale service into a KeepAlive loop.
+    if ! retire_worktree_consumer_launchagents "$path"; then
+      cleanup_failed_count=$((cleanup_failed_count + 1))
+      continue
+    fi
+
+    env_local_path="${path}/.env.local"
+    if [[ -d "$path" && -f "$env_local_path" ]]; then
+      claimed_token="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
+      if [[ -n "$claimed_token" ]]; then
+        (cd "$path" && bash scripts/telegram-live-runtime.sh release) || true
+      fi
+    fi
+
     if git worktree remove --force "$path"; then
       removed_count=$((removed_count + 1))
     fi
@@ -301,3 +483,7 @@ else
 fi
 
 echo "GC complete: ${prunable_count} prunable, ${merged_count} merged (${removed_count} removed), ${detached_count} detached, ${active_count} active"
+if [[ "${cleanup_failed_count:-0}" -gt 0 ]]; then
+  echo "Error: ${cleanup_failed_count} worktree(s) preserved because LaunchAgent retirement failed." >&2
+  exit 1
+fi
