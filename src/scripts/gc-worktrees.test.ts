@@ -187,6 +187,86 @@ afterEach(() => {
 });
 
 describe("gc-worktrees LaunchAgent retirement", () => {
+  it("retires an owned agent before pruning a registered worktree whose directory is gone", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    const registeredLane = fs.realpathSync(lane);
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.rmSync(lane, { recursive: true, force: true });
+
+    // Prove the stale registration exists before GC; this is the ownership
+    // record the old eager-prune ordering discarded before LaunchAgent cleanup.
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
+    ).toContain(`worktree ${registeredLane}`);
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(ownedPlist)).toBe(false);
+    expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(true);
+    const launchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
+    expect(launchctlLog).toContain("source_present=0 bootout");
+    expect(launchctlLog).not.toContain("bootstrap");
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
+    ).not.toContain(`worktree ${registeredLane}`);
+    expect(result.stdout).toContain("GC complete: 1 prunable, 0 merged (1 removed)");
+  });
+
+  it("keeps missing-lane metadata and quarantine on ambiguous retirement failure", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    const registeredLane = fs.realpathSync(lane);
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.rmSync(lane, { recursive: true, force: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "ambiguous-error",
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(ownedPlist)).toBe(false);
+    expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(true);
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).not.toContain("bootstrap");
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
+    ).toContain(`worktree ${registeredLane}`);
+    expect(result.stderr).toContain("worktree entrypoint is missing");
+    expect(result.stderr).toContain("skipped Git metadata prune");
+  });
+
   it("quarantines only an explicitly owned consumer gateway before deleting its worktree", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);

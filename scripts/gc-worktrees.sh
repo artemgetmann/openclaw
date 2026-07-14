@@ -56,6 +56,16 @@ path_belongs_to_worktree() {
   fi
   if [[ -n "$normalized_candidate" ]]; then
     candidate="$normalized_candidate"
+  else
+    # These are stable macOS filesystem aliases. They cannot be resolved with
+    # pwd -P after the target disappears, but Git records their physical
+    # /private paths. Limit lexical fallback to these exact system aliases;
+    # arbitrary nonexistent symlinks remain untrusted.
+    case "$candidate" in
+      /var|/var/*|/tmp|/tmp/*|/etc|/etc/*)
+        candidate="/private${candidate}"
+        ;;
+    esac
   fi
 
   [[ "$candidate" == "$worktree_path" || "$candidate" == "$worktree_path/"* ]]
@@ -128,6 +138,14 @@ restore_quarantined_launchagent() {
   local label="$3"
   local worktree_path="$4"
   local failure_reason="$5"
+
+  # A missing worktree has no safe service state to restore. Keep the plist
+  # quarantined so neither this session nor the next login can restart a
+  # KeepAlive job against an entrypoint that is already gone.
+  if [[ ! -d "$worktree_path" ]]; then
+    echo "Error: ${failure_reason} for ${label}; worktree entrypoint is missing, so quarantined copy remains at ${destination}: ${worktree_path}" >&2
+    return
+  fi
 
   if [[ -e "$plist_path" || -L "$plist_path" ]]; then
     echo "Error: ${failure_reason} for ${label}; ${plist_path} reappeared, so quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
@@ -414,8 +432,8 @@ if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
   exit 1
 fi
 
-git worktree prune
-
+# Capture stale registrations before pruning. Their recorded worktree path is
+# the ownership evidence needed to retire an orphaned LaunchAgent safely.
 worktree_output="$(git worktree list --porcelain)"
 if [[ -z "$worktree_output" ]]; then
   echo "Error: git worktree list returned no entries." >&2
@@ -430,6 +448,7 @@ declare -a display_classes=()
 declare -a display_paths=()
 declare -a display_tokens=()
 declare -a remove_paths=()
+declare -a remove_prunable=()
 
 finalize_block() {
   if [[ -z "${current_path:-}" ]]; then
@@ -555,6 +574,7 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
   display_tokens+=("$token_display")
   if [[ "$should_remove" == "1" ]]; then
     remove_paths+=("$normalized_path")
+    remove_prunable+=("$is_prunable")
   fi
 done
 
@@ -569,7 +589,12 @@ done
 if [[ "$AUTO" == "1" ]]; then
   cleanup_failed_count=0
   remove_failed_count=0
-  for path in "${remove_paths[@]}"; do
+  prunable_retired_count=0
+  prunable_retirement_failed_count=0
+  for ((remove_index = 0; remove_index < ${#remove_paths[@]}; remove_index++)); do
+    path="${remove_paths[$remove_index]}"
+    path_is_prunable="${remove_prunable[$remove_index]}"
+
     # Retire launchd ownership before either the tester runtime release or Git
     # deletion. If quarantine fails, leave the worktree intact; deleting its
     # entrypoint would turn a recoverable stale service into a KeepAlive loop.
@@ -577,6 +602,17 @@ if [[ "$AUTO" == "1" ]]; then
     if ! retire_worktree_consumer_launchagents "$path"; then
       rollback_retired_launchagents "$path" || true
       cleanup_failed_count=$((cleanup_failed_count + 1))
+      if [[ "$path_is_prunable" == "1" ]]; then
+        prunable_retirement_failed_count=$((prunable_retirement_failed_count + 1))
+      fi
+      continue
+    fi
+
+    # A prunable registration points at a missing worktree. There is no tester
+    # runtime to release and no directory for `git worktree remove`; defer its
+    # metadata cleanup until every prunable LaunchAgent retirement is safe.
+    if [[ "$path_is_prunable" == "1" ]]; then
+      prunable_retired_count=$((prunable_retired_count + 1))
       continue
     fi
 
@@ -596,6 +632,20 @@ if [[ "$AUTO" == "1" ]]; then
       remove_failed_count=$((remove_failed_count + 1))
     fi
   done
+
+  # `git worktree prune` is global, so run it only when every discovered stale
+  # registration passed retirement. Otherwise it could erase ownership
+  # evidence for a lane whose LaunchAgent state is still ambiguous.
+  if [[ "$prunable_retired_count" -gt 0 && "$prunable_retirement_failed_count" == "0" ]]; then
+    if git worktree prune; then
+      removed_count=$((removed_count + prunable_retired_count))
+    else
+      echo "Error: Git metadata prune failed after retiring ${prunable_retired_count} prunable worktree(s). LaunchAgents remain quarantined." >&2
+      remove_failed_count=$((remove_failed_count + prunable_retired_count))
+    fi
+  elif [[ "$prunable_retirement_failed_count" -gt 0 ]]; then
+    echo "Error: skipped Git metadata prune because ${prunable_retirement_failed_count} prunable worktree LaunchAgent retirement(s) failed." >&2
+  fi
 else
   echo "re-run with --auto to apply."
 fi
