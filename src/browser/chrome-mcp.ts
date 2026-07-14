@@ -1255,6 +1255,42 @@ export const chromeMcpPdfResourceInternalsForTest = {
   writeCapturedPdfResponse,
 };
 
+async function loadChromeMcpNetworkResource(params: {
+  send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
+  frameId: string;
+  url: string;
+}): Promise<Buffer> {
+  const loadResult = asRecord(
+    await params.send("Network.loadNetworkResource", {
+      frameId: params.frameId,
+      url: params.url,
+      options: { disableCache: false, includeCredentials: true },
+    }),
+  );
+  const resource = asRecord(loadResult?.resource);
+  const stream = typeof resource?.stream === "string" ? resource.stream : "";
+  if (resource?.success !== true || !stream) {
+    throw new Error("Chrome could not replay the PDF resource");
+  }
+
+  const chunks: Buffer[] = [];
+  try {
+    while (true) {
+      const readResult = asRecord(await params.send("IO.read", { handle: stream }));
+      const data = typeof readResult?.data === "string" ? readResult.data : "";
+      if (data) {
+        chunks.push(Buffer.from(data, readResult?.base64Encoded === true ? "base64" : "utf8"));
+      }
+      if (readResult?.eof === true) {
+        break;
+      }
+    }
+  } finally {
+    await params.send("IO.close", { handle: stream }).catch(() => {});
+  }
+  return Buffer.concat(chunks);
+}
+
 async function readChromeMcpPdfResourceWithSend(
   send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
 ): Promise<ChromeMcpPdfResourceResult> {
@@ -1267,11 +1303,23 @@ async function readChromeMcpPdfResourceWithSend(
   const errors: string[] = [];
   for (const candidate of candidates) {
     try {
-      const contentResult = await send("Page.getResourceContent", {
-        frameId: candidate.frameId,
-        url: candidate.url,
-      });
-      const buffer = decodeChromeResourceContent(contentResult);
+      let buffer: Buffer;
+      try {
+        const contentResult = await send("Page.getResourceContent", {
+          frameId: candidate.frameId,
+          url: candidate.url,
+        });
+        buffer = decodeChromeResourceContent(contentResult);
+      } catch {
+        // No-store PDF responses are visible in the viewer but absent from its
+        // resource cache. Replay the authenticated frame through Chrome and
+        // consume the resulting DevTools stream instead.
+        buffer = await loadChromeMcpNetworkResource({
+          send,
+          frameId: candidate.frameId,
+          url: candidate.url,
+        });
+      }
       assertNativePdfBuffer(buffer, candidate.url);
       return { url: candidate.url, buffer };
     } catch (err) {
@@ -1295,6 +1343,7 @@ async function readChromeMcpPdfResourceFromWebSocket(params: {
       // Replacement viewer targets start with no Page agent attached. Enable
       // the domain on this fresh connection before reading its resource cache.
       await send("Page.enable");
+      await send("Network.enable");
       return await readChromeMcpPdfResourceWithSend(send);
     },
   });

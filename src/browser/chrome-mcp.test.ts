@@ -1347,6 +1347,7 @@ describe("chrome MCP page parsing", () => {
     let httpServer: ReturnType<typeof createServer> | undefined;
     let wsServer: WebSocketServer | undefined;
     let resourceTreeCalls = 0;
+    let streamReadCalls = 0;
     let viewerReady = false;
 
     try {
@@ -1384,12 +1385,43 @@ describe("chrome MCP page parsing", () => {
             socket.send(
               JSON.stringify({
                 id: message.id,
+                error: { message: "Content unavailable. Resource was not cached" },
+              }),
+            );
+            return;
+          }
+          if (isViewerTarget && message.method === "Network.loadNetworkResource") {
+            expect(message.params).toEqual({
+              frameId: "pdf-frame",
+              url: responseUrl,
+              options: { disableCache: false, includeCredentials: true },
+            });
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: { resource: { success: true, stream: "pdf-stream" } },
+              }),
+            );
+            return;
+          }
+          if (isViewerTarget && message.method === "IO.read") {
+            streamReadCalls += 1;
+            expect(message.params).toEqual({ handle: "pdf-stream" });
+            socket.send(
+              JSON.stringify({
+                id: message.id,
                 result: {
-                  content: pdfBytes.toString("base64"),
+                  data: pdfBytes.toString("base64"),
                   base64Encoded: true,
+                  eof: true,
                 },
               }),
             );
+            return;
+          }
+          if (isViewerTarget && message.method === "IO.close") {
+            expect(message.params).toEqual({ handle: "pdf-stream" });
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
             return;
           }
           if (typeof message.id === "number") {
@@ -1471,6 +1503,7 @@ describe("chrome MCP page parsing", () => {
         path: finalPath,
       });
       expect(resourceTreeCalls).toBeGreaterThanOrEqual(1);
+      expect(streamReadCalls).toBe(1);
       expect(await fs.readFile(finalPath)).toEqual(pdfBytes);
     } finally {
       if (previousBrowserUrl === undefined) {
