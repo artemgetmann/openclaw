@@ -5,6 +5,8 @@
 # This helper never discovers, stops, or kills processes.
 
 OPENCLAW_JARVIS_RELEASE_LOCK_HELD=0
+OPENCLAW_JARVIS_RELEASE_LOCK_CLAIMED_DIR=0
+OPENCLAW_JARVIS_RELEASE_LOCK_DELEGATED=0
 OPENCLAW_JARVIS_RELEASE_LOCK_PATH=""
 OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN=""
 
@@ -30,8 +32,15 @@ openclaw_jarvis_release_lock_default_path() {
   identity="$(printf '%s' "$common_physical" | /usr/bin/cksum | /usr/bin/awk '{ print $1 "-" $2 }')"
 
   # Git common-dir makes worktrees of this repository contend together, while
-  # unrelated clones get different paths. TMPDIR keeps lock state out of Git.
-  printf '%s/openclaw-jarvis-release-locks/%s.lock\n' "${TMPDIR:-/tmp}" "$identity"
+  # unrelated clones get different paths. Use one fixed, user-specific base:
+  # TMPDIR differs between launchd, automation, and interactive shells.
+  printf '/tmp/openclaw-jarvis-release-locks-%s/%s.lock\n' "$(id -u)" "$identity"
+}
+
+openclaw_jarvis_release_lock_after_mkdir() {
+  # Test seam for interruption precisely after atomic ownership. Production
+  # callers leave this no-op unchanged.
+  return 0
 }
 
 openclaw_jarvis_release_lock_write_owner() {
@@ -108,23 +117,66 @@ openclaw_jarvis_release_lock_reclaim_dead_owner() {
 
 openclaw_jarvis_release_lock_release() {
   local owner_path owner_token
-  [[ "$OPENCLAW_JARVIS_RELEASE_LOCK_HELD" == "1" ]] || return 0
+  [[ "$OPENCLAW_JARVIS_RELEASE_LOCK_DELEGATED" != "1" ]] || return 0
+  [[ "$OPENCLAW_JARVIS_RELEASE_LOCK_CLAIMED_DIR" == "1" ]] || return 0
 
   owner_path="$OPENCLAW_JARVIS_RELEASE_LOCK_PATH/owner"
-  owner_token="$(openclaw_jarvis_release_lock_value "$owner_path" token)"
-  if [[ "$owner_token" == "$OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN" ]]; then
-    # Remove only our token-matched record, then rmdir. The directory blocks a
-    # replacement owner between those operations, so cleanup cannot steal it.
-    rm -f "$owner_path"
+  if [[ ! -f "$owner_path" ]]; then
+    # The caller has positive in-memory ownership from its successful mkdir.
+    # This is the only safe case where an ownerless directory may be removed.
+    rm -f "${owner_path}.tmp.$$"
     rmdir "$OPENCLAW_JARVIS_RELEASE_LOCK_PATH" 2>/dev/null || true
+  else
+    owner_token="$(openclaw_jarvis_release_lock_value "$owner_path" token)"
+    if [[ "$owner_token" == "$OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN" ]]; then
+      # Remove only our token-matched record, then rmdir. The directory blocks
+      # a replacement owner between those operations, so cleanup cannot steal it.
+      rm -f "$owner_path"
+      rmdir "$OPENCLAW_JARVIS_RELEASE_LOCK_PATH" 2>/dev/null || true
+    fi
   fi
   OPENCLAW_JARVIS_RELEASE_LOCK_HELD=0
+  OPENCLAW_JARVIS_RELEASE_LOCK_CLAIMED_DIR=0
 }
 
 openclaw_jarvis_release_lock_signal() {
   local status="$1"
   openclaw_jarvis_release_lock_release
   exit "$status"
+}
+
+openclaw_jarvis_release_lock_install_cleanup() {
+  trap openclaw_jarvis_release_lock_release EXIT
+  trap 'openclaw_jarvis_release_lock_signal 129' HUP
+  trap 'openclaw_jarvis_release_lock_signal 130' INT
+  trap 'openclaw_jarvis_release_lock_signal 143' TERM
+}
+
+openclaw_jarvis_release_lock_accept_parent() {
+  local lock_path="$1"
+  local owner_path="$lock_path/owner"
+  local parent_pid="${OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PID:-}"
+  local parent_token="${OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_TOKEN:-}"
+  local parent_path="${OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PATH:-}"
+  local metadata_pid metadata_token
+
+  [[ "$parent_pid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$parent_pid" == "$PPID" ]] || return 1
+  [[ -n "$parent_token" && "$parent_path" == "$lock_path" ]] || return 1
+  [[ -f "$owner_path" ]] || return 1
+  metadata_pid="$(openclaw_jarvis_release_lock_value "$owner_path" pid)"
+  metadata_token="$(openclaw_jarvis_release_lock_value "$owner_path" token)"
+  [[ "$metadata_pid" == "$parent_pid" && "$metadata_token" == "$parent_token" ]] || return 1
+  kill -0 "$parent_pid" 2>/dev/null || return 1
+
+  # The child borrows the live direct parent's ownership. It must never install
+  # cleanup or remove the parent's lock; the parent remains the sole owner.
+  OPENCLAW_JARVIS_RELEASE_LOCK_DELEGATED=1
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH="$lock_path"
+  OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN="$parent_token"
+  echo "jarvis_release_lock=delegated_parent"
+  echo "jarvis_release_lock_owner_pid=$parent_pid"
+  return 0
 }
 
 openclaw_jarvis_release_lock_acquire() {
@@ -140,18 +192,31 @@ openclaw_jarvis_release_lock_acquire() {
   }
   lock_parent="$(dirname "$lock_path")"
   owner_path="$lock_path/owner"
-  (umask 077 && mkdir -p "$lock_parent")
+  (umask 077 && mkdir -p "$lock_parent" && chmod 700 "$lock_parent")
+
+  if openclaw_jarvis_release_lock_accept_parent "$lock_path"; then
+    return 0
+  fi
+
+  # Cleanup must exist before mkdir. If this process is interrupted in the
+  # mkdir-to-metadata window, positive in-memory ownership lets it remove only
+  # its own ownerless directory instead of wedging the lane permanently.
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH="$lock_path"
+  OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN="$token"
+  openclaw_jarvis_release_lock_install_cleanup
 
   while true; do
     if mkdir "$lock_path" 2>/dev/null; then
+      OPENCLAW_JARVIS_RELEASE_LOCK_CLAIMED_DIR=1
+      openclaw_jarvis_release_lock_after_mkdir
       openclaw_jarvis_release_lock_write_owner "$owner_path" "$token" "$context" "$root"
-      OPENCLAW_JARVIS_RELEASE_LOCK_PATH="$lock_path"
-      OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN="$token"
       OPENCLAW_JARVIS_RELEASE_LOCK_HELD=1
-      trap openclaw_jarvis_release_lock_release EXIT
-      trap 'openclaw_jarvis_release_lock_signal 129' HUP
-      trap 'openclaw_jarvis_release_lock_signal 130' INT
-      trap 'openclaw_jarvis_release_lock_signal 143' TERM
+      OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PID="$$"
+      OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_TOKEN="$token"
+      OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PATH="$lock_path"
+      export OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PID
+      export OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_TOKEN
+      export OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PATH
       echo "jarvis_release_lock=acquired"
       echo "jarvis_release_lock_path=$lock_path"
       return 0

@@ -159,19 +159,49 @@ test_error_and_signal_cleanup() {
   pass "errors and signals clean caller ownership"
 }
 
+test_interrupted_acquisition_cleans_ownerless_claim() {
+  local lock_path="$TMP_DIR/interrupted-acquire.lock"
+  local ready_path="$TMP_DIR/interrupted-acquire.ready"
+  local child_pid status
+
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" bash -c '
+    source "$1/scripts/lib/jarvis-release-lock.sh"
+    READY_PATH="$2"
+    openclaw_jarvis_release_lock_after_mkdir() {
+      : >"$READY_PATH"
+      while true; do sleep 1; done
+    }
+    openclaw_jarvis_release_lock_acquire "$1" "interrupted-acquire-test"
+  ' _ "$ROOT_DIR" "$ready_path" >/dev/null &
+  child_pid=$!
+  wait_for_file "$ready_path"
+  [[ -d "$lock_path" && ! -f "$lock_path/owner" ]] || fail "fixture did not stop in ownerless mkdir window"
+  kill -TERM "$child_pid"
+  set +e
+  wait "$child_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 143 ]] || fail "interrupted acquisition returned $status instead of 143"
+  [[ ! -e "$lock_path" ]] || fail "interrupted ownerless claim wedged the lock"
+  pass "interrupted acquisition cleans its ownerless claim"
+}
+
 test_repository_paths_are_isolated() {
   local repo_one="$TMP_DIR/repo-one"
   local repo_two="$TMP_DIR/repo-two"
-  local path_one path_two
+  local path_one path_one_other_tmp path_two
 
   git init -q "$repo_one"
   git init -q "$repo_two"
   path_one="$(openclaw_jarvis_release_lock_default_path "$repo_one")"
+  path_one_other_tmp="$(TMPDIR="$TMP_DIR/alternate-tmp" openclaw_jarvis_release_lock_default_path "$repo_one")"
   path_two="$(openclaw_jarvis_release_lock_default_path "$repo_two")"
+  [[ "$path_one" == "$path_one_other_tmp" ]] || fail "TMPDIR changed the repository lock path"
   [[ "$path_one" != "$path_two" ]] || fail "unrelated repositories share a lock path"
   [[ "$path_one" != "$repo_one"/* ]] || fail "lock path lives inside its repository"
   [[ "$path_two" != "$repo_two"/* ]] || fail "lock path lives inside its repository"
-  pass "lock paths stay external and isolate repositories"
+  [[ "$path_one" == /tmp/openclaw-jarvis-release-locks-* ]] || fail "lock path does not use the stable user base"
+  pass "stable lock paths ignore TMPDIR and isolate repositories"
 }
 
 test_package_integration_contention() {
@@ -216,15 +246,82 @@ test_package_integration_contention() {
   pass "package locks mutating and manifest-writing verification phases"
 }
 
-test_delegated_package_path_has_one_owner() {
+test_parent_delegation_and_wrapper_contention() {
+  local lock_path="$TMP_DIR/wrapper.lock"
+  local ready_path="$TMP_DIR/wrapper.ready"
+  local release_path="$TMP_DIR/wrapper.release"
+  local delegated_out="$TMP_DIR/delegated.out"
+  local contender_out="$TMP_DIR/wrapper-contender.out"
+  local contender_err="$TMP_DIR/wrapper-contender.err"
+  local dry_run_out="$TMP_DIR/wrapper-dry-run.out"
+  local delegated_wrapper_out="$TMP_DIR/wrapper-delegated.out"
+  local delegated_wrapper_err="$TMP_DIR/wrapper-delegated.err"
+  local release_home release_name holder_pid status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" bash -c '
+    set -euo pipefail
+    source "$1/scripts/lib/jarvis-release-lock.sh"
+    openclaw_jarvis_release_lock_acquire "$1" "public-release-orchestration"
+    bash -c '\''
+      source "$1/scripts/lib/jarvis-release-lock.sh"
+      openclaw_jarvis_release_lock_acquire "$1" "package-phase:full"
+    '\'' _ "$1" >"$2"
+    : >"$3"
+    while [[ ! -f "$4" ]]; do sleep 0.05; done
+  ' _ "$ROOT_DIR" "$delegated_out" "$ready_path" "$release_path" &
+  holder_pid=$!
+  wait_for_file "$ready_path"
+  grep -q "jarvis_release_lock=delegated_parent" "$delegated_out" || fail "direct package child did not accept parent ownership"
+
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --phase full \
+      >"$contender_out" 2>"$contender_err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "second public wrapper bypassed the owner"
+  grep -q "another Jarvis release owner is active" "$contender_err" || fail "second wrapper did not fail at the lock"
+  ! grep -q "selected_phase=" "$contender_out" || fail "second wrapper selected a stale phase before locking"
+  kill -0 "$holder_pid" 2>/dev/null || fail "wrapper contention harmed the live owner"
+
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --phase full >"$dry_run_out"
+  grep -q "dry_run=true" "$dry_run_out" || fail "dry-run did not remain lock-free"
+
+  : >"$release_path"
+  wait "$holder_pid"
+
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$TMP_DIR/wrapper-delegated-summary.env" \
+  OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TMP_DIR/wrapper-delegated-timing.tsv" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --phase create-local-release-assets-only \
+      --github-release-tag v-current \
+      >"$delegated_wrapper_out" 2>"$delegated_wrapper_err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "delegated wrapper fixture unexpectedly created release assets"
+  grep -q "jarvis_release_lock=delegated_parent" "$delegated_wrapper_out" || fail "actual package child did not recognize wrapper ownership"
+  [[ ! -e "$lock_path" ]] || fail "wrapper failure left its parent-owned lock behind"
+  pass "wrapper owns selection, delegates to child, and leaves dry-run unlocked"
+}
+
+test_release_entrypoint_wiring() {
   local package_script wrapper_script
   package_script="$(<"$ROOT_DIR/scripts/package-openclaw-mac-dist.sh")"
   wrapper_script="$(<"$ROOT_DIR/scripts/jarvis-public-release.sh")"
 
   [[ "$package_script" == *'openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"'* ]] || fail "package path does not acquire the lock"
-  [[ "$wrapper_script" != *"openclaw_jarvis_release_lock_acquire"* ]] || fail "public wrapper double-locks delegated package work"
+  [[ "$wrapper_script" == *'openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"'* ]] || fail "public wrapper does not own phase selection"
   [[ "$wrapper_script" == *'CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")'* ]] || fail "public wrapper no longer delegates through package"
-  pass "public-release to package path has one owner"
+  pass "release entrypoints use parent-owned reentrant locking"
 }
 
 test_acquire_and_cleanup
@@ -233,6 +330,8 @@ test_stale_recovery
 test_unknown_owner_fails_safe
 test_owner_safe_cleanup
 test_error_and_signal_cleanup
+test_interrupted_acquisition_cleans_ownerless_claim
 test_repository_paths_are_isolated
 test_package_integration_contention
-test_delegated_package_path_has_one_owner
+test_parent_delegation_and_wrapper_contention
+test_release_entrypoint_wiring

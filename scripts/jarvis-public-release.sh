@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 
 PACKAGE_SCRIPT="$ROOT_DIR/scripts/package-openclaw-mac-dist.sh"
 STATE_ROOT="${OPENCLAW_JARVIS_RELEASE_STATE_ROOT:-$ROOT_DIR}"
@@ -283,6 +284,14 @@ case "$FORCED_PHASE" in
     ;;
 esac
 
+if [[ "$DRY_RUN" != "1" ]]; then
+  # Own the state snapshot and delegated package execution as one operation.
+  # Locking only the package child leaves a race where two wrappers choose the
+  # same stale next phase before either child starts.
+  openclaw_require_jarvis_release_worktree "$ROOT_DIR"
+  openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"
+fi
+
 if [[ "$FORCED_PHASE" == "auto" ]]; then
   SELECTED_PHASE="$(
     jarvis_release_next_phase \
@@ -398,8 +407,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "dry_run=true"
   exit 0
 fi
-
-openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 
 ensure_timing_report
 started_at="$(iso_now)"
