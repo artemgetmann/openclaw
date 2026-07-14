@@ -61,19 +61,25 @@ describe("evaluateGuiPolicy", () => {
   });
 
   it("allows a signed-out chooser row when Remove an account is a visible sibling", () => {
+    const textEnvelopeSummary = [
+      "App=com.google.Chrome (pid 42)",
+      'Window: "Choose an account - Sign in", App: Google Chrome.',
+      "0 standard window Choose an account - Sign in",
+      "  101 button Artem artem@example.com Signed out Secondary Actions: AXPress",
+      "  102 button Use another account Secondary Actions: AXPress",
+      "  103 button Remove an account Secondary Actions: AXPress",
+    ].join("\n");
     const decision = evaluateGuiPolicy({
       actionType: "click",
-      target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
+      target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
       snapshot: snapshot({
-        appName: "Safari",
+        appName: "Google Chrome",
         windowTitle: "Choose an account - Sign in",
-        summary: "Choose an account to continue to Google",
+        summary: textEnvelopeSummary,
         visibleText: [
-          "Artem",
-          "artem@example.com",
-          "Signed out",
-          "Use another account",
-          "Remove an account",
+          "button Artem artem@example.com Signed out",
+          "button Use another account",
+          "button Remove an account",
         ],
       }),
       element: {
@@ -89,6 +95,57 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.allowed).toBe(true);
     expect(decision.risk).toBe("allowed-mutation");
   });
+
+  it.each(
+    [
+      ["payment", "104 static text Payment authorization requires authentication"],
+      ["delete", "104 static text Delete account requires authentication"],
+      ["account", "104 static text Account settings require authentication"],
+      ["security", "104 static text Security settings require authentication"],
+    ].flatMap(([risk, riskLine]) => [
+      { profile: "trusted", risk, riskLine, taskPolicy: undefined },
+      {
+        profile: "commerce",
+        risk,
+        riskLine,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      },
+    ]),
+  )(
+    "keeps $risk evidence from a chooser text-envelope summary under $profile policy",
+    ({ riskLine, taskPolicy }) => {
+      const summary = [
+        "App=com.google.Chrome (pid 42)",
+        'Window: "Choose an account - Sign in", App: Google Chrome.',
+        "0 standard window Choose an account - Sign in",
+        "  101 button Artem artem@example.com Signed out Secondary Actions: AXPress",
+        `  ${riskLine}`,
+        "  105 button Remove an account Secondary Actions: AXPress",
+      ].join("\n");
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+        snapshot: snapshot({
+          appName: "Google Chrome",
+          windowTitle: "Choose an account - Sign in",
+          summary,
+          visibleText: ["button Artem artem@example.com Signed out", "button Remove an account"],
+        }),
+        element: {
+          ref: "@101",
+          role: "button",
+          label: "Artem artem@example.com Signed out",
+        },
+        reason: "Select the known signed-out account without using credentials.",
+        approvedPolicyRisk: true,
+        taskPolicy,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI");
+    },
+  );
 
   it("blocks selecting an active-session account from an account chooser", () => {
     const decision = evaluateGuiPolicy({
@@ -627,19 +684,25 @@ describe("evaluateGuiPolicy", () => {
   });
 
   it("allows a signed-out chooser row with a Remove an account sibling under commerce", () => {
+    const textEnvelopeSummary = [
+      "App=com.google.Chrome (pid 42)",
+      'Window: "Choose an account - Sign in", App: Google Chrome.',
+      "0 standard window Choose an account - Sign in",
+      "  101 button Artem artem@example.com Signed out Secondary Actions: AXPress",
+      "  102 button Use another account Secondary Actions: AXPress",
+      "  103 button Remove an account Secondary Actions: AXPress",
+    ].join("\n");
     const decision = evaluateGuiPolicy({
       actionType: "click",
-      target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
+      target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
       snapshot: snapshot({
-        appName: "Safari",
+        appName: "Google Chrome",
         windowTitle: "Choose an account - Sign in",
-        summary: "Choose an account to continue to Google",
+        summary: textEnvelopeSummary,
         visibleText: [
-          "Artem",
-          "artem@example.com",
-          "Signed out",
-          "Use another account",
-          "Remove an account",
+          "button Artem artem@example.com Signed out",
+          "button Use another account",
+          "button Remove an account",
         ],
       }),
       element: {

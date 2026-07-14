@@ -553,6 +553,15 @@ function visibleContextText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function isAccountChooserManagementSibling(part: string): boolean {
+  // Match either a structured label or one complete OCU text-envelope element
+  // line. Do not match prose such as "Remove an account requires approval";
+  // that remains risk-bearing page context.
+  return /^(?:(?:\d+\s+)?(?:button|link|row|cell|list item)\s+)?remove (?:an )?account(?:\s+(?:id|value|description|secondary actions|frame):.*)?$/.test(
+    normalizeText(part),
+  );
+}
+
 function preAuthHardStopContextParts(input: GuiPolicyInput): Array<string | undefined> {
   const selectedSafeChooserTarget = isSafeAccountChooserSelection(input);
   const visibleText = (input.snapshot?.visibleText ?? []).filter((part) => {
@@ -560,15 +569,24 @@ function preAuthHardStopContextParts(input: GuiPolicyInput): Array<string | unde
     // rows. Ignore only the exact sibling and only when the selected target is
     // independently proven safe; selected removal controls and risk-bearing
     // page copy continue through the hard-stop scan.
-    return !(selectedSafeChooserTarget && /^remove (?:an )?account$/.test(normalizeText(part)));
+    return !(selectedSafeChooserTarget && isAccountChooserManagementSibling(part));
   });
+  const summary = selectedSafeChooserTarget
+    ? input.snapshot?.summary
+        ?.split(/\r?\n/)
+        // Text-only OCU snapshots duplicate every accessible element into the
+        // fallback summary. Remove only the structurally complete management
+        // sibling line; titles, prose, and all other risk evidence survive.
+        .filter((line) => !isAccountChooserManagementSibling(line))
+        .join("\n")
+    : input.snapshot?.summary;
 
   return [
     input.target.appName,
     input.target.windowTitle,
     input.snapshot?.appName,
     input.snapshot?.windowTitle,
-    input.snapshot?.summary,
+    summary,
     ...visibleText,
   ];
 }
