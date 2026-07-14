@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
+import { MEDIA_FFMPEG_TIMEOUT_MS } from "../media/ffmpeg-limits.js";
 import {
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
   isInboundPathAllowed,
@@ -17,6 +18,9 @@ const MAX_AUDIO_CHUNK_DURATION_SECONDS = 15 * 60;
 const AUDIO_CHUNK_BITRATE_KBPS = 32;
 const AUDIO_CHUNK_BITRATE_BPS = AUDIO_CHUNK_BITRATE_KBPS * 1024;
 const AUDIO_CHUNK_SIZE_SAFETY_RATIO = 0.8;
+const AUDIO_CHUNK_TIMEOUT_GRACE_MS = 60_000;
+const UNKNOWN_AUDIO_CHUNK_TIMEOUT_MS = 10 * 60_000;
+const MAX_AUDIO_CHUNK_TIMEOUT_MS = 2 * 60 * 60_000;
 
 function resolveAudioMaxBytes(cfg: OpenClawConfig): number {
   const audioConfig = cfg.tools?.media?.audio;
@@ -79,6 +83,17 @@ function resolveChunkDurationSeconds(maxBytes: number): number {
   return Math.max(1, Math.min(MAX_AUDIO_CHUNK_DURATION_SECONDS, durationForConfiguredLimit));
 }
 
+function resolveAudioChunkTimeoutMs(durationSeconds: number): number {
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 0) {
+    return UNKNOWN_AUDIO_CHUNK_TIMEOUT_MS;
+  }
+  const durationAwareTimeoutMs = Math.ceil(durationSeconds * 1000) + AUDIO_CHUNK_TIMEOUT_GRACE_MS;
+  return Math.min(
+    MAX_AUDIO_CHUNK_TIMEOUT_MS,
+    Math.max(MEDIA_FFMPEG_TIMEOUT_MS, durationAwareTimeoutMs),
+  );
+}
+
 async function assertChunkSourceAllowed(params: {
   filePath: string;
   localPathRoots?: readonly string[];
@@ -120,37 +135,41 @@ async function createAudioChunks(params: {
   filePath: string;
   outputDir: string;
   maxBytes: number;
+  durationSeconds: number;
 }): Promise<string[]> {
   const outputPattern = path.join(params.outputDir, "chunk-%03d.mp3");
   try {
     // Re-encoding to narrowband mono keeps every chunk small and predictable
     // across source codecs instead of trusting the original container bitrate.
-    await runFfmpeg([
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-i",
-      params.filePath,
-      "-map",
-      "0:a:0",
-      "-vn",
-      "-ac",
-      "1",
-      "-ar",
-      "16000",
-      "-c:a",
-      "libmp3lame",
-      "-b:a",
-      `${AUDIO_CHUNK_BITRATE_KBPS}k`,
-      "-f",
-      "segment",
-      "-segment_time",
-      String(resolveChunkDurationSeconds(params.maxBytes)),
-      "-reset_timestamps",
-      "1",
-      "-y",
-      outputPattern,
-    ]);
+    await runFfmpeg(
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        params.filePath,
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        `${AUDIO_CHUNK_BITRATE_KBPS}k`,
+        "-f",
+        "segment",
+        "-segment_time",
+        String(resolveChunkDurationSeconds(params.maxBytes)),
+        "-reset_timestamps",
+        "1",
+        "-y",
+        outputPattern,
+      ],
+      { timeoutMs: resolveAudioChunkTimeoutMs(params.durationSeconds) },
+    );
   } catch (err) {
     throw new Error(
       `Unable to create transcription chunks with ffmpeg. Install FFmpeg and verify the file contains readable audio: ${formatErrorMessage(err)}`,
@@ -173,7 +192,7 @@ async function transcribeAudioChunk(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   localPathRoots: readonly string[];
-}): Promise<string> {
+}): Promise<string | undefined> {
   try {
     const { transcript } = await runAudioTranscription({
       ctx: { MediaPath: params.chunkPath, MediaType: "audio/mpeg" },
@@ -181,11 +200,7 @@ async function transcribeAudioChunk(params: {
       agentDir: params.agentDir,
       localPathRoots: params.localPathRoots,
     });
-    const text = transcript?.trim();
-    if (!text) {
-      throw new Error("provider returned no text");
-    }
-    return text;
+    return transcript?.trim();
   } catch (err) {
     // Do not return a plausible-looking partial transcript when one interval
     // failed or was skipped by the configured provider/model fallback path.
@@ -202,7 +217,8 @@ async function transcribeAudioChunks(params: {
   agentDir?: string;
   localPathRoots?: readonly string[];
   maxBytes: number;
-}): Promise<{ text: string }> {
+  durationSeconds: number;
+}): Promise<{ text: string | undefined }> {
   await assertChunkSourceAllowed({
     filePath: params.filePath,
     localPathRoots: params.localPathRoots,
@@ -215,19 +231,27 @@ async function transcribeAudioChunks(params: {
       filePath: params.filePath,
       outputDir,
       maxBytes: params.maxBytes,
+      durationSeconds: params.durationSeconds,
     });
     const localPathRoots = [...(params.localPathRoots ?? []), outputDir];
     const transcripts: string[] = [];
     for (const [chunkIndex, chunkPath] of chunkPaths.entries()) {
-      transcripts.push(
-        await transcribeAudioChunk({
-          chunkPath,
-          chunkIndex,
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-          localPathRoots,
-        }),
-      );
+      const text = await transcribeAudioChunk({
+        chunkPath,
+        chunkIndex,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        localPathRoots,
+      });
+      if (!text) {
+        if (transcripts.length === 0) {
+          return { text: undefined };
+        }
+        throw new Error(
+          `Audio chunk ${chunkIndex + 1} returned no text; no partial transcript was returned.`,
+        );
+      }
+      transcripts.push(text);
     }
     return { text: transcripts.join("\n") };
   } finally {
@@ -260,8 +284,8 @@ export async function transcribeAudioFile(params: {
   // An oversized source would be skipped by the runner. Inspect and split it
   // before any provider call, while short files keep their existing fast path.
   if (stat.size > maxBytes) {
-    await inspectAudioDuration(params.filePath);
-    return await transcribeAudioChunks({ ...params, maxBytes });
+    const durationSeconds = await inspectAudioDuration(params.filePath);
+    return await transcribeAudioChunks({ ...params, maxBytes, durationSeconds });
   }
 
   const { transcript } = await runAudioTranscription({
@@ -278,7 +302,7 @@ export async function transcribeAudioFile(params: {
   // miss, then recover with chunks when its duration exceeds the safe ceiling.
   const durationSeconds = await inspectAudioDuration(params.filePath);
   if (durationSeconds > MAX_AUDIO_CHUNK_DURATION_SECONDS) {
-    return await transcribeAudioChunks({ ...params, maxBytes });
+    return await transcribeAudioChunks({ ...params, maxBytes, durationSeconds });
   }
   return { text: undefined };
 }

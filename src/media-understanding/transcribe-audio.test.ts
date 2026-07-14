@@ -5,6 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const MB = 1024 * 1024;
+const UNAVAILABLE_AUDIO_CONFIGS: Array<[string, OpenClawConfig]> = [
+  ["disabled", { tools: { media: { audio: { enabled: false, maxBytes: 10 } } } }],
+  [
+    "unsupported provider",
+    {
+      tools: {
+        media: { audio: { maxBytes: 10, models: [{ provider: "unsupported-provider" }] } },
+      },
+    },
+  ],
+  ["no provider", { tools: { media: { audio: { maxBytes: 10 } } } }],
+];
 
 const { runAudioTranscription, runFfmpeg, runFfprobe } = vi.hoisted(() => {
   const runAudioTranscription = vi.fn();
@@ -176,7 +188,9 @@ describe("transcribeAudioFile", () => {
     await expect(
       transcribeAudioFile({ filePath, cfg: {} as OpenClawConfig, localPathRoots: [tempDir] }),
     ).resolves.toEqual({ text: "long transcript" });
-    expect(runFfmpeg).toHaveBeenCalledWith(expect.arrayContaining(["-segment_time", "900"]));
+    expect(runFfmpeg).toHaveBeenCalledWith(expect.arrayContaining(["-segment_time", "900"]), {
+      timeoutMs: 961_000,
+    });
     expect(runAudioTranscription).toHaveBeenCalledTimes(2);
   });
 
@@ -191,7 +205,7 @@ describe("transcribeAudioFile", () => {
       .mockResolvedValueOnce({ transcript: undefined, attachments: [] });
 
     await expect(transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] })).rejects.toThrow(
-      /chunk 2 failed to transcribe; no partial transcript/i,
+      /chunk 2 returned no text; no partial transcript/i,
     );
 
     const secondChunkPath = runAudioTranscription.mock.calls[1]?.[0].ctx.MediaPath as string;
@@ -225,5 +239,38 @@ describe("transcribeAudioFile", () => {
     ).resolves.toEqual({ text: "accepted" });
     expect(runFfprobe).not.toHaveBeenCalled();
     expect(runFfmpeg).not.toHaveBeenCalled();
+  });
+
+  it.each(UNAVAILABLE_AUDIO_CONFIGS)(
+    "preserves undefined when the first chunk has no text (%s)",
+    async (_label, cfg) => {
+      const filePath = await writeAudioFile("unavailable.mp3", "this is larger than ten bytes");
+      mockChunkFiles(1);
+      runAudioTranscription.mockResolvedValue({ transcript: undefined, attachments: [] });
+
+      await expect(
+        transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
+      ).resolves.toEqual({
+        text: undefined,
+      });
+      expect(runAudioTranscription).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("uses a bounded fallback timeout when ffprobe cannot determine duration", async () => {
+    const filePath = await writeAudioFile("unknown-duration.mp3", "this is larger than ten bytes");
+    const cfg = {
+      tools: { media: { audio: { maxBytes: 10 } } },
+    } as unknown as OpenClawConfig;
+    runFfprobe.mockResolvedValue("audio\nN/A");
+    mockChunkFiles(1);
+    runAudioTranscription.mockResolvedValue({ transcript: "recovered", attachments: [] });
+
+    await expect(
+      transcribeAudioFile({ filePath, cfg, localPathRoots: [tempDir] }),
+    ).resolves.toEqual({
+      text: "recovered",
+    });
+    expect(runFfmpeg).toHaveBeenCalledWith(expect.any(Array), { timeoutMs: 600_000 });
   });
 });
