@@ -174,12 +174,14 @@ declare -a retired_launchagent_sources=()
 declare -a retired_launchagent_destinations=()
 declare -a retired_launchagent_labels=()
 declare -a retired_launchagent_was_loaded=()
+declare -a retired_launchagent_markers=()
 
 reset_launchagent_retirement_record() {
   retired_launchagent_sources=()
   retired_launchagent_destinations=()
   retired_launchagent_labels=()
   retired_launchagent_was_loaded=()
+  retired_launchagent_markers=()
 }
 
 record_retired_launchagent() {
@@ -187,6 +189,7 @@ record_retired_launchagent() {
   retired_launchagent_destinations+=("$2")
   retired_launchagent_labels+=("$3")
   retired_launchagent_was_loaded+=("$4")
+  retired_launchagent_markers+=("$5")
 }
 
 # Roll back in reverse retirement order. A service that was loaded before GC
@@ -200,6 +203,7 @@ rollback_retired_launchagents() {
   local destination=""
   local label=""
   local was_loaded=0
+  local success_marker=""
 
   [[ "${#retired_launchagent_sources[@]}" -gt 0 ]] || return 0
 
@@ -216,6 +220,15 @@ rollback_retired_launchagents() {
     destination="${retired_launchagent_destinations[$index]}"
     label="${retired_launchagent_labels[$index]}"
     was_loaded="${retired_launchagent_was_loaded[$index]}"
+    success_marker="${retired_launchagent_markers[$index]}"
+
+    if [[ -n "$success_marker" && ( -e "$success_marker" || -L "$success_marker" ) ]]; then
+      if ! rm -f "$success_marker"; then
+        echo "Error: rollback could not remove retirement success marker ${success_marker}" >&2
+        rollback_failed=1
+        continue
+      fi
+    fi
 
     # Never overwrite a plist that appeared after retirement. The worktree is
     # already being preserved, so leaving both copies is the safest outcome.
@@ -260,11 +273,13 @@ retire_worktree_consumer_launchagents() {
   local launchctl_print_output=""
   local inventory_path=""
   local plist_parent=""
+  local symlink_target=""
   local existing_plist_path=""
   local duplicate_plist=0
   local quarantine_is_internal=0
   local -a plist_paths=()
   local was_loaded=0
+  local success_marker=""
   local found=0
 
   [[ -d "$LAUNCH_AGENTS_DIR" ]] || return 0
@@ -327,12 +342,40 @@ retire_worktree_consumer_launchagents() {
   done
 
   # A nested exact-owned plist is a durable record of an earlier ambiguous or
-  # incomplete retirement. Fail before new mutations; manual resolution must
-  # restore or remove that evidence deliberately.
+  # incomplete retirement unless it has the success receipt written only after
+  # confirmed absence or successful bootout. A receipt lets a partial prunable
+  # batch resume without confusing completed retirement with ambiguity.
   for plist_path in "${plist_paths[@]}"; do
     plist_parent="$(dirname "$plist_path")"
     if [[ "$plist_parent" != "$LAUNCH_AGENTS_DIR" ]] && worktree_owns_consumer_gateway_plist "$plist_path" "$worktree_path"; then
-      echo "Error: exact-owned LaunchAgent is already quarantined at ${plist_path}; preserving worktree metadata: ${worktree_path}" >&2
+      success_marker="${plist_path}.retired-success"
+      if [[ -f "$success_marker" && ! -L "$success_marker" ]]; then
+        found=1
+        echo "Confirmed prior LaunchAgent retirement: ${plist_path}"
+      else
+        echo "Error: exact-owned LaunchAgent is already quarantined without a success receipt at ${plist_path}; preserving worktree metadata: ${worktree_path}" >&2
+        return 1
+      fi
+    fi
+  done
+
+
+  # Moving a symlink whose target lives inside the lane would leave a broken,
+  # non-reversible quarantine artifact after Git deletion. Reject that shape
+  # before any plist or launchd mutation; external symlink targets remain safe.
+  for plist_path in "${plist_paths[@]}"; do
+    plist_parent="$(dirname "$plist_path")"
+    [[ "$plist_parent" == "$LAUNCH_AGENTS_DIR" && -L "$plist_path" ]] || continue
+    worktree_owns_consumer_gateway_plist "$plist_path" "$worktree_path" || continue
+    if ! symlink_target="$(readlink "$plist_path")"; then
+      echo "Error: cannot resolve LaunchAgent plist symlink ${plist_path}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+    if [[ "$symlink_target" != /* ]]; then
+      symlink_target="${plist_parent}/${symlink_target}"
+    fi
+    if path_belongs_to_worktree "$symlink_target" "$worktree_path"; then
+      echo "Error: LaunchAgent plist symlink target is inside the worktree and cannot be quarantined reversibly: ${plist_path} -> ${symlink_target}" >&2
       return 1
     fi
   done
@@ -347,6 +390,7 @@ retire_worktree_consumer_launchagents() {
     found=1
     label="$(plist_value "$plist_path" "Label")"
     destination="${LAUNCH_AGENT_QUARANTINE_DIR}/$(basename "$plist_path")"
+    success_marker="${destination}.retired-success"
 
     if ! mkdir -p "$LAUNCH_AGENT_QUARANTINE_DIR"; then
       echo "Error: cannot create LaunchAgent quarantine; preserving worktree: ${worktree_path}" >&2
@@ -355,7 +399,7 @@ retire_worktree_consumer_launchagents() {
 
     # Never overwrite an older quarantine artifact. Losing the previous plist
     # would make this cleanup destructive instead of reversible.
-    if [[ -e "$destination" || -L "$destination" ]]; then
+    if [[ -e "$destination" || -L "$destination" || -e "$success_marker" || -L "$success_marker" ]]; then
       echo "Error: quarantine destination already exists for ${label}; preserving worktree: ${worktree_path}" >&2
       return 1
     fi
@@ -383,7 +427,15 @@ retire_worktree_consumer_launchagents() {
         "$plist_path" "$destination" "$label" "$worktree_path" "launchctl print failed without service-not-found confirmation"
       return 1
     fi
-    record_retired_launchagent "$plist_path" "$destination" "$label" "$was_loaded"
+
+    # Noclobber makes the empty receipt atomic. A crash before this point leaves
+    # an intentionally ambiguous quarantine; a crash after it can safely resume.
+    if ! (umask 077; set -C; : > "$success_marker"); then
+      record_retired_launchagent "$plist_path" "$destination" "$label" "$was_loaded" ""
+      echo "Error: could not record successful LaunchAgent retirement at ${success_marker}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+    record_retired_launchagent "$plist_path" "$destination" "$label" "$was_loaded" "$success_marker"
     echo "Quarantined worktree LaunchAgent: ${label} -> ${destination}"
   done
 

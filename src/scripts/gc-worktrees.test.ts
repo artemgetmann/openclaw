@@ -116,6 +116,13 @@ if [[ "$1" == "print" ]]; then
       printf 'Could not access domain for user gui: transient failure\\n' >&2
       exit 1
       ;;
+    second-ambiguous)
+      if [[ "$label" == "ai.openclaw.consumer.second-lane.gateway" ]]; then
+        printf 'Could not access domain for user gui: transient failure\\n' >&2
+        exit 1
+      fi
+      exit 0
+      ;;
     loaded)
       exit 0
       ;;
@@ -156,7 +163,7 @@ function runGc(
     plistBuddy: string;
     quarantine: string;
     launchctlBootoutFails?: boolean;
-    launchctlPrintMode?: "loaded" | "absent" | "ambiguous-error";
+    launchctlPrintMode?: "loaded" | "absent" | "ambiguous-error" | "second-ambiguous";
     gitRemoveFails?: boolean;
     findFails?: boolean;
   },
@@ -236,6 +243,41 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     expect(fs.lstatSync(quarantinedPlist).isSymbolicLink()).toBe(true);
     expect(fs.existsSync(plistTarget)).toBe(true);
     expect(fs.readFileSync(tools.launchctlLog, "utf8")).toContain("bootout");
+  });
+
+  it("rejects an owned plist symlink whose target would be deleted with the worktree", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const plistTarget = path.join(lane, "owned-target.plist");
+    const ownedPlist = path.join(launchAgents, "owned-link.plist");
+    writePlistFixture(
+      plistTarget,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.symlinkSync(plistTarget, ownedPlist);
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.lstatSync(ownedPlist).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(plistTarget)).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    expect(result.stderr).toContain("symlink target is inside the worktree");
+    expect(result.stderr).toContain("LaunchAgent retirement failed");
   });
 
   it("fails closed on a broken plist symlink before worktree removal", () => {
@@ -363,6 +405,88 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     ).toContain(`worktree ${registeredLane}`);
     expect(retry.stderr).toContain("already quarantined");
     expect(retry.stderr).toContain("skipped Git metadata prune");
+  });
+
+  it("resumes a partial prunable batch from durable successful-retirement evidence", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const secondLane = path.join(root, "second-lane");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "second-lane", secondLane], {
+      cwd: main,
+    });
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    const registeredLane = fs.realpathSync(lane);
+    const registeredSecondLane = fs.realpathSync(secondLane);
+
+    const firstPlist = path.join(launchAgents, "a-first.plist");
+    const secondPlist = path.join(launchAgents, "b-second.plist");
+    writePlistFixture(
+      firstPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    writePlistFixture(
+      secondPlist,
+      ownedConsumerGatewayFields(
+        "ai.openclaw.consumer.second-lane.gateway",
+        secondLane,
+        "second-lane",
+      ),
+    );
+    fs.rmSync(lane, { recursive: true, force: true });
+    fs.rmSync(secondLane, { recursive: true, force: true });
+
+    const first = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "second-ambiguous",
+    });
+
+    const quarantinedFirst = path.join(quarantine, path.basename(firstPlist));
+    const quarantinedSecond = path.join(quarantine, path.basename(secondPlist));
+    expect(first.status).toBe(1);
+    expect(fs.existsSync(quarantinedFirst)).toBe(true);
+    expect(fs.existsSync(`${quarantinedFirst}.retired-success`)).toBe(true);
+    expect(fs.existsSync(quarantinedSecond)).toBe(true);
+    expect(fs.existsSync(`${quarantinedSecond}.retired-success`)).toBe(false);
+    const firstLaunchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
+    const firstLabelOccurrences = firstLaunchctlLog.match(
+      /ai\.openclaw\.consumer\.merged-lane\.gateway/g,
+    )?.length;
+
+    // Manual resolution makes only the ambiguous second plist active again.
+    // The first lane must resume from its durable success receipt without a
+    // second launchctl operation.
+    fs.renameSync(quarantinedSecond, secondPlist);
+    const retry = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "absent",
+    });
+
+    expect(retry.status, `${retry.stdout}\n${retry.stderr}`).toBe(0);
+    expect(fs.existsSync(`${quarantinedSecond}.retired-success`)).toBe(true);
+    const retryLaunchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
+    expect(retryLaunchctlLog.match(/ai\.openclaw\.consumer\.merged-lane\.gateway/g)?.length).toBe(
+      firstLabelOccurrences,
+    );
+    const registrations = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: main,
+      encoding: "utf8",
+    });
+    expect(registrations).not.toContain(`worktree ${registeredLane}`);
+    expect(registrations).not.toContain(`worktree ${registeredSecondLane}`);
+    expect(retry.stdout).toContain("Confirmed prior LaunchAgent retirement");
+    expect(retry.stdout).toContain("GC complete: 2 prunable, 0 merged (2 removed)");
   });
 
   it("keeps external quarantine evidence visible across an ambiguous missing-lane retry", () => {
