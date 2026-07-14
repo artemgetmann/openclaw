@@ -81,4 +81,18 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       }),
     ).rejects.toThrow("Audio transcription response missing text");
   });
+
+  it("preserves an explicit empty transcript as successful silence", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({ text: "   " });
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "silent.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).resolves.toMatchObject({ text: "" });
+  });
 });

@@ -80,4 +80,20 @@ describe("transcribeDeepgramAudio", () => {
       }),
     ).rejects.toThrow("Audio transcription response missing transcript");
   });
+
+  it("preserves an explicit empty transcript as successful silence", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      results: { channels: [{ alternatives: [{ transcript: "   " }] }] },
+    });
+
+    await expect(
+      transcribeDeepgramAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "silent.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).resolves.toMatchObject({ text: "" });
+  });
 });
