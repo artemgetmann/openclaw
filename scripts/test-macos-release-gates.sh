@@ -163,6 +163,33 @@ test_sparkle_build_predicate() {
   run_expect "sparkle-newer-marketing-version-newer-build" pass \
     openclaw_require_incremental_sparkle_build "$built" "$installed"
 
+  # Same-base prereleases must follow release-channel order, not lexical token
+  # order: stable > beta > alpha, then the numeric prerelease counter.
+  make_app "$installed" "2026.7.1" "2026071402"
+  make_app "$built" "2026.7.1-beta.1" "2026071403"
+  run_expect "sparkle-stable-to-beta-regression" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.7.1-beta.1" "2026071402"
+  make_app "$built" "2026.7.1" "2026071403"
+  run_expect "sparkle-beta-to-stable-upgrade" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.7.1-alpha.2" "2026071402"
+  make_app "$built" "2026.7.1-beta.1" "2026071403"
+  run_expect "sparkle-alpha-to-beta-upgrade" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.7.1-beta.1" "2026071402"
+  make_app "$built" "2026.7.1-beta.2" "2026071403"
+  run_expect "sparkle-beta-counter-upgrade" pass \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
+  make_app "$installed" "2026.7.1-beta.2" "2026071402"
+  make_app "$built" "2026.7.1-beta.1" "2026071403"
+  run_expect "sparkle-beta-counter-regression" fail \
+    openclaw_require_incremental_sparkle_build "$built" "$installed"
+
   /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$built/Contents/Info.plist"
   run_expect "sparkle-built-marketing-version-missing" fail \
     openclaw_require_incremental_sparkle_build "$built" "$installed"

@@ -287,6 +287,57 @@ openclaw_compare_bundle_versions() {
   ' "$left" "$right"
 }
 
+openclaw_parse_marketing_version() {
+  local value="$1"
+  local prerelease_rank
+
+  # Jarvis marketing versions use a numeric CalVer base with an optional
+  # alpha.N or beta.N suffix. Give stable the highest rank so a same-base
+  # prerelease can never replace an installed stable release.
+  if [[ "$value" =~ ^([0-9]+([.][0-9]+)*)[-.](alpha|beta)[.]([0-9]+)$ ]]; then
+    case "${BASH_REMATCH[3]}" in
+      alpha) prerelease_rank="0" ;;
+      beta) prerelease_rank="1" ;;
+    esac
+    printf '%s|%s|%s\n' "${BASH_REMATCH[1]}" "$prerelease_rank" "${BASH_REMATCH[4]}"
+    return 0
+  fi
+
+  if [[ "$value" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
+    printf '%s|2|0\n' "$value"
+    return 0
+  fi
+
+  echo "ERROR: unsupported Jarvis CFBundleShortVersionString '$value'; expected numeric CalVer with optional alpha.N or beta.N suffix." >&2
+  return 1
+}
+
+openclaw_compare_marketing_versions() {
+  local left="$1"
+  local right="$2"
+  local left_parsed right_parsed
+  local left_base left_rank left_prerelease
+  local right_base right_rank right_prerelease
+  local comparison
+
+  left_parsed="$(openclaw_parse_marketing_version "$left")" || return 1
+  right_parsed="$(openclaw_parse_marketing_version "$right")" || return 1
+  IFS='|' read -r left_base left_rank left_prerelease <<<"$left_parsed"
+  IFS='|' read -r right_base right_rank right_prerelease <<<"$right_parsed"
+
+  comparison="$(openclaw_compare_bundle_versions "$left_base" "$right_base")"
+  if [[ "$comparison" != "0" ]]; then
+    printf '%s\n' "$comparison"
+    return 0
+  fi
+
+  # Only compare channel rank and prerelease number after the CalVer base
+  # matches. The generic comparator remains unchanged for CFBundleVersion.
+  openclaw_compare_bundle_versions \
+    "$left_rank.$left_prerelease" \
+    "$right_rank.$right_prerelease"
+}
+
 openclaw_require_incremental_sparkle_build() {
   local built_app_path="$1"
   local installed_app_path="${2:-${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}}"
@@ -319,7 +370,7 @@ openclaw_require_incremental_sparkle_build() {
     exit 1
   fi
 
-  version_comparison="$(openclaw_compare_bundle_versions "$installed_version" "$built_version")"
+  version_comparison="$(openclaw_compare_marketing_versions "$installed_version" "$built_version")"
   if [[ "$version_comparison" == "1" ]]; then
     cat >&2 <<EOF
 ERROR: built Jarvis CFBundleShortVersionString is older than the installed app.
