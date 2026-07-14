@@ -2,10 +2,16 @@ import SwiftUI
 
 struct AIAccessSettings: View {
     @State private var modelSetup = ConsumerModelSetupModel()
+    private let gatewayManager = GatewayProcessManager.shared
 
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
+                if let incident = self.gatewayManager.recoveryIncident {
+                    GatewayRecoveryIncidentCard(incident: incident) {
+                        DebugActions.restartGateway()
+                    }
+                }
                 ConsumerModelSetupCardContent(model: self.modelSetup)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

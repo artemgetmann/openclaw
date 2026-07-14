@@ -1,5 +1,6 @@
 import SwiftUI
 import Testing
+import UserNotifications
 @testable import OpenClaw
 
 @Suite(.serialized)
@@ -108,6 +109,31 @@ struct SettingsViewSmokeTests {
     @Test func `ai access settings builds body`() {
         let view = AIAccessSettings()
         _ = view.body
+    }
+
+    @Test func `gateway recovery card keeps one consumer safe action`() {
+        let incident = GatewayRecoveryIncident.offline(appName: "Jarvis")
+
+        #expect(incident.title == "Jarvis needs a restart")
+        #expect(incident.actionTitle == "Restart Jarvis")
+        #expect(!incident.message.localizedCaseInsensitiveContains("launchd"))
+        #expect(!incident.message.localizedCaseInsensitiveContains("port"))
+        #expect(!incident.message.localizedCaseInsensitiveContains("service"))
+
+        let view = GatewayRecoveryIncidentCard(incident: incident, restart: {})
+        _ = view.body
+    }
+
+    @Test func `gateway recovery notification exposes exactly one restart action`() throws {
+        let category = NotificationManager.gatewayRecoveryCategory(appName: "Jarvis")
+        let action = try #require(category.actions.first)
+
+        #expect(category.identifier == NotificationManager.gatewayRecoveryCategoryIdentifier)
+        #expect(category.actions.count == 1)
+        #expect(action.title == "Restart Jarvis")
+        #expect(action.identifier == NotificationManager.gatewayRecoveryRestartActionIdentifier)
+        #expect(GatewayRecoveryNotificationRoute.route(actionIdentifier: action.identifier) == .restart)
+        #expect(GatewayRecoveryNotificationRoute.route(actionIdentifier: UNNotificationDefaultActionIdentifier) == nil)
     }
 
     @Test func `consumer defaults keep dock icon visible unless user changed it`() {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import { whatsappOutbound } from "../../test/channel-outbounds.js";
+import { detectImageReferences } from "../agents/pi-embedded-runner/run/images.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -999,6 +1000,93 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Body).toContain("Recent delivered heartbeat alerts (most recent first):");
       expect(calledCtx.Body).toContain("Follow up on Emirates KYC blocker.");
       expect(calledCtx.Body).toContain("prefer a shorter nudge");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("keeps persisted and newly recorded heartbeat previews from rehydrating media references", async () => {
+    const tmpDir = await createCaseDir("hb-history-media-safe");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    const persistedPreview =
+      "Useful KYC follow-up remains. [Image: source: /tmp/old proof.png] file:///tmp/old-photo.jpg '../proof image.webp' data:image/png;base64,OLD-BASE64";
+    const freshPreview =
+      'Useful vendor follow-up remains. [media attached: /tmp/new proof.png (image/png)] file:///tmp/new-photo.jpg "~/proof image.webp" data:image/png;base64,FRESH-BASE64';
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            recentHeartbeats: [
+              {
+                sentAt: Date.UTC(2026, 3, 9, 12, 0, 0),
+                channel: "telegram",
+                to: "1336356696",
+                preview: persistedPreview,
+                status: "sent",
+              },
+            ],
+          },
+        }),
+      );
+
+      // The fixture must prove the old persisted shape would trigger prompt image rehydration.
+      expect(detectImageReferences(persistedPreview)).not.toHaveLength(0);
+      replySpy.mockResolvedValue([{ text: freshPreview }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, Date.UTC(2026, 3, 9, 12, 1, 0)),
+      });
+
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const promptBody = calledCtx.Body ?? "";
+      expect(detectImageReferences(promptBody)).toEqual([]);
+      expect(promptBody).toContain("Useful KYC follow-up remains.");
+      expect(promptBody).toContain("[media reference omitted]");
+      expect(promptBody).not.toContain("old proof.png");
+      expect(promptBody).not.toContain("file://");
+      expect(promptBody).not.toContain("data:image");
+      expect(promptBody).not.toContain("OLD-BASE64");
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        { recentHeartbeats?: Array<{ preview?: string }> } | undefined
+      >;
+      const storedPreview = store[sessionKey]?.recentHeartbeats?.[0]?.preview ?? "";
+      expect(detectImageReferences(storedPreview)).toEqual([]);
+      expect(storedPreview).toContain("Useful vendor follow-up remains.");
+      expect(storedPreview).toContain("[media reference omitted]");
+      expect(storedPreview).not.toContain("new proof.png");
+      expect(storedPreview).not.toContain("file://");
+      expect(storedPreview).not.toContain("data:image");
+      expect(storedPreview).not.toContain("FRESH-BASE64");
     } finally {
       replySpy.mockRestore();
     }

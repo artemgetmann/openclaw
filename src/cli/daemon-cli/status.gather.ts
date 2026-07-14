@@ -530,14 +530,15 @@ export async function gatherDaemonStatus(
     serviceEnv: command?.environment,
   });
   const canonicalDefaultGateway =
-    isDefaultTarget && !loaded
+    isDefaultTarget &&
+    !loaded &&
+    runtime &&
+    "missingUnit" in runtime &&
+    runtime.missingUnit === true
       ? {
           missing: true,
           label: GATEWAY_LAUNCH_AGENT_LABEL,
-          reason:
-            runtime && "missingUnit" in runtime && runtime.missingUnit === true
-              ? "canonical shared gateway LaunchAgent is missing or not registered"
-              : "canonical shared gateway LaunchAgent is not loaded",
+          reason: "canonical shared gateway LaunchAgent is missing or not registered",
           recoveryCommand: "bash scripts/gateway-recover-main.sh",
         }
       : undefined;

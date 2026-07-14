@@ -275,6 +275,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         self.state = AppStateStore.shared
+        // Register before a recovery incident can fire so the notification and
+        // both in-app cards expose the same one-action restart path.
+        NotificationManager.configureGatewayRecoveryActions(appName: AppFlavor.current.appName)
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         self.installVisibleSurfaceObserverIfNeeded()
         if let state {

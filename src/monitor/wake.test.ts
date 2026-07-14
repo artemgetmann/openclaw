@@ -1,7 +1,219 @@
 import { describe, expect, it } from "vitest";
+import { detectImageReferences } from "../agents/pi-embedded-runner/run/images.js";
 import { buildMonitorWakeMessage } from "./wake.js";
 
 describe("buildMonitorWakeMessage", () => {
+  it("keeps checkpoint media references out of the wake prompt without mutating checkpoint state", () => {
+    const checkpoint = {
+      id: "checkpoint-dld-91f",
+      checkedAt: "2026-07-13T01:23:45.000Z",
+      chatTarget: "+971507664706",
+      summary: "Feedback was confirmed and the conversation remains resolved.",
+      evidence: {
+        screenshotId: "screenshot-record-17",
+        feedbackConfirmationScreenshot:
+          "/Users/test/Library/Application Support/OpenClaw/media/91f-proof.jpg",
+        attachments: [
+          "file:///Users/test/Pictures/follow-up.png",
+          "Proof is file:///Users/test/proofs/final proof.png after review.",
+          "Single proof '~/Application Support/proof image.png' remains reviewed.",
+          "Backtick proof `../Application Support/backtick proof.jpeg` remains reviewed.",
+          'Double proof "./Application Support/double proof.webp" remains reviewed.',
+          "Bare tilde ~proof.png remains reviewed.",
+          "Parenthesized (~proof-two.jpeg) remains reviewed.",
+          "https://cdn.example.com/proofs/confirmation.webp?version=2",
+          "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD",
+        ],
+        structuredMarkers: [
+          "[Image: source: /Users/test/proofs/feedback confirmation.png]",
+          "[Image: source: file:///Users/test/proofs/follow up.jpeg]",
+          "[Image: source: https://cdn.example.com/proofs/final confirmation.webp]",
+          "[media attached: /Users/test/proofs/media attachment.tiff (image/tiff)]",
+        ],
+        nativeImage: {
+          type: "image",
+          mimeType: "image/png",
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+        },
+        nestedImage: {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "nested-image-base64-payload",
+          },
+        },
+        generatedImage: {
+          type: "image",
+          source: {
+            mediaType: "image/webp",
+            b64_json: "generated-image-b64-json-payload",
+          },
+        },
+        standaloneImageSource: {
+          type: "base64",
+          media_type: "image/jpeg",
+          data: "snake-case-image-base64-payload",
+        },
+        byteArrayImage: {
+          type: "image",
+          mimeType: "image/png",
+          data: [137, 80, 78, 71],
+        },
+        serializedBufferImage: {
+          type: "image",
+          source: {
+            mediaType: "image/png",
+            data: { type: "Buffer", data: [137, 80, 78, 71] },
+          },
+        },
+        unrelatedPayload: {
+          type: "record",
+          source: {
+            media_type: "application/json",
+            data: "ordinary-checkpoint-data",
+            b64_json: "ordinary-checkpoint-b64-json",
+          },
+        },
+        unrelatedBinaryShapes: {
+          data: [1, 2, 3],
+          buffer: { type: "Buffer", data: [4, 5, 6] },
+        },
+        wrappedDataUri: "  \ndata:image/png;base64,WRAPPED-AAA\nWRAPPED-BBB",
+        svgDataUri:
+          'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>WHOLE-SVG-PAYLOAD</text></svg>',
+        inlineWrappedDataUri:
+          "Inline preview 'data:image/png;base64,INLINE-AAA\nINLINE-BBB' remains reviewed.",
+        unquotedWrappedDataUri: "Preview data:image/png;base64,UNQUOTED-AAAA\nUNQUOTED-BBBB",
+        inlineSvgDataUri:
+          'SVG preview data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>INLINE-SVG-PAYLOAD</text></svg> remains reviewed.',
+      },
+    };
+    const checkpointBeforeWake = structuredClone(checkpoint);
+
+    // This proves the production checkpoint shape is sufficient to trigger the
+    // embedded runner's local prompt-image detection before sanitization.
+    expect(detectImageReferences(JSON.stringify(checkpoint))).not.toHaveLength(0);
+
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-13T01:30:00.000Z",
+      wakeReason: "cron:monitor-dld",
+      monitor: {
+        monitorId: "monitor-dld",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-dld",
+        sourceType: "telegram-user",
+        sourceTarget: { chat: "6783130823" },
+        cadence: { kind: "every", everyMs: 600_000 },
+        actionPolicy: "notify_only",
+        status: "active",
+        lastCheckpoint: checkpoint,
+        cronJobId: "cron-dld",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(detectImageReferences(message)).toEqual([]);
+    expect(message).not.toContain("91f-proof.jpg");
+    expect(message).not.toContain("file:///Users/test/Pictures/follow-up.png");
+    expect(message).not.toContain("file:///Users/test/proofs/final proof.png");
+    expect(message).toContain("Single proof [media reference omitted] remains reviewed.");
+    expect(message).toContain("Backtick proof [media reference omitted] remains reviewed.");
+    expect(message).toContain("Double proof [media reference omitted] remains reviewed.");
+    expect(message).toContain("Bare tilde [media reference omitted] remains reviewed.");
+    expect(message).toContain("Parenthesized ([media reference omitted]) remains reviewed.");
+    expect(message).not.toContain("https://cdn.example.com/proofs/confirmation.webp");
+    expect(message).not.toContain("data:image/jpeg;base64");
+    expect(message).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");
+    expect(message).not.toContain("nested-image-base64-payload");
+    expect(message).not.toContain("generated-image-b64-json-payload");
+    expect(message).not.toContain("snake-case-image-base64-payload");
+    expect(message).toContain(
+      '"byteArrayImage":{"type":"image","mimeType":"image/png","data":"[media reference omitted]"}',
+    );
+    expect(message).toContain(
+      '"serializedBufferImage":{"type":"image","source":{"data":"[media reference omitted]","mediaType":"image/png"}}',
+    );
+    expect(message).toContain("ordinary-checkpoint-data");
+    expect(message).toContain("ordinary-checkpoint-b64-json");
+    expect(message).toContain('"unrelatedBinaryShapes":{"data":[1,2,3]');
+    expect(message).toContain('"buffer":{"type":"Buffer","data":[4,5,6]}');
+    expect(message).toContain('"wrappedDataUri":"[media reference omitted]"');
+    expect(message).toContain('"svgDataUri":"[media reference omitted]"');
+    expect(message).toContain("Inline preview [media reference omitted] remains reviewed.");
+    expect(message).toContain('"unquotedWrappedDataUri":"[media reference omitted]"');
+    expect(message).toContain("SVG preview [media reference omitted] remains reviewed.");
+    expect(message).not.toContain("WRAPPED-BBB");
+    expect(message).not.toContain("WHOLE-SVG-PAYLOAD");
+    expect(message).not.toContain("INLINE-BBB");
+    expect(message).not.toContain("UNQUOTED-BBBB");
+    expect(message).not.toContain("INLINE-SVG-PAYLOAD");
+    expect(message).not.toContain("feedback confirmation.png");
+    expect(message).not.toContain("follow up.jpeg");
+    expect(message).not.toContain("final confirmation.webp");
+    expect(message).not.toContain("media attachment.tiff");
+    expect(message).toContain("[media reference omitted]");
+    expect(message).toContain('"id":"checkpoint-dld-91f"');
+    expect(message).toContain('"checkedAt":"2026-07-13T01:23:45.000Z"');
+    expect(message).toContain('"chatTarget":"+971507664706"');
+    expect(message).toContain('"screenshotId":"screenshot-record-17"');
+    expect(message).toContain("Feedback was confirmed and the conversation remains resolved.");
+    expect(checkpoint).toEqual(checkpointBeforeWake);
+  });
+
+  it("bounds pathological checkpoints while retaining late semantic fields over early raw evidence", () => {
+    const checkpoint: Record<string, unknown> = {
+      rawEvidence: "x".repeat(100_000),
+      screenshotPath: "/Users/test/proofs/pathological late proof.png",
+      imageBytes: "PATHOLOGICAL-IMAGE-BYTES",
+      oversizedList: Array.from({ length: 1_000 }, (_, index) => ({ index })),
+      id: "checkpoint-pathological",
+      checkedAt: "2026-07-13T01:23:45.000Z",
+      cursor: "message-991",
+      status: "waiting_for_reply",
+      outcome: "Vendor acknowledged the corrected invoice.",
+      nextAction: "Check for the promised payment confirmation.",
+      summary: "Late semantic checkpoint state must survive early junk.",
+    };
+    // Persisted checkpoints are JSON, so cycles should not normally exist. The
+    // wake renderer still must fail closed if an in-memory caller supplies one.
+    checkpoint.circular = checkpoint;
+
+    const message = buildMonitorWakeMessage({
+      nowIso: "2026-07-13T01:30:00.000Z",
+      wakeReason: "cron:pathological",
+      monitor: {
+        monitorId: "monitor-pathological",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        monitorSessionKey: "agent:main:monitor:monitor-pathological",
+        sourceType: "synthetic",
+        sourceTarget: { source: "proof" },
+        cadence: { kind: "every", everyMs: 600_000 },
+        actionPolicy: "notify_only",
+        status: "active",
+        lastCheckpoint: checkpoint,
+        cronJobId: "cron-pathological",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    });
+
+    expect(message).toContain('"id":"checkpoint-pathological"');
+    expect(message).toContain('"checkedAt":"2026-07-13T01:23:45.000Z"');
+    expect(message).toContain('"cursor":"message-991"');
+    expect(message).toContain('"status":"waiting_for_reply"');
+    expect(message).toContain("Vendor acknowledged the corrected invoice.");
+    expect(message).toContain("Check for the promised payment confirmation.");
+    expect(message).toContain("Late semantic checkpoint state must survive early junk.");
+    expect(message).not.toContain("pathological late proof.png");
+    expect(message).not.toContain("PATHOLOGICAL-IMAGE-BYTES");
+    expect(message).toContain("omitted");
+    expect(message.length).toBeLessThan(30_000);
+  });
+
   it("tells the waking agent to treat checkpoint data as baseline instead of final authority", () => {
     const message = buildMonitorWakeMessage({
       nowIso: "2026-04-10T04:30:13.436Z",
