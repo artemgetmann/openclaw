@@ -277,7 +277,7 @@ retire_worktree_consumer_launchagents() {
     echo "Error: cannot create LaunchAgent inventory; preserving worktree: ${worktree_path}" >&2
     return 1
   fi
-  if ! "$FIND_BIN" "$LAUNCH_AGENTS_DIR" -maxdepth 2 -type f -name '*.plist' -print0 > "$inventory_path"; then
+  if ! "$FIND_BIN" "$LAUNCH_AGENTS_DIR" -maxdepth 2 \( -type f -o -type l \) -name '*.plist' -print0 > "$inventory_path"; then
     rm -f "$inventory_path" || true
     echo "Error: LaunchAgent inventory failed; preserving worktree: ${worktree_path}" >&2
     return 1
@@ -293,7 +293,7 @@ retire_worktree_consumer_launchagents() {
       ;;
   esac
   if [[ "$quarantine_is_internal" == "0" && -d "$LAUNCH_AGENT_QUARANTINE_DIR" ]]; then
-    if ! "$FIND_BIN" "$LAUNCH_AGENT_QUARANTINE_DIR" -maxdepth 1 -type f -name '*.plist' -print0 >> "$inventory_path"; then
+    if ! "$FIND_BIN" "$LAUNCH_AGENT_QUARANTINE_DIR" -maxdepth 1 \( -type f -o -type l \) -name '*.plist' -print0 >> "$inventory_path"; then
       rm -f "$inventory_path" || true
       echo "Error: external LaunchAgent quarantine inventory failed; preserving worktree: ${worktree_path}" >&2
       return 1
@@ -314,6 +314,17 @@ retire_worktree_consumer_launchagents() {
     echo "Error: cannot remove LaunchAgent inventory; preserving worktree: ${worktree_path}" >&2
     return 1
   fi
+
+  # `find -type l` inventories the plist link itself without following symlinked
+  # directories. A readable target still goes through exact ownership checks.
+  # A broken or unreadable plist link is ambiguous and must block deletion: a
+  # launchd job may already have cached the definition before the link broke.
+  for plist_path in "${plist_paths[@]}"; do
+    if [[ -L "$plist_path" && ( ! -e "$plist_path" || ! -r "$plist_path" ) ]]; then
+      echo "Error: broken or unreadable LaunchAgent plist symlink at ${plist_path}; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+  done
 
   # A nested exact-owned plist is a durable record of an earlier ambiguous or
   # incomplete retirement. Fail before new mutations; manual resolution must

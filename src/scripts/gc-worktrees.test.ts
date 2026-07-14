@@ -204,6 +204,69 @@ afterEach(() => {
 });
 
 describePosix("gc-worktrees LaunchAgent retirement", () => {
+  it("quarantines and boots out an exact-owned symlinked plist before worktree removal", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const plistTarget = path.join(root, "owned-target.plist");
+    const ownedPlist = path.join(launchAgents, "owned-link.plist");
+    writePlistFixture(
+      plistTarget,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.symlinkSync(plistTarget, ownedPlist);
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    const quarantinedPlist = path.join(quarantine, path.basename(ownedPlist));
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(false);
+    expect(fs.existsSync(ownedPlist)).toBe(false);
+    expect(fs.lstatSync(quarantinedPlist).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(plistTarget)).toBe(true);
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).toContain("bootout");
+  });
+
+  it("fails closed on a broken plist symlink before worktree removal", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const brokenPlist = path.join(launchAgents, "broken.plist");
+    fs.symlinkSync(path.join(root, "missing-target.plist"), brokenPlist);
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.lstatSync(brokenPlist).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    expect(result.stderr).toContain("broken or unreadable LaunchAgent plist symlink");
+    expect(result.stderr).toContain("LaunchAgent retirement failed");
+  });
+
   it("retires an owned agent before pruning a registered worktree whose directory is gone", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
