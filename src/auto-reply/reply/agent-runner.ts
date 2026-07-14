@@ -83,6 +83,7 @@ import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
+  isExplicitAgentTimeoutPayload,
   REPLY_TIMEOUT_CONTINUATION_PROMPT,
   resolveReplyTimeoutContinuationConfig,
   shouldContinueAfterReplyTimeout,
@@ -565,7 +566,13 @@ export async function runReplyAgent(params: {
     recordDurableTaskAttemptStart(durableTask);
     let runOutcome = await runSingleTurn(commandBody);
     while (runOutcome.kind !== "final") {
-      if (runOutcome.runResult.meta?.aborted) {
+      const runPayloads = runOutcome.runResult.payloads ?? [];
+      const isExplicitTimeout =
+        runPayloads.length === 1 && isExplicitAgentTimeoutPayload(runPayloads[0]);
+      // The embedded runner marks provider timeouts as aborted after cancelling
+      // their work. Let the explicit timeout payload reach continuation policy;
+      // every other abort remains an immediate, silent user/system cancellation.
+      if (runOutcome.runResult.meta?.aborted && !isExplicitTimeout) {
         exhaustDurableReplyTask(durableTask);
         return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
       }
@@ -578,12 +585,12 @@ export async function runReplyAgent(params: {
       if (pendingToolTasks.size > 0) {
         await Promise.allSettled(pendingToolTasks);
       }
-      recordDurableTaskPayloadEvidence(durableTask, runOutcome.runResult.payloads);
+      recordDurableTaskPayloadEvidence(durableTask, runPayloads);
       const timeoutContinuation = shouldContinueAfterReplyTimeout({
         cfg,
         opts: runOpts,
         isHeartbeat,
-        payloads: runOutcome.runResult.payloads ?? [],
+        payloads: runPayloads,
         didSendFinalVisibleReply: didSendFinalVisibleReply.value,
         messagingToolSentTargets: runOutcome.runResult.messagingToolSentTargets,
         messageProvider: followupRun.run.messageProvider,
