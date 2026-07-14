@@ -25,7 +25,9 @@ openclaw_jarvis_release_lock_safe_text() {
 openclaw_jarvis_release_lock_process_start() {
   local pid="$1"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  /bin/ps -p "$pid" -o lstart= 2>/dev/null \
+  # ps renders lstart using the caller's locale and timezone. Pin both so a
+  # launchd owner and an interactive contender derive the same fingerprint.
+  LC_ALL=C TZ=UTC /bin/ps -p "$pid" -o lstart= 2>/dev/null \
     | /usr/bin/awk '{$1=$1; if (length($0)) print}' \
     | /usr/bin/head -n 1
 }

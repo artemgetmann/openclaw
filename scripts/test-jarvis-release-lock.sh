@@ -84,6 +84,33 @@ test_live_contention() {
   pass "live contention fails without harming owner"
 }
 
+test_locale_and_timezone_do_not_change_owner_identity() {
+  local lock_path="$TMP_DIR/locale-contention.lock"
+  local ready_path="$TMP_DIR/locale-contention.ready"
+  local release_path="$TMP_DIR/locale-contention.release"
+  local err_path="$TMP_DIR/locale-contention.err"
+  local holder_pid status
+
+  LC_ALL=fr_FR.UTF-8 TZ=Pacific/Honolulu \
+    run_holder "$lock_path" "$ready_path" "$release_path" &
+  holder_pid=$!
+  wait_for_file "$ready_path"
+
+  set +e
+  LC_ALL=C TZ=UTC OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+    bash -c 'source "$1/scripts/lib/jarvis-release-lock.sh"; openclaw_jarvis_release_lock_acquire "$1" "cross-locale-contender"' _ "$ROOT_DIR" \
+      >/dev/null 2>"$err_path"
+  status=$?
+  set -e
+
+  [[ "$status" -ne 0 ]] || fail "cross-locale contender reclaimed a live owner"
+  grep -q "another Jarvis release owner is active" "$err_path" || fail "cross-locale contention did not identify the live owner"
+  kill -0 "$holder_pid" 2>/dev/null || fail "cross-locale contention harmed the owner"
+  : >"$release_path"
+  wait "$holder_pid"
+  pass "process identity is stable across locale and timezone"
+}
+
 test_stale_recovery() {
   local lock_path="$TMP_DIR/stale.lock"
   mkdir "$lock_path"
@@ -478,6 +505,7 @@ test_release_entrypoint_wiring() {
 
 test_acquire_and_cleanup
 test_live_contention
+test_locale_and_timezone_do_not_change_owner_identity
 test_stale_recovery
 test_unknown_owner_fails_safe
 test_owner_safe_cleanup
