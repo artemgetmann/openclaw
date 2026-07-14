@@ -282,10 +282,13 @@ bash scripts/jarvis-release-worktree.sh
 proof inside the blessed release worktree. It does not allow public Jarvis
 packaging from random worktrees.
 
-For a real update to existing installations, bump `APP_VERSION` and/or
-`APP_BUILD` before packaging. Sparkle updates only when the new
-`CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
-same-build upload is just a republish and will not trigger an update.
+For a real update to existing installations, keep `APP_VERSION` at least as
+high as the installed app's marketing version and bump `APP_BUILD`. The release
+gate requires `CFBundleShortVersionString` to stay equal or increase and
+`CFBundleVersion` to increase strictly. This prevents a higher build number
+from installing an app whose About screen visibly regresses to an older version.
+For the same CalVer base, release order is `alpha.N`, `beta.N`, stable, then
+legacy numeric corrections such as `-1` and `-2`.
 
 The historical public release acceleration spec is archived at
 `docs/consumer/archive/jarvis-public-release-acceleration-spec.md`. The
