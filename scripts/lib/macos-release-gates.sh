@@ -247,6 +247,18 @@ openclaw_read_bundle_version() {
   /usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$info_plist" 2>/dev/null || printf '%s\n' ""
 }
 
+openclaw_read_bundle_marketing_version() {
+  local app_path="$1"
+  local info_plist="$app_path/Contents/Info.plist"
+
+  if [[ ! -f "$info_plist" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$info_plist" 2>/dev/null || printf '%s\n' ""
+}
+
 openclaw_compare_bundle_versions() {
   local left="$1"
   local right="$2"
@@ -275,13 +287,91 @@ openclaw_compare_bundle_versions() {
   ' "$left" "$right"
 }
 
+openclaw_parse_marketing_version() {
+  local value="$1"
+  local prerelease_rank
+
+  # Jarvis marketing versions use a numeric CalVer base with an optional
+  # alpha.N or beta.N suffix. Give stable the highest rank so a same-base
+  # prerelease can never replace an installed stable release.
+  if [[ "$value" =~ ^([0-9]+([.][0-9]+)*)[-.](alpha|beta)[.]([0-9]+)$ ]]; then
+    case "${BASH_REMATCH[3]}" in
+      alpha) prerelease_rank="0" ;;
+      beta) prerelease_rank="1" ;;
+    esac
+    printf '%s|%s|%s\n' "${BASH_REMATCH[1]}" "$prerelease_rank" "${BASH_REMATCH[4]}"
+    return 0
+  fi
+
+  # Legacy public releases use -N for same-base corrections. Corrections ship
+  # after stable, so rank them above suffix-free stable and order by N.
+  if [[ "$value" =~ ^([0-9]+([.][0-9]+)*)-([0-9]+)$ ]]; then
+    printf '%s|3|%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
+  if [[ "$value" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
+    printf '%s|2|0\n' "$value"
+    return 0
+  fi
+
+  echo "ERROR: unsupported Jarvis CFBundleShortVersionString '$value'; expected numeric CalVer with optional alpha.N, beta.N, or numeric correction suffix." >&2
+  return 1
+}
+
+openclaw_compare_marketing_versions() {
+  local left="$1"
+  local right="$2"
+  local left_parsed right_parsed
+  local left_base left_rank left_prerelease
+  local right_base right_rank right_prerelease
+  local comparison
+
+  left_parsed="$(openclaw_parse_marketing_version "$left")" || return 1
+  right_parsed="$(openclaw_parse_marketing_version "$right")" || return 1
+  IFS='|' read -r left_base left_rank left_prerelease <<<"$left_parsed"
+  IFS='|' read -r right_base right_rank right_prerelease <<<"$right_parsed"
+
+  comparison="$(openclaw_compare_bundle_versions "$left_base" "$right_base")"
+  if [[ "$comparison" != "0" ]]; then
+    printf '%s\n' "$comparison"
+    return 0
+  fi
+
+  # Only compare channel rank and prerelease number after the CalVer base
+  # matches. The generic comparator remains unchanged for CFBundleVersion.
+  openclaw_compare_bundle_versions \
+    "$left_rank.$left_prerelease" \
+    "$right_rank.$right_prerelease"
+}
+
+openclaw_macos_release_phase_requires_version_gate() {
+  local phase="$1"
+
+  case "$phase" in
+    full|local-proof|post-app-build|build-app-only|trusted-ring-fast|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|publish-sparkle-assets-only)
+      return 0
+      ;;
+    verify-public-assets-only|verify-sparkle-assets-only)
+      # Verification observes already-public assets and must not depend on the
+      # operator's currently installed Jarvis version/build.
+      return 1
+      ;;
+    *)
+      echo "ERROR: unknown macOS release phase for version gate: $phase" >&2
+      return 2
+      ;;
+  esac
+}
+
 openclaw_require_incremental_sparkle_build() {
   local built_app_path="$1"
   local installed_app_path="${2:-${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}}"
-  local built_build installed_build comparison
+  local built_version installed_version version_comparison
+  local built_build installed_build build_comparison
 
   if [[ "${ALLOW_NON_INCREMENTAL_SPARKLE_BUILD:-0}" == "1" ]]; then
-    echo "WARN: ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 bypassed installed Jarvis build comparison." >&2
+    echo "WARN: ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 bypassed installed Jarvis version/build comparison." >&2
     return 0
   fi
 
@@ -290,21 +380,52 @@ openclaw_require_incremental_sparkle_build() {
     return 0
   fi
 
+  built_version="$(openclaw_read_bundle_marketing_version "$built_app_path")"
+  installed_version="$(openclaw_read_bundle_marketing_version "$installed_app_path")"
+
+  # Build numbers drive Sparkle eligibility, but About displays the marketing
+  # version. Guard both identities so a larger build cannot visibly downgrade
+  # an installed Jarvis release through stale APP_VERSION metadata.
+  if [[ -z "$built_version" ]]; then
+    echo "ERROR: built Jarvis app is missing CFBundleShortVersionString: $built_app_path" >&2
+    exit 1
+  fi
+  if [[ -z "$installed_version" ]]; then
+    echo "ERROR: installed Jarvis app is missing CFBundleShortVersionString: $installed_app_path" >&2
+    echo "Set ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only if you intentionally want to bypass this Jarvis version/build guard." >&2
+    exit 1
+  fi
+
+  version_comparison="$(openclaw_compare_marketing_versions "$installed_version" "$built_version")"
+  if [[ "$version_comparison" == "1" ]]; then
+    cat >&2 <<EOF
+ERROR: built Jarvis CFBundleShortVersionString is older than the installed app.
+
+Built app:         $built_app_path
+Built version:     $built_version
+Installed app:     $installed_app_path
+Installed version: $installed_version
+
+A higher CFBundleVersion cannot make a marketing-version downgrade safe.
+Bump APP_VERSION to at least $installed_version, or use ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only for an intentional emergency bypass.
+EOF
+    exit 1
+  fi
+
   built_build="$(openclaw_read_bundle_version "$built_app_path")"
   installed_build="$(openclaw_read_bundle_version "$installed_app_path")"
-
   if [[ -z "$built_build" ]]; then
     echo "ERROR: built Jarvis app is missing CFBundleVersion: $built_app_path" >&2
     exit 1
   fi
   if [[ -z "$installed_build" ]]; then
     echo "ERROR: installed Jarvis app is missing CFBundleVersion: $installed_app_path" >&2
-    echo "Set ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only if you intentionally want to bypass this Sparkle update guard." >&2
+    echo "Set ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only if you intentionally want to bypass this Jarvis version/build guard." >&2
     exit 1
   fi
 
-  comparison="$(openclaw_compare_bundle_versions "$installed_build" "$built_build")"
-  if [[ "$comparison" == "0" || "$comparison" == "1" ]]; then
+  build_comparison="$(openclaw_compare_bundle_versions "$installed_build" "$built_build")"
+  if [[ "$build_comparison" == "0" || "$build_comparison" == "1" ]]; then
     cat >&2 <<EOF
 ERROR: built Jarvis CFBundleVersion is not newer than the installed app.
 
@@ -314,12 +435,14 @@ Installed app: $installed_app_path
 Installed:     $installed_build
 
 Sparkle will not offer an update unless the new CFBundleVersion is higher.
-Bump APP_BUILD/APP_VERSION, or use ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only for an intentional republish.
+Bump APP_BUILD, or use ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1 only for an intentional emergency bypass.
 EOF
     exit 1
   fi
 
   echo "sparkle_build_incremental=ok"
+  echo "sparkle_built_version=$built_version"
+  echo "sparkle_installed_version=$installed_version"
   echo "sparkle_built_build=$built_build"
   echo "sparkle_installed_build=$installed_build"
 }
