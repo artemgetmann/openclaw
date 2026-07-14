@@ -280,6 +280,20 @@ function buildErrorAgentMeta(params: {
   };
 }
 
+/**
+ * The reply runner recognizes this exact sentinel as a safe continuation trigger.
+ * Keep every no-response timeout path on this one payload so prompt-side and
+ * assistant-result timeouts cannot drift into different user-visible contracts.
+ */
+function buildExplicitTimeoutPayload() {
+  return {
+    text:
+      "Request timed out before a response was generated. " +
+      "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+    isError: true,
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -1365,6 +1379,39 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // A timeout while submitting the prompt can surface as `promptError`
+          // (usually just "aborted") before the SDK has reflected its abort
+          // state in this result. The generic prompt-error branch can therefore
+          // throw before the later no-payload timeout normalization runs.
+          //
+          // Do not broaden this to every abort: user/system cancellation and
+          // compaction-only timeouts must retain their existing silent behavior.
+          if (promptError && timedOut && !timedOutDuringCompaction) {
+            return {
+              payloads: [buildExplicitTimeoutPayload()],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant,
+                  lastTurnTotal,
+                }),
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
           if (promptError && !aborted) {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
@@ -1718,14 +1765,7 @@ export async function runEmbeddedPiAgent(
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
             return {
-              payloads: [
-                {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-                  isError: true,
-                },
-              ],
+              payloads: [buildExplicitTimeoutPayload()],
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
