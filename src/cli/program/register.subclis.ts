@@ -294,6 +294,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "browser-monitor",
+    description: "Opt-in browser page reply observer",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../browser-monitor-cli.js");
+      mod.registerBrowserMonitorCli(program);
+    },
+  },
+  {
     name: "media",
     description: "Generic local media tools",
     hasSubcommands: true,
