@@ -282,9 +282,10 @@ OPENCLAW_HOOKS_TOKEN='dedicated-hooks-secret' \
 
 `OPENCLAW_HOOKS_TOKEN` must resolve to the dedicated `hooks.token`; the command
 does not accept secrets in process arguments. Watch mode logs a bounded error
-and retries transient browser or hook failures. Without `--watch`, failures
-remain fail-fast. This observer does not scan other tabs or persist raw page
-text.
+and retries transient browser or hook failures, but stops for invalid static
+configuration or permanent hook client errors, including HTTP 401/403. Without
+`--watch`, failures remain fail-fast. This observer does not scan other tabs or
+persist raw page text.
 
 If a monitor has no explicit cursor seed such as `afterId`, the first poll
 checkpoints the current visible Telegram history and emits no wake. This avoids

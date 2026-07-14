@@ -8,9 +8,13 @@ import {
   resolveBrowserMonitorHookToken,
 } from "./reply-monitor-command.js";
 import {
+  BROWSER_REPLY_DISPATCH_TIMEOUT_MS,
   compileApprovedBrowserUrlPattern,
   loadBrowserReplyCursorStore,
   observeBrowserReplyOnce,
+  BrowserReplyObserverConfigurationError,
+  BrowserReplyObserverDispatchTimeoutError,
+  BrowserReplyObserverHookHttpError,
   resolveLocalBrowserMonitorHookUrl,
   type BrowserReplyObserverConfig,
 } from "./reply-monitor.js";
@@ -118,12 +122,70 @@ describe("browser reply observer scope", () => {
     ).rejects.toThrow("requires OPENCLAW_HOOKS_TOKEN");
   });
 
+  it("stops watch mode for permanent configuration and hook-authentication failures", async () => {
+    const permanentErrors = [
+      new BrowserReplyObserverConfigurationError("invalid selector"),
+      new BrowserReplyObserverHookHttpError(400, "browser reply monitor hook returned HTTP 400"),
+      new BrowserReplyObserverHookHttpError(401, "browser reply monitor hook returned HTTP 401"),
+      new BrowserReplyObserverHookHttpError(403, "browser reply monitor hook returned HTTP 403"),
+      new BrowserReplyObserverHookHttpError(404, "browser reply monitor hook returned HTTP 404"),
+    ];
+
+    for (const error of permanentErrors) {
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as unknown as RuntimeEnv;
+      const observeOnce = vi.fn(async () => await Promise.reject(error));
+      const wait = vi.fn(async () => undefined);
+
+      await expect(
+        browserReplyObserveCommand(commandOptions({ watch: true, maxRuns: "2" }), runtime, {
+          env: { OPENCLAW_HOOKS_TOKEN: "test-hooks-secret" },
+          observeOnce,
+          sleep: wait,
+        }),
+      ).rejects.toBe(error);
+      expect(observeOnce).toHaveBeenCalledOnce();
+      expect(wait).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retries rate-limit, server, and generic watch failures", async () => {
+    const retryableErrors = [
+      new BrowserReplyObserverHookHttpError(408, "browser reply monitor hook returned HTTP 408"),
+      new BrowserReplyObserverHookHttpError(429, "browser reply monitor hook returned HTTP 429"),
+      new BrowserReplyObserverHookHttpError(500, "browser reply monitor hook returned HTTP 500"),
+      new Error("network disconnected"),
+      new BrowserReplyObserverDispatchTimeoutError("hook dispatch timed out"),
+    ];
+
+    for (const error of retryableErrors) {
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as unknown as RuntimeEnv;
+      const observeOnce = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce({
+        cursorStorePath: "/tmp/cursor.json",
+        dispatched: false,
+        found: false,
+        matched: false,
+        stateChanged: false,
+      });
+      const wait = vi.fn(async () => undefined);
+
+      await browserReplyObserveCommand(commandOptions({ watch: true, maxRuns: "2" }), runtime, {
+        env: { OPENCLAW_HOOKS_TOKEN: "test-hooks-secret" },
+        observeOnce,
+        sleep: wait,
+      });
+      expect(observeOnce).toHaveBeenCalledTimes(2);
+      expect(wait).toHaveBeenCalledWith(25);
+      expect(runtime.error).toHaveBeenCalledOnce();
+    }
+  });
+
   it("requires an absolute fixed origin and supports path-only globs", () => {
     const pattern = compileApprovedBrowserUrlPattern("https://example.test/thread/**");
     expect(pattern.test("https://example.test/thread/one/replies")).toBe(true);
     expect(pattern.test("https://example.test.evil/thread/one/replies")).toBe(false);
     expect(() => compileApprovedBrowserUrlPattern("example.test/thread/*")).toThrow(
-      "absolute HTTP(S) URL",
+      BrowserReplyObserverConfigurationError,
     );
     expect(() => compileApprovedBrowserUrlPattern("https://*.example.test/thread/*")).toThrow(
       "wildcards only after the origin",
@@ -141,22 +203,97 @@ describe("browser reply observer scope", () => {
 });
 
 describe("browser reply observer cursor", () => {
-  it("does not wake or persist raw content for a nonmatch", async () => {
+  it("persists a hash-only first nonmatch without waking and suppresses it after restart", async () => {
     const cursorStorePath = await tempCursorPath();
     const dispatchEvent = vi.fn();
-    const result = await observeBrowserReplyOnce(baseConfig(cursorStorePath), {
+    const readPage = async () => ({
+      allowed: true,
+      found: true,
+      text: "Still waiting for a response",
+      url: "https://example.test/thread/42",
+    });
+    const first = await observeBrowserReplyOnce(baseConfig(cursorStorePath), {
       dispatchEvent,
-      readPage: async () => ({
-        allowed: true,
-        found: true,
-        text: "Still waiting for a response",
-        url: "https://example.test/thread/42",
-      }),
+      nowMs: 1_720_000_000_000,
+      readPage,
+    });
+    const second = await observeBrowserReplyOnce(baseConfig(cursorStorePath), {
+      dispatchEvent,
+      nowMs: 1_720_000_001_000,
+      readPage,
     });
 
-    expect(result).toMatchObject({ dispatched: false, matched: false, stateChanged: false });
+    expect(first).toMatchObject({ dispatched: false, matched: false, stateChanged: true });
+    expect(second).toMatchObject({ dispatched: false, matched: false, stateChanged: false });
     expect(dispatchEvent).not.toHaveBeenCalled();
-    await expect(fs.promises.access(cursorStorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    const serialized = await fs.promises.readFile(cursorStorePath, "utf8");
+    expect(serialized).not.toContain("Still waiting for a response");
+    expect(serialized).not.toContain("data-test");
+    expect(
+      Object.values((await loadBrowserReplyCursorStore(cursorStorePath)).cursors),
+    ).toHaveLength(1);
+  });
+
+  it("dispatches again when a matching DOM state returns after a nonmatch", async () => {
+    const cursorStorePath = await tempCursorPath();
+    const dispatchEvent = vi.fn(async () => ({
+      wakes: [{ monitorId: "monitor-browser-1", enqueue: { ok: true, enqueued: true } }],
+    }));
+    let text = "Replied: first";
+    const readPage = async () => ({
+      allowed: true,
+      found: true,
+      text,
+      url: "https://example.test/thread/42",
+    });
+
+    await expect(
+      observeBrowserReplyOnce(baseConfig(cursorStorePath), { dispatchEvent, readPage }),
+    ).resolves.toMatchObject({ dispatched: true, matched: true });
+    text = "Still waiting";
+    await expect(
+      observeBrowserReplyOnce(baseConfig(cursorStorePath), { dispatchEvent, readPage }),
+    ).resolves.toMatchObject({ dispatched: false, matched: false, stateChanged: true });
+    text = "Replied: first";
+    await expect(
+      observeBrowserReplyOnce(baseConfig(cursorStorePath), { dispatchEvent, readPage }),
+    ).resolves.toMatchObject({ dispatched: true, matched: true });
+
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    const serialized = await fs.promises.readFile(cursorStorePath, "utf8");
+    expect(serialized).not.toContain("Replied: first");
+    expect(serialized).not.toContain("Still waiting");
+  });
+
+  it("dispatches again when a missing selector separates identical matches", async () => {
+    const cursorStorePath = await tempCursorPath();
+    const dispatchEvent = vi.fn(async () => ({
+      wakes: [{ monitorId: "monitor-browser-1", enqueue: { ok: true, enqueued: true } }],
+    }));
+    let found = true;
+    const readPage = async () => ({
+      allowed: true,
+      found,
+      text: found ? "Replied: selector returned" : "",
+      url: "https://example.test/thread/42",
+    });
+
+    await observeBrowserReplyOnce(baseConfig(cursorStorePath), { dispatchEvent, readPage });
+    found = false;
+    await expect(
+      observeBrowserReplyOnce(baseConfig(cursorStorePath), { dispatchEvent, readPage }),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      found: false,
+      matched: false,
+      stateChanged: true,
+    });
+    found = true;
+    await observeBrowserReplyOnce(baseConfig(cursorStorePath), { dispatchEvent, readPage });
+
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    const serialized = await fs.promises.readFile(cursorStorePath, "utf8");
+    expect(serialized).not.toContain("selector returned");
   });
 
   it("persists only hashes and suppresses the same DOM state after restart", async () => {
@@ -244,6 +381,60 @@ describe("browser reply observer cursor", () => {
       observeBrowserReplyOnce(config, { dispatchEvent, readPage }),
     ).resolves.toMatchObject({ dispatched: true });
     expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a timed-out in-lock dispatch and leaves the cursor absent", async () => {
+    const cursorStorePath = await tempCursorPath();
+    let markDispatchStarted!: () => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    const dispatchEvent = vi.fn(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          markDispatchStarted();
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const observation = observeBrowserReplyOnce(baseConfig(cursorStorePath), {
+        dispatchEvent,
+        dispatchTimeoutMs: 10,
+        readPage: async () => ({
+          allowed: true,
+          found: true,
+          text: "Replied: timeout",
+          url: "https://example.test/thread/42",
+        }),
+      });
+      await dispatchStarted;
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(observation).rejects.toBeInstanceOf(BrowserReplyObserverDispatchTimeoutError);
+      expect(dispatchEvent).toHaveBeenCalledOnce();
+      await expect(fs.promises.access(cursorStorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(BROWSER_REPLY_DISPATCH_TIMEOUT_MS).toBeLessThan(30_000);
+  });
+
+  it("classifies an invalid CSS selector as permanent before cursor persistence", async () => {
+    const cursorStorePath = await tempCursorPath();
+
+    await expect(
+      observeBrowserReplyOnce(baseConfig(cursorStorePath), {
+        readPage: async () => ({
+          allowed: true,
+          configurationError: "invalid_selector",
+          found: false,
+          text: "",
+          url: "https://example.test/thread/42",
+        }),
+      }),
+    ).rejects.toBeInstanceOf(BrowserReplyObserverConfigurationError);
+    await expect(fs.promises.access(cursorStorePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("serializes concurrent cursor transactions without dropping sibling cursors", async () => {

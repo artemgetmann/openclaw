@@ -2,6 +2,8 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  BrowserReplyObserverConfigurationError,
+  BrowserReplyObserverHookHttpError,
   observeBrowserReplyOnce,
   type BrowserReplyMatchMode,
   type BrowserReplyObservationResult,
@@ -26,6 +28,21 @@ export function resolveBrowserMonitorHookToken(
 export function formatBrowserReplyPollError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return (raw.trim() || "unknown error").replace(/\s+/g, " ").slice(0, MAX_POLL_ERROR_LENGTH);
+}
+
+/**
+ * A watch loop is useful only while a later poll could plausibly recover. Keep
+ * static input mistakes and rejected hook credentials fail-fast so a supervisor
+ * does not hide an operator-actionable misconfiguration behind endless retries.
+ */
+export function isPermanentBrowserReplyObserveError(error: unknown): boolean {
+  const permanentHookClientError =
+    error instanceof BrowserReplyObserverHookHttpError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429;
+  return error instanceof BrowserReplyObserverConfigurationError || permanentHookClientError;
 }
 
 function readString(opts: Record<string, unknown>, key: string): string {
@@ -89,7 +106,7 @@ export async function browserReplyObserveCommand(
       const result = await observeOnce(config);
       runtime.log(JSON.stringify(watch ? { run, ...result } : result, null, 2));
     } catch (error) {
-      if (!watch) {
+      if (!watch || isPermanentBrowserReplyObserveError(error)) {
         throw error;
       }
       runtime.error(

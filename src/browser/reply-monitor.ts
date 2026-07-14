@@ -15,6 +15,10 @@ const CURSOR_STORE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 10, maxTimeout: 100, randomize: true },
   stale: 30_000,
 } as const;
+// Dispatch happens while the cursor transaction is held so a successful wake
+// and its cursor advance are atomic. Finish well before the lock can be
+// considered stale: another process must never steal the lock mid-request.
+export const BROWSER_REPLY_DISPATCH_TIMEOUT_MS = 25_000;
 const cursorStoreWriteLocks = new Map<string, Promise<void>>();
 
 export type BrowserReplyMatchMode = "exact" | "contains";
@@ -53,8 +57,31 @@ export type BrowserReplyObservationResult = {
   stateHash?: string;
 };
 
+/** A permanent error in observer inputs that a watch loop must not retry. */
+export class BrowserReplyObserverConfigurationError extends Error {
+  override readonly name = "BrowserReplyObserverConfigurationError";
+}
+
+/** A hook response error whose status lets watch mode distinguish retries from permanent failures. */
+export class BrowserReplyObserverHookHttpError extends Error {
+  override readonly name = "BrowserReplyObserverHookHttpError";
+
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** The in-lock hook dispatch exceeded its bounded deadline and left the cursor unchanged. */
+export class BrowserReplyObserverDispatchTimeoutError extends Error {
+  override readonly name = "BrowserReplyObserverDispatchTimeoutError";
+}
+
 type BrowserPageProbe = {
   allowed: boolean;
+  configurationError?: "invalid_selector";
   found: boolean;
   text: string;
   url: string;
@@ -66,7 +93,11 @@ type BrowserReplyObserverDeps = {
     hookToken?: string;
     hookUrl: string;
     monitorId: string;
+    /** Optional so existing injected dispatchers remain source-compatible. */
+    signal?: AbortSignal;
   }) => Promise<unknown>;
+  /** Test-only override of the bounded in-lock dispatch deadline. */
+  dispatchTimeoutMs?: number;
   nowMs?: number;
   readPage?: (
     config: BrowserReplyObserverConfig,
@@ -98,10 +129,12 @@ function globPatternToRegexSource(pattern: string): string {
 function requireBoundedValue(name: string, value: string, maxLength: number): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`Browser reply observer requires ${name}.`);
+    throw new BrowserReplyObserverConfigurationError(`Browser reply observer requires ${name}.`);
   }
   if (trimmed.length > maxLength) {
-    throw new Error(`Browser reply observer ${name} exceeds ${maxLength} characters.`);
+    throw new BrowserReplyObserverConfigurationError(
+      `Browser reply observer ${name} exceeds ${maxLength} characters.`,
+    );
   }
   return trimmed;
 }
@@ -115,14 +148,23 @@ export function compileApprovedBrowserUrlPattern(rawPattern: string): RegExp {
   const pattern = requireBoundedValue("--url-pattern", rawPattern, 2_048);
   const originMatch = /^(https?):\/\/([^/?#]+)(.*)$/.exec(pattern);
   if (!originMatch || originMatch[2].includes("*")) {
-    throw new Error(
+    throw new BrowserReplyObserverConfigurationError(
       "Browser reply observer --url-pattern must be an absolute HTTP(S) URL with wildcards only after the origin.",
     );
   }
   // URL parsing validates the fixed origin without interpreting path globs.
-  const parsedOrigin = new URL(`${originMatch[1]}://${originMatch[2]}`);
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(`${originMatch[1]}://${originMatch[2]}`);
+  } catch (err) {
+    throw new BrowserReplyObserverConfigurationError(
+      `Browser reply observer --url-pattern must use a valid URL origin: ${String(err)}`,
+    );
+  }
   if (!parsedOrigin.hostname || parsedOrigin.username || parsedOrigin.password) {
-    throw new Error("Browser reply observer --url-pattern must use a credential-free URL origin.");
+    throw new BrowserReplyObserverConfigurationError(
+      "Browser reply observer --url-pattern must use a credential-free URL origin.",
+    );
   }
   return new RegExp(`^${globPatternToRegexSource(pattern)}$`);
 }
@@ -132,9 +174,9 @@ export function resolveLocalBrowserMonitorHookUrl(rawHookUrl: string): string {
   try {
     url = new URL(rawHookUrl);
   } catch (err) {
-    throw new Error(`Browser reply observer requires a valid --hook-url: ${String(err)}`, {
-      cause: err,
-    });
+    throw new BrowserReplyObserverConfigurationError(
+      `Browser reply observer requires a valid --hook-url: ${String(err)}`,
+    );
   }
   const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
   const normalizedPath = url.pathname.replace(/\/+$/, "");
@@ -143,7 +185,7 @@ export function resolveLocalBrowserMonitorHookUrl(rawHookUrl: string): string {
     !loopbackHosts.has(url.hostname) ||
     !normalizedPath.endsWith("/monitor-event")
   ) {
-    throw new Error(
+    throw new BrowserReplyObserverConfigurationError(
       "Browser reply observer --hook-url must target the local gateway /hooks/monitor-event endpoint.",
     );
   }
@@ -229,7 +271,9 @@ async function withBrowserReplyCursorStoreLock<T>(
 function normalizeConfig(config: BrowserReplyObserverConfig): BrowserReplyObserverConfig {
   const matchMode = config.matchMode;
   if (matchMode !== "exact" && matchMode !== "contains") {
-    throw new Error("Browser reply observer --match-mode must be exact or contains.");
+    throw new BrowserReplyObserverConfigurationError(
+      "Browser reply observer --match-mode must be exact or contains.",
+    );
   }
   const normalized = {
     ...config,
@@ -275,7 +319,18 @@ async function readSelectedPage(
       fn: `() => {
         const allowed = new RegExp(${JSON.stringify(allowedUrlRegex.source)}).test(location.href);
         if (!allowed) return { allowed: false, found: false, text: "", url: location.href };
-        const node = document.querySelector(${JSON.stringify(config.selector)});
+        let node;
+        try {
+          node = document.querySelector(${JSON.stringify(config.selector)});
+        } catch {
+          return {
+            allowed: true,
+            configurationError: "invalid_selector",
+            found: false,
+            text: "",
+            url: location.href,
+          };
+        }
         const text = node ? String(node.textContent ?? "").trim().slice(0, ${MAX_OBSERVED_TEXT_LENGTH}) : "";
         return { allowed: true, found: Boolean(node), text, url: location.href };
       }`,
@@ -289,6 +344,8 @@ async function readSelectedPage(
   const probe = result as Record<string, unknown>;
   const pageProbe: BrowserPageProbe = {
     allowed: probe.allowed === true,
+    configurationError:
+      probe.configurationError === "invalid_selector" ? "invalid_selector" : undefined,
     found: probe.found === true,
     text: typeof probe.text === "string" ? probe.text.slice(0, MAX_OBSERVED_TEXT_LENGTH) : "",
     url: typeof probe.url === "string" ? probe.url : "",
@@ -306,6 +363,7 @@ async function postBrowserMonitorEvent(params: {
   hookToken?: string;
   hookUrl: string;
   monitorId: string;
+  signal?: AbortSignal;
 }): Promise<unknown> {
   const response = await fetch(params.hookUrl, {
     method: "POST",
@@ -314,15 +372,65 @@ async function postBrowserMonitorEvent(params: {
       ...(params.hookToken ? { Authorization: `Bearer ${params.hookToken}` } : {}),
     },
     body: JSON.stringify({ ...params.event, monitorId: params.monitorId }),
+    signal: params.signal,
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`browser reply monitor hook returned HTTP ${response.status}: ${body}`);
+    throw new BrowserReplyObserverHookHttpError(
+      response.status,
+      `browser reply monitor hook returned HTTP ${response.status}: ${body}`,
+    );
   }
   try {
     return JSON.parse(body) as unknown;
   } catch {
     return body;
+  }
+}
+
+function resolveDispatchTimeoutMs(configuredTimeoutMs?: number): number {
+  if (typeof configuredTimeoutMs !== "number" || !Number.isFinite(configuredTimeoutMs)) {
+    return BROWSER_REPLY_DISPATCH_TIMEOUT_MS;
+  }
+  // Test overrides may shorten the deadline but cannot erode the production
+  // headroom below the stale-lock threshold.
+  return Math.min(Math.max(1, Math.floor(configuredTimeoutMs)), BROWSER_REPLY_DISPATCH_TIMEOUT_MS);
+}
+
+async function dispatchBrowserMonitorEventWithTimeout(
+  dispatchEvent: NonNullable<BrowserReplyObserverDeps["dispatchEvent"]>,
+  params: {
+    event: MonitorEventEnvelope;
+    hookToken?: string;
+    hookUrl: string;
+    monitorId: string;
+  },
+  timeoutMs: number,
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeoutError = new BrowserReplyObserverDispatchTimeoutError(
+    `Browser reply observer hook dispatch timed out after ${timeoutMs}ms; cursor unchanged.`,
+  );
+  let abortListener: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(controller.signal.reason ?? timeoutError);
+    controller.signal.addEventListener("abort", abortListener, { once: true });
+  });
+  const timeout = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+
+  try {
+    // Race even injected dispatchers. The production fetch observes the signal,
+    // while the race guarantees a non-cooperative test/custom dispatcher cannot
+    // hold this cursor lock until its 30-second stale threshold.
+    return await Promise.race([
+      dispatchEvent({ ...params, signal: controller.signal }),
+      abortPromise,
+    ]);
+  } finally {
+    clearTimeout(timeout);
+    if (abortListener) {
+      controller.signal.removeEventListener("abort", abortListener);
+    }
   }
 }
 
@@ -355,17 +463,12 @@ export async function observeBrowserReplyOnce(
   const allowedUrlRegex = compileApprovedBrowserUrlPattern(config.urlPattern);
   const cursorStorePath = resolveBrowserReplyCursorStorePath(config.cursorStorePath);
   const probe = await (deps.readPage ?? readSelectedPage)(config, allowedUrlRegex);
-  const matched = probe.found && matchesRule(probe.text, config.matchMode, config.matchValue);
-  if (!matched) {
-    return {
-      cursorStorePath,
-      dispatched: false,
-      found: probe.found,
-      matched: false,
-      stateChanged: false,
-    };
+  if (probe.configurationError === "invalid_selector") {
+    throw new BrowserReplyObserverConfigurationError(
+      "Browser reply observer --selector must be a valid CSS selector.",
+    );
   }
-
+  const matched = probe.found && matchesRule(probe.text, config.matchMode, config.matchValue);
   const ruleHash = hash(
     JSON.stringify({
       matchMode: config.matchMode,
@@ -376,7 +479,12 @@ export async function observeBrowserReplyOnce(
       urlPattern: config.urlPattern,
     }),
   );
-  const stateHash = hash(`${ruleHash}\u0000${probe.text}`);
+  // Include selector presence so an absent node and an empty node cannot mask
+  // one another. The value is hashed before persistence; raw page text never
+  // enters the cursor store or monitor event.
+  const stateHash = hash(
+    `${ruleHash}\u0000${probe.found ? "found" : "missing"}\u0000${probe.text}`,
+  );
   const cursorKey = `monitor:${config.monitorId}:${ruleHash}`;
   return await withBrowserReplyCursorStoreLock(cursorStorePath, async () => {
     const cursorStore = await loadBrowserReplyCursorStore(cursorStorePath);
@@ -384,14 +492,34 @@ export async function observeBrowserReplyOnce(
       return {
         cursorStorePath,
         dispatched: false,
-        found: true,
-        matched: true,
+        found: probe.found,
+        matched,
         stateChanged: false,
         stateHash,
       };
     }
 
     const receivedAtMs = deps.nowMs ?? Date.now();
+    if (!matched) {
+      // A no-match is a real state transition. Persist it without a wake so a
+      // later return to the same matching DOM state is eligible to dispatch,
+      // while a restart on this same no-match remains quiet.
+      cursorStore.cursors[cursorKey] = {
+        lastStateHash: stateHash,
+        ruleHash,
+        updatedAtMs: receivedAtMs,
+      };
+      await saveBrowserReplyCursorStore(cursorStorePath, cursorStore);
+      return {
+        cursorStorePath,
+        dispatched: false,
+        found: probe.found,
+        matched: false,
+        stateChanged: true,
+        stateHash,
+      };
+    }
+
     const event: MonitorEventEnvelope = {
       triggerKind: "browser_observer",
       sourceType: "browser",
@@ -412,12 +540,16 @@ export async function observeBrowserReplyOnce(
         ruleHash,
       },
     };
-    const dispatch = await (deps.dispatchEvent ?? postBrowserMonitorEvent)({
-      event,
-      hookToken: config.hookToken,
-      hookUrl: config.hookUrl,
-      monitorId: config.monitorId,
-    });
+    const dispatch = await dispatchBrowserMonitorEventWithTimeout(
+      deps.dispatchEvent ?? postBrowserMonitorEvent,
+      {
+        event,
+        hookToken: config.hookToken,
+        hookUrl: config.hookUrl,
+        monitorId: config.monitorId,
+      },
+      resolveDispatchTimeoutMs(deps.dispatchTimeoutMs),
+    );
     if (!dispatchConfirmedWake(dispatch, config.monitorId)) {
       throw new Error(
         "Browser reply observer dispatch did not confirm a monitor wake; cursor unchanged.",
