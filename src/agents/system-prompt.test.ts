@@ -271,6 +271,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Use /goal as a recovery/control surface");
     expect(prompt).not.toContain("Scoped autonomy");
     expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
+    expect(prompt).toContain(
+      "After a send or external action whose useful next step clearly depends on a later reply/status, briefly offer once to watch and continue.",
+    );
   });
 
   it("omits monitor-specific goal guidance when monitor is unavailable", () => {
@@ -280,7 +283,21 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Goal Tools");
-    expect(prompt).not.toContain("create or reuse a durable monitor");
+    expect(prompt).not.toContain("briefly offer once to watch and continue");
+  });
+
+  it("keeps the proactive monitor cue compact", () => {
+    const promptWithMonitor = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["get_goal", "create_goal", "update_goal", "monitor"],
+    });
+    const goalToolsSection = promptWithMonitor.split("## Goal Tools")[1]?.split("\n## ")[0] ?? "";
+
+    expect(goalToolsSection).toContain("briefly offer once to watch and continue");
+    expect(goalToolsSection).toContain("Skip casual sends");
+    expect(goalToolsSection).toContain("do not start monitoring without approval");
+    expect(goalToolsSection).not.toContain("default notify with a drafted next response");
+    expect(goalToolsSection).not.toContain("buttons, settings, or commands");
   });
 
   it("adds reasoning tag hint when enabled", () => {
