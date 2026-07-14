@@ -813,17 +813,20 @@ async function withChromeDevToolsPageSession<T>(params: {
   profileName: string;
   userDataDir?: string;
   targetId: string;
+  wsUrl?: string;
   timeoutMs?: number;
   run: (
     send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
   ) => Promise<T>;
 }): Promise<T> {
   const timeoutMs = Math.max(1_000, params.timeoutMs ?? CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
-  const wsUrl = await resolveChromeMcpPageWebSocketUrl({
-    profileName: params.profileName,
-    userDataDir: params.userDataDir,
-    targetId: params.targetId,
-  });
+  const wsUrl =
+    params.wsUrl ??
+    (await resolveChromeMcpPageWebSocketUrl({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+    }));
   if (!wsUrl) {
     throw new Error(
       "existing-session CDP access requires a per-tab DevTools websocket; retry after Chrome exposes remote debugging for this profile.",
@@ -1153,9 +1156,8 @@ function createChromeMcpPdfNetworkCapture(params: {
 }
 
 function createChromeMcpTriggeredPdfResourceCapture(params: {
-  profileName: string;
-  userDataDir?: string;
-  targetId: string;
+  browserHttpUrl: string;
+  beforeWebSocketUrls: Set<string>;
   timeoutMs: number;
 }) {
   let cancelled = false;
@@ -1183,35 +1185,47 @@ function createChromeMcpTriggeredPdfResourceCapture(params: {
     }
     started = true;
 
-    // Chrome replaces the original DevTools target when a navigation enters
-    // its built-in PDF viewer. Re-resolve the logical tab on each poll instead
-    // of assuming the pre-click WebSocket can still expose the viewer cache.
+    // Chrome can replace the clicked DevTools target when a navigation enters
+    // its built-in PDF viewer. Inspect only targets created after the click so
+    // an older PDF tab with the same response URL cannot satisfy this capture.
     void (async () => {
       const deadline = Date.now() + params.timeoutMs;
       while (!cancelled && Date.now() <= deadline) {
         try {
-          const resource = await readChromeMcpPdfResource({
-            profileName: params.profileName,
-            userDataDir: params.userDataDir,
-            targetId: params.targetId,
-            timeoutMs: Math.min(2_000, Math.max(1_000, deadline - Date.now())),
-          });
-          if (cancelled) {
-            return;
+          const newTargets = (await fetchChromeCdpTargets(params.browserHttpUrl)).filter(
+            (target) =>
+              target.type === "page" &&
+              typeof target.webSocketDebuggerUrl === "string" &&
+              target.webSocketDebuggerUrl.trim() &&
+              !params.beforeWebSocketUrls.has(target.webSocketDebuggerUrl),
+          );
+          for (const target of newTargets) {
+            if (cancelled || !target.webSocketDebuggerUrl) {
+              return;
+            }
+            try {
+              const resource = await readChromeMcpPdfResourceFromWebSocket({
+                wsUrl: target.webSocketDebuggerUrl,
+                timeoutMs: Math.min(2_000, Math.max(1_000, deadline - Date.now())),
+              });
+              if (cancelled) {
+                return;
+              }
+              resolvePdf?.({
+                ...resource,
+                suggestedFilename: inferPdfResponseFilename({
+                  url: resource.url,
+                  headers: {},
+                  mimeType: "application/pdf",
+                }),
+              });
+              return;
+            } catch {
+              // Newly created non-PDF tabs are irrelevant to this race.
+            }
           }
-          resolvePdf?.({
-            ...resource,
-            suggestedFilename: inferPdfResponseFilename({
-              url: resource.url,
-              headers: {},
-              mimeType: "application/pdf",
-            }),
-          });
-          return;
         } catch {
-          // The clicked tab can briefly disappear while Chrome swaps in the
-          // viewer target. Retry until either bytes appear or the main wait
-          // reaches its caller-owned timeout.
+          // The target list can be unavailable while Chrome swaps viewers.
         }
         if (cancelled || Date.now() >= deadline) {
           return;
@@ -1241,6 +1255,46 @@ export const chromeMcpPdfResourceInternalsForTest = {
   writeCapturedPdfResponse,
 };
 
+async function readChromeMcpPdfResourceWithSend(
+  send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
+): Promise<ChromeMcpPdfResourceResult> {
+  const resourceTreeResult = asRecord(await send("Page.getResourceTree"));
+  const candidates = collectPdfResourceCandidates(resourceTreeResult?.frameTree);
+  if (candidates.length === 0) {
+    throw new Error("No application/pdf resource is loaded in the current tab");
+  }
+
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const contentResult = await send("Page.getResourceContent", {
+        frameId: candidate.frameId,
+        url: candidate.url,
+      });
+      const buffer = decodeChromeResourceContent(contentResult);
+      assertNativePdfBuffer(buffer, candidate.url);
+      return { url: candidate.url, buffer };
+    } catch (err) {
+      errors.push(`${candidate.url}: ${String(err instanceof Error ? err.message : err)}`);
+    }
+  }
+
+  throw new Error(`Failed to read native PDF resource from current tab: ${errors.join("; ")}`);
+}
+
+async function readChromeMcpPdfResourceFromWebSocket(params: {
+  wsUrl: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpPdfResourceResult> {
+  return await withChromeDevToolsPageSession({
+    profileName: "",
+    targetId: "",
+    wsUrl: params.wsUrl,
+    timeoutMs: params.timeoutMs,
+    run: readChromeMcpPdfResourceWithSend,
+  });
+}
+
 export async function readChromeMcpPdfResource(params: {
   profileName: string;
   userDataDir?: string;
@@ -1252,30 +1306,7 @@ export async function readChromeMcpPdfResource(params: {
     userDataDir: params.userDataDir,
     targetId: params.targetId,
     timeoutMs: params.timeoutMs,
-    run: async (send) => {
-      const resourceTreeResult = asRecord(await send("Page.getResourceTree"));
-      const candidates = collectPdfResourceCandidates(resourceTreeResult?.frameTree);
-      if (candidates.length === 0) {
-        throw new Error("No application/pdf resource is loaded in the current tab");
-      }
-
-      const errors: string[] = [];
-      for (const candidate of candidates) {
-        try {
-          const contentResult = await send("Page.getResourceContent", {
-            frameId: candidate.frameId,
-            url: candidate.url,
-          });
-          const buffer = decodeChromeResourceContent(contentResult);
-          assertNativePdfBuffer(buffer, candidate.url);
-          return { url: candidate.url, buffer };
-        } catch (err) {
-          errors.push(`${candidate.url}: ${String(err instanceof Error ? err.message : err)}`);
-        }
-      }
-
-      throw new Error(`Failed to read native PDF resource from current tab: ${errors.join("; ")}`);
-    },
+    run: readChromeMcpPdfResourceWithSend,
   });
 }
 
@@ -1642,14 +1673,9 @@ async function runChromeMcpDownloadSession(params: {
     send: async (method, commandParams) => await send(method, commandParams),
     timeoutMs,
   });
-  const triggeredPdfResourceCapture = params.trigger
-    ? createChromeMcpTriggeredPdfResourceCapture({
-        profileName: params.profileName,
-        userDataDir: params.userDataDir,
-        targetId: params.targetId,
-        timeoutMs,
-      })
-    : undefined;
+  let triggeredPdfResourceCapture:
+    | ReturnType<typeof createChromeMcpTriggeredPdfResourceCapture>
+    | undefined;
 
   ws.on("message", (data: RawData) => {
     let message: CdpEvent;
@@ -1734,6 +1760,28 @@ async function runChromeMcpDownloadSession(params: {
       behavior: "allow",
       downloadPath: downloadDir,
     });
+
+    // Capture the target set at the last possible moment before the click.
+    // Chrome's PDF viewer may replace the clicked target, and older viewer tabs
+    // can share the same URL, so URL matching cannot identify this download.
+    if (params.trigger) {
+      const browserHttpUrl = await resolveChromeMcpBrowserHttpUrl(
+        params.profileName,
+        params.userDataDir,
+      );
+      if (browserHttpUrl) {
+        const beforeWebSocketUrls = new Set(
+          (await fetchChromeCdpTargets(browserHttpUrl))
+            .map((target) => target.webSocketDebuggerUrl)
+            .filter((url): url is string => typeof url === "string" && Boolean(url.trim())),
+        );
+        triggeredPdfResourceCapture = createChromeMcpTriggeredPdfResourceCapture({
+          browserHttpUrl,
+          beforeWebSocketUrls,
+          timeoutMs,
+        });
+      }
+    }
 
     await params.trigger?.();
     triggeredPdfResourceCapture?.start();

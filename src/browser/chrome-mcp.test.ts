@@ -1336,7 +1336,7 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("re-resolves a tab when Chrome replaces it with the PDF viewer", async () => {
+  it("captures the new PDF viewer when an older viewer has the same URL", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
     const downloadDir = path.join(tempDir, "downloads");
     const finalPath = path.join(downloadDir, "statement.pdf");
@@ -1403,6 +1403,11 @@ describe("chrome MCP page parsing", () => {
           res.setHeader("content-type", "application/json");
           res.end(
             JSON.stringify([
+              {
+                type: "page",
+                url: responseUrl,
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/old-viewer`,
+              },
               {
                 type: "page",
                 url: viewerReady ? responseUrl : "https://example.com/statement",
