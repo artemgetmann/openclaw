@@ -15,6 +15,7 @@ source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
@@ -1123,6 +1124,10 @@ case "$PACKAGE_PHASE" in
 esac
 
 openclaw_require_jarvis_release_worktree "$ROOT_DIR"
+
+# Every package phase can update release receipts or the manifest, including
+# public verification. Keep one owner across the whole delegated package run.
+openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"
 
 if [[ "$PACKAGE_PHASE" == "local-proof" ]]; then
   SKIP_NOTARIZE=1
