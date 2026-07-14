@@ -57,6 +57,7 @@ function writePlistFixture(filePath: string, fields: Record<string, string>) {
 function makeToolFixtures(root: string) {
   const binDir = path.join(root, "bin");
   const launchctlLog = path.join(root, "launchctl.log");
+  const realGit = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim();
   fs.mkdirSync(binDir, { recursive: true });
 
   const plistBuddy = path.join(binDir, "plistbuddy");
@@ -110,10 +111,27 @@ fi
 if [[ "$1" == "bootout" && "\${OPENCLAW_TEST_LAUNCHCTL_BOOTOUT_FAIL:-0}" == "1" ]]; then
   exit 1
 fi
+if [[ "$1" == "bootstrap" && ! -f "\${3:-}" ]]; then
+  exit 1
+fi
 `,
   );
 
-  return { launchctl, launchctlLog, plistBuddy };
+  // Delegate every Git operation except the one failure injected by the
+  // rollback test. This keeps the fixture behavior identical to real Git.
+  const git = path.join(binDir, "git");
+  writeExecutable(
+    git,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${OPENCLAW_TEST_GIT_REMOVE_FAIL:-0}" == "1" && "\${1:-}" == "worktree" && "\${2:-}" == "remove" ]]; then
+  exit 71
+fi
+exec "${realGit}" "$@"
+`,
+  );
+
+  return { binDir, launchctl, launchctlLog, plistBuddy };
 }
 
 function runGc(
@@ -126,6 +144,7 @@ function runGc(
     quarantine: string;
     launchctlBootoutFails?: boolean;
     launchctlPrintMode?: "loaded" | "absent" | "ambiguous-error";
+    gitRemoveFails?: boolean;
   },
 ) {
   return spawnSync("bash", [path.join(repoRoot, "scripts/gc-worktrees.sh"), "--auto"], {
@@ -133,12 +152,14 @@ function runGc(
     env: {
       ...process.env,
       HOME: env.home,
+      PATH: `${path.dirname(env.launchctl)}:${process.env.PATH ?? ""}`,
       OPENCLAW_LAUNCHCTL_BIN: env.launchctl,
       OPENCLAW_PLISTBUDDY_BIN: env.plistBuddy,
       OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR: env.launchAgents,
       OPENCLAW_WORKTREE_GC_QUARANTINE_DIR: env.quarantine,
       OPENCLAW_TEST_LAUNCHCTL_BOOTOUT_FAIL: env.launchctlBootoutFails ? "1" : "0",
       OPENCLAW_TEST_LAUNCHCTL_PRINT_MODE: env.launchctlPrintMode ?? "loaded",
+      OPENCLAW_TEST_GIT_REMOVE_FAIL: env.gitRemoveFails ? "1" : "0",
     },
     encoding: "utf8",
   });
@@ -390,6 +411,42 @@ describe("gc-worktrees LaunchAgent retirement", () => {
       "launchctl print failed without service-not-found confirmation",
     );
     expect(result.stderr).toContain("restored plist and preserved worktree");
+  });
+
+  it("rolls back retirement and fails when Git cannot remove the worktree", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      gitRemoveFails: true,
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.existsSync(ownedPlist)).toBe(true);
+    expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(false);
+    const launchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
+    expect(launchctlLog).toContain("source_present=0 bootout");
+    expect(launchctlLog).toContain("bootstrap");
+    expect(result.stderr).toContain("git worktree remove failed");
+    expect(result.stderr).toContain("Rolled back retired LaunchAgents");
+    expect(result.stderr).toContain("preserved because Git removal failed");
   });
 
   it("still releases a claimed Telegram tester token before removing the worktree", () => {

@@ -148,6 +148,84 @@ launchctl_print_confirms_service_absent() {
   [[ "$output" == *"Could not find service \"${label}\""* ]]
 }
 
+# One GC iteration owns one retirement transaction. Parallel arrays preserve
+# paths without delimiter parsing, and loaded-state records whether rollback
+# must bootstrap the service after restoring its plist.
+declare -a retired_launchagent_sources=()
+declare -a retired_launchagent_destinations=()
+declare -a retired_launchagent_labels=()
+declare -a retired_launchagent_was_loaded=()
+
+reset_launchagent_retirement_record() {
+  retired_launchagent_sources=()
+  retired_launchagent_destinations=()
+  retired_launchagent_labels=()
+  retired_launchagent_was_loaded=()
+}
+
+record_retired_launchagent() {
+  retired_launchagent_sources+=("$1")
+  retired_launchagent_destinations+=("$2")
+  retired_launchagent_labels+=("$3")
+  retired_launchagent_was_loaded+=("$4")
+}
+
+# Roll back in reverse retirement order. A service that was loaded before GC
+# is bootstrapped only after its original plist is safely restored. A service
+# confirmed absent stays absent, preserving its pre-GC runtime state.
+rollback_retired_launchagents() {
+  local worktree_path="$1"
+  local rollback_failed=0
+  local index=0
+  local plist_path=""
+  local destination=""
+  local label=""
+  local was_loaded=0
+
+  [[ "${#retired_launchagent_sources[@]}" -gt 0 ]] || return 0
+
+  # Git removal is expected to leave the lane intact on failure, but do not
+  # assume that after an interrupted or partially completed removal. Reloading
+  # KeepAlive against a missing entrypoint would recreate the original incident.
+  if [[ ! -d "$worktree_path" ]]; then
+    echo "Error: cannot roll back LaunchAgents because the worktree directory is missing; quarantined plists remain disabled: ${worktree_path}" >&2
+    return 1
+  fi
+
+  for ((index = ${#retired_launchagent_sources[@]} - 1; index >= 0; index--)); do
+    plist_path="${retired_launchagent_sources[$index]}"
+    destination="${retired_launchagent_destinations[$index]}"
+    label="${retired_launchagent_labels[$index]}"
+    was_loaded="${retired_launchagent_was_loaded[$index]}"
+
+    # Never overwrite a plist that appeared after retirement. The worktree is
+    # already being preserved, so leaving both copies is the safest outcome.
+    if [[ -e "$plist_path" || -L "$plist_path" ]]; then
+      echo "Error: rollback refused to overwrite ${plist_path}; quarantined copy remains at ${destination}" >&2
+      rollback_failed=1
+      continue
+    fi
+    if ! mv "$destination" "$plist_path"; then
+      echo "Error: rollback could not restore ${label} from ${destination}" >&2
+      rollback_failed=1
+      continue
+    fi
+
+    if [[ "$was_loaded" == "1" ]] && ! "$LAUNCHCTL_BIN" bootstrap "gui/$(id -u)" "$plist_path" >/dev/null 2>&1; then
+      echo "Error: rollback restored ${label} plist but could not reload its previously loaded service" >&2
+      rollback_failed=1
+    fi
+  done
+
+  if [[ "$rollback_failed" == "1" ]]; then
+    echo "Error: LaunchAgent rollback incomplete; preserved worktree: ${worktree_path}" >&2
+    return 1
+  fi
+  if [[ "${#retired_launchagent_sources[@]}" -gt 0 ]]; then
+    echo "Rolled back retired LaunchAgents for preserved worktree: ${worktree_path}" >&2
+  fi
+}
+
 # Quarantine and boot out only gateway plists positively owned by this
 # worktree. Moving the plist is the first mutation: if quarantine fails, the
 # service stays exactly as it was and worktree deletion is blocked. Once moved,
@@ -161,6 +239,7 @@ retire_worktree_consumer_launchagents() {
   local destination=""
   local launchctl_target=""
   local launchctl_print_output=""
+  local was_loaded=0
   local found=0
 
   [[ -d "$LAUNCH_AGENTS_DIR" ]] || return 0
@@ -196,7 +275,9 @@ retire_worktree_consumer_launchagents() {
     # loop. Only an explicit service-not-found result proves bootout is
     # unnecessary; every other print failure is ambiguous and fails closed.
     launchctl_target="gui/$(id -u)/${label}"
+    was_loaded=0
     if launchctl_print_output="$("$LAUNCHCTL_BIN" print "$launchctl_target" 2>&1)"; then
+      was_loaded=1
       if ! "$LAUNCHCTL_BIN" bootout "$launchctl_target" >/dev/null 2>&1; then
         restore_quarantined_launchagent \
           "$plist_path" "$destination" "$label" "$worktree_path" "could not boot out loaded service"
@@ -207,6 +288,7 @@ retire_worktree_consumer_launchagents() {
         "$plist_path" "$destination" "$label" "$worktree_path" "launchctl print failed without service-not-found confirmation"
       return 1
     fi
+    record_retired_launchagent "$plist_path" "$destination" "$label" "$was_loaded"
     echo "Quarantined worktree LaunchAgent: ${label} -> ${destination}"
   done < <(find "$LAUNCH_AGENTS_DIR" -maxdepth 1 -type f -name '*.plist' -print0)
 
@@ -486,11 +568,14 @@ done
 
 if [[ "$AUTO" == "1" ]]; then
   cleanup_failed_count=0
+  remove_failed_count=0
   for path in "${remove_paths[@]}"; do
     # Retire launchd ownership before either the tester runtime release or Git
     # deletion. If quarantine fails, leave the worktree intact; deleting its
     # entrypoint would turn a recoverable stale service into a KeepAlive loop.
+    reset_launchagent_retirement_record
     if ! retire_worktree_consumer_launchagents "$path"; then
+      rollback_retired_launchagents "$path" || true
       cleanup_failed_count=$((cleanup_failed_count + 1))
       continue
     fi
@@ -505,6 +590,10 @@ if [[ "$AUTO" == "1" ]]; then
 
     if git worktree remove --force "$path"; then
       removed_count=$((removed_count + 1))
+    else
+      echo "Error: git worktree remove failed; preserving worktree: ${path}" >&2
+      rollback_retired_launchagents "$path" || true
+      remove_failed_count=$((remove_failed_count + 1))
     fi
   done
 else
@@ -514,5 +603,10 @@ fi
 echo "GC complete: ${prunable_count} prunable, ${merged_count} merged (${removed_count} removed), ${detached_count} detached, ${active_count} active"
 if [[ "${cleanup_failed_count:-0}" -gt 0 ]]; then
   echo "Error: ${cleanup_failed_count} worktree(s) preserved because LaunchAgent retirement failed." >&2
+fi
+if [[ "${remove_failed_count:-0}" -gt 0 ]]; then
+  echo "Error: ${remove_failed_count} worktree(s) preserved because Git removal failed." >&2
+fi
+if [[ "${cleanup_failed_count:-0}" -gt 0 || "${remove_failed_count:-0}" -gt 0 ]]; then
   exit 1
 fi
