@@ -497,10 +497,10 @@ async function runManagedOpenAiAudioEntry(params: {
     },
   });
   const payload = unwrapManagedProviderPayload(response, "openai");
-  const text = typeof payload.text === "string" ? payload.text.trim() : "";
-  if (!text) {
+  if (typeof payload.text !== "string") {
     throw new Error("Jarvis managed audio transcription returned no text");
   }
+  const text = payload.text.trim();
   const returnedModel = typeof payload.model === "string" ? payload.model : model;
   return {
     kind: "audio.transcription",

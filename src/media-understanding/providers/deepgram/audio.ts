@@ -3,7 +3,7 @@ import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postTranscriptionRequest,
-  requireTranscriptionText,
+  requireTranscriptionTextField,
 } from "../shared.js";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
@@ -18,7 +18,7 @@ type DeepgramTranscriptResponse = {
   results?: {
     channels?: Array<{
       alternatives?: Array<{
-        transcript?: string;
+        transcript?: unknown;
       }>;
     }>;
   };
@@ -68,7 +68,7 @@ export async function transcribeDeepgramAudio(
     await assertOkOrThrowHttpError(res, "Audio transcription failed");
 
     const payload = (await res.json()) as DeepgramTranscriptResponse;
-    const transcript = requireTranscriptionText(
+    const transcript = requireTranscriptionTextField(
       payload.results?.channels?.[0]?.alternatives?.[0]?.transcript,
       "Audio transcription response missing transcript",
     );

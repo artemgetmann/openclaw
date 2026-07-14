@@ -15,7 +15,26 @@ vi.mock("../memory/remote-http.js", async (importOriginal) => {
 });
 
 describe("runCapability managed audio", () => {
-  it("routes managed Jarvis audio through the backend without a local OpenAI key", async () => {
+  it.each([
+    {
+      name: "routes a non-empty transcript through the backend",
+      payload: { text: "wake up my friend", model: "gpt-4o-mini-transcribe" },
+      expectedOutcome: "success",
+      expectedText: "wake up my friend",
+    },
+    {
+      name: "preserves an explicit empty transcript as successful silence",
+      payload: { text: "", model: "gpt-4o-mini-transcribe" },
+      expectedOutcome: "success",
+      expectedText: "",
+    },
+    {
+      name: "fails when the backend omits the transcript field",
+      payload: { model: "gpt-4o-mini-transcribe" },
+      expectedOutcome: "skipped",
+      expectedText: undefined,
+    },
+  ] as const)("$name", async ({ payload, expectedOutcome, expectedText }) => {
     const priorOpenAi = process.env.OPENAI_API_KEY;
     const priorNonModel = process.env.OPENAI_NON_MODEL_API_KEY;
     delete process.env.OPENAI_API_KEY;
@@ -38,10 +57,7 @@ describe("runCapability managed audio", () => {
             ok: true,
             result: {
               provider: "openai",
-              payload: {
-                text: "wake up my friend",
-                model: "gpt-4o-mini-transcribe",
-              },
+              payload,
             },
           }),
           { status: 200 },
@@ -84,13 +100,18 @@ describe("runCapability managed audio", () => {
           providerRegistry: buildProviderRegistry(),
         });
 
-        expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]).toMatchObject({
-          kind: "audio.transcription",
-          provider: "openai",
-          model: "gpt-4o-mini-transcribe",
-          text: "wake up my friend",
-        });
+        expect(result.decision.outcome).toBe(expectedOutcome);
+        if (expectedOutcome === "success") {
+          expect(result.outputs[0]).toMatchObject({
+            kind: "audio.transcription",
+            provider: "openai",
+            model: "gpt-4o-mini-transcribe",
+            text: expectedText,
+          });
+          return;
+        }
+        expect(result.outputs).toEqual([]);
+        expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain("returned no text");
       });
     } finally {
       fetchResponse.mockReset();
