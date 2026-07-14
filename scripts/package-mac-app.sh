@@ -866,8 +866,9 @@ ensure_consumer_uv_runtime() {
 resolve_matrix_crypto_package_root() {
   local package_root=""
 
-  # pnpm can hoist the Matrix package, so resolve the installed package path
-  # instead of assuming a flat repo-local node_modules layout.
+  # The Matrix extension owns this dependency. Resolve from its manifest so
+  # pnpm's workspace-local node_modules link is visible even when the package
+  # is not hoisted into the repo root.
   package_root="$(
     "$VALIDATED_NODE_BIN" -e '
       const path = require("node:path");
@@ -884,7 +885,7 @@ resolve_matrix_crypto_package_root() {
         );
         process.exit(1);
       }
-    ' "$ROOT_DIR/package.json"
+    ' "$ROOT_DIR/extensions/matrix/package.json"
   )"
 
   printf '%s\n' "$package_root"
