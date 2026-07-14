@@ -151,6 +151,49 @@ struct TelegramSetupBootstrapTests {
         #expect(!ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(unrelatedError))
     }
 
+    @Test func `enabled consumer-local telegram bootstrap restarts the managed gateway`() async {
+        var restartCalls = 0
+
+        let restarted = await ChannelsStore.restartConsumerGatewayForTelegramBootstrapIfNeeded(
+            enabled: true,
+            isConsumer: true,
+            isPreview: false,
+            connectionMode: .local,
+            restart: { restartCalls += 1 })
+
+        #expect(restarted)
+        #expect(restartCalls == 1)
+    }
+
+    @Test func `staged preview and remote telegram bootstrap do not restart the managed gateway`() async {
+        var restartCalls = 0
+        let restart: () async -> Void = { restartCalls += 1 }
+
+        let staged = await ChannelsStore.restartConsumerGatewayForTelegramBootstrapIfNeeded(
+            enabled: false,
+            isConsumer: true,
+            isPreview: false,
+            connectionMode: .local,
+            restart: restart)
+        let preview = await ChannelsStore.restartConsumerGatewayForTelegramBootstrapIfNeeded(
+            enabled: true,
+            isConsumer: true,
+            isPreview: true,
+            connectionMode: .local,
+            restart: restart)
+        let remote = await ChannelsStore.restartConsumerGatewayForTelegramBootstrapIfNeeded(
+            enabled: true,
+            isConsumer: true,
+            isPreview: false,
+            connectionMode: .remote,
+            restart: restart)
+
+        #expect(!staged)
+        #expect(!preview)
+        #expect(!remote)
+        #expect(restartCalls == 0)
+    }
+
     @Test func `telegram replay status hides local gateway plumbing`() async throws {
         await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
@@ -350,10 +393,10 @@ struct TelegramSetupBootstrapTests {
         #expect(payload["chatId"] as? Int == 303)
     }
 
-    @Test func `managed telegram client decodes start and connected status responses`() async throws {
-        let client = try JarvisTelegramManagedBotClient(
+    @Test func `managed telegram client decodes fractional expiry timestamps`() async throws {
+        let client = JarvisTelegramManagedBotClient(
             configuration: .init(
-                baseURL: #require(URL(string: "https://jarvis.example.test")),
+                baseURL: try #require(URL(string: "https://jarvis.example.test")),
                 accessToken: "server-token",
                 accountAccessToken: "jat_account_token"),
             transport: { request in
@@ -365,7 +408,7 @@ struct TelegramSetupBootstrapTests {
                       "setupId": "tgms_test",
                       "approvalUrl": "https://t.me/JarvisManagerBot?start=abc",
                       "suggestedBotUsername": "jarvis_test_bot",
-                      "expiresAt": "2026-05-18T12:00:00Z",
+                      "expiresAt": "2026-05-18T12:00:00.987654Z",
                       "status": "pending"
                     }
                     """
@@ -373,7 +416,7 @@ struct TelegramSetupBootstrapTests {
                     body = """
                     {
                       "setupId": "tgms_test",
-                      "expiresAt": "2026-05-18T12:00:00Z",
+                      "expiresAt": "2026-05-18T12:00:00.987654Z",
                       "status": "connected",
                       "suggestedBotUsername": "jarvis_test_bot",
                       "botId": 777000,
@@ -403,6 +446,44 @@ struct TelegramSetupBootstrapTests {
         #expect(started.approvalUrl == "https://t.me/JarvisManagerBot?start=abc")
         #expect(connected.status == "connected")
         #expect(connected.managedChildBotToken == "777000:test-child-token")
+    }
+
+    @Test func `managed telegram client reports a friendly error for malformed expiry timestamps`() async throws {
+        let client = JarvisTelegramManagedBotClient(
+            configuration: .init(
+                baseURL: try #require(URL(string: "https://jarvis.example.test")),
+                accessToken: "server-token",
+                accountAccessToken: "jat_account_token"),
+            transport: { request in
+                let body = """
+                {
+                  "setupId": "tgms_fractional",
+                  "approvalUrl": "https://t.me/JarvisManagerBot?start=abc",
+                  "suggestedBotUsername": "jarvis_test_bot",
+                  "expiresAt": "not-an-iso-8601-date",
+                  "status": "pending"
+                }
+                """
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil)
+                else {
+                    throw URLError(.badServerResponse)
+                }
+                return (Data(body.utf8), response)
+            })
+
+        do {
+            _ = try await client.start(suggestedBotName: "Jarvis Assistant")
+            Issue.record("Expected a malformed expiry timestamp to fail decoding")
+        } catch {
+            let expected =
+                "Jarvis bot setup received an unexpected response. Please try again in a moment."
+            #expect(error.localizedDescription == expected)
+        }
     }
 
     @Test func `managed telegram start requires activated Jarvis account token`() async throws {

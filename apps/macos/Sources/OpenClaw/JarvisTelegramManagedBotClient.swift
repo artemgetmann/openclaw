@@ -23,6 +23,7 @@ enum JarvisTelegramManagedBotClientError: LocalizedError {
     case missingBaseURL
     case missingAccessToken
     case invalidURL
+    case invalidResponse
     case http(String)
     case transport(String)
 
@@ -34,6 +35,11 @@ enum JarvisTelegramManagedBotClientError: LocalizedError {
             return "Jarvis bot setup is not configured for this build."
         case .invalidURL:
             return "Jarvis bot setup could not build a valid request."
+        case .invalidResponse:
+            // Do not surface Foundation's decoding internals to a first-run
+            // user. The backend owns this contract and retrying is the only
+            // useful customer action while the app/backend versions converge.
+            return "Jarvis bot setup received an unexpected response. Please try again in a moment."
         case let .http(message):
             return message
         case let .transport(message):
@@ -150,6 +156,8 @@ struct JarvisTelegramManagedBotClient: Sendable {
             return try decoder.decode(Response.self, from: data)
         } catch let error as JarvisTelegramManagedBotClientError {
             throw error
+        } catch is DecodingError {
+            throw JarvisTelegramManagedBotClientError.invalidResponse
         } catch {
             throw JarvisTelegramManagedBotClientError.transport(error.localizedDescription)
         }
