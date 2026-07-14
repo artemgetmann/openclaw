@@ -26,6 +26,16 @@ wait_for_file() {
   [[ -f "$path" ]] || fail "timed out waiting for $path"
 }
 
+wait_for_absence() {
+  local path="$1"
+  local attempt=0
+  while [[ -e "$path" && "$attempt" -lt 100 ]]; do
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  [[ ! -e "$path" ]] || fail "timed out waiting for removal of $path"
+}
+
 run_holder() {
   local lock_path="$1"
   local ready_path="$2"
@@ -80,6 +90,7 @@ test_stale_recovery() {
   {
     printf 'pid=99999999\n'
     printf 'token=dead-owner\n'
+    printf 'process_start=Mon Jan 1 00:00:00 2001\n'
     printf 'context=abandoned-release\n'
   } >"$lock_path/owner"
 
@@ -204,6 +215,146 @@ test_repository_paths_are_isolated() {
   pass "stable lock paths ignore TMPDIR and isolate repositories"
 }
 
+test_pid_start_identity_controls_recovery() {
+  local reused_lock="$TMP_DIR/reused-pid.lock"
+  local unknown_lock="$TMP_DIR/missing-start.lock"
+  local err_path="$TMP_DIR/missing-start.err"
+  local status
+
+  mkdir "$reused_lock"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'token=reused-pid-owner\n'
+    printf 'process_start=Mon Jan 1 00:00:00 2001\n'
+    printf 'context=reused-pid-fixture\n'
+  } >"$reused_lock/owner"
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$reused_lock" \
+    bash -c 'source "$1/scripts/lib/jarvis-release-lock.sh"; openclaw_jarvis_release_lock_acquire "$1" "reused-pid-test"' _ "$ROOT_DIR" \
+      >/dev/null
+  [[ ! -e "$reused_lock" ]] || fail "mismatched PID fingerprint blocked stale recovery"
+
+  mkdir "$unknown_lock"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'token=unknown-start-owner\n'
+    printf 'context=missing-start-fixture\n'
+  } >"$unknown_lock/owner"
+  set +e
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$unknown_lock" \
+    bash -c 'source "$1/scripts/lib/jarvis-release-lock.sh"; openclaw_jarvis_release_lock_acquire "$1" "missing-start-test"' _ "$ROOT_DIR" \
+      >/dev/null 2>"$err_path"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 && -d "$unknown_lock" ]] || fail "missing process identity did not fail safely"
+  grep -q "owner identity is missing or unreadable" "$err_path" || fail "missing identity error was not actionable"
+  rm -rf "$unknown_lock"
+  pass "PID reuse recovers by fingerprint and missing identity fails safe"
+}
+
+test_interrupted_transfer_preserves_parent() {
+  local lock_path="$TMP_DIR/interrupted-transfer.lock"
+  local ready_path="$TMP_DIR/interrupted-transfer.ready"
+  local child_done_path="$TMP_DIR/interrupted-transfer.child-done"
+  local child_pid_path="$TMP_DIR/interrupted-transfer.child-pid"
+  local parent_release_path="$TMP_DIR/interrupted-transfer.parent-release"
+  local contender_err="$TMP_DIR/interrupted-transfer.contender.err"
+  local parent_pid child_pid status owner_pid
+
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" bash -c '
+    set -euo pipefail
+    source "$1/scripts/lib/jarvis-release-lock.sh"
+    openclaw_jarvis_release_lock_acquire "$1" "transfer-parent"
+    bash -c '\''
+      source "$1/scripts/lib/jarvis-release-lock.sh"
+      READY_PATH="$2"
+      PID_PATH="$3"
+      openclaw_jarvis_release_lock_after_transfer_prepare() {
+        printf "%s\n" "$$" >"$PID_PATH"
+        : >"$READY_PATH"
+        while true; do sleep 1; done
+      }
+      openclaw_jarvis_release_lock_acquire "$1" "transfer-child"
+    '\'' _ "$1" "$2" "$3" >/dev/null &
+    child=$!
+    wait "$child" || true
+    : >"$4"
+    while [[ ! -f "$5" ]]; do sleep 0.05; done
+  ' _ "$ROOT_DIR" "$ready_path" "$child_pid_path" "$child_done_path" "$parent_release_path" >/dev/null &
+  parent_pid=$!
+  wait_for_file "$ready_path"
+  child_pid="$(<"$child_pid_path")"
+  kill -TERM "$child_pid"
+  wait_for_file "$child_done_path"
+  owner_pid="$(openclaw_jarvis_release_lock_value "$lock_path/owner" pid)"
+  [[ "$owner_pid" == "$parent_pid" ]] || fail "interrupted transfer changed durable ownership"
+  if compgen -G "${lock_path}.transfer.*" >/dev/null; then
+    fail "interrupted transfer left a sibling record"
+  fi
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+    bash -c 'source "$1/scripts/lib/jarvis-release-lock.sh"; openclaw_jarvis_release_lock_acquire "$1" "transfer-contender"' _ "$ROOT_DIR" \
+      >/dev/null 2>"$contender_err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "contender bypassed parent after interrupted transfer"
+  kill -0 "$parent_pid" 2>/dev/null || fail "interrupted transfer harmed parent"
+  : >"$parent_release_path"
+  wait "$parent_pid"
+  [[ ! -e "$lock_path" ]] || fail "parent cleanup failed after interrupted transfer"
+  pass "interrupted transfer preserves parent ownership and cleans sibling"
+}
+
+test_child_survives_killed_parent_as_owner() {
+  local lock_path="$TMP_DIR/killed-parent.lock"
+  local ready_path="$TMP_DIR/killed-parent.ready"
+  local child_pid_path="$TMP_DIR/killed-parent.child-pid"
+  local child_release_path="$TMP_DIR/killed-parent.child-release"
+  local contender_err="$TMP_DIR/killed-parent.contender.err"
+  local parent_pid child_pid status
+
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" bash -c '
+    set -euo pipefail
+    source "$1/scripts/lib/jarvis-release-lock.sh"
+    openclaw_jarvis_release_lock_acquire "$1" "kill-parent-wrapper"
+    bash -c '\''
+      source "$1/scripts/lib/jarvis-release-lock.sh"
+      openclaw_jarvis_release_lock_acquire "$1" "kill-parent-package"
+      printf "%s\n" "$$" >"$2"
+      : >"$3"
+      while [[ ! -f "$4" ]]; do sleep 0.05; done
+    '\'' _ "$1" "$2" "$3" "$4" >/dev/null &
+    wait $!
+  ' _ "$ROOT_DIR" "$child_pid_path" "$ready_path" "$child_release_path" >/dev/null &
+  parent_pid=$!
+  wait_for_file "$ready_path"
+  child_pid="$(<"$child_pid_path")"
+  kill -KILL "$parent_pid"
+  set +e
+  wait "$parent_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 137 ]] || fail "killed parent returned $status instead of 137"
+
+  set +e
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+    bash -c 'source "$1/scripts/lib/jarvis-release-lock.sh"; openclaw_jarvis_release_lock_acquire "$1" "post-parent-kill-contender"' _ "$ROOT_DIR" \
+      >/dev/null 2>"$contender_err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "contender reclaimed from live transferred child"
+  kill -0 "$child_pid" 2>/dev/null || fail "contender harmed transferred child"
+  grep -q "owner_pid=$child_pid" "$contender_err" || fail "contention did not report child as owner"
+
+  : >"$child_release_path"
+  wait_for_absence "$lock_path"
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
+    bash -c 'source "$1/scripts/lib/jarvis-release-lock.sh"; openclaw_jarvis_release_lock_acquire "$1" "after-child-exit"' _ "$ROOT_DIR" \
+      >/dev/null
+  [[ ! -e "$lock_path" ]] || fail "lock was not reusable after child exit"
+  pass "transferred child remains owner after parent SIGKILL"
+}
+
 test_package_integration_contention() {
   local lock_path="$TMP_DIR/package-integration.lock"
   local ready_path="$TMP_DIR/package-integration.ready"
@@ -267,13 +418,14 @@ test_parent_delegation_and_wrapper_contention() {
     bash -c '\''
       source "$1/scripts/lib/jarvis-release-lock.sh"
       openclaw_jarvis_release_lock_acquire "$1" "package-phase:full"
-    '\'' _ "$1" >"$2"
-    : >"$3"
-    while [[ ! -f "$4" ]]; do sleep 0.05; done
+      : >"$2"
+      while [[ ! -f "$3" ]]; do sleep 0.05; done
+    '\'' _ "$1" "$3" "$4" >"$2" &
+    wait $!
   ' _ "$ROOT_DIR" "$delegated_out" "$ready_path" "$release_path" &
   holder_pid=$!
   wait_for_file "$ready_path"
-  grep -q "jarvis_release_lock=delegated_parent" "$delegated_out" || fail "direct package child did not accept parent ownership"
+  grep -q "jarvis_release_lock=transferred_to_child" "$delegated_out" || fail "direct package child did not take parent ownership"
 
   set +e
   OPENCLAW_MAIN_HOME_CLONE="$release_home" \
@@ -308,7 +460,7 @@ test_parent_delegation_and_wrapper_contention() {
   status=$?
   set -e
   [[ "$status" -ne 0 ]] || fail "delegated wrapper fixture unexpectedly created release assets"
-  grep -q "jarvis_release_lock=delegated_parent" "$delegated_wrapper_out" || fail "actual package child did not recognize wrapper ownership"
+  grep -q "jarvis_release_lock=transferred_to_child" "$delegated_wrapper_out" || fail "actual package child did not take wrapper ownership"
   [[ ! -e "$lock_path" ]] || fail "wrapper failure left its parent-owned lock behind"
   pass "wrapper owns selection, delegates to child, and leaves dry-run unlocked"
 }
@@ -321,7 +473,7 @@ test_release_entrypoint_wiring() {
   [[ "$package_script" == *'openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"'* ]] || fail "package path does not acquire the lock"
   [[ "$wrapper_script" == *'openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"'* ]] || fail "public wrapper does not own phase selection"
   [[ "$wrapper_script" == *'CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")'* ]] || fail "public wrapper no longer delegates through package"
-  pass "release entrypoints use parent-owned reentrant locking"
+  pass "release entrypoints use atomic parent-to-child ownership transfer"
 }
 
 test_acquire_and_cleanup
@@ -332,6 +484,9 @@ test_owner_safe_cleanup
 test_error_and_signal_cleanup
 test_interrupted_acquisition_cleans_ownerless_claim
 test_repository_paths_are_isolated
+test_pid_start_identity_controls_recovery
+test_interrupted_transfer_preserves_parent
+test_child_survives_killed_parent_as_owner
 test_package_integration_contention
 test_parent_delegation_and_wrapper_contention
 test_release_entrypoint_wiring
