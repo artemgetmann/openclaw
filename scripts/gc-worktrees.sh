@@ -260,6 +260,9 @@ retire_worktree_consumer_launchagents() {
   local launchctl_print_output=""
   local inventory_path=""
   local plist_parent=""
+  local existing_plist_path=""
+  local duplicate_plist=0
+  local quarantine_is_internal=0
   local -a plist_paths=()
   local was_loaded=0
   local found=0
@@ -279,8 +282,33 @@ retire_worktree_consumer_launchagents() {
     echo "Error: LaunchAgent inventory failed; preserving worktree: ${worktree_path}" >&2
     return 1
   fi
+
+  # Tests and operators may place quarantine outside LaunchAgents. Scan that
+  # configured root explicitly when it exists; otherwise an ambiguous plist
+  # would vanish from the next run's evidence and stale Git metadata could be
+  # pruned. Internal quarantine is already covered by maxdepth=2 above.
+  case "$LAUNCH_AGENT_QUARANTINE_DIR" in
+    "$LAUNCH_AGENTS_DIR"|"$LAUNCH_AGENTS_DIR"/*)
+      quarantine_is_internal=1
+      ;;
+  esac
+  if [[ "$quarantine_is_internal" == "0" && -d "$LAUNCH_AGENT_QUARANTINE_DIR" ]]; then
+    if ! "$FIND_BIN" "$LAUNCH_AGENT_QUARANTINE_DIR" -maxdepth 1 -type f -name '*.plist' -print0 >> "$inventory_path"; then
+      rm -f "$inventory_path" || true
+      echo "Error: external LaunchAgent quarantine inventory failed; preserving worktree: ${worktree_path}" >&2
+      return 1
+    fi
+  fi
+
   while IFS= read -r -d '' plist_path; do
-    plist_paths+=("$plist_path")
+    duplicate_plist=0
+    for existing_plist_path in "${plist_paths[@]}"; do
+      if [[ "$existing_plist_path" == "$plist_path" ]]; then
+        duplicate_plist=1
+        break
+      fi
+    done
+    [[ "$duplicate_plist" == "1" ]] || plist_paths+=("$plist_path")
   done < "$inventory_path"
   if ! rm -f "$inventory_path"; then
     echo "Error: cannot remove LaunchAgent inventory; preserving worktree: ${worktree_path}" >&2
@@ -658,6 +686,10 @@ if [[ "$AUTO" == "1" ]]; then
     if [[ -d "$path" && -f "$env_local_path" ]]; then
       claimed_token="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
       if [[ -n "$claimed_token" ]]; then
+        # The release helper lives inside the worktree, so this preexisting
+        # best-effort external claim release must happen before Git deletes the
+        # lane. It is intentionally not represented as transactionally
+        # restorable state; LaunchAgent rollback must not pretend otherwise.
         (cd "$path" && bash scripts/telegram-live-runtime.sh release) || true
       fi
     fi

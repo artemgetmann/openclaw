@@ -302,6 +302,55 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     expect(retry.stderr).toContain("skipped Git metadata prune");
   });
 
+  it("keeps external quarantine evidence visible across an ambiguous missing-lane retry", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(root, "external-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    const registeredLane = fs.realpathSync(lane);
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    fs.rmSync(lane, { recursive: true, force: true });
+
+    const first = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "ambiguous-error",
+    });
+
+    expect(first.status).toBe(1);
+    expect(fs.existsSync(ownedPlist)).toBe(false);
+    expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(true);
+    const firstLaunchctlLog = fs.readFileSync(tools.launchctlLog, "utf8");
+
+    const retry = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "absent",
+    });
+
+    expect(retry.status).toBe(1);
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).toBe(firstLaunchctlLog);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: main, encoding: "utf8" }),
+    ).toContain(`worktree ${registeredLane}`);
+    expect(retry.stderr).toContain("already quarantined");
+    expect(retry.stderr).toContain("skipped Git metadata prune");
+  });
+
   it("fails closed before mutation when LaunchAgent enumeration fails", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
