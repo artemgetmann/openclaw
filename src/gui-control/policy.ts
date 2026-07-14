@@ -553,6 +553,23 @@ function visibleContextText(input: GuiPolicyInput): string {
     .join(" ");
 }
 
+function pagePurposeText(input: GuiPolicyInput): string {
+  // Titles and the snapshot summary describe why the page exists. Exclude the
+  // full visible-text inventory because sibling controls can carry unrelated
+  // deny terms (for example, Google shows "Remove an account" next to safe
+  // signed-out account rows).
+  return [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.summary,
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function commerceHardStopContextText(input: GuiPolicyInput): string {
   return [
     input.target.appName,
@@ -980,11 +997,10 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     blockedSurface &&
     isAuthenticationBoundaryTerm(blockedSurface) &&
     !hasNonAuthenticationBoundaryTerm(text, taskPolicy.deniedSurfaceTerms) &&
-    // Mutation text intentionally excludes broad AX snapshot content to avoid
-    // unrelated-control false positives. Before waiving an auth boundary,
-    // inspect that visible context separately so a reversible-looking control
-    // cannot bypass payment, deletion, account, or security hard stops.
-    !hasNonAuthenticationBoundaryTerm(visibleContextText(input), taskPolicy.deniedSurfaceTerms) &&
+    // Mutation text intentionally excludes broad AX snapshot content. Before
+    // waiving an auth boundary, inspect the page's title/summary separately so
+    // a reversible-looking control cannot bypass mixed hard-stop page purpose.
+    !hasNonAuthenticationBoundaryTerm(pagePurposeText(input), taskPolicy.deniedSurfaceTerms) &&
     isReversiblePreAuthNavigation(input)
   ) {
     // Window titles and challenge summaries provide the context needed to

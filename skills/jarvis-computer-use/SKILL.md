@@ -86,12 +86,12 @@ following are hard stops unless the user has explicitly approved the exact step:
 - software install, update, relaunch-to-update, or package-manager mutation
 
 Reversible navigation before an authentication act is allowed. This includes
-selecting a known account on an account chooser, using `Try another way` to
-discover available methods, and dismissing an unavailable-passkey dialog with
-`Close`, `Cancel`, or `Back`. This does not authorize generic `Next` or
-`Continue` controls on a password, passkey, OTP, CAPTCHA, security-key, or
-approval challenge; those controls may submit an autofilled or already-entered
-credential and remain hard stops.
+selecting a known signed-out account on an account chooser, using
+`Try another way` to discover available methods, and dismissing an
+unavailable-passkey dialog with `Close`, `Cancel`, or `Back`. This does not
+authorize generic `Next` or `Continue` controls on a password, passkey, OTP,
+CAPTCHA, security-key, or approval challenge; those controls may submit an
+autofilled or already-entered credential and remain hard stops.
 
 If a command reports the wrong app/window, ambiguous target, stale element ref,
 blocked policy risk, or missing post-state verification, stop and report the

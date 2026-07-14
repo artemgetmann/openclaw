@@ -60,7 +60,7 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain(`Blocked sensitive GUI surface: ${blockedTerm}`);
   });
 
-  it("allows selecting a known signed-out account from a Google account chooser", () => {
+  it("allows a signed-out chooser row when Remove an account is a visible sibling", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",
       target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
@@ -68,7 +68,13 @@ describe("evaluateGuiPolicy", () => {
         appName: "Safari",
         windowTitle: "Choose an account - Sign in",
         summary: "Choose an account to continue to Google",
-        visibleText: ["Artem", "artem@example.com", "Signed out", "Use another account"],
+        visibleText: [
+          "Artem",
+          "artem@example.com",
+          "Signed out",
+          "Use another account",
+          "Remove an account",
+        ],
       }),
       element: {
         ref: "@known-account",
