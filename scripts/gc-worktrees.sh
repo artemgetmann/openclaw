@@ -573,6 +573,7 @@ declare -a block_paths=()
 declare -a block_branches=()
 declare -a block_detached=()
 declare -a block_prunable=()
+declare -a block_locked=()
 declare -a display_classes=()
 declare -a display_paths=()
 declare -a display_tokens=()
@@ -587,12 +588,14 @@ finalize_block() {
   block_branches+=("${current_branch:-}")
   block_detached+=("${current_detached:-0}")
   block_prunable+=("${current_prunable:-0}")
+  block_locked+=("${current_locked:-0}")
 }
 
 current_path=""
 current_branch=""
 current_detached=0
 current_prunable=0
+current_locked=0
 
 while IFS= read -r line || [[ -n "$line" ]]; do
   if [[ -z "$line" ]]; then
@@ -601,6 +604,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     current_branch=""
     current_detached=0
     current_prunable=0
+    current_locked=0
     continue
   fi
 
@@ -616,6 +620,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       ;;
     prunable*)
       current_prunable=1
+      ;;
+    locked*)
+      current_locked=1
       ;;
   esac
 done <<< "$worktree_output"
@@ -646,6 +653,7 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
   branch_ref="${block_branches[$i]}"
   is_detached="${block_detached[$i]}"
   is_prunable="${block_prunable[$i]}"
+  is_locked="${block_locked[$i]}"
 
   normalized_path="$worktree_path"
   if [[ -d "$worktree_path" ]]; then
@@ -668,7 +676,13 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
   class="active"
   should_remove=0
 
-  if [[ "$is_prunable" == "1" ]]; then
+  # A lock is an explicit owner request to preserve this registration. It wins
+  # over prunable/merged state, including temporarily unavailable worktrees;
+  # never retire services or prune metadata behind that lock.
+  if [[ "$is_locked" == "1" ]]; then
+    class="locked"
+    active_count=$((active_count + 1))
+  elif [[ "$is_prunable" == "1" ]]; then
     class="prunable"
     prunable_count=$((prunable_count + 1))
     should_remove=1

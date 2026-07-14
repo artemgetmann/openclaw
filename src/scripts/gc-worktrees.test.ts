@@ -211,6 +211,48 @@ afterEach(() => {
 });
 
 describePosix("gc-worktrees LaunchAgent retirement", () => {
+  it("preserves a locked missing worktree and its owned LaunchAgent", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    const registeredLane = fs.realpathSync(lane);
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+    execFileSync("git", ["worktree", "lock", "--reason", "temporarily unavailable", lane], {
+      cwd: main,
+    });
+    fs.rmSync(lane, { recursive: true, force: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(ownedPlist)).toBe(true);
+    expect(fs.existsSync(quarantine)).toBe(false);
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+    const registrations = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: main,
+      encoding: "utf8",
+    });
+    expect(registrations).toContain(`worktree ${registeredLane}`);
+    expect(registrations).toContain("locked temporarily unavailable");
+    expect(result.stdout).toContain("locked");
+    expect(result.stdout).toContain(registeredLane);
+  });
+
   it("quarantines and boots out an exact-owned symlinked plist before worktree removal", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
