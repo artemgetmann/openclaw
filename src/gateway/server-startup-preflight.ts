@@ -295,6 +295,14 @@ export async function runGatewayStartupConfigPreflight(
         configSnapshot = await deps.readSnapshot();
       } catch (err) {
         deps.log.warn(`gateway: failed to repair consumer bundled skill config: ${String(err)}`);
+        // Persistence and reread are best-effort, but the current boot must not
+        // fall back to the stale entry key. Empty/missing allowlists are
+        // unrestricted, so keep the repaired config in memory and retry the
+        // durable write naturally on the next startup.
+        configSnapshot = {
+          ...configSnapshot,
+          config: consumerSkillRepair.config,
+        };
       }
     }
   }
