@@ -2,6 +2,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
+import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -10,6 +11,11 @@ import {
   resolvePermissionMode,
   type PermissionMode,
 } from "../../infra/permissions-mode.js";
+import {
+  consumeRestartSentinel,
+  writeRestartSentinel,
+  type RestartSentinelPayload,
+} from "../../infra/restart-sentinel.js";
 import {
   isSafeLocalRestartScriptAvailable,
   scheduleGatewaySigusr1Restart,
@@ -708,6 +714,47 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   // cannot keep emitting watchdog/progress output while the restart is pending.
   await abortReplyWorkForCommandTarget(params, { logLabel: "restart" });
   const commandSurface = resolveCommandSurfaceChannel(params);
+  const { deliveryContext: storedDeliveryContext, threadId: storedThreadId } = extractDeliveryInfo(
+    params.sessionKey,
+  );
+  const liveTarget =
+    params.ctx.OriginatingTo?.trim() || params.command.from?.trim() || params.command.to?.trim();
+  const liveThreadId =
+    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
+  const payload: RestartSentinelPayload = {
+    kind: "restart",
+    status: "requested",
+    ts: Date.now(),
+    sessionKey: params.sessionKey,
+    // Prefer the current command envelope over stored session metadata. A
+    // restart receipt must return to the chat/topic that requested it, even if
+    // the session's last delivery route is stale.
+    deliveryContext: {
+      channel: commandSurface || storedDeliveryContext?.channel,
+      to: liveTarget || storedDeliveryContext?.to,
+      accountId: params.ctx.AccountId?.trim() || storedDeliveryContext?.accountId,
+    },
+    threadId: liveThreadId || storedThreadId,
+    stats: {
+      mode: "command.restart",
+      phase: "requested",
+      verified: false,
+    },
+  };
+  try {
+    // Persistence must complete before any restart is scheduled. Otherwise the
+    // process can disappear after the acknowledgement with no durable route for
+    // the completion receipt or safe session continuation.
+    await writeRestartSentinel(payload);
+  } catch (err) {
+    logVerbose(`Restart command could not persist recovery state: ${String(err)}`);
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Restart not started because recovery state could not be saved. Try again.",
+      },
+    };
+  }
   const preferLocalScriptRestart =
     process.platform === "darwin" &&
     commandSurface.length > 0 &&
@@ -720,6 +767,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (preferLocalScriptRestart) {
     const restartMethod = triggerOpenClawRestart({ preferLocalScript: true });
     if (!restartMethod.ok) {
+      // The trigger failed synchronously, so this command still owns the
+      // sentinel it just wrote. Remove it to prevent a later unrelated restart
+      // from producing a false completion receipt.
+      await consumeRestartSentinel().catch(() => undefined);
       const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
       return {
         shouldContinue: false,
@@ -735,8 +786,8 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       shouldContinue: false,
       reply: {
         text: usedLocalScript
-          ? "⚙️ Restarting OpenClaw via local restart script; give me a few seconds to come back online."
-          : `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+          ? "⚙️ Restart queued via the local restart script. I’ll confirm here when the gateway is back online."
+          : `⚙️ Restart queued via ${restartMethod.method}. I’ll confirm here when the gateway is back online.`,
       },
     };
   }
@@ -748,12 +799,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+        text: "⚙️ Restart queued. Active work may finish first; I’ll confirm here when the gateway is back online.",
       },
     };
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
+    await consumeRestartSentinel().catch(() => undefined);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,
@@ -765,7 +817,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+      text: `⚙️ Restart queued via ${restartMethod.method}. I’ll confirm here when the gateway is back online.`,
     },
   };
 };
