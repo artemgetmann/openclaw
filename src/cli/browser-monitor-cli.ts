@@ -12,7 +12,7 @@ export function registerBrowserMonitorCli(program: Command) {
   browserMonitor
     .command("observe")
     .description("Observe one approved selector in one selected browser tab")
-    .requiredOption("--profile <name>", "Browser profile name")
+    .requiredOption("--browser-profile <name>", "Browser profile name")
     .requiredOption("--target-id <id>", "Exact browser tab target id")
     .requiredOption("--url-pattern <url>", "Approved absolute URL; path globs are allowed")
     .requiredOption("--selector <selector>", "Exact DOM selector to read")
@@ -38,7 +38,13 @@ export function registerBrowserMonitorCli(program: Command) {
         async () => {
           const { browserReplyObserveCommand } =
             await import("../browser/reply-monitor-command.js");
-          await browserReplyObserveCommand(opts, defaultRuntime);
+          // The root CLI reserves --profile for runtime isolation, so translate the
+          // non-conflicting browser flag back to the observer's existing config field.
+          const { browserProfile, ...observerOpts } = opts;
+          await browserReplyObserveCommand(
+            { ...observerOpts, profile: browserProfile },
+            defaultRuntime,
+          );
         },
         (err) => {
           defaultRuntime.error(danger(String(err)));

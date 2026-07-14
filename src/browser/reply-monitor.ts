@@ -40,6 +40,8 @@ export type BrowserReplyObserverConfig = {
 export type BrowserReplyCursor = {
   lastStateHash: string;
   ruleHash: string;
+  /** Monotonic per-rule transition identity; absent only in pre-migration stores. */
+  transitionGeneration?: number;
   updatedAtMs: number;
 };
 
@@ -296,6 +298,17 @@ function matchesRule(text: string, mode: BrowserReplyMatchMode, value: string): 
   return text.includes(value);
 }
 
+function nextTransitionGeneration(cursor: BrowserReplyCursor | undefined): number {
+  const previous = cursor?.transitionGeneration;
+  if (previous === undefined) {
+    return 1;
+  }
+  if (!Number.isSafeInteger(previous) || previous < 1 || previous === Number.MAX_SAFE_INTEGER) {
+    throw new Error("Browser reply observer cursor has an invalid transition generation.");
+  }
+  return previous + 1;
+}
+
 async function readSelectedPage(
   config: BrowserReplyObserverConfig,
   allowedUrlRegex: RegExp,
@@ -488,7 +501,8 @@ export async function observeBrowserReplyOnce(
   const cursorKey = `monitor:${config.monitorId}:${ruleHash}`;
   return await withBrowserReplyCursorStoreLock(cursorStorePath, async () => {
     const cursorStore = await loadBrowserReplyCursorStore(cursorStorePath);
-    if (cursorStore.cursors[cursorKey]?.lastStateHash === stateHash) {
+    const previousCursor = cursorStore.cursors[cursorKey];
+    if (previousCursor?.lastStateHash === stateHash) {
       return {
         cursorStorePath,
         dispatched: false,
@@ -500,6 +514,10 @@ export async function observeBrowserReplyOnce(
     }
 
     const receivedAtMs = deps.nowMs ?? Date.now();
+    // The next generation is derived from durable cursor state. A failed
+    // dispatch leaves the cursor unchanged, so retries reuse the same identity;
+    // every persisted intervening state advances it before a later match.
+    const transitionGeneration = nextTransitionGeneration(previousCursor);
     if (!matched) {
       // A no-match is a real state transition. Persist it without a wake so a
       // later return to the same matching DOM state is eligible to dispatch,
@@ -507,6 +525,7 @@ export async function observeBrowserReplyOnce(
       cursorStore.cursors[cursorKey] = {
         lastStateHash: stateHash,
         ruleHash,
+        transitionGeneration,
         updatedAtMs: receivedAtMs,
       };
       await saveBrowserReplyCursorStore(cursorStorePath, cursorStore);
@@ -531,7 +550,7 @@ export async function observeBrowserReplyOnce(
         urlPatternHash: hash(config.urlPattern),
       },
       eventType: "dom.text.matched",
-      idempotencyKey: `browser:${stateHash}`,
+      idempotencyKey: `browser:${hash(`${stateHash}\u0000${transitionGeneration}`)}`,
       receivedAtMs,
       evidence: {
         found: true,
@@ -559,6 +578,7 @@ export async function observeBrowserReplyOnce(
     cursorStore.cursors[cursorKey] = {
       lastStateHash: stateHash,
       ruleHash,
+      transitionGeneration,
       updatedAtMs: receivedAtMs,
     };
     await saveBrowserReplyCursorStore(cursorStorePath, cursorStore);

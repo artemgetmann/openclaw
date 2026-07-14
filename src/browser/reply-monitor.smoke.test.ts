@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHooksHandler } from "../gateway/server-http.test-harness.js";
 import { dispatchMonitorEventToCron } from "../gateway/server-methods/monitor.js";
 import { createMonitorRecord, saveMonitorStore } from "../monitor/store.js";
-import { observeBrowserReplyOnce } from "./reply-monitor.js";
+import { observeBrowserReplyOnce, type BrowserReplyObserverConfig } from "./reply-monitor.js";
 
 type TestHttpServer = { close: () => Promise<void>; url: string };
 
@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("browser reply observer isolated HTTP smoke", () => {
-  it("reads one fake local page through the browser client and posts one hash-only wake", async () => {
+  it("keeps hook dedupe scoped to one browser state transition", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-smoke-"));
     tempRoots.push(root);
     const cronStorePath = path.join(root, "cron.json");
@@ -66,10 +66,15 @@ describe("browser reply observer isolated HTTP smoke", () => {
       ],
     });
 
-    const routedEvents: unknown[] = [];
+    const routedEvents: Array<{ idempotencyKey?: string }> = [];
+    let failNextDispatch = false;
     const hookHandler = createHooksHandler({
       dispatchMonitorEventHook: async (event) => {
         routedEvents.push(event);
+        if (failNextDispatch) {
+          failNextDispatch = false;
+          throw new Error("temporary smoke dispatch failure");
+        }
         return await dispatchMonitorEventToCron({
           cronStorePath,
           cron: { enqueueRun },
@@ -85,7 +90,7 @@ describe("browser reply observer isolated HTTP smoke", () => {
     );
     servers.push(hookServer);
 
-    const html = '<main><div data-test="reply">Replied: local smoke</div></main>';
+    let replyText = "Replied: local smoke";
     const browserServer = await listen(
       http.createServer((req, res) => {
         res.setHeader("Content-Type", "application/json");
@@ -106,7 +111,6 @@ describe("browser reply observer isolated HTTP smoke", () => {
           return;
         }
         if (req.url?.startsWith("/act")) {
-          const text = /data-test="reply">([^<]+)/.exec(html)?.[1] ?? "";
           res.end(
             JSON.stringify({
               ok: true,
@@ -115,7 +119,7 @@ describe("browser reply observer isolated HTTP smoke", () => {
               result: {
                 allowed: true,
                 found: true,
-                text,
+                text: replyText,
                 url: "http://fixture.test/thread/7",
               },
             }),
@@ -128,7 +132,7 @@ describe("browser reply observer isolated HTTP smoke", () => {
     );
     servers.push(browserServer);
 
-    const result = await observeBrowserReplyOnce({
+    const config: BrowserReplyObserverConfig = {
       browserBaseUrl: browserServer.url,
       cursorStorePath: path.join(root, "cursor.json"),
       hookUrl: `${hookServer.url}/hooks/monitor-event`,
@@ -140,11 +144,39 @@ describe("browser reply observer isolated HTTP smoke", () => {
       selector: "[data-test=reply]",
       targetId: "tab-smoke",
       urlPattern: "http://fixture.test/thread/*",
-    });
+    };
 
-    expect(result).toMatchObject({ dispatched: true, matched: true, stateChanged: true });
-    expect(enqueueRun).toHaveBeenCalledWith("cron-browser-smoke", "force");
-    expect(routedEvents).toHaveLength(1);
+    await expect(observeBrowserReplyOnce(config)).resolves.toMatchObject({
+      dispatched: true,
+      matched: true,
+      stateChanged: true,
+    });
+    replyText = "Still waiting";
+    await expect(observeBrowserReplyOnce(config)).resolves.toMatchObject({
+      dispatched: false,
+      matched: false,
+      stateChanged: true,
+    });
+    replyText = "Replied: local smoke";
+    await expect(observeBrowserReplyOnce(config)).resolves.toMatchObject({ dispatched: true });
+
+    expect(enqueueRun).toHaveBeenCalledTimes(2);
+    expect(routedEvents).toHaveLength(2);
+    expect(routedEvents[1]?.idempotencyKey).not.toBe(routedEvents[0]?.idempotencyKey);
+
+    replyText = "Waiting for retry case";
+    await observeBrowserReplyOnce(config);
+    replyText = "Replied: retry smoke";
+    failNextDispatch = true;
+    await expect(observeBrowserReplyOnce(config)).rejects.toThrow("HTTP 503");
+    await expect(observeBrowserReplyOnce(config)).resolves.toMatchObject({ dispatched: true });
+
+    expect(enqueueRun).toHaveBeenCalledTimes(3);
+    expect(enqueueRun).toHaveBeenNthCalledWith(1, "cron-browser-smoke", "force");
+    expect(enqueueRun).toHaveBeenNthCalledWith(2, "cron-browser-smoke", "force");
+    expect(enqueueRun).toHaveBeenNthCalledWith(3, "cron-browser-smoke", "force");
+    expect(routedEvents).toHaveLength(4);
+    expect(routedEvents[3]?.idempotencyKey).toBe(routedEvents[2]?.idempotencyKey);
     expect(JSON.stringify(routedEvents[0])).not.toContain("local smoke");
     expect(routedEvents[0]).toMatchObject({
       triggerKind: "browser_observer",
