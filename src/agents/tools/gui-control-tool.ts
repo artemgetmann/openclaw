@@ -99,10 +99,10 @@ function normalizeAction(action: string): GuiControlAction {
 
 export function createGuiControlTool(): AnyAgentTool {
   return {
-    label: "GUI Control",
+    label: "Computer Use",
     name: "gui_control",
     description:
-      "Experimental macOS GUI-control tool for Codex loopback testing. Observe apps, resolve real UI elements from fresh snapshots, and perform guarded actions that fail closed on wrong targets, ambiguous elements, stale refs, or blocked mutation risks.",
+      "Experimental macOS Computer Use tool for Codex loopback testing. Observe apps, resolve real UI elements from fresh snapshots, and perform guarded actions that fail closed on wrong targets, ambiguous elements, stale refs, or blocked mutation risks.",
     parameters: GuiControlToolSchema,
     ownerOnly: true,
     async execute(_toolCallId, params) {

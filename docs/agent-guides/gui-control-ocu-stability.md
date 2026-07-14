@@ -3,7 +3,7 @@
 Last updated: 2026-06-25
 Status: active stability slice, dev-only
 
-Use this checklist when proving OpenComputerUse-backed Jarvis GUI control. The
+Use this checklist when proving OpenComputerUse-backed Jarvis Computer Use. The
 goal is not to show that a demo happened once. The goal is to prove what the
 runtime did, what it avoided, and which debt remains.
 

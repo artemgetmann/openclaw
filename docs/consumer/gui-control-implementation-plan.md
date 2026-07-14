@@ -1,11 +1,11 @@
-# Jarvis GUI Control Implementation Plan
+# Jarvis Computer Use Implementation Plan
 
 Last updated: 2026-06-12
 Status: implementation spike, not exposed to consumers
 
 ## Goal
 
-Build Jarvis GUI control that feels closer to Codex Computer Use than Peekaboo:
+Build Jarvis Computer Use so it feels closer to Codex Computer Use than Peekaboo:
 fast, visible, workspace-preserving, fail-closed, and safe enough for consumer
 workflows.
 

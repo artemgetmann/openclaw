@@ -391,7 +391,7 @@ describe("buildAgentSystemPrompt", () => {
       "keep those channel-specific procedures there instead of copying command playbooks into the prompt",
     );
     expect(prompt).toContain(
-      "For macOS GUI-operation or GUI-proof requests, prefer the `jarvis-gui-control` skill",
+      "For macOS computer-use, GUI-operation, or GUI-proof requests, prefer the `jarvis-computer-use` skill",
     );
     expect(prompt).toContain("use the `screen-record` skill and `openclaw screen record`");
     expect(prompt).toContain(

@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES } from "./consumer-default-bundled-skills.js";
 import { resolveBundledSkillsDir } from "./skills/bundled-dir.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "./skills/frontmatter.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
@@ -209,6 +210,15 @@ async function fileExists(filePath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function pathEntryExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.lstat(filePath);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
@@ -437,6 +447,83 @@ async function unmarkedWorkspaceSkillLooksBundled(params: {
   );
 }
 
+async function retireRenamedManagedWorkspaceSkills(params: {
+  bundledSkillsDir: string;
+  workspaceSkillsDir: string;
+  workspaceSkillDirectoryNames: ReadonlySet<string>;
+}): Promise<void> {
+  for (const [legacySkillName, renamedSkillName] of Object.entries(
+    LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES,
+  )) {
+    if (!params.workspaceSkillDirectoryNames.has(legacySkillName)) {
+      continue;
+    }
+
+    const legacyWorkspaceSkillDir = path.join(params.workspaceSkillsDir, legacySkillName);
+    const renamedWorkspaceSkillDir = path.join(params.workspaceSkillsDir, renamedSkillName);
+    const renamedBundledSkillDir = path.join(params.bundledSkillsDir, renamedSkillName);
+    const renamedBundledSkillPath = path.join(renamedBundledSkillDir, "SKILL.md");
+
+    // A missing renamed bundle means the package is incomplete. Keep the old
+    // mirror intact rather than deleting the only usable copy of the skill.
+    if (!(await fileExists(renamedBundledSkillPath))) {
+      continue;
+    }
+
+    const managedMarker = await readManagedWorkspaceSkillMarker(legacyWorkspaceSkillDir);
+    if (!managedMarker) {
+      // Unmarked directories are user content, even if their name used to
+      // match a bundled skill. Product renames never infer ownership by name.
+      continue;
+    }
+
+    const legacyWorkspaceTreeHash = await hashWorkspaceSkillTree(legacyWorkspaceSkillDir);
+    if (legacyWorkspaceTreeHash !== managedMarker.bundledTreeHash) {
+      // The marker proves prior ownership, while the hash mismatch proves the
+      // user edited it afterwards. Preserve that fork under its legacy name.
+      continue;
+    }
+
+    const renamedWorkspaceSkillExists = params.workspaceSkillDirectoryNames.has(renamedSkillName);
+    if (!renamedWorkspaceSkillExists && (await pathEntryExists(renamedWorkspaceSkillDir))) {
+      // A file or symlink at the replacement path is not a managed skill
+      // directory. Preserve both paths instead of overwriting unknown content.
+      continue;
+    }
+    if (!renamedWorkspaceSkillExists) {
+      const renamedBundledTreeHash = await hashWorkspaceSkillTree(renamedBundledSkillDir);
+      const renamedWorkspaceSkillTempDir = path.join(
+        params.workspaceSkillsDir,
+        `.${renamedSkillName}.openclaw-rename-${crypto.randomUUID()}`,
+      );
+      try {
+        // Seed into a private sibling before deleting the old mirror. Atomic
+        // rename avoids overwriting a replacement created by another process,
+        // while any failed copy leaves the previous capability intact.
+        await fs.cp(renamedBundledSkillDir, renamedWorkspaceSkillTempDir, { recursive: true });
+        await writeManagedWorkspaceSkillMarker(
+          renamedWorkspaceSkillTempDir,
+          renamedBundledTreeHash,
+        );
+        await fs.rename(renamedWorkspaceSkillTempDir, renamedWorkspaceSkillDir);
+      } catch (error) {
+        await fs.rm(renamedWorkspaceSkillTempDir, { recursive: true, force: true }).catch(() => {});
+        throw error;
+      }
+    }
+
+    // Existing replacement directories are deliberately untouched here. The
+    // same-name refresh loop below owns their normal adoption/update policy.
+    await fs.rm(legacyWorkspaceSkillDir, { recursive: true, force: true });
+    workspaceLogger.info("Retired renamed managed workspace skill mirror.", {
+      legacySkill: legacySkillName,
+      renamedSkill: renamedSkillName,
+      legacyWorkspaceSkillDir,
+      renamedWorkspaceSkillDir,
+    });
+  }
+}
+
 async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promise<void> {
   const bundledSkillsDir = resolveBundledSkillsDir();
   if (!bundledSkillsDir) {
@@ -453,6 +540,14 @@ async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promis
   } catch {
     return;
   }
+
+  await retireRenamedManagedWorkspaceSkills({
+    bundledSkillsDir,
+    workspaceSkillsDir,
+    workspaceSkillDirectoryNames: new Set(
+      entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+    ),
+  });
 
   for (const entry of entries) {
     if (!entry.isDirectory()) {

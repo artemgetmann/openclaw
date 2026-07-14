@@ -14,7 +14,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/bootstrap-open-computer-use-runtime.sh
 
-Build the pinned OpenComputerUse runtime used by Jarvis GUI-control parity runs.
+Build the pinned OpenComputerUse runtime used by Jarvis Computer Use parity runs.
 
 Environment overrides:
   OPENCLAW_OPEN_COMPUTER_USE_REPO             Git repository to clone/fetch

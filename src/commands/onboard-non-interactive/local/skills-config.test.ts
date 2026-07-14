@@ -4,6 +4,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writeSkill } from "../../../agents/skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt } from "../../../agents/skills.js";
+import { shouldIncludeSkill } from "../../../agents/skills/config.js";
+import type { SkillEntry } from "../../../agents/skills/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
@@ -23,6 +25,18 @@ const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
 } as unknown as RuntimeEnv;
+
+const jarvisComputerUseEntry: SkillEntry = {
+  skill: {
+    name: "jarvis-computer-use",
+    description: "Jarvis Computer Use",
+    filePath: "/bundled/jarvis-computer-use/SKILL.md",
+    baseDir: "/bundled/jarvis-computer-use",
+    source: "openclaw-bundled",
+    disableModelInvocation: false,
+  },
+  frontmatter: {},
+};
 
 function apply(nextConfig: OpenClawConfig, opts: Partial<OnboardOptions> = {}) {
   return applyNonInteractiveSkillsConfig({
@@ -46,7 +60,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "monitor-router",
         "media-editor",
         "video-frames",
-        "jarvis-gui-control",
+        "jarvis-computer-use",
         "screen-record",
         "find-food",
         "mcporter",
@@ -140,7 +154,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(repaired.changes).toEqual([
       expect.stringContaining("skills.allowBundled += checkpoint,goal-mode"),
     ]);
-    expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-gui-control")).toBe(
+    expect(repaired.config.skills?.allowBundled?.indexOf("jarvis-computer-use")).toBe(
       (repaired.config.skills?.allowBundled?.indexOf("peekaboo") ?? 0) - 1,
     );
     expect(repaired.config.skills?.allowBundled?.indexOf("telegram-user")).toBeGreaterThan(
@@ -152,12 +166,106 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "goal-mode",
         "monitor-router",
         "find-food",
-        "jarvis-gui-control",
+        "jarvis-computer-use",
       ]),
     );
     expect(repaired.config.skills?.allowBundled?.indexOf("find-food")).toBe(
       (repaired.config.skills?.allowBundled?.indexOf("goplaces") ?? 0) + 1,
     );
+  });
+
+  it("renames legacy Jarvis GUI Control allowlist entries without widening custom allowlists", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["jarvis-gui-control"] },
+    });
+
+    expect(repaired.changes).toEqual([
+      "skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use",
+    ]);
+    expect(repaired.config.skills?.allowBundled).toEqual(["jarvis-computer-use"]);
+  });
+
+  it("deduplicates old and new Jarvis Computer Use allowlist entries", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["peekaboo", "jarvis-gui-control", "jarvis-computer-use"] },
+    });
+
+    expect(repaired.config.skills?.allowBundled).toEqual(["peekaboo", "jarvis-computer-use"]);
+  });
+
+  it("migrates a legacy opt-out into the config key enforced by the skill loader", () => {
+    const legacyOptOut: OpenClawConfig = {
+      skills: {
+        entries: {
+          "jarvis-gui-control": {
+            enabled: false,
+            env: { LEGACY_TOKEN: "preserved" },
+          },
+        },
+      },
+    };
+
+    const next = apply(legacyOptOut);
+
+    expect(next.skills?.entries?.["jarvis-gui-control"]).toBeUndefined();
+    expect(next.skills?.entries?.["jarvis-computer-use"]).toEqual({
+      enabled: false,
+      env: { LEGACY_TOKEN: "preserved" },
+    });
+    expect(shouldIncludeSkill({ entry: jarvisComputerUseEntry, config: next })).toBe(false);
+  });
+
+  it("lets explicit false win while merging legacy and current skill entry fields", () => {
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: {
+        allowBundled: [],
+        entries: {
+          "jarvis-gui-control": {
+            enabled: false,
+            env: { LEGACY_ONLY: "legacy", SHARED: "legacy" },
+            config: { legacyOnly: true, shared: "legacy" },
+          },
+          "jarvis-computer-use": {
+            enabled: true,
+            env: { CURRENT_ONLY: "current", SHARED: "current" },
+            config: { currentOnly: true, shared: "current" },
+          },
+        },
+      },
+    });
+
+    expect(repaired.config.skills?.entries?.["jarvis-gui-control"]).toBeUndefined();
+    expect(repaired.config.skills?.allowBundled).toEqual([]);
+    expect(repaired.config.skills?.entries?.["jarvis-computer-use"]).toEqual({
+      enabled: false,
+      env: {
+        LEGACY_ONLY: "legacy",
+        CURRENT_ONLY: "current",
+        SHARED: "current",
+      },
+      config: {
+        legacyOnly: true,
+        currentOnly: true,
+        shared: "current",
+      },
+    });
+    expect(shouldIncludeSkill({ entry: jarvisComputerUseEntry, config: repaired.config })).toBe(
+      false,
+    );
+  });
+
+  it("leaves the __none__ sentinel and legacy entries untouched during repair", () => {
+    const config: OpenClawConfig = {
+      skills: {
+        allowBundled: ["__none__"],
+        entries: { "jarvis-gui-control": { enabled: false } },
+      },
+    };
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist(config);
+
+    expect(repaired).toEqual({ config, changes: [] });
+    expect(repaired.config).toBe(config);
   });
 
   it("does not repair custom bundled skill allowlists", () => {
@@ -192,10 +300,10 @@ describe("applyNonInteractiveSkillsConfig", () => {
       body: "# Monitor Router\n",
     });
     await writeSkill({
-      dir: path.join(bundledDir, "jarvis-gui-control"),
-      name: "jarvis-gui-control",
-      description: "Use for Jarvis macOS GUI-control tasks and GUI proof requests.",
-      body: "# Jarvis GUI Control\n",
+      dir: path.join(bundledDir, "jarvis-computer-use"),
+      name: "jarvis-computer-use",
+      description: "Use for Jarvis Computer Use tasks and GUI proof requests.",
+      body: "# Jarvis Computer Use\n",
     });
     await writeSkill({
       dir: path.join(bundledDir, "telegram-chat-management"),
@@ -214,7 +322,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
     expect(prompt).toContain("offer or run a durable goal");
     expect(prompt).toContain("Route monitor status questions");
-    expect(prompt).toContain("Jarvis macOS GUI-control tasks");
+    expect(prompt).toContain("Jarvis Computer Use tasks");
     expect(prompt).toContain("Manage Telegram chats, topics, threads");
   });
 });

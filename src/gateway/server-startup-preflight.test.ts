@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CONSUMER_DEFAULT_BUNDLED_SKILLS } from "../agents/consumer-default-bundled-skills.js";
+import { shouldIncludeSkill } from "../agents/skills/config.js";
+import type { SkillEntry } from "../agents/skills/types.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthConfig,
@@ -41,6 +43,18 @@ function createSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFile
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-preflight-"));
 }
+
+const jarvisComputerUseEntry: SkillEntry = {
+  skill: {
+    name: "jarvis-computer-use",
+    description: "Jarvis Computer Use",
+    filePath: "/bundled/jarvis-computer-use/SKILL.md",
+    baseDir: "/bundled/jarvis-computer-use",
+    source: "openclaw-bundled",
+    disableModelInvocation: false,
+  },
+  frontmatter: {},
+};
 
 describe("runGatewayStartupConfigPreflight", () => {
   it("classifies invalid config errors in config_validation phase", async () => {
@@ -287,13 +301,13 @@ describe("runGatewayStartupConfigPreflight", () => {
     );
     const staleAllowBundled: string[] = CONSUMER_DEFAULT_BUNDLED_SKILLS.filter(
       (skillName) =>
-        skillName !== "jarvis-gui-control" &&
+        skillName !== "jarvis-computer-use" &&
         skillName !== "telegram-chat-management" &&
         skillName !== "screen-record",
     );
     const repairedAllowBundled = [...staleAllowBundled];
     repairedAllowBundled.splice(repairedAllowBundled.indexOf("gog"), 0, "screen-record");
-    repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-gui-control");
+    repairedAllowBundled.splice(repairedAllowBundled.indexOf("peekaboo"), 0, "jarvis-computer-use");
     repairedAllowBundled.splice(
       repairedAllowBundled.indexOf("notion"),
       0,
@@ -329,17 +343,118 @@ describe("runGatewayStartupConfigPreflight", () => {
 
     const writtenConfig = writeConfig.mock.calls[0]?.[0];
     expect(writtenConfig?.skills?.allowBundled).toEqual(repairedAllowBundled);
-    expect(repairedAllowBundled.indexOf("jarvis-gui-control")).toBe(
+    expect(repairedAllowBundled.indexOf("jarvis-computer-use")).toBe(
       repairedAllowBundled.indexOf("peekaboo") - 1,
     );
     expect(repairedAllowBundled.indexOf("telegram-chat-management")).toBe(
       repairedAllowBundled.indexOf("notion") - 1,
     );
-    expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill allowlist"));
-    expect(result.config.skills?.allowBundled).toContain("jarvis-gui-control");
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("consumer bundled skill config"));
+    expect(result.config.skills?.allowBundled).toContain("jarvis-computer-use");
     expect(result.config.skills?.allowBundled).toContain("screen-record");
     expect(result.config.skills?.allowBundled).toContain("telegram-chat-management");
   });
+
+  it("migrates a legacy Jarvis Computer Use opt-out without an allowlist", async () => {
+    const home = makeTempDir();
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const staleConfig: OpenClawConfig = {
+      skills: {
+        entries: { "jarvis-gui-control": { enabled: false } },
+      },
+    };
+    const repairedConfig: OpenClawConfig = {
+      skills: {
+        entries: { "jarvis-computer-use": { enabled: false } },
+      },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+      .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: repairedConfig }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+    });
+
+    expect(writeConfig).toHaveBeenCalledWith(repairedConfig);
+    expect(result.config.skills?.entries?.["jarvis-gui-control"]).toBeUndefined();
+    expect(result.config.skills?.entries?.["jarvis-computer-use"]?.enabled).toBe(false);
+    expect(result.config.skills?.allowBundled).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "config write fails",
+      writeConfig: vi
+        .fn<(config: OpenClawConfig) => Promise<void>>()
+        .mockRejectedValue("read-only"),
+      rereadFails: false,
+    },
+    {
+      name: "persisted config reread fails",
+      writeConfig: vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue(),
+      rereadFails: true,
+    },
+  ])(
+    "keeps the migrated skill opt-out in memory when $name",
+    async ({ writeConfig, rereadFails }) => {
+      const home = makeTempDir();
+      const jarvisConfigPath = path.join(
+        home,
+        "Library",
+        "Application Support",
+        "Jarvis",
+        ".jarvis",
+        "openclaw.json",
+      );
+      const staleConfig: OpenClawConfig = {
+        skills: { entries: { "jarvis-gui-control": { enabled: false } } },
+      };
+      const readSnapshot = vi
+        .fn<() => Promise<ConfigFileSnapshot>>()
+        .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }))
+        .mockResolvedValueOnce(createSnapshot({ path: jarvisConfigPath, config: staleConfig }));
+      if (rereadFails) {
+        readSnapshot.mockRejectedValueOnce(new Error("reread failed"));
+      }
+      const warn = vi.fn<(message: string) => void>();
+
+      const result = await runGatewayStartupConfigPreflight({
+        readSnapshot,
+        writeConfig,
+        log: { info: vi.fn(), warn },
+        isNixMode: false,
+        env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+        syncBundledSkillsToSharedPersonalRootFn: vi.fn().mockResolvedValue({
+          targetDir: path.join(home, ".agents", "skills"),
+          entries: [],
+        }),
+      });
+
+      expect(result.config.skills?.entries?.["jarvis-gui-control"]).toBeUndefined();
+      expect(result.config.skills?.entries?.["jarvis-computer-use"]?.enabled).toBe(false);
+      expect(shouldIncludeSkill({ entry: jarvisComputerUseEntry, config: result.config })).toBe(
+        false,
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("failed to repair consumer bundled skill config"),
+      );
+    },
+  );
 
   it("syncs bundled skills to shared personal root for Jarvis consumer startup", async () => {
     const home = makeTempDir();
