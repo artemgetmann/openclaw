@@ -1,7 +1,9 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const browserReplyObserveCommand = vi.fn(async () => undefined);
+const browserReplyObserveCommand = vi.fn(
+  async (_opts: Record<string, unknown>, _runtime: unknown) => undefined,
+);
 
 vi.mock("../browser/reply-monitor-command.js", () => ({ browserReplyObserveCommand }));
 
@@ -10,21 +12,26 @@ const { registerBrowserMonitorCli } = await import("./browser-monitor-cli.js");
 describe("browser-monitor cli", () => {
   beforeEach(() => browserReplyObserveCommand.mockClear());
 
-  it("registers explicit browser scope and forwards observe options", async () => {
-    const program = new Command();
+  it("parses the browser profile without colliding with the root profile option", async () => {
+    const program = new Command().name("openclaw");
+    program.option("--profile <name>", "Global config profile");
     program.exitOverride();
     registerBrowserMonitorCli(program);
 
     const browserMonitor = program.commands.find((command) => command.name() === "browser-monitor");
     const observe = browserMonitor?.commands.find((command) => command.name() === "observe");
     expect(observe?.options.map((option) => option.long)).not.toContain("--hook-token");
+    expect(observe?.options.map((option) => option.long)).not.toContain("--profile");
+    expect(observe?.options.map((option) => option.long)).toContain("--browser-profile");
     expect(observe?.helpInformation()).toContain("OPENCLAW_HOOKS_TOKEN");
 
     await program.parseAsync(
       [
+        "node",
+        "openclaw",
         "browser-monitor",
         "observe",
-        "--profile",
+        "--browser-profile",
         "isolated",
         "--target-id",
         "tab-1",
@@ -44,7 +51,7 @@ describe("browser-monitor cli", () => {
         "--max-runs",
         "2",
       ],
-      { from: "user" },
+      { from: "node" },
     );
 
     expect(browserReplyObserveCommand).toHaveBeenCalledWith(
@@ -61,5 +68,6 @@ describe("browser-monitor cli", () => {
       }),
       expect.anything(),
     );
+    expect(browserReplyObserveCommand.mock.calls[0]?.[0]).not.toHaveProperty("browserProfile");
   });
 });
