@@ -196,7 +196,7 @@ function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<
     "Use /goal as a recovery/control surface; do not make slash commands the primary consumer UX.",
     ...(params.availableTools.has("monitor")
       ? [
-          "When a goal needs waiting or follow-up, pair it with the monitor tool only inside the boundaries described by the goal-mode skill.",
+          "After a send or external action whose useful next step clearly depends on a later reply/status, briefly offer once to watch and continue. Skip casual sends, and do not start monitoring without approval unless already authorized.",
         ]
       : []),
     "",
