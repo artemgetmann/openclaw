@@ -404,7 +404,7 @@ extension ChannelsStore {
             dmPolicy: dmPolicy,
             allowFrom: allowFrom,
             enabled: enabled)
-        await self.reconnectConsumerGatewayAfterConfigBootstrap()
+        await self.reconnectConsumerGatewayAfterConfigBootstrap(enabled: enabled)
         Task { await self.refresh(probe: true) }
         return persisted
     }
@@ -833,10 +833,20 @@ extension ChannelsStore {
         }
     }
 
-    private func reconnectConsumerGatewayAfterConfigBootstrap() async {
-        guard AppFlavor.current.isConsumer else { return }
-        guard !self.isPreview else { return }
-        guard AppStateStore.shared.connectionMode == .local else { return }
+    private func reconnectConsumerGatewayAfterConfigBootstrap(enabled: Bool) async {
+        let isConsumer = AppFlavor.current.isConsumer
+        let isPreview = self.isPreview
+        let connectionMode = AppStateStore.shared.connectionMode
+        guard isConsumer, !isPreview, connectionMode == .local else { return }
+
+        _ = await Self.restartConsumerGatewayForTelegramBootstrapIfNeeded(
+            enabled: enabled,
+            isConsumer: isConsumer,
+            isPreview: isPreview,
+            connectionMode: connectionMode,
+            restart: {
+                await GatewayProcessManager.shared.restartManagedGateway()
+            })
 
         _ = await Self.recoverConsumerGatewayAfterConfigBootstrap(
             shutdown: {
@@ -853,6 +863,31 @@ extension ChannelsStore {
                     method: .status,
                     timeoutMs: 1_500)
             })
+    }
+
+    /// Restarts only when the final setup write enables Telegram in the local
+    /// consumer runtime. The earlier staged write deliberately leaves polling
+    /// disabled while ownership is unknown; restarting there adds a slow launchd
+    /// cycle without making the bot usable. Keep lifecycle work injectable so
+    /// unit tests never touch the shared managed gateway.
+    @discardableResult
+    static func restartConsumerGatewayForTelegramBootstrapIfNeeded(
+        enabled: Bool,
+        isConsumer: Bool,
+        isPreview: Bool,
+        connectionMode: AppState.ConnectionMode,
+        restart: @escaping () async -> Void
+    ) async -> Bool {
+        guard enabled,
+              isConsumer,
+              !isPreview,
+              connectionMode == .local
+        else {
+            return false
+        }
+
+        await restart()
+        return true
     }
 
     private static func recoverConsumerGatewayAfterConfigBootstrap(

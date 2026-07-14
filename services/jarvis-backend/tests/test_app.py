@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import socket
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ import pytest
 from app.main import (
     OPENAI_IMAGE_TIMEOUT_SECONDS,
     TELEGRAM_MANAGED_SETUP_TTL_MINUTES,
+    TelegramManagedStartResponse,
     app,
     get_settings,
     telegram_managed_setup_sessions,
@@ -392,6 +394,10 @@ def test_telegram_managed_start_returns_approval_url_without_secret_values(monke
         "https://t.me/newbot/JarvisManagerBot/founder_jarvis_bot"
         "?name=Jarvis%20Founder%20Bot"
     )
+    # This is the exact JSON returned by FastAPI, not a model-only assertion.
+    # The macOS client decodes dates with JSONDecoder.iso8601, which rejects the
+    # fractional-second form Pydantic otherwise emits for datetime.now().
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", body["expiresAt"])
     expires_at = datetime.fromisoformat(body["expiresAt"])
     ttl = expires_at - datetime.now(timezone.utc)
     assert ttl > timedelta(minutes=TELEGRAM_MANAGED_SETUP_TTL_MINUTES - 5)
@@ -402,6 +408,20 @@ def test_telegram_managed_start_returns_approval_url_without_secret_values(monke
     assert "123456:test-manager-token" not in response.text
     assert "123456:test-manager-token" not in health.text
     assert "123456:test-manager-token" not in repr(get_settings())
+
+
+def test_telegram_managed_expiry_serializer_normalizes_fractional_seconds_to_stable_iso8601():
+    response = TelegramManagedStartResponse(
+        setupId="tgms_fractional",
+        approvalUrl="https://t.me/JarvisManagerBot?start=tgms_fractional",
+        suggestedBotUsername="fractional_jarvis_bot",
+        expiresAt=datetime(2026, 5, 18, 12, 0, 0, 987_654, tzinfo=timezone.utc),
+        status="pending",
+    )
+
+    # Regression coverage for the production failure: a fractional internal
+    # timestamp must never leak back onto the app-facing JSON contract.
+    assert response.model_dump(mode="json")["expiresAt"] == "2026-05-18T12:00:00Z"
 
 
 def test_telegram_managed_status_returns_pending_when_no_matching_update(monkeypatch):
