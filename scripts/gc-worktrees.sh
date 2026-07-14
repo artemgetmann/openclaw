@@ -119,6 +119,35 @@ worktree_owns_consumer_gateway_plist() {
   [[ "$has_gateway_subcommand" == "1" && "$has_worktree_path" == "1" ]]
 }
 
+# Put a quarantined plist back without overwriting anything that appeared while
+# launchctl was being queried. This helper deliberately reports but does not
+# hide restore failure; its caller always preserves the worktree either way.
+restore_quarantined_launchagent() {
+  local plist_path="$1"
+  local destination="$2"
+  local label="$3"
+  local worktree_path="$4"
+  local failure_reason="$5"
+
+  if [[ -e "$plist_path" || -L "$plist_path" ]]; then
+    echo "Error: ${failure_reason} for ${label}; ${plist_path} reappeared, so quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
+  elif mv "$destination" "$plist_path"; then
+    echo "Error: ${failure_reason} for ${label}; restored plist and preserved worktree: ${worktree_path}" >&2
+  else
+    echo "Error: ${failure_reason} for ${label} and could not restore ${plist_path}; quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
+  fi
+}
+
+# launchctl print has three materially different outcomes. Success proves the
+# job is loaded. A failure proves absence only when launchctl explicitly names
+# this label in its service-not-found diagnostic. Domain, permission, and
+# transient failures are ambiguous and must block worktree deletion.
+launchctl_print_confirms_service_absent() {
+  local output="$1"
+  local label="$2"
+  [[ "$output" == *"Could not find service \"${label}\""* ]]
+}
+
 # Quarantine and boot out only gateway plists positively owned by this
 # worktree. Moving the plist is the first mutation: if quarantine fails, the
 # service stays exactly as it was and worktree deletion is blocked. Once moved,
@@ -130,6 +159,8 @@ retire_worktree_consumer_launchagents() {
   local plist_path=""
   local label=""
   local destination=""
+  local launchctl_target=""
+  local launchctl_print_output=""
   local found=0
 
   [[ -d "$LAUNCH_AGENTS_DIR" ]] || return 0
@@ -162,21 +193,19 @@ retire_worktree_consumer_launchagents() {
 
     # launchd caches loaded job definitions independently of the plist file. If
     # the job is still loaded, moving the plist alone cannot stop a KeepAlive
-    # loop. Restore the plist and preserve the worktree when bootout fails so
-    # the service never points at an entrypoint GC subsequently deletes.
-    if "$LAUNCHCTL_BIN" print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
-      if ! "$LAUNCHCTL_BIN" bootout "gui/$(id -u)/${label}" >/dev/null 2>&1; then
-        # Do not overwrite a plist that appeared during the cleanup window.
-        # Preserve both copies and the worktree if another actor raced GC.
-        if [[ -e "$plist_path" || -L "$plist_path" ]]; then
-          echo "Error: could not boot out ${label}; ${plist_path} reappeared, so quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
-        elif mv "$destination" "$plist_path"; then
-          echo "Error: could not boot out ${label}; restored plist and preserved worktree: ${worktree_path}" >&2
-        else
-          echo "Error: could not boot out ${label} or restore ${plist_path}; quarantined copy remains at ${destination}; preserving worktree: ${worktree_path}" >&2
-        fi
+    # loop. Only an explicit service-not-found result proves bootout is
+    # unnecessary; every other print failure is ambiguous and fails closed.
+    launchctl_target="gui/$(id -u)/${label}"
+    if launchctl_print_output="$("$LAUNCHCTL_BIN" print "$launchctl_target" 2>&1)"; then
+      if ! "$LAUNCHCTL_BIN" bootout "$launchctl_target" >/dev/null 2>&1; then
+        restore_quarantined_launchagent \
+          "$plist_path" "$destination" "$label" "$worktree_path" "could not boot out loaded service"
         return 1
       fi
+    elif ! launchctl_print_confirms_service_absent "$launchctl_print_output" "$label"; then
+      restore_quarantined_launchagent \
+        "$plist_path" "$destination" "$label" "$worktree_path" "launchctl print failed without service-not-found confirmation"
+      return 1
     fi
     echo "Quarantined worktree LaunchAgent: ${label} -> ${destination}"
   done < <(find "$LAUNCH_AGENTS_DIR" -maxdepth 1 -type f -name '*.plist' -print0)

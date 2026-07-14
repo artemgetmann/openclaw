@@ -92,6 +92,21 @@ while IFS= read -r -d '' plist; do
   fi
 done < <(find "$OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR" -maxdepth 1 -type f -name '*.plist' -print0)
 printf 'source_present=%s %s\\n' "$source_present" "$*" >> "${launchctlLog}"
+if [[ "$1" == "print" ]]; then
+  case "\${OPENCLAW_TEST_LAUNCHCTL_PRINT_MODE:-loaded}" in
+    absent)
+      printf 'Bad request.\\nCould not find service "%s" in domain for user gui\\n' "$label" >&2
+      exit 113
+      ;;
+    ambiguous-error)
+      printf 'Could not access domain for user gui: transient failure\\n' >&2
+      exit 1
+      ;;
+    loaded)
+      exit 0
+      ;;
+  esac
+fi
 if [[ "$1" == "bootout" && "\${OPENCLAW_TEST_LAUNCHCTL_BOOTOUT_FAIL:-0}" == "1" ]]; then
   exit 1
 fi
@@ -110,6 +125,7 @@ function runGc(
     plistBuddy: string;
     quarantine: string;
     launchctlBootoutFails?: boolean;
+    launchctlPrintMode?: "loaded" | "absent" | "ambiguous-error";
   },
 ) {
   return spawnSync("bash", [path.join(repoRoot, "scripts/gc-worktrees.sh"), "--auto"], {
@@ -122,6 +138,7 @@ function runGc(
       OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR: env.launchAgents,
       OPENCLAW_WORKTREE_GC_QUARANTINE_DIR: env.quarantine,
       OPENCLAW_TEST_LAUNCHCTL_BOOTOUT_FAIL: env.launchctlBootoutFails ? "1" : "0",
+      OPENCLAW_TEST_LAUNCHCTL_PRINT_MODE: env.launchctlPrintMode ?? "loaded",
     },
     encoding: "utf8",
   });
@@ -304,6 +321,74 @@ describe("gc-worktrees LaunchAgent retirement", () => {
     expect(fs.existsSync(ownedPlist)).toBe(true);
     expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(false);
     expect(fs.readFileSync(tools.launchctlLog, "utf8")).toContain("source_present=0 bootout");
+    expect(result.stderr).toContain("restored plist and preserved worktree");
+  });
+
+  it("accepts explicit service-not-found evidence without attempting bootout", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "absent",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(false);
+    expect(fs.existsSync(ownedPlist)).toBe(false);
+    expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(true);
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).toContain("source_present=0 print");
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).not.toContain("bootout");
+  });
+
+  it("restores the plist and preserves the worktree on ambiguous launchctl print failure", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const ownedPlist = path.join(launchAgents, "owned.plist");
+    writePlistFixture(
+      ownedPlist,
+      ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
+    );
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      launchctlPrintMode: "ambiguous-error",
+    });
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.existsSync(ownedPlist)).toBe(true);
+    expect(fs.existsSync(path.join(quarantine, path.basename(ownedPlist)))).toBe(false);
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).toContain("source_present=0 print");
+    expect(fs.readFileSync(tools.launchctlLog, "utf8")).not.toContain("bootout");
+    expect(result.stderr).toContain(
+      "launchctl print failed without service-not-found confirmation",
+    );
     expect(result.stderr).toContain("restored plist and preserved worktree");
   });
 
