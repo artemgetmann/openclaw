@@ -622,8 +622,10 @@ export async function runTelegramMonitorServiceStatus(
     listenerHealthUnavailable = true;
     return undefined;
   });
+  const listenerOwnerPid = listenerHealth?.record.owner.pid;
+  // Missing evidence cannot prove that the running service owns this listener heartbeat.
   const listenerOwnerMatches =
-    runtime.pid === undefined || runtime.pid === listenerHealth?.record.owner.pid;
+    runtime.pid !== undefined && listenerOwnerPid !== undefined && runtime.pid === listenerOwnerPid;
   const acceptance = {
     configured: command !== null,
     loaded,

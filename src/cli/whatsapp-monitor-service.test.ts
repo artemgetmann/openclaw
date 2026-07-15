@@ -450,4 +450,45 @@ describe("whatsapp-monitor monitor-service cli", () => {
       },
     });
   });
+
+  it.each([
+    {
+      caseName: "runtime PID is missing",
+      owner: { pid: 1234 },
+      runtime: { status: "running" },
+    },
+    {
+      caseName: "listener owner PID is missing",
+      owner: {},
+      runtime: { pid: 1234, status: "running" },
+    },
+  ])("rejects listener ownership when $caseName", async ({ owner, runtime }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-health-owner-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await updateListenerHealth({
+      check: "success",
+      owner,
+      pollIntervalMs: 1_000,
+      service: "whatsapp",
+      storePath: path.join(root, "listener-health.json"),
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: ["openclaw", "--monitor-store", monitorStore],
+    });
+    service.readRuntime.mockResolvedValueOnce(runtime);
+
+    await runWhatsAppMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(log)).toMatchObject({
+      service: {
+        acceptance: {
+          healthy: false,
+          ownership: { listener: { pidMatches: false } },
+        },
+        listenerHealth: { state: "healthy" },
+      },
+    });
+  });
 });
