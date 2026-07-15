@@ -75,6 +75,29 @@ openclaw_build_path_metadata() {
   fi
 }
 
+openclaw_build_path_protected_file_flags_reason() {
+  local target="$1"
+  local flags
+  local normalized_flags
+
+  # macOS stat exposes chflags state as a comma-separated string via %Sf. GNU
+  # stat rejects this invocation, which cleanly disables this check on Linux.
+  flags="$(stat -f '%Sf' "$target" 2>/dev/null)" || return 1
+  normalized_flags=",$(printf '%s' "$flags" | tr '[:space:]' ','),"
+
+  # Accept both chflags names and the longer aliases BSD stat implementations
+  # may emit. These flags can make rm partially mutate a tree before failing.
+  case "$normalized_flags" in
+    *,uchg,*|*,uimmutable,*|*,schg,*|*,simmutable,*|*,uappnd,*|*,uappend,*|*,sappnd,*|*,sappend,*)
+      printf 'protected_flags=%s; %s; operator action: inspect and clear flags on this exact path only if confirmed disposable; cleanup will not clear file flags\n' \
+        "$flags" "$(openclaw_build_path_metadata "$target")"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 openclaw_build_path_permission_protection_reason() {
   local target="$1"
   local owner_uid
@@ -114,8 +137,9 @@ openclaw_build_path_permission_protection_reason() {
 openclaw_build_tree_removal_protection_reason() {
   local target="$1"
   local target_parent
-  local descendant_dir
+  local descendant_path
   local protection_reason
+  local file_flags_supported=0
 
   if protection_reason="$(openclaw_build_path_permission_protection_reason "$target")"; then
     printf '%s\n' "$protection_reason"
@@ -129,26 +153,41 @@ openclaw_build_tree_removal_protection_reason() {
     return 0
   fi
 
+  # Probe once per candidate. On macOS every descendant must be inspected,
+  # including regular files; Linux skips the unsupported BSD stat format.
+  if stat -f '%Sf' "$target" >/dev/null 2>&1; then
+    file_flags_supported=1
+  fi
+  if [[ "$file_flags_supported" == "1" ]] && protection_reason="$(openclaw_build_path_protected_file_flags_reason "$target")"; then
+    printf 'protected_descendant=%s; %s\n' "$target" "$protection_reason"
+    return 0
+  fi
+
   [[ -d "$target" ]] || return 1
 
   # rm -rf can delete accessible siblings before discovering a blocked nested
-  # directory. Walk every directory first and require enumerate, search, and
-  # removal access before the caller is allowed to mutate anything.
-  while IFS= read -r -d '' descendant_dir; do
-    if protection_reason="$(openclaw_build_path_permission_protection_reason "$descendant_dir")"; then
-      printf 'protected_descendant=%s; %s\n' "$descendant_dir" "$protection_reason"
+  # path. Walk every file and directory for protected flags, then apply
+  # enumerate/search/removal checks to directories before any mutation.
+  while IFS= read -r -d '' descendant_path; do
+    if [[ "$file_flags_supported" == "1" ]] && protection_reason="$(openclaw_build_path_protected_file_flags_reason "$descendant_path")"; then
+      printf 'protected_descendant=%s; %s\n' "$descendant_path" "$protection_reason"
       return 0
     fi
-    if [[ ! -w "$descendant_dir" ]]; then
+    [[ -d "$descendant_path" ]] || continue
+    if protection_reason="$(openclaw_build_path_permission_protection_reason "$descendant_path")"; then
+      printf 'protected_descendant=%s; %s\n' "$descendant_path" "$protection_reason"
+      return 0
+    fi
+    if [[ ! -w "$descendant_path" ]]; then
       printf 'removal-protected descendant=%s; %s; operator action: inspect this exact nested directory; cleanup will not alter permissions\n' \
-        "$descendant_dir" "$(openclaw_build_path_metadata "$descendant_dir")"
+        "$descendant_path" "$(openclaw_build_path_metadata "$descendant_path")"
       return 0
     fi
-  done < <(find "$target" -type d -print0 2>/dev/null)
+  done < <(find "$target" -print0 2>/dev/null)
 
   # A second traversal captures errors that occur before find can emit a path.
   # No deletion happens if the complete tree cannot be enumerated reliably.
-  if ! find "$target" -type d -print0 >/dev/null 2>&1; then
+  if ! find "$target" -print0 >/dev/null 2>&1; then
     printf 'traversal-protected target=%s; %s; operator action: inspect inaccessible descendants; cleanup will not alter permissions\n' \
       "$target" "$(openclaw_build_path_metadata "$target")"
     return 0

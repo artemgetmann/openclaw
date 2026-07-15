@@ -10,6 +10,8 @@ TMP_DIR="$(mktemp -d)"
 BUILD_ROOT="$TMP_DIR/build-artifacts"
 OUT="$TMP_DIR/out.txt"
 ACTIVE_PROCESS_PID=""
+IMMUTABLE_FIXTURE_PATH=""
+IMMUTABLE_FIXTURE_SET=0
 
 stop_active_process_fixture() {
   if [[ -z "$ACTIVE_PROCESS_PID" ]]; then
@@ -26,6 +28,12 @@ stop_active_process_fixture() {
 
 cleanup() {
   stop_active_process_fixture
+  # Only the fixture cleanup clears a flag, and only on the exact temp file the
+  # test marked immutable. Production cleanup never calls chflags.
+  if [[ "$IMMUTABLE_FIXTURE_SET" == "1" && -n "$IMMUTABLE_FIXTURE_PATH" ]]; then
+    chflags nouchg "$IMMUTABLE_FIXTURE_PATH" 2>/dev/null || true
+    IMMUTABLE_FIXTURE_SET=0
+  fi
   # The permission fixture is deliberately unreadable during the test. Restore
   # owner access only so the test harness can remove its own temporary tree.
   chmod -R u+rwx "$TMP_DIR" 2>/dev/null || true
@@ -88,8 +96,11 @@ PROCESS_ACTIVE="$RUNS/20200103T000000Z-package-mac-app-700.active-process"
 PARTIAL_CANDIDATE="$BUILD_ROOT/tmp/partial-delete-candidate"
 PARTIAL_NESTED="$PARTIAL_CANDIDATE/nested-inaccessible"
 PARTIAL_SIBLING="$PARTIAL_CANDIDATE/accessible-sibling.txt"
+IMMUTABLE_CANDIDATE="$BUILD_ROOT/tmp/immutable-delete-candidate"
+IMMUTABLE_FILE="$IMMUTABLE_CANDIDATE/immutable.txt"
+IMMUTABLE_SIBLING="$IMMUTABLE_CANDIDATE/sibling.txt"
 
-mkdir -p "$GENERIC_OLD" "$RELEASE_OLD" "$PROTECTED" "$ACTIVE" "$RELEASE_NEW" "$PERMISSION_PROTECTED" "$PROCESS_ACTIVE" "$PARTIAL_NESTED"
+mkdir -p "$GENERIC_OLD" "$RELEASE_OLD" "$PROTECTED" "$ACTIVE" "$RELEASE_NEW" "$PERMISSION_PROTECTED" "$PROCESS_ACTIVE" "$PARTIAL_NESTED" "$IMMUTABLE_CANDIDATE"
 printf 'generic\n' >"$GENERIC_OLD/payload"
 printf 'release\n' >"$RELEASE_OLD/payload"
 printf 'keep\n' >"$PROTECTED/.openclaw-protected"
@@ -99,6 +110,8 @@ printf 'protected\n' >"$PERMISSION_PROTECTED/payload"
 printf 'actively tailed\n' >"$PROCESS_ACTIVE/payload"
 printf 'must survive whole\n' >"$PARTIAL_SIBLING"
 printf 'blocked child\n' >"$PARTIAL_NESTED/payload"
+printf 'flagged\n' >"$IMMUTABLE_FILE"
+printf 'must also survive\n' >"$IMMUTABLE_SIBLING"
 
 # Explicit mtimes make newest-retention deterministic on macOS and Linux. Touch
 # marker-bearing directories last because creating the marker updates mtime.
@@ -109,8 +122,19 @@ touch -t 202201010000 "$RELEASE_NEW"
 touch -t 202001020000 "$PERMISSION_PROTECTED"
 touch -t 202001030000 "$PROCESS_ACTIVE"
 touch -t 202001040000 "$PARTIAL_NESTED" "$PARTIAL_CANDIDATE"
+touch -t 202001050000 "$IMMUTABLE_CANDIDATE"
 chmod 000 "$PERMISSION_PROTECTED"
 chmod 000 "$PARTIAL_NESTED"
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  command -v chflags >/dev/null 2>&1 || fail "macOS immutable fixture requires chflags"
+  chflags uchg "$IMMUTABLE_FILE"
+  IMMUTABLE_FIXTURE_PATH="$IMMUTABLE_FILE"
+  IMMUTABLE_FIXTURE_SET=1
+else
+  printf 'SKIP: immutable file-flag fixture requires macOS chflags\n'
+  rm -rf "$IMMUTABLE_CANDIDATE"
+fi
 
 # The path is present in tail's command line and the payload remains open. This
 # exercises the real process/open-file safety gates instead of marker logic.
@@ -131,6 +155,9 @@ assert_record "active-process" "$PROCESS_ACTIVE" "dry-run detects genuinely acti
 assert_record "skip" "$PERMISSION_PROTECTED" "dry-run reports permission-protected entry"
 assert_record "unknown" "$PERMISSION_PROTECTED" "dry-run does not misreport unreadable size as zero"
 assert_record "unknown" "$PARTIAL_CANDIDATE" "dry-run rejects candidate with inaccessible descendant"
+if [[ "$IMMUTABLE_FIXTURE_SET" == "1" ]]; then
+  assert_record "unknown" "$IMMUTABLE_CANDIDATE" "dry-run rejects immutable descendant"
+fi
 assert_output_has "owner=" "permission report includes owner metadata"
 assert_output_has "mode=" "permission report includes mode metadata"
 
@@ -148,9 +175,20 @@ assert_file_exists "$PROCESS_ACTIVE" "apply keeps genuinely active run"
 assert_file_exists "$PERMISSION_PROTECTED" "apply keeps permission-protected entry and continues"
 assert_file_exists "$PARTIAL_NESTED" "apply keeps candidate with inaccessible descendant"
 assert_file_exists "$PARTIAL_SIBLING" "pre-delete validation leaves accessible sibling untouched"
+if [[ "$IMMUTABLE_FIXTURE_SET" == "1" ]]; then
+  assert_file_exists "$IMMUTABLE_FILE" "apply keeps immutable descendant"
+  assert_file_exists "$IMMUTABLE_SIBLING" "immutable preflight leaves accessible sibling untouched"
+fi
 assert_record "active-process" "$PROCESS_ACTIVE" "apply reports active process skip"
 assert_record "unknown" "$PARTIAL_CANDIDATE" "apply reports inaccessible tree size as unknown"
 assert_output_has "protected_descendant=$PARTIAL_NESTED" "apply identifies blocked nested directory"
+if [[ "$IMMUTABLE_FIXTURE_SET" == "1" ]]; then
+  assert_record "unknown" "$IMMUTABLE_CANDIDATE" "apply reports immutable tree size as unknown"
+  assert_output_has "protected_descendant=$IMMUTABLE_FILE" "apply identifies exact immutable descendant"
+  assert_output_has "protected_flags=uchg" "apply reports immutable file flags"
+  [[ "$(stat -f '%Sf' "$IMMUTABLE_FILE")" == *uchg* ]] || fail "apply unexpectedly cleared immutable fixture flag"
+  pass "apply leaves immutable flag unchanged"
+fi
 assert_output_has "operator action:" "apply prints narrow permission remediation"
 STOPPED_ACTIVE_PROCESS_PID="$ACTIVE_PROCESS_PID"
 stop_active_process_fixture
