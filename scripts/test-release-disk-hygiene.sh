@@ -12,6 +12,8 @@ OUT="$TMP_DIR/out.txt"
 ACTIVE_PROCESS_PID=""
 IMMUTABLE_FIXTURE_PATH=""
 IMMUTABLE_FIXTURE_SET=0
+ACL_FIXTURE_PATH=""
+ACL_FIXTURE_SET=0
 
 stop_active_process_fixture() {
   if [[ -z "$ACTIVE_PROCESS_PID" ]]; then
@@ -33,6 +35,12 @@ cleanup() {
   if [[ "$IMMUTABLE_FIXTURE_SET" == "1" && -n "$IMMUTABLE_FIXTURE_PATH" ]]; then
     chflags nouchg "$IMMUTABLE_FIXTURE_PATH" 2>/dev/null || true
     IMMUTABLE_FIXTURE_SET=0
+  fi
+  # As with file flags, ACL mutation is fixture cleanup only and targets the
+  # exact temporary file modified by this test.
+  if [[ "$ACL_FIXTURE_SET" == "1" && -n "$ACL_FIXTURE_PATH" ]]; then
+    chmod -N "$ACL_FIXTURE_PATH" 2>/dev/null || true
+    ACL_FIXTURE_SET=0
   fi
   # The permission fixture is deliberately unreadable during the test. Restore
   # owner access only so the test harness can remove its own temporary tree.
@@ -99,8 +107,11 @@ PARTIAL_SIBLING="$PARTIAL_CANDIDATE/accessible-sibling.txt"
 IMMUTABLE_CANDIDATE="$BUILD_ROOT/tmp/immutable-delete-candidate"
 IMMUTABLE_FILE="$IMMUTABLE_CANDIDATE/immutable.txt"
 IMMUTABLE_SIBLING="$IMMUTABLE_CANDIDATE/sibling.txt"
+ACL_CANDIDATE="$BUILD_ROOT/tmp/acl-delete-candidate"
+ACL_FILE="$ACL_CANDIDATE/deny-delete.txt"
+ACL_SIBLING="$ACL_CANDIDATE/sibling.txt"
 
-mkdir -p "$GENERIC_OLD" "$RELEASE_OLD" "$PROTECTED" "$ACTIVE" "$RELEASE_NEW" "$PERMISSION_PROTECTED" "$PROCESS_ACTIVE" "$PARTIAL_NESTED" "$IMMUTABLE_CANDIDATE"
+mkdir -p "$GENERIC_OLD" "$RELEASE_OLD" "$PROTECTED" "$ACTIVE" "$RELEASE_NEW" "$PERMISSION_PROTECTED" "$PROCESS_ACTIVE" "$PARTIAL_NESTED" "$IMMUTABLE_CANDIDATE" "$ACL_CANDIDATE"
 printf 'generic\n' >"$GENERIC_OLD/payload"
 printf 'release\n' >"$RELEASE_OLD/payload"
 printf 'keep\n' >"$PROTECTED/.openclaw-protected"
@@ -112,6 +123,8 @@ printf 'must survive whole\n' >"$PARTIAL_SIBLING"
 printf 'blocked child\n' >"$PARTIAL_NESTED/payload"
 printf 'flagged\n' >"$IMMUTABLE_FILE"
 printf 'must also survive\n' >"$IMMUTABLE_SIBLING"
+printf 'deny delete\n' >"$ACL_FILE"
+printf 'must survive ACL guard\n' >"$ACL_SIBLING"
 
 # Explicit mtimes make newest-retention deterministic on macOS and Linux. Touch
 # marker-bearing directories last because creating the marker updates mtime.
@@ -123,6 +136,7 @@ touch -t 202001020000 "$PERMISSION_PROTECTED"
 touch -t 202001030000 "$PROCESS_ACTIVE"
 touch -t 202001040000 "$PARTIAL_NESTED" "$PARTIAL_CANDIDATE"
 touch -t 202001050000 "$IMMUTABLE_CANDIDATE"
+touch -t 202001060000 "$ACL_CANDIDATE"
 chmod 000 "$PERMISSION_PROTECTED"
 chmod 000 "$PARTIAL_NESTED"
 
@@ -131,9 +145,14 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   chflags uchg "$IMMUTABLE_FILE"
   IMMUTABLE_FIXTURE_PATH="$IMMUTABLE_FILE"
   IMMUTABLE_FIXTURE_SET=1
+  chmod +a "everyone deny delete" "$ACL_FILE"
+  ACL_FIXTURE_PATH="$ACL_FILE"
+  ACL_FIXTURE_SET=1
 else
   printf 'SKIP: immutable file-flag fixture requires macOS chflags\n'
   rm -rf "$IMMUTABLE_CANDIDATE"
+  printf 'SKIP: extended ACL fixture requires macOS chmod/find\n'
+  rm -rf "$ACL_CANDIDATE"
 fi
 
 # The path is present in tail's command line and the payload remains open. This
@@ -158,6 +177,9 @@ assert_record "unknown" "$PARTIAL_CANDIDATE" "dry-run rejects candidate with ina
 if [[ "$IMMUTABLE_FIXTURE_SET" == "1" ]]; then
   assert_record "unknown" "$IMMUTABLE_CANDIDATE" "dry-run rejects immutable descendant"
 fi
+if [[ "$ACL_FIXTURE_SET" == "1" ]]; then
+  assert_record "unknown" "$ACL_CANDIDATE" "dry-run rejects ACL-protected descendant"
+fi
 assert_output_has "owner=" "permission report includes owner metadata"
 assert_output_has "mode=" "permission report includes mode metadata"
 
@@ -179,6 +201,10 @@ if [[ "$IMMUTABLE_FIXTURE_SET" == "1" ]]; then
   assert_file_exists "$IMMUTABLE_FILE" "apply keeps immutable descendant"
   assert_file_exists "$IMMUTABLE_SIBLING" "immutable preflight leaves accessible sibling untouched"
 fi
+if [[ "$ACL_FIXTURE_SET" == "1" ]]; then
+  assert_file_exists "$ACL_FILE" "apply keeps ACL-protected descendant"
+  assert_file_exists "$ACL_SIBLING" "ACL preflight leaves accessible sibling untouched"
+fi
 assert_record "active-process" "$PROCESS_ACTIVE" "apply reports active process skip"
 assert_record "unknown" "$PARTIAL_CANDIDATE" "apply reports inaccessible tree size as unknown"
 assert_output_has "protected_descendant=$PARTIAL_NESTED" "apply identifies blocked nested directory"
@@ -188,6 +214,13 @@ if [[ "$IMMUTABLE_FIXTURE_SET" == "1" ]]; then
   assert_output_has "protected_flags=uchg" "apply reports immutable file flags"
   [[ "$(stat -f '%Sf' "$IMMUTABLE_FILE")" == *uchg* ]] || fail "apply unexpectedly cleared immutable fixture flag"
   pass "apply leaves immutable flag unchanged"
+fi
+if [[ "$ACL_FIXTURE_SET" == "1" ]]; then
+  assert_record "unknown" "$ACL_CANDIDATE" "apply reports ACL-protected tree size as unknown"
+  assert_output_has "protected_descendant=$ACL_FILE" "apply identifies exact ACL-protected descendant"
+  assert_output_has "protected_acl=extended" "apply reports extended ACL protection"
+  [[ "$(find "$ACL_FILE" -acl -print)" == "$ACL_FILE" ]] || fail "apply unexpectedly cleared ACL fixture"
+  pass "apply leaves ACL unchanged"
 fi
 assert_output_has "operator action:" "apply prints narrow permission remediation"
 STOPPED_ACTIVE_PROCESS_PID="$ACTIVE_PROCESS_PID"

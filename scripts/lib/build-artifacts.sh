@@ -98,6 +98,16 @@ openclaw_build_path_protected_file_flags_reason() {
   return 1
 }
 
+openclaw_build_path_extended_acl_reason() {
+  local target="$1"
+
+  # The batched find -acl query has already proved an extended ACL exists. Keep
+  # reporting read-only and narrow; cleanup never attempts chmod -N or rewrites
+  # ACL entries because their ownership and intent require operator review.
+  printf 'protected_acl=extended; %s; operator action: inspect and remove the ACL on this exact path only if confirmed disposable; cleanup will not alter ACLs\n' \
+    "$(openclaw_build_path_metadata "$target")"
+}
+
 openclaw_build_path_permission_protection_reason() {
   local target="$1"
   local owner_uid
@@ -138,6 +148,7 @@ openclaw_build_tree_removal_protection_reason() {
   local target="$1"
   local target_parent
   local descendant_dir
+  local protected_acl_path=""
   local protected_flags_path=""
   local protection_reason
 
@@ -162,6 +173,18 @@ openclaw_build_tree_removal_protection_reason() {
   if [[ -n "$protected_flags_path" ]]; then
     protection_reason="$(openclaw_build_path_protected_file_flags_reason "$protected_flags_path")"
     printf 'protected_descendant=%s; %s\n' "$protected_flags_path" "$protection_reason"
+    return 0
+  fi
+
+  # BSD find also evaluates extended ACL presence in-process across the whole
+  # candidate. GNU find rejects -acl, leaving the result empty and safely
+  # bypassing this macOS-only guard without per-file subprocesses.
+  while IFS= read -r -d '' protected_acl_path; do
+    break
+  done < <(find "$target" -acl -print0 -quit 2>/dev/null)
+  if [[ -n "$protected_acl_path" ]]; then
+    protection_reason="$(openclaw_build_path_extended_acl_reason "$protected_acl_path")"
+    printf 'protected_descendant=%s; %s\n' "$protected_acl_path" "$protection_reason"
     return 0
   fi
 
