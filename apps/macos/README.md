@@ -214,6 +214,12 @@ If a wrapper adds another output or staging volume, append another label/path
 pair. Do not replace this with a repo-root-only check: that recreates the
 cross-volume blind spot.
 
+The standalone default checks the build-artifact `runs/` parent without
+creating a unique release run. The package wrapper normally creates its
+`jarvis-release` child there. If `OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT` selects an
+alternate exact path, the caller must pass that path with `--staging-path` or as
+the `release-staging` pair above.
+
 If old failed staging is consuming space, report it first, then apply the same
 conservative policy explicitly:
 

@@ -328,9 +328,34 @@ JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE=4096 \
 assert_output_has "shortfall_kib=0" "capacity pass has no shortfall"
 assert_output_has "status=pass" "capacity pass succeeds"
 
+PREFLIGHT_SCRIPT="$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh"
+[[ -x "$PREFLIGHT_SCRIPT" ]] || fail "release disk preflight must remain executable"
+pass "release disk preflight has executable mode"
+
+# Exercise the same helper used by package-openclaw-mac-dist.sh and lock its
+# filesystem contract: the heavy-write root is a unique jarvis-release child
+# under the build-artifact runs parent.
+PACKAGE_CONTRACT_ROOT="$TMP_DIR/package-contract-build-artifacts"
+PACKAGE_CONTRACT_RUN="$(
+  OPENCLAW_BUILD_ARTIFACT_ROOT="$PACKAGE_CONTRACT_ROOT" \
+    /bin/bash -c 'source "$1"; openclaw_build_run_root jarvis-release' \
+      fixture "$ROOT_DIR/scripts/lib/build-artifacts.sh"
+)"
+[[ "$(dirname "$PACKAGE_CONTRACT_RUN")" == "$PACKAGE_CONTRACT_ROOT/runs" ]] || \
+  fail "package run helper escaped build-artifact runs parent: $PACKAGE_CONTRACT_RUN"
+pass "package run helper selects build runs parent"
+case "$(basename "$PACKAGE_CONTRACT_RUN")" in
+  *-jarvis-release-*) pass "package run helper creates unique jarvis-release child" ;;
+  *) fail "package run helper produced unexpected child name: $PACKAGE_CONTRACT_RUN" ;;
+esac
+
 DISK_PROBE_STUB="$TMP_DIR/disk-probe-stub.sh"
 {
   printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'if [[ "$1" == "${EXPECTED_DEFAULT_OUTPUT:-}" || "$1" == "${EXPECTED_DEFAULT_STAGING:-}" ]]; then'
+  printf '%s\n' '  printf "fs-default\t/Volumes/default\t8192\t%s\n" "$1"'
+  printf '%s\n' '  exit 0'
+  printf '%s\n' 'fi'
   printf '%s\n' 'case "$1" in'
   printf '%s\n' '  */shared-output|*/shared-staging) printf "fs-shared\t/Volumes/shared\t4096\t%s\n" "$1" ;;'
   printf '%s\n' '  */other-output) printf "fs-other\t/Volumes/other\t8192\t%s\n" "$1" ;;'
@@ -339,6 +364,34 @@ DISK_PROBE_STUB="$TMP_DIR/disk-probe-stub.sh"
   printf '%s\n' 'esac'
 } >"$DISK_PROBE_STUB"
 chmod +x "$DISK_PROBE_STUB"
+
+# The package wrapper creates one unique jarvis-release child below this runs
+# parent. The standalone gate must inspect that parent filesystem without
+# calling the mkdir/mktemp helper or otherwise creating staging.
+DEFAULT_ARTIFACT_ROOT="$TMP_DIR/default-build-artifacts"
+EXPECTED_DEFAULT_OUTPUT="$ROOT_DIR/dist" \
+EXPECTED_DEFAULT_STAGING="$DEFAULT_ARTIFACT_ROOT/runs" \
+OPENCLAW_BUILD_ARTIFACT_ROOT="$DEFAULT_ARTIFACT_ROOT" \
+JARVIS_RELEASE_DISK_PROBE_COMMAND="$DISK_PROBE_STUB" \
+  "$PREFLIGHT_SCRIPT" --required-kib 2048 >"$OUT" 2>&1
+assert_output_has "target[1].label=release-output" "standalone default labels release output"
+assert_output_has "target[1].path=$ROOT_DIR/dist" "standalone default selects repo dist output"
+assert_output_has "target[2].label=release-staging" "standalone default labels release staging"
+assert_output_has "target[2].path=$DEFAULT_ARTIFACT_ROOT/runs" "standalone default selects build runs parent"
+[[ ! -e "$DEFAULT_ARTIFACT_ROOT" ]] || fail "read-only standalone preflight unexpectedly created staging"
+pass "standalone default does not create release staging"
+
+# Alternate wrapper paths are caller-owned. Prove the public flags forward both
+# exact strings instead of replacing them with the standalone defaults.
+EXPLICIT_OUTPUT="$TMP_DIR/shared-output"
+EXPLICIT_STAGING="$TMP_DIR/shared-staging"
+JARVIS_RELEASE_DISK_PROBE_COMMAND="$DISK_PROBE_STUB" \
+  "$PREFLIGHT_SCRIPT" \
+    --output-path "$EXPLICIT_OUTPUT" \
+    --staging-path "$EXPLICIT_STAGING" \
+    --required-kib 2048 >"$OUT" 2>&1
+assert_output_has "target[1].path=$EXPLICIT_OUTPUT" "explicit release output path passes unchanged"
+assert_output_has "target[2].path=$EXPLICIT_STAGING" "explicit release staging path passes unchanged"
 
 JARVIS_RELEASE_DISK_PROBE_COMMAND="$DISK_PROBE_STUB" \
   /bin/bash "$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh" \
