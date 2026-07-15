@@ -232,6 +232,14 @@ printf "unstable-%s-%s\n" "$$" "${RANDOM:-0}"'
     || fail "tracked deletion reported wrong failure"
   git -C "$repo" restore release.sh
 
+  chmod -x "$repo/release.sh"
+  if openclaw_jarvis_release_intent_authorize "$repo" 60 >/dev/null 2>"$err"; then
+    fail "tracked executable-mode change was authorized"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "tracked-state-dirty" ]] \
+    || fail "tracked mode change reported wrong failure"
+  chmod +x "$repo/release.sh"
+
   intent_id="$(openclaw_jarvis_release_intent_authorize "$repo" 60)"
   [[ "$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT)" == "$clean_one" ]] \
     || fail "clean tracked fingerprint was not persisted"

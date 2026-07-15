@@ -74,6 +74,7 @@ openclaw_jarvis_release_intent_tracked_diff() {
   LC_ALL=C TZ=UTC git -C "$root" --no-pager \
     -c color.ui=false \
     -c core.quotePath=true \
+    -c core.fileMode=true \
     diff \
     --binary \
     --full-index \
@@ -82,6 +83,7 @@ openclaw_jarvis_release_intent_tracked_diff() {
     --no-ext-diff \
     --no-textconv \
     --no-renames \
+    --ignore-submodules=none \
     --no-indent-heuristic \
     --diff-algorithm=minimal \
     --src-prefix=a/ \
