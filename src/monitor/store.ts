@@ -35,7 +35,9 @@ const MAX_LISTENER_EVIDENCE_IDENTIFIER_LENGTH = 512;
  * store invariant for callers that bypass the protocol schema.
  */
 export function normalizeMonitorInstructions(instructions: string): string {
-  return instructions.trim().slice(0, MONITOR_INSTRUCTIONS_MAX_LENGTH);
+  // JSON Schema maxLength counts Unicode code points, while String.slice
+  // counts UTF-16 units and can split a valid non-BMP character in half.
+  return Array.from(instructions.trim()).slice(0, MONITOR_INSTRUCTIONS_MAX_LENGTH).join("");
 }
 
 type MonitorIdentityInput = {

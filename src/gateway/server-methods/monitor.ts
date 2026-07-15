@@ -720,12 +720,13 @@ export const monitorHandlers: GatewayRequestHandlers = {
         // disclosure purpose. Recover that persisted contract before trusting
         // text from a later duplicate request. Named monitors stored only their
         // display label there, so that value is not safe to promote to a task.
-        const reconciledInstructions =
+        const reconciledInstructions = normalizeMonitorInstructions(
           existingMonitor.instructions?.trim() ||
-          (!existingMonitor.name?.trim()
-            ? existingMonitor.disclosure?.purpose.trim()
-            : undefined) ||
-          p.instructions;
+            (!existingMonitor.name?.trim()
+              ? existingMonitor.disclosure?.purpose.trim()
+              : undefined) ||
+            p.instructions,
+        );
         const disclosure = buildMonitorDisclosure({
           purpose: resolveMonitorDisclosurePurpose({
             instructions: reconciledInstructions,

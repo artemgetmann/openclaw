@@ -317,6 +317,29 @@ describe("monitor gateway handlers", () => {
       sourceTarget: baseParams.sourceTarget,
     });
     expect(invokeContext.cronAdd).toHaveBeenCalledOnce();
+
+    const oversizedLegacyPurpose = "x".repeat(MONITOR_INSTRUCTIONS_MAX_LENGTH + 1);
+    const oversizedLegacyMonitor = reloaded.monitors[0];
+    if (!oversizedLegacyMonitor?.disclosure) {
+      throw new Error("monitor.create did not persist the legacy disclosure");
+    }
+    delete oversizedLegacyMonitor.instructions;
+    oversizedLegacyMonitor.disclosure.purpose = oversizedLegacyPurpose;
+    await saveMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+      reloaded,
+    );
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, instructions: "Fallback task that should not replace legacy evidence." },
+      "req-contract-legacy-bounded-repair",
+    );
+
+    reloaded = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(reloaded.monitors[0]?.instructions).toBe("x".repeat(MONITOR_INSTRUCTIONS_MAX_LENGTH));
+    expect(invokeContext.cronAdd).toHaveBeenCalledOnce();
   });
 
   it("does not promote a named legacy monitor's display label into task instructions", async () => {
@@ -2261,6 +2284,31 @@ describe("monitor gateway handlers", () => {
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(invokeContext.cronAdd).not.toHaveBeenCalled();
+  });
+
+  it("preserves accepted boundary-length Unicode instructions exactly", async () => {
+    const invokeContext = createInvokeContext();
+    const instructions = "x".repeat(MONITOR_INSTRUCTIONS_MAX_LENGTH - 1) + "😀";
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions,
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "unicode-instructions" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      "req-unicode-boundary-instructions",
+    );
+
+    const call = invokeContext.respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    const reloaded = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(reloaded.monitors[0]?.instructions).toBe(instructions);
   });
 
   it("persists bounded matched listener evidence before cron enqueue", async () => {
