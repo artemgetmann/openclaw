@@ -9,6 +9,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
 
 PACKAGE_SCRIPT="$ROOT_DIR/scripts/package-openclaw-mac-dist.sh"
 STATE_ROOT="${OPENCLAW_JARVIS_RELEASE_STATE_ROOT:-$ROOT_DIR}"
@@ -26,6 +28,10 @@ SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-
 RUN_SIZE_REPORT=0
 PARALLEL_SAFE_LOCAL_ASSETS=0
 URGENT_SPARKLE_ONLY=0
+AUTHORIZE_RELEASE=0
+RELEASE_INTENT_ID=""
+RELEASE_INTENT_TTL_SECONDS=900
+RELEASE_INTENT_TTL_EXPLICIT=0
 
 usage() {
   cat <<'EOF'
@@ -35,6 +41,15 @@ Chooses the next Jarvis public-release package phase from existing dist
 artifacts, notary receipts, and dist/jarvis-release-manifest.env.
 
 Options:
+  --authorize
+      Create the latest expiring release intent for the current commit and
+      print the one exact command that may execute it. Authorization does not
+      build, sign, notarize, upload, or inspect release artifacts.
+  --release-intent <id>
+      Required for every non-dry-run release execution. Only the latest
+      unexpired intent created by --authorize is accepted.
+  --intent-ttl-seconds <seconds>
+      Authorization lifetime for --authorize (default 900, maximum 3600).
   --dry-run
       Print the selected phase and command without building, notarizing,
       uploading, or verifying public URLs.
@@ -199,11 +214,121 @@ fail_before_execute() {
   echo "  elapsed_seconds=0" >&2
   echo "  summary=$SUMMARY_REPORT" >&2
   echo "  timing_report=$TIMING_REPORT" >&2
+  if [[ "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "expired" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "replaced" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "missing" ]]; then
+    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+  else
+    echo "recovery_command=$RECOVERY_COMMAND" >&2
+  fi
   exit "$status"
+}
+
+checkpoint_valid() {
+  openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$@" >/dev/null 2>&1
+}
+
+select_checkpoint_safe_phase() {
+  local app="$DIST_DIR/${APP_NAME}.app"
+  local dmg="$DIST_DIR/${APP_NAME}.dmg"
+  local zip="$DIST_DIR/${APP_NAME}.zip"
+  local appcast="$DIST_DIR/jarvis-appcast.xml"
+  local app_receipt="$DIST_DIR/${APP_NAME}.app.notary.env"
+  local dmg_receipt="$DIST_DIR/${APP_NAME}.dmg.notary.env"
+  local app_state=""
+  local dmg_state=""
+
+  # Resume state flows only from strict artifact checkpoints. The manifest is
+  # intentionally absent from this decision: Accepted text plus file existence
+  # is operator context, not proof that those bytes belong to this commit.
+  if checkpoint_valid "$app" app app-notarized "$app_receipt"; then
+    app_state="notarized"
+  elif checkpoint_valid "$app" app app-notary-submitted "$app_receipt"; then
+    app_state="submitted"
+  elif checkpoint_valid "$app" app app-signed; then
+    app_state="signed"
+  else
+    printf '%s\n' "full"
+    return 0
+  fi
+
+  if [[ "$app_state" == "signed" ]]; then
+    printf '%s\n' "submit-app-notarization"
+    return 0
+  fi
+  if [[ "$app_state" == "submitted" ]]; then
+    printf '%s\n' "poll-app-notarization"
+    return 0
+  fi
+
+  if [[ "$URGENT_SPARKLE_ONLY" == "1" ]]; then
+    if ! checkpoint_valid "$zip" zip sparkle-zip || ! checkpoint_valid "$appcast" appcast sparkle-appcast; then
+      printf '%s\n' "create-local-release-assets-only"
+    elif [[ "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
+      printf '%s\n' "verify-sparkle-assets-only"
+    elif [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
+      printf '%s\n' "publish-sparkle-assets-only"
+    else
+      printf '%s\n' "ready-sparkle-local-assets"
+    fi
+    return 0
+  fi
+
+  if checkpoint_valid "$dmg" dmg dmg-notarized "$dmg_receipt"; then
+    dmg_state="notarized"
+  elif checkpoint_valid "$dmg" dmg dmg-notary-submitted "$dmg_receipt"; then
+    dmg_state="submitted"
+  elif checkpoint_valid "$dmg" dmg dmg-signed; then
+    dmg_state="signed"
+  fi
+
+  case "$dmg_state" in
+    notarized)
+      if ! checkpoint_valid "$zip" zip sparkle-zip || ! checkpoint_valid "$appcast" appcast sparkle-appcast; then
+        printf '%s\n' "create-local-release-assets-only"
+      elif [[ "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
+        printf '%s\n' "verify-public-assets-only"
+      elif [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
+        printf '%s\n' "publish-assets-only"
+      else
+        printf '%s\n' "ready-local-assets"
+      fi
+      ;;
+    submitted)
+      if [[ "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" ]] \
+        && { ! checkpoint_valid "$zip" zip sparkle-zip || ! checkpoint_valid "$appcast" appcast sparkle-appcast; }; then
+        printf '%s\n' "create-local-release-assets-only"
+      else
+        printf '%s\n' "poll-dmg-notarization"
+      fi
+      ;;
+    signed|"")
+      printf '%s\n' "submit-dmg-notarization"
+      ;;
+  esac
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --authorize)
+      AUTHORIZE_RELEASE=1
+      shift
+      ;;
+    --release-intent)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --release-intent requires a value." >&2
+        exit 1
+      fi
+      RELEASE_INTENT_ID="$2"
+      shift 2
+      ;;
+    --intent-ttl-seconds)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --intent-ttl-seconds requires a value." >&2
+        exit 1
+      fi
+      RELEASE_INTENT_TTL_SECONDS="$2"
+      RELEASE_INTENT_TTL_EXPLICIT=1
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -260,6 +385,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" || "$PUBLISH_RELEASE_ASSETS" == "1" || "$VERIFY_PUBLIC_ASSETS" == "1" || "$FORCED_PHASE" != "auto" || "$LATEST_RELEASE_TAG" == "1" || -n "$GITHUB_RELEASE_TAG" || "$RUN_SIZE_REPORT" == "1" || "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" || "$URGENT_SPARKLE_ONLY" == "1" || -n "$RELEASE_INTENT_ID" ]]; then
+    echo "ERROR: --authorize is a standalone operator action; do not combine it with release execution flags." >&2
+    exit 1
+  fi
+  openclaw_require_jarvis_release_worktree "$ROOT_DIR"
+  RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS")"
+  echo "jarvis_release_intent=authorized"
+  echo "jarvis_release_intent_id=$RELEASE_INTENT_ID"
+  echo "next_command=bash scripts/jarvis-public-release.sh --release-intent $RELEASE_INTENT_ID"
+  exit 0
+fi
+
+if [[ "$RELEASE_INTENT_TTL_EXPLICIT" == "1" ]]; then
+  echo "ERROR: --intent-ttl-seconds is valid only with standalone --authorize." >&2
+  exit 1
+fi
+
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
   echo "ERROR: choose --publish-release-assets or --verify-public-assets, not both." >&2
   exit 1
@@ -290,18 +433,16 @@ if [[ "$DRY_RUN" != "1" ]]; then
   # same stale next phase before either child starts.
   openclaw_require_jarvis_release_worktree "$ROOT_DIR"
   openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"
+  SELECTED_PHASE="authorization"
+  COMMAND_TEXT="bash scripts/jarvis-public-release.sh"
+  RECOVERY_COMMAND="bash scripts/jarvis-public-release.sh --authorize"
+  if ! openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release phase selection"; then
+    fail_before_execute 2 "ERROR: release execution is not authorized."
+  fi
 fi
 
 if [[ "$FORCED_PHASE" == "auto" ]]; then
-  SELECTED_PHASE="$(
-    jarvis_release_next_phase \
-      "$STATE_ROOT" \
-      "$PUBLISH_RELEASE_ASSETS" \
-      "$VERIFY_PUBLIC_ASSETS" \
-      "$APP_NAME" \
-      "$PARALLEL_SAFE_LOCAL_ASSETS" \
-      "$URGENT_SPARKLE_ONLY"
-  )"
+  SELECTED_PHASE="$(select_checkpoint_safe_phase)"
 else
   SELECTED_PHASE="$FORCED_PHASE"
 fi
@@ -337,6 +478,9 @@ if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
 fi
 
 CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")
+if [[ -n "$RELEASE_INTENT_ID" ]]; then
+  CMD+=(--release-intent "$RELEASE_INTENT_ID")
+fi
 case "$SELECTED_PHASE" in
   full|post-app-build)
     if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
@@ -357,6 +501,7 @@ case "$SELECTED_PHASE" in
 esac
 
 COMMAND_TEXT="$(quote_cmd "${CMD[@]}")"
+RECOVERY_COMMAND="$COMMAND_TEXT"
 
 if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
   fail_before_execute 2 \
@@ -402,6 +547,9 @@ fi
 if [[ "$DRY_RUN" == "1" && "$PUBLISH_RELEASE_ASSETS" == "1" && -z "$GITHUB_RELEASE_TAG" ]]; then
   echo "  required_before_execute=--github-release-tag <latest-tag>"
 fi
+if [[ "$DRY_RUN" == "1" && -z "$RELEASE_INTENT_ID" ]]; then
+  echo "  required_before_execute=bash scripts/jarvis-public-release.sh --authorize"
+fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "dry_run=true"
@@ -409,11 +557,18 @@ if [[ "$DRY_RUN" == "1" ]]; then
 fi
 
 ensure_timing_report
+# A newer operator authorization may have replaced this run after phase
+# selection. Revalidate immediately before delegated execution; the package
+# child repeats this after verified lock ownership transfer.
+if ! openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "delegated package execution"; then
+  fail_before_execute 2 "ERROR: release intent changed after phase selection."
+fi
 started_at="$(iso_now)"
 started_epoch="$(date +%s)"
 set +e
 PACKAGE_TIMING=1 \
 OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TIMING_REPORT" \
+OPENCLAW_JARVIS_RELEASE_RECOVERY_OWNER=wrapper \
   "${CMD[@]}"
 status=$?
 set -e
@@ -433,5 +588,15 @@ echo "  status=$status"
 echo "  elapsed_seconds=$elapsed_seconds"
 echo "  summary=$SUMMARY_REPORT"
 echo "  timing_report=$TIMING_REPORT"
+
+if [[ "$status" -ne 0 ]]; then
+  # Child shell state cannot propagate its failure reason back to this wrapper.
+  # Re-read the durable lease before choosing the sole recovery command.
+  if ! openclaw_jarvis_release_intent_validate "$ROOT_DIR" "$RELEASE_INTENT_ID"; then
+    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize"
+  else
+    echo "recovery_command=$RECOVERY_COMMAND"
+  fi
+fi
 
 exit "$status"

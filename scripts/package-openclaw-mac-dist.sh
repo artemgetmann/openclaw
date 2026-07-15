@@ -16,6 +16,8 @@ source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
@@ -32,6 +34,39 @@ JARVIS_ZIP_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.zip"
 JARVIS_APPCAST_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/jarvis-appcast.xml"
 RELEASE_MANIFEST_PATH="${OPENCLAW_JARVIS_RELEASE_MANIFEST:-$ROOT_DIR/dist/jarvis-release-manifest.env}"
 RELEASE_TIMING_REPORT_PATH="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
+RELEASE_INTENT_ID=""
+ORIGINAL_PACKAGE_ARGS=("$@")
+
+quote_package_command() {
+  local arg
+  printf 'bash %q ' "scripts/package-openclaw-mac-dist.sh"
+  for arg in "${ORIGINAL_PACKAGE_ARGS[@]}"; do
+    printf '%q ' "$arg"
+  done
+  printf '\n'
+}
+
+release_package_exit() {
+  local status="$?"
+  openclaw_jarvis_release_lock_release
+  if [[ "$status" -ne 0 && "${OPENCLAW_JARVIS_RELEASE_RECOVERY_OWNER:-package}" != "wrapper" ]]; then
+    case "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" in
+      missing|expired|replaced|commit|identity|schema)
+        echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+        ;;
+      *)
+        if [[ -n "${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE:-}" ]]; then
+          # A forced direct resume cannot repair a rejected checkpoint. Return
+          # to automatic phase selection under the same still-valid intent.
+          echo "recovery_command=bash scripts/jarvis-public-release.sh --release-intent $RELEASE_INTENT_ID" >&2
+        else
+          echo "recovery_command=$(quote_package_command)" >&2
+        fi
+        ;;
+    esac
+  fi
+  exit "$status"
+}
 
 usage() {
   cat <<'EOF'
@@ -41,6 +76,10 @@ Compatibility alias:
   scripts/package-consumer-mac-dist.sh
 
 Options:
+  --release-intent <id>
+                      Required expiring authorization created by
+                      jarvis-public-release.sh --authorize. Direct package
+                      execution is not authorized by artifact existence.
   --publish-release-assets
                       Upload Jarvis.dmg, Jarvis.zip, and jarvis-appcast.xml to
                       the latest artemgetmann/openclaw GitHub release, then
@@ -976,6 +1015,7 @@ create_signed_dmg() {
   dmg_sign_started_ms="$(release_phase_now_ms)"
   sign_dmg_if_possible "$DMG" "$SIGNING_AUTHORITY"
   release_phase_log_elapsed "$dmg_sign_started_ms" "DMG sign"
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$DMG" dmg dmg-signed
 }
 
 submit_dmg_notarization_only() {
@@ -1051,7 +1091,75 @@ create_local_release_assets_only() {
   ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP"
   assert_sparkle_zip_has_no_macos_metadata "$ZIP"
   generate_jarvis_appcast
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast
   write_release_manifest
+}
+
+release_checkpoint_receipt_submission_id() {
+  local receipt_path="$1"
+  receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID"
+}
+
+write_app_checkpoint_from_receipt() {
+  local intended_phase="$1"
+  local receipt_path
+  local status
+  local submission_id
+  receipt_path="$(app_notary_receipt_path)"
+  status="$(notary_receipt_status "$receipt_path")"
+  submission_id="$(release_checkpoint_receipt_submission_id "$receipt_path")"
+  openclaw_jarvis_release_checkpoint_write \
+    "$ROOT_DIR" "$APP_PATH" app "$intended_phase" "$status" "$submission_id"
+}
+
+write_dmg_checkpoint_from_receipt() {
+  local intended_phase="$1"
+  local receipt_path
+  local status
+  local submission_id
+  receipt_path="$(dmg_notary_receipt_path)"
+  status="$(notary_receipt_status "$receipt_path")"
+  submission_id="$(release_checkpoint_receipt_submission_id "$receipt_path")"
+  openclaw_jarvis_release_checkpoint_write \
+    "$ROOT_DIR" "$DMG" dmg "$intended_phase" "$status" "$submission_id"
+}
+
+require_resume_checkpoints_for_phase() {
+  local app_receipt
+  local dmg_receipt
+  local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  app_receipt="$(app_notary_receipt_path)"
+  dmg_receipt="$(dmg_notary_receipt_path)"
+
+  case "$PACKAGE_PHASE" in
+    post-app-build|submit-app-notarization)
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-signed
+      ;;
+    poll-app-notarization)
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notary-submitted "$app_receipt"
+      ;;
+    submit-dmg-notarization|create-local-release-assets-only)
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
+      ;;
+    poll-dmg-notarization)
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notary-submitted "$dmg_receipt"
+      ;;
+    publish-assets-only|verify-public-assets-only)
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notarized "$dmg_receipt"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$ZIP" zip sparkle-zip
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$appcast" appcast sparkle-appcast
+      ;;
+    publish-sparkle-assets-only|verify-sparkle-assets-only)
+      # Sparkle truth remains independent of DMG truth. Validate only the
+      # notarized app plus its immutable ZIP/appcast pair here.
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$ZIP" zip sparkle-zip
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$appcast" appcast sparkle-appcast
+      ;;
+  esac
 }
 
 while [[ $# -gt 0 ]]; do
@@ -1059,6 +1167,14 @@ while [[ $# -gt 0 ]]; do
     --publish-release-assets)
       PUBLISH_RELEASE_ASSETS=1
       shift
+      ;;
+    --release-intent)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --release-intent requires a value" >&2
+        exit 1
+      fi
+      RELEASE_INTENT_ID="$2"
+      shift 2
       ;;
     --github-release-tag)
       if [[ $# -lt 2 ]]; then
@@ -1128,6 +1244,12 @@ openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 # Every package phase can update release receipts or the manifest, including
 # public verification. Keep one owner across the whole delegated package run.
 openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"
+trap release_package_exit EXIT
+
+# Direct callers and delegated wrapper children share the same authorization
+# contract. This check happens only after verified lock acquisition/transfer,
+# so no stale process can consume a phase snapshot selected by another owner.
+openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "package phase $PACKAGE_PHASE"
 
 if [[ "$PACKAGE_PHASE" == "local-proof" ]]; then
   SKIP_NOTARIZE=1
@@ -1190,6 +1312,16 @@ if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
 fi
 
+# Derive canonical paths before any resume gate. These reads are safe; the
+# first mutation remains below the intent and checkpoint validation barriers.
+VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
+ARTIFACT_BASENAME="${APP_NAME}"
+if [[ "${VERSIONED_ARTIFACT_NAMES:-0}" == "1" ]]; then
+  ARTIFACT_BASENAME="${APP_NAME}-${VERSION}"
+fi
+ZIP="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.zip"
+DMG="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.dmg"
+
 case "$PACKAGE_PHASE" in
   create-local-release-assets-only)
     require_local_release_asset_phase_inputs
@@ -1245,6 +1377,10 @@ case "$PACKAGE_PHASE" in
     ;;
 esac
 
+# Argument/auth/tool checks above are read-only. Artifact reuse is still gated
+# here before verification writes receipts or any release mutation begins.
+require_resume_checkpoints_for_phase
+
 case "$PACKAGE_PHASE" in
   full|local-proof|build-app-only|trusted-ring-fast)
     openclaw_require_macos_prewarm_proof "$ROOT_DIR"
@@ -1257,6 +1393,9 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
 fi
 
 if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
+  # Authorization can be replaced while this process is waiting on preflight.
+  # Revalidate at the final boundary before deleting stale outputs or building.
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release app build"
   # Stale release artifacts under dist/ can get copied into the bundled runtime
   # before the fresh app is assembled. Remove only mac release outputs here; JS
   # build outputs under dist/ are still needed by the packaged CLI/runtime.
@@ -1308,6 +1447,21 @@ NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
 DSYM_ZIP="$ROOT_DIR/dist/${PRODUCT}-${VERSION}.dSYM.zip"
 SIGNING_AUTHORITY="$(bundle_signing_authority "$APP_PATH")"
 write_app_build_receipt
+case "$PACKAGE_PHASE" in
+  full|build-app-only)
+    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$APP_PATH" app app-signed
+    ;;
+  local-proof)
+    # Local proof may use development/ad-hoc signing and must never become a
+    # resumable public notarization input merely because its signature verifies.
+    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$APP_PATH" app app-local-proof
+    ;;
+  trusted-ring-fast)
+    # Trusted-ring output is intentionally non-public and cannot authorize a
+    # later public app-notary phase.
+    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$APP_PATH" app app-trusted-ring
+    ;;
+esac
 write_release_manifest
 
 case "$PACKAGE_PHASE" in
@@ -1343,6 +1497,7 @@ case "$PACKAGE_PHASE" in
   poll-dmg-notarization)
     ;;
   create-local-release-assets-only)
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "local Sparkle asset creation"
     create_local_release_assets_only
     echo "release_sendable=false"
     echo "reason=local Sparkle ZIP/appcast were generated but not uploaded/verified"
@@ -1351,6 +1506,7 @@ case "$PACKAGE_PHASE" in
     ;;
   publish-assets-only)
     require_notarized_manifest_before_publish
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "full public release publication"
     publish_release_assets
     write_release_manifest
     echo "release_sendable=true"
@@ -1359,6 +1515,7 @@ case "$PACKAGE_PHASE" in
     ;;
   publish-sparkle-assets-only)
     require_sparkle_assets_before_publish
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "Sparkle-only publication"
     publish_sparkle_release_assets
     write_release_manifest
     echo "sparkle_update_live=true"
@@ -1369,6 +1526,7 @@ case "$PACKAGE_PHASE" in
     exit 0
     ;;
   verify-public-assets-only)
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "full public release verification"
     verify_public_release_assets
     write_release_manifest
     echo "release_sendable=true"
@@ -1377,6 +1535,7 @@ case "$PACKAGE_PHASE" in
     ;;
   verify-sparkle-assets-only)
     require_sparkle_assets_before_publish
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "Sparkle-only public verification"
     verify_sparkle_public_release_assets
     write_release_manifest
     echo "sparkle_update_live=true"
@@ -1412,25 +1571,31 @@ fi
 
 case "$PACKAGE_PHASE" in
   submit-app-notarization)
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "app notarization submission"
     submit_app_notarization_only
+    write_app_checkpoint_from_receipt app-notary-submitted
     echo "release_sendable=false"
     echo "reason=app notarization was submitted; poll the saved receipt before continuing"
     exit 0
     ;;
   poll-app-notarization)
     poll_app_notarization_only
+    write_app_checkpoint_from_receipt app-notarized
     echo "release_sendable=false"
     echo "reason=app notarization accepted; continue with --phase submit-dmg-notarization"
     exit 0
     ;;
   submit-dmg-notarization)
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG creation and notarization submission"
     submit_dmg_notarization_only
+    write_dmg_checkpoint_from_receipt dmg-notary-submitted
     echo "release_sendable=false"
     echo "reason=DMG notarization was submitted; poll the saved receipt before continuing"
     exit 0
     ;;
   poll-dmg-notarization)
     poll_dmg_notarization_only
+    write_dmg_checkpoint_from_receipt dmg-notarized
     echo "release_sendable=false"
     if [[ ! -f "$ZIP" || ! -f "$ROOT_DIR/dist/jarvis-appcast.xml" ]]; then
       echo "reason=DMG notarization accepted; continue with --phase create-local-release-assets-only to create missing ZIP/appcast"
@@ -1442,6 +1607,7 @@ case "$PACKAGE_PHASE" in
 esac
 
 if [[ "$NOTARIZE" == "1" ]]; then
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "app notarization"
   echo "📦 Notary zip: $NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
@@ -1449,19 +1615,23 @@ if [[ "$NOTARIZE" == "1" ]]; then
     --receipt "$(app_notary_receipt_path)" \
     "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  write_app_checkpoint_from_receipt app-notarized
   write_release_manifest
   OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
   SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
     verify_app_bundle
 fi
 
+openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG creation"
 create_signed_dmg
 
 if [[ "$NOTARIZE" == "1" ]]; then
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarization"
   "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --receipt "$(dmg_notary_receipt_path)" \
     "$DMG"
   verify_dmg_gatekeeper "$DMG"
+  write_dmg_checkpoint_from_receipt dmg-notarized
   write_release_manifest
 fi
 
@@ -1475,6 +1645,8 @@ assert_sparkle_zip_has_no_macos_metadata "$ZIP"
 release_phase_log_elapsed "$zip_started_ms" "Sparkle ZIP create/verify"
 appcast_started_ms="$(release_phase_now_ms)"
 generate_jarvis_appcast
+openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip
+openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast
 release_phase_log_elapsed "$appcast_started_ms" "Jarvis appcast"
 write_release_manifest
 
@@ -1514,6 +1686,7 @@ release_phase_log_elapsed "$handoff_started_ms" "Handoff artifact copy"
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
   require_notarized_manifest_before_publish
 fi
+openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "public release publication"
 publish_started_ms="$(release_phase_now_ms)"
 publish_release_assets
 release_phase_log_elapsed "$publish_started_ms" "Release asset publish/verify"
