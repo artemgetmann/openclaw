@@ -63,16 +63,8 @@ function resolveMonitorDisclosurePurpose(params: {
   instructions: string;
   name?: string;
   existingName?: string;
-  existingInstructions?: string;
 }): string {
-  return (
-    params.name?.trim() ||
-    params.existingName?.trim() ||
-    // A duplicate retry must not relabel an unnamed monitor with new request
-    // text. Only a legacy record lacking the durable contract may adopt it.
-    params.existingInstructions?.trim() ||
-    params.instructions
-  );
+  return params.name?.trim() || params.existingName?.trim() || params.instructions;
 }
 
 function normalizeMonitorCreateSource(params: {
@@ -724,12 +716,18 @@ export const monitorHandlers: GatewayRequestHandlers = {
         const notificationPolicy = resolveMonitorNotificationPolicy(
           p.notificationPolicy ?? existingMonitor.notificationPolicy,
         );
+        // Pre-change unnamed monitors stored their original task as the
+        // disclosure purpose. Recover that persisted contract before trusting
+        // text from a later duplicate request.
+        const reconciledInstructions =
+          existingMonitor.instructions?.trim() ||
+          existingMonitor.disclosure?.purpose.trim() ||
+          p.instructions;
         const disclosure = buildMonitorDisclosure({
           purpose: resolveMonitorDisclosurePurpose({
-            instructions: p.instructions,
+            instructions: reconciledInstructions,
             name: p.name,
             existingName: existingMonitor.name,
-            existingInstructions: existingMonitor.instructions,
           }),
           name: existingMonitor.name,
           sourceType: existingMonitor.sourceType,
@@ -755,7 +753,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
             ? updateMonitorRecord(
                 existingMonitor,
                 {
-                  ...(instructionsChanged ? { instructions: p.instructions } : {}),
+                  ...(instructionsChanged ? { instructions: reconciledInstructions } : {}),
                   ...(goalChanged ? { goal } : {}),
                   ...(triggerChanged ? { trigger: nextTrigger } : {}),
                   ...(contractChanged

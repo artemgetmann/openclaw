@@ -299,7 +299,10 @@ describe("monitor gateway handlers", () => {
     );
     await invokeMonitorCreate(
       invokeContext,
-      { ...baseParams, instructions: originalInstructions },
+      {
+        ...baseParams,
+        instructions: "A later duplicate must recover the persisted legacy task instead.",
+      },
       "req-contract-legacy-repair",
     );
 
