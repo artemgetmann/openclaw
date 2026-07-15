@@ -186,8 +186,15 @@ final class ScreenRecordService {
     }
 
     private static func pickBestWindow(_ windows: [SCWindow]) -> SCWindow? {
-        windows
-            .filter { $0.isOnScreen && $0.frame.width > 0 && $0.frame.height > 0 }
+        // App-name and bundle matching can include tiny Stage Manager thumbnails
+        // and invisible helper surfaces. Reject those before active/area sorting so
+        // an active helper cannot beat the real app window. Explicit window-id
+        // capture bypasses this heuristic and remains exact.
+        let realisticWindows = windows.filter {
+            $0.isOnScreen && Self.isRealisticAppWindowFrame($0.frame)
+        }
+
+        return realisticWindows
             .sorted {
                 if $0.isActive != $1.isActive { return $0.isActive && !$1.isActive }
                 let lhsArea = $0.frame.width * $0.frame.height
@@ -195,6 +202,12 @@ final class ScreenRecordService {
                 return lhsArea > rhsArea
             }
             .first
+    }
+
+    static func isRealisticAppWindowFrame(_ frame: CGRect) -> Bool {
+        // 320x240 excludes toolbar/helper slivers; the area floor also rejects
+        // narrow Stage Manager thumbnails that happen to meet one dimension.
+        frame.width >= 320 && frame.height >= 240 && frame.width * frame.height >= 100_000
     }
 
     private static func trimmed(_ value: String?) -> String? {

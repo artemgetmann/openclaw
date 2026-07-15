@@ -8,6 +8,7 @@ import {
   pickDefaultScreenRecordNode,
   resolveDefaultScreenRecordNodeOrThrow,
   shouldUseNativeMacScreencaptureFallback,
+  shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure,
 } from "./screen-record.js";
 
 describe("screen record CLI params", () => {
@@ -373,6 +374,54 @@ describe("screen record CLI params", () => {
         "darwin",
         localGatewayContext,
       ),
+    ).toBe(false);
+  });
+
+  it("allows post-resolution node capture failures to fall back only for local displays", () => {
+    const mode = {
+      requireTarget: true,
+      requireDisplayReason: true,
+    };
+    const opts = { display: "0", reason: "workflow crosses apps", duration: "2s" };
+    const localGatewayContext = {
+      config: { gateway: { mode: "local" as const } },
+      env: {},
+    };
+
+    expect(
+      shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure(
+        opts,
+        mode,
+        "darwin",
+        localGatewayContext,
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure(
+        { ...opts, node: "mac-1" },
+        mode,
+        "darwin",
+        localGatewayContext,
+      ),
+    ).toBe(false);
+    expect(
+      shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure(
+        { app: "Google Chrome", duration: "2s" },
+        mode,
+        "darwin",
+        localGatewayContext,
+      ),
+    ).toBe(false);
+    expect(
+      shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure(opts, mode, "darwin", {
+        config: {
+          gateway: {
+            mode: "remote",
+            remote: { url: "wss://remote.example.test/ws" },
+          },
+        },
+        env: {},
+      }),
     ).toBe(false);
   });
 
