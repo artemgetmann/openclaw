@@ -375,6 +375,31 @@ describe("gatherDaemonStatus", () => {
     expect(status.extraServices).toHaveLength(1);
   });
 
+  it("does not synthesize a missing canonical gateway after an inspection failure", async () => {
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_PROFILE;
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "unknown",
+      detail: "Operation not permitted",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Operation not permitted",
+    });
+    expect(status.canonicalDefaultGateway).toBeUndefined();
+  });
+
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },

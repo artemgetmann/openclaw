@@ -1,5 +1,11 @@
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
+import {
+  classifyFatalListenerHealthError,
+  resolveListenerHealthStorePath,
+  updateListenerHealth,
+  type ListenerHealthSnapshot,
+} from "../monitor/listener-health.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   getTelegramUserDefaultPollIntervalMs,
@@ -1125,8 +1131,86 @@ export async function telegramUserMonitorPollCommand(
       : undefined,
   };
 
+  const listenerStartedAtMs = Date.now();
+  const healthStorePath = loop
+    ? resolveListenerHealthStorePath({
+        cronStorePath: basePollOptions.cronStorePath,
+        env: process.env,
+        monitorStorePath: basePollOptions.monitorStorePath,
+      })
+    : undefined;
+
+  const reportHealthTransition = (snapshot: ListenerHealthSnapshot) => {
+    if (snapshot.transition === "degraded") {
+      runtime.error(
+        `Telegram listener health degraded: ${snapshot.record.lastError ?? "listener check failed"}`,
+      );
+    } else if (snapshot.transition === "recovered") {
+      runtime.log("Telegram listener health recovered.");
+    }
+  };
+  let healthPersistenceWarningEmitted = false;
+  const persistHealth = async (input: Parameters<typeof updateListenerHealth>[0]) => {
+    try {
+      const snapshot = await updateListenerHealth(input);
+      healthPersistenceWarningEmitted = false;
+      reportHealthTransition(snapshot);
+    } catch {
+      // Health is observability, not routing authority. A permission or lock
+      // failure must not stop matching, dispatch, or cursor commits, and the
+      // in-process latch prevents a once-per-second warning loop.
+      if (!healthPersistenceWarningEmitted) {
+        runtime.error("Telegram listener health persistence unavailable.");
+        healthPersistenceWarningEmitted = true;
+      }
+    }
+  };
+
   for (let runNumber = 1; ; runNumber += 1) {
-    const result = await pollTelegramUserMonitorEvents(basePollOptions);
+    let result: Awaited<ReturnType<typeof pollTelegramUserMonitorEvents>>;
+    try {
+      result = await pollTelegramUserMonitorEvents(basePollOptions);
+    } catch (err) {
+      // Preserve the existing supervisor restart behavior, but first leave a
+      // bounded durable explanation for status. A failed health write must not
+      // replace the original listener failure that operators need to diagnose.
+      if (healthStorePath) {
+        await persistHealth({
+          check: "failure",
+          error: classifyFatalListenerHealthError(err),
+          owner: {
+            pid: process.pid,
+            profile: process.env.OPENCLAW_PROFILE,
+            startedAtMs: listenerStartedAtMs,
+          },
+          pollIntervalMs,
+          service: "telegram-user",
+          storePath: healthStorePath,
+        });
+      }
+      throw err;
+    }
+
+    if (healthStorePath) {
+      const operationalErrors = result.skipped.filter(
+        (skip) => skip.reason === "read_error" || skip.reason === "dispatch_error",
+      );
+      await persistHealth({
+        check: operationalErrors.length > 0 ? "failure" : "success",
+        // Reason codes are useful operational evidence; backend error text is
+        // not. It may contain message bodies, selectors, paths, or credentials.
+        error: operationalErrors.map((skip) => skip.reason).join(","),
+        owner: {
+          pid: process.pid,
+          profile: process.env.OPENCLAW_PROFILE,
+          startedAtMs: listenerStartedAtMs,
+        },
+        pollIntervalMs,
+        routedEvent: result.dispatched > 0,
+        service: "telegram-user",
+        storePath: healthStorePath,
+      });
+    }
     if (readBooleanOpt(opts, "json")) {
       logJson(runtime, loop ? { run: runNumber, ...result } : result);
     } else {

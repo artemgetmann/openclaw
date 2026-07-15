@@ -8,6 +8,7 @@ const { callGatewayToolMock, resolveAnnounceTargetMock } = vi.hoisted(() => ({
       channel: string;
       to: string;
       accountId: string;
+      threadId?: string;
     } | null> => ({
       channel: "telegram",
       to: "19098680",
@@ -127,6 +128,43 @@ describe("monitor tool", () => {
     );
   });
 
+  it("canonicalizes a session-resolved Telegram topic before gateway validation", async () => {
+    resolveAnnounceTargetMock.mockResolvedValueOnce({
+      channel: "telegram",
+      to: "-1003783709877",
+      accountId: "default",
+      threadId: "21581",
+    });
+    const originSessionKey = "agent:main:telegram:group:-1003783709877:topic:21581";
+    const tool = createMonitorTool({ agentSessionKey: originSessionKey });
+
+    await tool.execute?.("call-topic", {
+      action: "create",
+      instructions: "Quote the matching reply and draft the next response for approval.",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "monitor.create",
+      expect.any(Object),
+      expect.objectContaining({
+        originSessionKey,
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1003783709877:topic:21581",
+          accountId: "default",
+        },
+      }),
+    );
+    const gatewayParams = callGatewayToolMock.mock.calls.at(-1)?.[2] as
+      | { originDelivery?: Record<string, unknown> }
+      | undefined;
+    expect(gatewayParams?.originDelivery).not.toHaveProperty("threadId");
+  });
+
   it("describes natural-language monitor routing safety", () => {
     const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
 
@@ -140,7 +178,12 @@ describe("monitor tool", () => {
     expect(tool.description).toContain("green-zone replies go to that watched surface");
     expect(tool.description).toContain("approval questions must go back to the origin chat");
     expect(tool.description).toContain("only reporting status");
-    expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
+    expect(tool.description).toContain(
+      "record a short semantic description of relevant image/media contents when first seen",
+    );
+    expect(tool.description).toContain("store raw evidence only as stable ids/refs");
+    expect(tool.description).toContain("never image paths, data URIs, or bytes");
+    expect(tool.description).toContain("do not rely on re-reading media on every wake");
     expect(tool.description).toContain("if there is an active goal");
     expect(tool.description).toContain("exact check cadence");
     expect(tool.description).toContain("successful unchanged checks 1-2 are silent");

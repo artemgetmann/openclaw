@@ -103,6 +103,75 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Stale user-managed Google Workspace");
     expect(prompt).not.toContain("Bundled Google Workspace");
   });
+
+  it("keeps only product-managed goal-mode ahead of optional workspace inventory when truncated", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace-goal-mode-priority");
+    const productManagedDir = path.join(workspaceDir, ".product-managed");
+    const optionalSkillDescription = "Optional workspace inventory ".repeat(12);
+
+    await writeSkill({
+      dir: path.join(productManagedDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Offer user-approved durable follow-up after consequential external actions.",
+      body: "# Goal mode\n",
+    });
+    await writeSkill({
+      dir: path.join(productManagedDir, "product-optional"),
+      name: "product-optional",
+      description: optionalSkillDescription,
+      body: "# Optional product-managed skill\n",
+    });
+    for (let index = 0; index < 20; index += 1) {
+      const name = `workspace-${String(index).padStart(2, "0")}`;
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: optionalSkillDescription,
+        body: "# Optional workspace skill\n",
+      });
+    }
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      productManagedSkillsDir: productManagedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 100,
+            maxSkillsPromptChars: 2_500,
+          },
+        },
+      },
+    });
+
+    expect(prompt).toContain("<name>goal-mode</name>");
+    expect(prompt).toContain("<name>workspace-00</name>");
+    expect(prompt).not.toContain("<name>product-optional</name>");
+    expect(prompt).not.toContain("<name>workspace-19</name>");
+  });
+
+  it("keeps explicitly disabled product-managed goal-mode out of the prompt", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace-goal-mode-disabled");
+    const productManagedDir = path.join(workspaceDir, ".product-managed");
+
+    await writeSkill({
+      dir: path.join(productManagedDir, "goal-mode"),
+      name: "goal-mode",
+      description: "Offer durable follow-up.",
+      body: "# Goal mode\n",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      productManagedSkillsDir: productManagedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      config: { skills: { entries: { "goal-mode": { enabled: false } } } },
+    });
+
+    expect(prompt).not.toContain("<name>goal-mode</name>");
+  });
+
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const skillsDir = path.join(workspaceDir, "skills");

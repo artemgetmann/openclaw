@@ -15,6 +15,7 @@ source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
@@ -113,8 +114,9 @@ Env:
                       bash scripts/prewarm-worktree.sh --root "$PWD" --macos
                       This does not bypass the blessed release-worktree guard.
   ALLOW_NON_INCREMENTAL_SPARKLE_BUILD=1
-                      Emergency-only bypass when the built CFBundleVersion is
-                      not newer than /Applications/Jarvis.app
+                      Emergency-only bypass when the built marketing version
+                      or CFBundleVersion fails comparison with
+                      /Applications/Jarvis.app
 
 OpenClaw release packaging is intentionally default-instance only.
 Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
@@ -1123,6 +1125,10 @@ esac
 
 openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 
+# Every package phase can update release receipts or the manifest, including
+# public verification. Keep one owner across the whole delegated package run.
+openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"
+
 if [[ "$PACKAGE_PHASE" == "local-proof" ]]; then
   SKIP_NOTARIZE=1
   SKIP_DSYM="${SKIP_DSYM:-1}"
@@ -1282,11 +1288,12 @@ else
 fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
-case "$PACKAGE_PHASE" in
-  full|local-proof|build-app-only|trusted-ring-fast)
-    openclaw_require_incremental_sparkle_build "$APP_PATH"
-    ;;
-esac
+if openclaw_macos_release_phase_requires_version_gate "$PACKAGE_PHASE"; then
+  # Resume phases can notarize or publish a previously built app without ever
+  # entering the fresh-build branch above. Gate the shared app artifact before
+  # any phase writes release receipts or advances it toward public delivery.
+  openclaw_require_incremental_sparkle_build "$APP_PATH"
+fi
 ARTIFACT_BASENAME="${APP_NAME}"
 if [[ "${VERSIONED_ARTIFACT_NAMES:-0}" == "1" ]]; then
   # Clean filenames are the default for human handoff because most consumer

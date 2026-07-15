@@ -269,6 +269,17 @@ notary, publish, or verify work.
 Follow the launcher's printed next steps, then run the release commands from the
 release lane.
 
+Mutating release phases also acquire one fail-fast lock shared by this
+repository's worktrees. If a live owner holds it, use an explicit chat/session
+handoff and let that owner finish or exit. Never improvise a `ps`-scanning
+`SIGSTOP`/`SIGKILL` guard: the canonical lock reports owner PID/context,
+safely reclaims dead owners, and never signals a process. The wrapper's true
+read-only path, `jarvis-public-release.sh --dry-run`, exits before delegated
+package work and does not acquire the lock. Real wrapper runs acquire before
+inspecting release state, then atomically transfer verified ownership to the
+package child so phase selection and execution cannot race or lose protection
+if the wrapper exits first.
+
 Normal app-building release phases require the blessed release worktree plus
 macOS prewarm proof. If the lane is missing or stale, refresh it through the
 launcher:
@@ -282,10 +293,13 @@ bash scripts/jarvis-release-worktree.sh
 proof inside the blessed release worktree. It does not allow public Jarvis
 packaging from random worktrees.
 
-For a real update to existing installations, bump `APP_VERSION` and/or
-`APP_BUILD` before packaging. Sparkle updates only when the new
-`CFBundleVersion` is higher than the installed app's `CFBundleVersion`; a
-same-build upload is just a republish and will not trigger an update.
+For a real update to existing installations, keep `APP_VERSION` at least as
+high as the installed app's marketing version and bump `APP_BUILD`. The release
+gate requires `CFBundleShortVersionString` to stay equal or increase and
+`CFBundleVersion` to increase strictly. This prevents a higher build number
+from installing an app whose About screen visibly regresses to an older version.
+For the same CalVer base, release order is `alpha.N`, `beta.N`, stable, then
+legacy numeric corrections such as `-1` and `-2`.
 
 The historical public release acceleration spec is archived at
 `docs/consumer/archive/jarvis-public-release-acceleration-spec.md`. The

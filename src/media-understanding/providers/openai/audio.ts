@@ -4,7 +4,7 @@ import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postTranscriptionRequest,
-  requireTranscriptionText,
+  requireTranscriptionTextField,
 } from "../shared.js";
 
 export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
@@ -56,8 +56,8 @@ export async function transcribeOpenAiCompatibleAudio(
   try {
     await assertOkOrThrowHttpError(res, "Audio transcription failed");
 
-    const payload = (await res.json()) as { text?: string };
-    const text = requireTranscriptionText(
+    const payload = (await res.json()) as { text?: unknown };
+    const text = requireTranscriptionTextField(
       payload.text,
       "Audio transcription response missing text",
     );

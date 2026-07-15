@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import { loadConfig } from "../../config/config.js";
 import { MONITOR_RECEIPT_DETAILS_KEY } from "../../monitor/receipt.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -34,11 +35,33 @@ function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined
   if (!delivery) {
     return undefined;
   }
+  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
+  const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
+  const threadId =
+    (typeof delivery.threadId === "string" && delivery.threadId.trim()) ||
+    (typeof delivery.threadId === "number" && Number.isSafeInteger(delivery.threadId)
+      ? String(delivery.threadId)
+      : undefined);
+
+  if (channel.toLowerCase() === "telegram" && to && threadId) {
+    // Session routing exposes the topic as transient `threadId` metadata, while
+    // durable cron delivery intentionally stores topics inside `to`. Convert at
+    // this boundary so gateway schema validation and later direct delivery use
+    // the same canonical target instead of forcing the agent to retry.
+    const parsed = parseExplicitTargetForChannel(channel, to);
+    const canonicalThreadId = parsed?.threadId ?? threadId;
+    const canonicalTo = parsed?.to ?? to;
+    const { threadId: _transientThreadId, ...durableDelivery } = delivery;
+    return {
+      ...durableDelivery,
+      mode: typeof delivery.mode === "string" ? delivery.mode : "announce",
+      channel,
+      to: `${canonicalTo}:topic:${canonicalThreadId}`,
+    };
+  }
   if (typeof delivery.mode === "string") {
     return delivery;
   }
-  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
-  const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
   if (!channel || !to) {
     return delivery;
   }
@@ -94,7 +117,16 @@ const MonitorToolSchema = Type.Object(
       }),
     ),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
-    checkpoint: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    checkpoint: Type.Optional(
+      Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description:
+            "Compact semantic state for future wakes. When image/media matters, record a short semantic description when first seen. Store raw evidence only as stable ids/refs; never image paths, data URIs, or bytes, and do not rely on re-reading media on every wake.",
+        },
+      ),
+    ),
     originSessionKey: Type.Optional(Type.String()),
     originDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
   },
@@ -141,7 +173,9 @@ For monitor-related user replies/status:
 - act only when exactly one monitor is clear; if multiple active monitors could match, ask a short clarification.
 - when drafting a reply, include the actual draft text in the origin-chat update before asking whether to send, edit, or stop watching.
 - when only reporting status, summarize the status and next step without forcing send/edit language.
-- use update to persist compact status/checkpoint; keep raw evidence behind ids, paths, or refs.`,
+- use update to persist compact semantic status/checkpoint state.
+- if relevant image/media is inspected, record a short semantic description of relevant image/media contents when first seen so later wakes retain the meaning without reopening the asset.
+- store raw evidence only as stable ids/refs; never image paths, data URIs, or bytes, and do not rely on re-reading media on every wake.`,
     parameters: MonitorToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

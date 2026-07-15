@@ -272,7 +272,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Scoped autonomy");
     expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
     expect(prompt).toContain(
-      "After a send or external action whose useful next step clearly depends on a later reply/status, briefly offer once to watch and continue.",
+      "Before finalizing, after an important external send/action whose useful next step depends on a later reply/status, offer once in the same final response to watch and continue;",
     );
   });
 
@@ -283,7 +283,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Goal Tools");
-    expect(prompt).not.toContain("briefly offer once to watch and continue");
+    expect(prompt).not.toContain("offer once in the same final response to watch and continue");
   });
 
   it("keeps the proactive monitor cue compact", () => {
@@ -293,8 +293,12 @@ describe("buildAgentSystemPrompt", () => {
     });
     const goalToolsSection = promptWithMonitor.split("## Goal Tools")[1]?.split("\n## ")[0] ?? "";
 
-    expect(goalToolsSection).toContain("briefly offer once to watch and continue");
-    expect(goalToolsSection).toContain("Skip casual sends");
+    expect(goalToolsSection).toContain("Before finalizing");
+    expect(goalToolsSection).toContain("important external send/action");
+    expect(goalToolsSection).toContain(
+      "offer once in the same final response to watch and continue",
+    );
+    expect(goalToolsSection).toContain("skip casual sends");
     expect(goalToolsSection).toContain("do not start monitoring without approval");
     expect(goalToolsSection).not.toContain("default notify with a drafted next response");
     expect(goalToolsSection).not.toContain("buttons, settings, or commands");

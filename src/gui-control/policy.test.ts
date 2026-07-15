@@ -60,6 +60,429 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.reason).toContain(`Blocked sensitive GUI surface: ${blockedTerm}`);
   });
 
+  it("allows a signed-out chooser row when Remove an account is a visible sibling", () => {
+    const textEnvelopeSummary = [
+      "App=com.google.Chrome (pid 42)",
+      'Window: "Choose an account - Sign in", App: Google Chrome.',
+      "0 standard window Choose an account - Sign in",
+      "  101 button Artem artem@example.com Signed out Secondary Actions: AXPress",
+      "  102 button Use another account Secondary Actions: AXPress",
+      "  103 button Remove an account Secondary Actions: AXPress",
+    ].join("\n");
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+      snapshot: snapshot({
+        appName: "Google Chrome",
+        windowTitle: "Choose an account - Sign in",
+        summary: textEnvelopeSummary,
+        visibleText: [
+          "button Artem artem@example.com Signed out",
+          "button Use another account",
+          "button Remove an account",
+        ],
+      }),
+      element: {
+        ref: "@known-account",
+        role: "button",
+        label: "Artem artem@example.com Signed out",
+      },
+      reason: "Select the known signed-out Google account.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each(
+    [
+      ["payment", "104 static text Payment authorization requires authentication"],
+      ["delete", "104 static text Delete account requires authentication"],
+      ["account", "104 static text Account settings require authentication"],
+      ["security", "104 static text Security settings require authentication"],
+    ].flatMap(([risk, riskLine]) => [
+      { profile: "trusted", risk, riskLine, taskPolicy: undefined },
+      {
+        profile: "commerce",
+        risk,
+        riskLine,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      },
+    ]),
+  )(
+    "keeps $risk evidence from a chooser text-envelope summary under $profile policy",
+    ({ riskLine, taskPolicy }) => {
+      const summary = [
+        "App=com.google.Chrome (pid 42)",
+        'Window: "Choose an account - Sign in", App: Google Chrome.',
+        "0 standard window Choose an account - Sign in",
+        "  101 button Artem artem@example.com Signed out Secondary Actions: AXPress",
+        `  ${riskLine}`,
+        "  105 button Remove an account Secondary Actions: AXPress",
+      ].join("\n");
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+        snapshot: snapshot({
+          appName: "Google Chrome",
+          windowTitle: "Choose an account - Sign in",
+          summary,
+          visibleText: ["button Artem artem@example.com Signed out", "button Remove an account"],
+        }),
+        element: {
+          ref: "@101",
+          role: "button",
+          label: "Artem artem@example.com Signed out",
+        },
+        reason: "Select the known signed-out account without using credentials.",
+        approvedPolicyRisk: true,
+        taskPolicy,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI");
+    },
+  );
+
+  it.each(
+    [
+      ["delete", "Description: Delete account requires authentication"],
+      ["payment", "Value: Payment authorization requires authentication"],
+      ["account", "Description: Account settings require authentication"],
+      ["security", "Value: Security settings require authentication"],
+      ["unknown", "Description: Remove an account Custom: Delete account requires authentication"],
+    ].flatMap(([risk, metadata]) => [
+      { profile: "trusted", risk, metadata, taskPolicy: undefined },
+      {
+        profile: "commerce",
+        risk,
+        metadata,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      },
+    ]),
+  )(
+    "keeps $risk metadata from a truncated chooser summary under $profile policy",
+    ({ metadata, taskPolicy }) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+        snapshot: snapshot({
+          appName: "Google Chrome",
+          windowTitle: "Choose an account - Sign in",
+          summary: `102 button Remove an account ${metadata}`,
+          visibleText: ["button Artem artem@example.com Signed out"],
+        }),
+        element: {
+          ref: "@101",
+          role: "button",
+          label: "Artem artem@example.com Signed out",
+        },
+        reason: "Select the known signed-out account without using credentials.",
+        approvedPolicyRisk: true,
+        taskPolicy,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI");
+    },
+  );
+
+  it.each(
+    [
+      ["description", "Description: Remove an account Secondary Actions: AXPress"],
+      ["value", "Value: Remove an account Frame: x=10, y=20, w=30, h=40"],
+    ].flatMap(([metadataKind, metadata]) => [
+      { profile: "trusted", metadataKind, metadata, taskPolicy: undefined },
+      {
+        profile: "commerce",
+        metadataKind,
+        metadata,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      },
+    ]),
+  )(
+    "allows duplicate $metadataKind chooser metadata under $profile policy",
+    ({ metadata, taskPolicy }) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+        snapshot: snapshot({
+          appName: "Google Chrome",
+          windowTitle: "Choose an account - Sign in",
+          summary: `102 button Remove an account ${metadata}`,
+          visibleText: ["button Artem artem@example.com Signed out"],
+        }),
+        element: {
+          ref: "@101",
+          role: "button",
+          label: "Artem artem@example.com Signed out",
+        },
+        reason: "Select the known signed-out account without using credentials.",
+        approvedPolicyRisk: true,
+        taskPolicy,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(true);
+      expect(decision.risk).toBe("allowed-mutation");
+    },
+  );
+
+  it("blocks selecting an active-session account from an account chooser", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Choose an account - Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Choose an account - Sign in",
+        summary: "Choose an account to continue to Google",
+        visibleText: ["Artem", "artem@example.com", "Use another account"],
+      }),
+      element: {
+        ref: "@active-account",
+        role: "button",
+        label: "Artem artem@example.com",
+      },
+      reason: "Select the active Google account.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface: sign in");
+  });
+
+  it("allows method discovery from a password challenge", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge for artem@example.com",
+        visibleText: ["Enter your password", "Try another way", "Next"],
+      }),
+      element: { ref: "@other-way", role: "button", label: "Try another way" },
+      reason: "Discover the available authentication methods without using one.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it("allows dismissing an unavailable-passkey dialog", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "SecurityAgent", windowTitle: "No passkeys available" },
+      snapshot: snapshot({
+        appName: "SecurityAgent",
+        windowTitle: "No passkeys available",
+        summary: "No passkeys are available for this sign-in request",
+        visibleText: ["No passkeys available", "Close"],
+      }),
+      element: { ref: "@close", role: "button", label: "Close" },
+      reason: "Dismiss the unavailable-passkey dialog.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each([
+    ["Sign in to delete account", "Delete account requires authentication"],
+    ["Sign in to payment", "Payment authorization requires authentication"],
+  ])(
+    "does not let safe auth navigation bypass a mixed hard-stop context: %s",
+    (windowTitle, summary) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle,
+          summary,
+          visibleText: ["Close"],
+        }),
+        element: { ref: "@close", role: "button", label: "Close" },
+        reason: "Close this authentication dialog.",
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it.each([
+    ["payment", "Payment authorization requires authentication"],
+    ["delete", "Delete account requires authentication"],
+    ["account", "Account settings require authentication"],
+    ["security", "Security settings require authentication"],
+  ])(
+    "does not let Try another way bypass mixed %s risk visible outside the selected control",
+    (_risk, mixedRiskContext) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Sign in" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Sign in",
+          summary: mixedRiskContext,
+          visibleText: [mixedRiskContext, "Try another way"],
+        }),
+        element: { ref: "@other-way", role: "button", label: "Try another way" },
+        reason: "Discover the available authentication methods without using one.",
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it.each([
+    ["payment", "Payment authorization requires authentication"],
+    ["delete", "Delete account requires authentication"],
+    ["account", "Account settings require authentication"],
+    ["security", "Security settings require authentication"],
+  ])(
+    "blocks Try another way when mixed %s risk appears only in visible text",
+    (_risk, mixedRiskContext) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Sign in" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Sign in",
+          summary: "Choose an authentication method",
+          visibleText: [mixedRiskContext, "Try another way"],
+        }),
+        element: { ref: "@other-way", role: "button", label: "Try another way" },
+        reason: "Discover the available authentication methods without using one.",
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it("blocks writing into a password field", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "setValue",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge",
+      }),
+      element: { ref: "@password", role: "secure text field", label: "Password" },
+      reason: "Enter the password.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
+
+  it.each(["Use passkey", "Assert passkey"])("blocks the passkey act %s", (label) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Passkey challenge",
+      }),
+      element: { ref: "@passkey", role: "button", label },
+      reason: `Click ${label}.`,
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
+  });
+
+  it.each([
+    {
+      name: "OTP entry",
+      actionType: "setValue" as const,
+      windowTitle: "Verify it's you",
+      summary: "Enter the verification code",
+      element: { ref: "@otp", role: "text field", label: "OTP verification code" },
+    },
+    {
+      name: "CAPTCHA assertion",
+      actionType: "click" as const,
+      windowTitle: "Security check",
+      summary: "Complete the CAPTCHA challenge",
+      element: { ref: "@captcha", role: "checkbox", label: "I'm not a robot" },
+    },
+    {
+      name: "security-key assertion",
+      actionType: "click" as const,
+      windowTitle: "Security key",
+      summary: "Use your security key to continue",
+      element: { ref: "@security-key", role: "button", label: "Use security key" },
+    },
+    {
+      name: "sign-in approval",
+      actionType: "click" as const,
+      windowTitle: "Approve sign in",
+      summary: "Approve this sign-in request",
+      element: { ref: "@approve", role: "button", label: "Approve" },
+    },
+  ])(
+    "blocks the actual authentication act: $name",
+    ({ actionType, windowTitle, summary, element }) => {
+      const decision = evaluateGuiPolicy({
+        actionType,
+        target: { appName: "Safari", windowTitle },
+        snapshot: snapshot({ appName: "Safari", windowTitle, summary }),
+        element,
+        reason: `Perform ${summary}.`,
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+    },
+  );
+
+  it("blocks a generic Next button on a password challenge", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge with an autofilled password",
+        visibleText: ["Password", "Next"],
+      }),
+      element: { ref: "@next", role: "button", label: "Next" },
+      reason: "Continue to the next step.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface: sign in");
+  });
+
   it("still requires post-state verification under the trusted local default", () => {
     const decision = evaluateGuiPolicy({
       actionType: "click",
@@ -344,6 +767,93 @@ describe("evaluateGuiPolicy", () => {
     expect(decision.risk).toBe("allowed-mutation");
     expect(decision.requiredCapability).toBe("click_verified_button");
   });
+
+  it("allows a signed-out chooser row with a Remove an account sibling under commerce", () => {
+    const textEnvelopeSummary = [
+      "App=com.google.Chrome (pid 42)",
+      'Window: "Choose an account - Sign in", App: Google Chrome.',
+      "0 standard window Choose an account - Sign in",
+      "  101 button Artem artem@example.com Signed out Secondary Actions: AXPress",
+      "  102 button Use another account Secondary Actions: AXPress",
+      "  103 button Remove an account Secondary Actions: AXPress",
+    ].join("\n");
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Google Chrome", windowTitle: "Choose an account - Sign in" },
+      snapshot: snapshot({
+        appName: "Google Chrome",
+        windowTitle: "Choose an account - Sign in",
+        summary: textEnvelopeSummary,
+        visibleText: [
+          "button Artem artem@example.com Signed out",
+          "button Use another account",
+          "button Remove an account",
+        ],
+      }),
+      element: {
+        ref: "@known-account",
+        role: "button",
+        label: "Artem artem@example.com Signed out",
+      },
+      reason: "Select the known signed-out account without using credentials.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it("allows Try another way in an auth-only commerce context", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Sign in" },
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Sign in",
+        summary: "Password challenge",
+        visibleText: ["Enter your password", "Try another way", "Next"],
+      }),
+      element: { ref: "@other-way", role: "button", label: "Try another way" },
+      reason: "Show the available methods without selecting one.",
+      approvedPolicyRisk: true,
+      taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each([
+    ["payment", "Payment authorization requires authentication"],
+    ["delete", "Delete account requires authentication"],
+    ["account", "Account settings require authentication"],
+    ["security", "Security settings require authentication"],
+  ])(
+    "blocks commerce pre-auth navigation when mixed %s risk appears only in visible text",
+    (_risk, mixedRiskContext) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "Safari", windowTitle: "Sign in" },
+        snapshot: snapshot({
+          appName: "Safari",
+          windowTitle: "Sign in",
+          summary: "Choose a method to continue",
+          visibleText: [mixedRiskContext, "Try another way"],
+        }),
+        element: { ref: "@other-way", role: "button", label: "Try another way" },
+        reason: "Show the available methods without selecting one.",
+        approvedPolicyRisk: true,
+        taskPolicy: getGuiTaskPolicyProfile("commerce_flow_until_final_confirmation"),
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("Blocked sensitive GUI context");
+    },
+  );
 
   it("allows explicitly supplied traveler/contact detail entry under the commerce profile", () => {
     const decision = evaluateGuiPolicy({

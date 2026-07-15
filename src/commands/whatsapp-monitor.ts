@@ -1,5 +1,11 @@
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  classifyFatalListenerHealthError,
+  resolveListenerHealthStorePath,
+  updateListenerHealth,
+  type ListenerHealthSnapshot,
+} from "../monitor/listener-health.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   pollWhatsAppMonitorEvents,
@@ -175,8 +181,77 @@ export async function whatsappMonitorPollCommand(
         : undefined,
   };
 
+  const listenerStartedAtMs = Date.now();
+  const healthStorePath = watch
+    ? resolveListenerHealthStorePath({
+        cronStorePath: basePollOptions.cronStorePath,
+        env: process.env,
+        monitorStorePath: basePollOptions.monitorStorePath,
+      })
+    : undefined;
+  const reportHealthTransition = (snapshot: ListenerHealthSnapshot) => {
+    if (snapshot.transition === "degraded") {
+      runtime.error(
+        `WhatsApp listener health degraded: ${snapshot.record.lastError ?? "listener check failed"}`,
+      );
+    } else if (snapshot.transition === "recovered") {
+      runtime.log("WhatsApp listener health recovered.");
+    }
+  };
+  let healthPersistenceWarningEmitted = false;
+  const persistHealth = async (input: Parameters<typeof updateListenerHealth>[0]) => {
+    try {
+      const snapshot = await updateListenerHealth(input);
+      healthPersistenceWarningEmitted = false;
+      reportHealthTransition(snapshot);
+    } catch {
+      if (!healthPersistenceWarningEmitted) {
+        runtime.error("WhatsApp listener health persistence unavailable.");
+        healthPersistenceWarningEmitted = true;
+      }
+    }
+  };
+
   for (let runNumber = 1; ; runNumber += 1) {
-    const result = await pollWhatsAppMonitorEvents(basePollOptions);
+    let result: Awaited<ReturnType<typeof pollWhatsAppMonitorEvents>>;
+    try {
+      result = await pollWhatsAppMonitorEvents(basePollOptions);
+    } catch (err) {
+      if (healthStorePath) {
+        await persistHealth({
+          check: "failure",
+          error: classifyFatalListenerHealthError(err),
+          owner: {
+            pid: process.pid,
+            profile: process.env.OPENCLAW_PROFILE,
+            startedAtMs: listenerStartedAtMs,
+          },
+          pollIntervalMs,
+          service: "whatsapp",
+          storePath: healthStorePath,
+        });
+      }
+      throw err;
+    }
+
+    if (healthStorePath) {
+      const operationalErrors = result.skipped.filter(
+        (skip) => skip.reason === "lookup_error" || skip.reason === "dispatch_error",
+      );
+      await persistHealth({
+        check: operationalErrors.length > 0 ? "failure" : "success",
+        error: operationalErrors.map((skip) => skip.reason).join(","),
+        owner: {
+          pid: process.pid,
+          profile: process.env.OPENCLAW_PROFILE,
+          startedAtMs: listenerStartedAtMs,
+        },
+        pollIntervalMs,
+        routedEvent: result.dispatched > 0,
+        service: "whatsapp",
+        storePath: healthStorePath,
+      });
+    }
     if (readBooleanOpt(opts, "json")) {
       logJson(runtime, watch ? { run: runNumber, ...result } : result);
     } else {

@@ -14,6 +14,7 @@ import {
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
+  readLaunchAgentRuntime,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -24,6 +25,8 @@ const state = vi.hoisted(() => ({
   bashCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
+  printStderr: "",
+  printCode: 0,
   bootstrapError: "",
   kickstartError: "",
   kickstartFailuresRemaining: 0,
@@ -98,7 +101,7 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
-      return { stdout: state.printOutput, stderr: "", code: 0 };
+      return { stdout: state.printOutput, stderr: state.printStderr, code: state.printCode };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
@@ -191,6 +194,8 @@ beforeEach(() => {
   state.bashCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
+  state.printStderr = "";
+  state.printCode = 0;
   state.bootstrapError = "";
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
@@ -224,6 +229,30 @@ afterEach(() => {
 });
 
 describe("launchd runtime parsing", () => {
+  it("marks only the explicit missing-label launchctl diagnostic as missing", async () => {
+    state.printCode = 113;
+    state.printStderr = [
+      "Bad request.",
+      'Could not find service "ai.openclaw.gateway" in domain for user gui: 501',
+    ].join("\n");
+
+    await expect(readLaunchAgentRuntime({ HOME: "/Users/test" })).resolves.toEqual({
+      status: "unknown",
+      detail: state.printStderr,
+      missingUnit: true,
+    });
+  });
+
+  it("keeps non-missing launchctl inspection failures unknown", async () => {
+    state.printCode = 1;
+    state.printStderr = "Operation not permitted";
+
+    await expect(readLaunchAgentRuntime({ HOME: "/Users/test" })).resolves.toEqual({
+      status: "unknown",
+      detail: "Operation not permitted",
+    });
+  });
+
   it("parses state, pid, and exit status", () => {
     const output = [
       "state = running",

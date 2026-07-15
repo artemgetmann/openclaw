@@ -5,12 +5,18 @@ import Observation
 @Observable
 final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
+    typealias RecoveryNotificationSender = @MainActor @Sendable (GatewayRecoveryIncident) async -> Void
     // Real launchd restarts on this machine routinely take 13-14s because the gateway
     // may regenerate auth config and then bootstrap channels before the health RPC
     // answers again. A 6s deadline turns successful restarts into fake "not connecting"
     // errors in the app, so keep one explicit, shared readiness budget here.
     static let gatewayReadinessTimeout: TimeInterval = 20
     private static let readinessPollIntervalNanos: UInt64 = 400_000_000
+    /// launchd normally restarts a crashed gateway itself. This slower app-owned
+    /// check covers the different failure mode where the job registration vanishes
+    /// while Jarvis remains open and still believes it is attached to the gateway.
+    private static let launchAgentReconciliationInterval: Duration = .seconds(60)
+    private static let recoveryNotificationIdentifier = "ai.jarvis.gateway-recovery"
 
     enum Status: Equatable {
         case stopped
@@ -44,10 +50,18 @@ final class GatewayProcessManager {
     private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
     private(set) var existingGatewayDetails: String?
     private(set) var lastFailureReason: String?
+    private(set) var recoveryIncident: GatewayRecoveryIncident?
     private var desiredActive = false
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
+    private var launchAgentReconciliationTask: Task<Void, Never>?
+    /// A cancelled loop can finish after local mode has already started a replacement.
+    /// The generation prevents that stale loop from clearing the replacement task handle.
+    private var launchAgentReconciliationGeneration: UInt = 0
+    private var recoveryIncidentTracker = GatewayRecoveryIncidentTracker()
+    private let recoveryReadinessTimeout: TimeInterval
+    private let recoveryNotificationSender: RecoveryNotificationSender
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -55,6 +69,23 @@ final class GatewayProcessManager {
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30
+
+    init(
+        recoveryReadinessTimeout: TimeInterval = GatewayProcessManager.gatewayReadinessTimeout,
+        recoveryNotificationSender: RecoveryNotificationSender? = nil)
+    {
+        self.recoveryReadinessTimeout = recoveryReadinessTimeout
+        self.recoveryNotificationSender = recoveryNotificationSender ?? { incident in
+            _ = await NotificationManager().send(
+                title: incident.title,
+                body: incident.message,
+                sound: nil,
+                priority: .active,
+                identifier: GatewayProcessManager.recoveryNotificationIdentifier,
+                categoryIdentifier: NotificationManager.gatewayRecoveryCategoryIdentifier)
+        }
+    }
+
     private var connection: GatewayConnection {
         #if DEBUG
         return self.testingConnection ?? .shared
@@ -77,6 +108,7 @@ final class GatewayProcessManager {
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active {
+            self.startLaunchAgentReconciliationIfNeeded()
             self.startIfNeeded()
         } else {
             self.stop()
@@ -84,22 +116,39 @@ final class GatewayProcessManager {
     }
 
     func ensureLaunchAgentEnabledIfNeeded() async {
-        guard !CommandResolver.connectionModeIsRemote() else { return }
+        _ = await self.ensureLaunchAgentEnabledIfNeeded(
+            allowAttachToHealthyGateway: true,
+            mutationAuthority: nil)
+    }
+
+    private func ensureLaunchAgentEnabledIfNeeded(
+        allowAttachToHealthyGateway: Bool,
+        mutationAuthority: (@MainActor @Sendable () -> GatewayLaunchAgentManager.MutationAuthority)?) async -> String?
+    {
+        guard !CommandResolver.connectionModeIsRemote() else { return nil }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
-            return
+            return nil
         }
-        if await self.shouldAttachInsteadOfEnableLaunchd() {
-            return
+        // Initial local-mode application may safely attach to an already-healthy
+        // canonical gateway. Reconciliation has stronger evidence: launchd reports
+        // that its job is missing, so socket health must not suppress service repair.
+        if allowAttachToHealthyGateway, await self.shouldAttachInsteadOfEnableLaunchd() {
+            return nil
         }
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         self.appendLog("[gateway] auto-enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
-        let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
+        let err = await GatewayLaunchAgentManager.set(
+            enabled: true,
+            bundlePath: bundlePath,
+            port: port,
+            mutationAuthority: mutationAuthority)
         if let err {
             self.appendLog("[gateway] launchd auto-enable failed: \(err)\n")
         }
+        return err
     }
 
     func startIfNeeded() {
@@ -137,6 +186,7 @@ final class GatewayProcessManager {
         }
         self.logger.info("gateway managed restart requested")
         self.desiredActive = true
+        self.startLaunchAgentReconciliationIfNeeded()
         self.existingGatewayDetails = nil
         self.clearLastFailure()
         self.status = .starting
@@ -150,6 +200,7 @@ final class GatewayProcessManager {
             self.lastFailureReason = err
             self.appendLog("[gateway] managed restart failed: \(err)\n")
             self.logger.error("gateway managed restart failed: \(err)")
+            await self.confirmGatewayUnavailableBeforePresentingIncident()
             return
         }
 
@@ -167,6 +218,7 @@ final class GatewayProcessManager {
                     snap: decodeHealthSnapshot(from: data))
                 self.existingGatewayDetails = details
                 self.status = .running(details: details)
+                self.clearRecoveryIncidentAfterHealthyRPC()
                 self.appendLog("[gateway] managed restart succeeded: \(details)\n")
                 self.logger.info("gateway managed restart succeeded details=\(details)")
                 self.refreshControlChannelIfNeeded(reason: "gateway restarted")
@@ -181,12 +233,15 @@ final class GatewayProcessManager {
         self.lastFailureReason = "launchd restart timeout"
         self.appendLog("[gateway] managed restart timed out\n")
         self.logger.warning("gateway managed restart timed out")
+        await self.presentRecoveryIncident()
     }
 
     func stop() {
         self.desiredActive = false
+        self.stopLaunchAgentReconciliation()
         self.existingGatewayDetails = nil
         self.lastFailureReason = nil
+        self.clearRecoveryIncidentAfterIntentionalStop()
         self.status = .stopped
         self.logger.info("gateway stop requested")
         if CommandResolver.connectionModeIsRemote() {
@@ -248,6 +303,151 @@ final class GatewayProcessManager {
 
     // MARK: - Internals
 
+    private func startLaunchAgentReconciliationIfNeeded() {
+        guard self.desiredActive else { return }
+        guard !CommandResolver.connectionModeIsRemote() else { return }
+        // setActive(true) is intentionally idempotent. Multiple UI and connection
+        // surfaces call it, but only one serial reconciliation loop may own launchd.
+        guard self.launchAgentReconciliationTask == nil else { return }
+
+        self.launchAgentReconciliationGeneration &+= 1
+        let generation = self.launchAgentReconciliationGeneration
+        self.launchAgentReconciliationTask = Task { [weak self] in
+            await self?.runLaunchAgentReconciliationLoop(
+                generation: generation,
+                interval: Self.launchAgentReconciliationInterval)
+        }
+    }
+
+    private func stopLaunchAgentReconciliation() {
+        // Invalidate before cancelling so a suspended old loop cannot clear a newer
+        // task if local mode is toggled off and back on in quick succession.
+        self.launchAgentReconciliationGeneration &+= 1
+        self.launchAgentReconciliationTask?.cancel()
+        self.launchAgentReconciliationTask = nil
+    }
+
+    private func runLaunchAgentReconciliationLoop(
+        generation: UInt,
+        interval: Duration) async
+    {
+        defer {
+            if self.launchAgentReconciliationGeneration == generation {
+                self.launchAgentReconciliationTask = nil
+            }
+        }
+
+        // The normal startup path already performs an immediate ensure. Sleeping
+        // first avoids a duplicate status/install race during launch while still
+        // bounding recovery time for registration loss after startup.
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: interval)
+            } catch {
+                return
+            }
+            guard await self.reconcileLaunchAgentRegistrationIfNeeded(generation: generation) else { return }
+        }
+    }
+
+    @discardableResult
+    private func reconcileLaunchAgentRegistrationIfNeeded(generation: UInt) async -> Bool {
+        // Attach-only is special at loop entry: it pauses reconciliation without
+        // surrendering the loop, so removing the marker resumes healing. Every
+        // later suspended boundary uses the stricter mutation authority below.
+        guard self.desiredActive,
+              !CommandResolver.connectionModeIsRemote(),
+              self.launchAgentReconciliationGeneration == generation,
+              !Task.isCancelled
+        else { return false }
+        // Attach-only is an explicit instruction not to mutate launchd. Keep the
+        // loop alive so removing the marker later resumes healing without relaunch.
+        guard !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() else { return true }
+
+        let firstLoadedState = await GatewayLaunchAgentManager.loadedState()
+        let shouldVerifyUnknownState = self.recoveryIncidentTracker.recordServiceObservation(firstLoadedState)
+
+        // `nil` means the status command failed or returned an unrecognized payload.
+        // It is never mutation authority. After two consecutive unknown checks,
+        // live health gets a bounded chance to veto the consumer incident instead.
+        if firstLoadedState == nil {
+            if shouldVerifyUnknownState {
+                await self.verifyUnverifiableGatewayState()
+            }
+            return true
+        }
+
+        // A loaded service is normally a no-op. If an incident is already visible,
+        // one live probe lets a launchd-owned recovery clear it without user action.
+        if firstLoadedState == true {
+            if self.recoveryIncident != nil {
+                await self.clearRecoveryIncidentIfSingleHealthProbeSucceeds()
+            }
+            return true
+        }
+
+        // Require a second definitive observation. Besides filtering a transient
+        // read, this gives a service that recovered between polls a clean no-op path.
+        let secondLoadedState = await GatewayLaunchAgentManager.loadedState()
+        let shouldVerifySecondUnknownState = self.recoveryIncidentTracker.recordServiceObservation(secondLoadedState)
+        if secondLoadedState == nil {
+            if shouldVerifySecondUnknownState {
+                await self.verifyUnverifiableGatewayState()
+            }
+            return true
+        }
+        guard secondLoadedState == false else { return true }
+
+        // Both status reads suspend. Revalidate all app-owned authority immediately
+        // before entering the existing launchd mutation path so a late result cannot
+        // recreate the service after stop, remote-mode transition, or cancellation.
+        guard self.launchAgentReconciliationCanMutate(generation: generation) else { return false }
+
+        self.appendLog("[gateway] launchd job missing; reconciling app-owned service\n")
+        self.logger.warning("gateway launchd job missing; reconciling app-owned service")
+        // Reuse the established enable policy. It performs its own action query, so
+        // pass the same authority predicate through for one final check immediately
+        // before every start/install attempt and after any failed-command fallback.
+        _ = await self.ensureLaunchAgentEnabledIfNeeded(
+            allowAttachToHealthyGateway: false,
+            mutationAuthority: { [weak self] in
+                self?.launchAgentReconciliationMutationAuthority(generation: generation) ?? .revoked
+            })
+        // A successful launchd command only proves that the repair command ran.
+        // Give the actual RPC the normal cold-start budget before surfacing UI.
+        if self.launchAgentReconciliationCanMutate(generation: generation) {
+            await self.confirmGatewayUnavailableBeforePresentingIncident()
+        }
+        return true
+    }
+
+    private func launchAgentReconciliationCanMutate(generation: UInt) -> Bool {
+        self.desiredActive &&
+            !CommandResolver.connectionModeIsRemote() &&
+            !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() &&
+            self.launchAgentReconciliationGeneration == generation &&
+            !Task.isCancelled
+    }
+
+    private func launchAgentReconciliationMutationAuthority(
+        generation: UInt) -> GatewayLaunchAgentManager.MutationAuthority
+    {
+        if self.launchAgentReconciliationCanMutate(generation: generation) {
+            return .allowed
+        }
+
+        // Cancellation or a generation mismatch only makes this task stale. If
+        // current app state still wants a writable local service, a newer loop owns
+        // it and the old task must not compensate by stopping that shared service.
+        if self.desiredActive,
+           !CommandResolver.connectionModeIsRemote(),
+           !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
+        {
+            return .superseded
+        }
+        return .revoked
+    }
+
     private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {
         guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime() else { return false }
         // A healthy gateway is not enough on first launch. If the plist still
@@ -272,6 +472,7 @@ final class GatewayProcessManager {
                 snap: decodeHealthSnapshot(from: data))
             self.existingGatewayDetails = details
             self.clearLastFailure()
+            self.clearRecoveryIncidentAfterHealthyRPC()
             self.status = .attachedExisting(details: details)
             self.appendLog("[gateway] launchd enable skipped; attached existing canonical gateway: \(details)\n")
             self.logger.info("gateway launchd enable skipped; attached existing canonical gateway details=\(details)")
@@ -322,6 +523,7 @@ final class GatewayProcessManager {
                 let details = self.describe(details: instanceText, port: port, snap: snap)
                 self.existingGatewayDetails = details
                 self.clearLastFailure()
+                self.clearRecoveryIncidentAfterHealthyRPC()
                 self.status = .attachedExisting(details: details)
                 self.appendLog("[gateway] using existing instance: \(details)\n")
                 self.logger.info("gateway using existing instance details=\(details)")
@@ -341,6 +543,7 @@ final class GatewayProcessManager {
                     self.lastFailureReason = reason
                     self.appendLog("[gateway] existing listener on port \(port) but attach failed: \(reason)\n")
                     self.logger.warning("gateway attach failed reason=\(reason)")
+                    await self.presentRecoveryIncident()
                     return true
                 }
 
@@ -423,6 +626,7 @@ final class GatewayProcessManager {
                 self.status = .failed(resolution.status.message)
             }
             self.logger.error("gateway command resolve failed: \(resolution.status.message)")
+            await self.confirmGatewayUnavailableBeforePresentingIncident()
             return
         }
 
@@ -444,6 +648,7 @@ final class GatewayProcessManager {
             self.status = .failed(err)
             self.lastFailureReason = err
             self.logger.error("gateway launchd enable failed: \(err)")
+            await self.confirmGatewayUnavailableBeforePresentingIncident()
             return
         }
 
@@ -456,6 +661,7 @@ final class GatewayProcessManager {
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
                 self.clearLastFailure()
+                self.clearRecoveryIncidentAfterHealthyRPC()
                 self.status = .running(details: details)
                 self.logger.info("gateway started details=\(details ?? "ok")")
                 self.refreshControlChannelIfNeeded(reason: "gateway started")
@@ -469,6 +675,7 @@ final class GatewayProcessManager {
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
         self.logger.warning("gateway start timed out")
+        await self.presentRecoveryIncident()
     }
 
     private func appendLog(_ chunk: String) {
@@ -497,6 +704,7 @@ final class GatewayProcessManager {
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 self.clearLastFailure()
+                self.clearRecoveryIncidentAfterHealthyRPC()
                 return true
             } catch {
                 try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
@@ -505,6 +713,66 @@ final class GatewayProcessManager {
         self.appendLog("[gateway] readiness wait timed out\n")
         self.logger.warning("gateway readiness wait timed out")
         return false
+    }
+
+    /// Unknown launchd status is not an outage. Only the combination of repeated
+    /// observer uncertainty and a bounded live-health failure activates recovery.
+    private func verifyUnverifiableGatewayState() async {
+        if self.recoveryIncident != nil {
+            await self.clearRecoveryIncidentIfSingleHealthProbeSucceeds()
+            return
+        }
+        await self.confirmGatewayUnavailableBeforePresentingIncident()
+    }
+
+    private func confirmGatewayUnavailableBeforePresentingIncident() async {
+        guard AppFlavor.current.isConsumer,
+              self.desiredActive,
+              !CommandResolver.connectionModeIsRemote()
+        else { return }
+
+        if await self.waitForGatewayReady(timeout: self.recoveryReadinessTimeout) {
+            return
+        }
+        guard self.desiredActive, !CommandResolver.connectionModeIsRemote() else { return }
+        await self.presentRecoveryIncident()
+    }
+
+    private func clearRecoveryIncidentIfSingleHealthProbeSucceeds() async {
+        guard AppFlavor.current.isConsumer, self.desiredActive else { return }
+        do {
+            _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+            self.clearLastFailure()
+            self.clearRecoveryIncidentAfterHealthyRPC()
+        } catch {
+            // Keep the existing incident. The next reconciliation tick or the
+            // explicit restart action can prove recovery; neither may re-notify.
+        }
+    }
+
+    private func presentRecoveryIncident() async {
+        guard AppFlavor.current.isConsumer,
+              self.desiredActive,
+              !CommandResolver.connectionModeIsRemote()
+        else { return }
+
+        let incident = GatewayRecoveryIncident.offline(appName: AppFlavor.current.appName)
+        let shouldNotify = self.recoveryIncidentTracker.recordUnavailable()
+        self.recoveryIncident = incident
+        guard shouldNotify else { return }
+
+        self.logger.warning("gateway recovery incident presented")
+        await self.recoveryNotificationSender(incident)
+    }
+
+    private func clearRecoveryIncidentAfterHealthyRPC() {
+        self.recoveryIncidentTracker.recordHealthy()
+        self.recoveryIncident = nil
+    }
+
+    private func clearRecoveryIncidentAfterIntentionalStop() {
+        self.recoveryIncidentTracker.reset()
+        self.recoveryIncident = nil
     }
 
     func clearLog() {
@@ -538,10 +806,40 @@ extension GatewayProcessManager {
 
     func setTestingDesiredActive(_ active: Bool) {
         self.desiredActive = active
+        if !active {
+            // Tests that model leaving local mode must release the same background
+            // ownership as production `stop()`, without issuing a real launchd stop.
+            self.stopLaunchAgentReconciliation()
+        }
+    }
+
+    func startTestingLaunchAgentReconciliation() {
+        self.startLaunchAgentReconciliationIfNeeded()
+    }
+
+    func testingLaunchAgentReconciliationIsRunning() -> Bool {
+        self.launchAgentReconciliationTask != nil
+    }
+
+    func testingReconcileLaunchAgentRegistrationNow() async {
+        let generation = self.launchAgentReconciliationGeneration
+        _ = await self.reconcileLaunchAgentRegistrationIfNeeded(generation: generation)
     }
 
     func setTestingLastFailureReason(_ reason: String?) {
         self.lastFailureReason = reason
+    }
+
+    func testingRecoveryIncident() -> GatewayRecoveryIncident? {
+        self.recoveryIncident
+    }
+
+    func testingPresentRecoveryIncident() async {
+        await self.presentRecoveryIncident()
+    }
+
+    func testingRecordHealthyRPC() {
+        self.clearRecoveryIncidentAfterHealthyRPC()
     }
 
     func setTestingStatus(_ status: Status) {

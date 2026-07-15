@@ -268,7 +268,11 @@ test_wrapper_dry_run() {
   local p2_asset_out="$TMP_DIR/wrapper-p2-local-assets.out"
   local p2_poll_root="$TMP_DIR/wrapper-p2-poll-dmg"
   local p2_poll_out="$TMP_DIR/wrapper-p2-poll-dmg.out"
+  local release_home release_name
   local status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
 
   mkdir -p "$root/dist/Jarvis.app"
   write_receipt "$(jarvis_release_app_notary_receipt_path "$root")" "app-submission"
@@ -401,6 +405,8 @@ test_wrapper_dry_run() {
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$verify_root" \
   OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$verify_summary" \
   OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$verify_timing" \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --verify-public-assets >"$verify_out" 2>"$verify_err"
   status=$?
   set -e

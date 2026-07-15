@@ -109,3 +109,14 @@ export function requireTranscriptionText(
   }
   return text;
 }
+
+/**
+ * Validate a provider transcript field without treating an explicit empty
+ * string as malformed. Silence is a successful transcription result.
+ */
+export function requireTranscriptionTextField(value: unknown, missingMessage: string): string {
+  if (typeof value !== "string") {
+    throw new Error(missingMessage);
+  }
+  return value.trim();
+}

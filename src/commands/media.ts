@@ -17,7 +17,7 @@ function readStringOpt(opts: Record<string, unknown>, key: string): string | und
 export type MediaTranscribeCommandResult = {
   file_path: string;
   mime: string | null;
-  text: string | null;
+  text: string;
 };
 
 export async function mediaTranscribeCommand(
@@ -46,15 +46,19 @@ export async function mediaTranscribeCommand(
     localPathRoots: [path.dirname(filePath)],
     mime,
   });
+  const text = result.text?.trim();
+  if (!text) {
+    throw new Error("Media transcribe produced no transcript.");
+  }
   const payload: MediaTranscribeCommandResult = {
     file_path: filePath,
     mime: mime ?? null,
-    text: result.text ?? null,
+    text,
   };
 
   if (readBooleanOpt(opts, "json")) {
     runtime.log(JSON.stringify(payload, null, 2));
     return;
   }
-  runtime.log(payload.text ?? "");
+  runtime.log(payload.text);
 }

@@ -43,3 +43,17 @@ export function buildMonitorNotificationLines(params: {
     "If an SLA or response deadline has passed, report deadline_passed instead of unchanged and obey notificationDecision.nextAction: escalate_within_scope via normal tools/skills, or request_approval. Never turn it into another no-change report.",
   ];
 }
+
+export function buildMonitorDraftCompletionLines(actionPolicy: string): string[] {
+  if (actionPolicy !== "notify_draft") {
+    return [];
+  }
+  return [
+    // `notify_draft` is still conditional on the user's task. It does not invent
+    // reply work for status-only monitors, but it must not discard requested
+    // work merely because the watched condition also became complete.
+    "If the original monitor task explicitly requires a draft and this wake finds the matching or completing event, the origin-chat update must include the actual draft text.",
+    "For that explicitly requested draft task, a status-only completion is incomplete; provide the draft before asking for approval.",
+    "Do not invent a draft when the original monitor task only requests status or notification.",
+  ];
+}

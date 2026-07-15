@@ -80,4 +80,15 @@ describe("media commands", () => {
     );
     expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, "", "   "])("rejects an empty transcript result (%j)", async (text) => {
+    const filePath = path.join(tempDir, "empty.oga");
+    await fs.writeFile(filePath, "audio");
+    mocks.transcribeAudioFile.mockResolvedValueOnce({ text });
+
+    await expect(mediaTranscribeCommand(filePath, { json: true }, runtime)).rejects.toThrow(
+      /produced no transcript/i,
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 });

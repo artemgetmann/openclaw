@@ -112,6 +112,70 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
 Keep these lanes separate. They answer different questions, mutate different
 state, and produce different proof:
 
+### Canonical main-Jarvis hotfix wrapper
+
+When Artem asks to “Ship this PR to my main Jarvis” or equivalent, use the
+repo-native break-glass wrapper. Do not reconstruct these stages by hand:
+
+```bash
+cd /Users/user/Programming_Projects/openclaw
+bash scripts/ship-jarvis-hotfix.sh --pr <number> --dry-run
+bash scripts/ship-jarvis-hotfix.sh --pr <number>
+```
+
+For an OPEN PR, `--dry-run` cannot know the future merged `main` commit. Its
+commit-dependent package, seed, protection, and proof plan therefore uses the
+explicit `<post-merge-main>` placeholder and resolves the real commit only in
+the live run after merge plus `git pull --ff-only`. Exact installed-app commit
+comparison remains enabled for already-MERGED PR dry-runs.
+
+The wrapper is intentionally narrower than a public release and stronger than
+read-only Jarvis proof. It:
+
+- refuses unless the sacred clone is clean, on `main`, and is the current
+  working directory
+- verifies the PR targets `main`, waits through `scripts/pr-required-status.sh`
+  even when GitHub already reports it merged, merges when needed, then
+  fast-forwards with `git pull --ff-only`
+- rejects before packaging or runtime mutation when `/Applications/Jarvis.app`
+  already bundles the merged commit; that is a managed-runtime proof case, not
+  a break-glass hotfix
+- preserves `/Applications/Jarvis.app`'s installed
+  `CFBundleShortVersionString` as `APP_VERSION`, uses that same version for the
+  normal canonical Sparkle build calculation, then selects
+  `APP_BUILD=max(installed bundleVersion + 1, normal package-derived build)`
+  before packaging. This prevents newer hotfix code from reporting the older
+  source-tree package version.
+- builds a host-architecture `dist/Jarvis.app` through the fast consumer
+  package helper with explicit local single-architecture smoke flags and a
+  fresh dependency install plus fresh JS/UI build. Canonical shipping never
+  inherits `SKIP_PNPM_INSTALL=1` from the fast helper's iteration defaults.
+- launches only `dist/Jarvis.app` so it seeds the default Jarvis app-support
+  runtime; it does not replace `/Applications/Jarvis.app`
+- verifies the built app version and bundled runtime `package.json` both match
+  the preserved installed version before launch, then requires the live runtime
+  to report that version during readiness and final proof
+- immediately after observing the expected seed, installs and verifies the
+  compatibility marker that protects it from the older installed app. If any
+  later readiness or proof stage fails, the exit guard re-verifies that state
+  (or completes and verifies an interrupted protection write) before returning
+  the original nonzero result.
+- kickstarts `ai.jarvis.gateway`, then waits for a replacement PID, that PID's
+  port `18789` listener, the expected runtime commit, and deep RPC success
+  before the live protection helper repeats its full daemon-bound proof
+- runs `protect-jarvis-runtime-from-app-reseed.sh` first in its no-flag dry-run
+  mode and then with `--apply`
+- prints only selected proof: live runtime commit, PID, credential-free command,
+  port, RPC, `runtime_source=jarvis-break-glass-hotfix`, current `[default]`
+  Telegram bot when found in logs, and a one-way token fingerprint when a
+  default config token is available. It never prints the token.
+
+Every stage fails closed. A successful run means one Mac is running an explicit
+app-support hotfix from merged `main`. It does not mean a public Jarvis update
+was published, `/Applications/Jarvis.app` changed, or managed-bundle steady
+state was restored. Replace the protected hotfix with a package-seeded runtime
+through the managed release/update lane after the incident.
+
 1. Managed-package daily Jarvis
    - This is the steady state: `/Applications/Jarvis.app` seeds the
      `ai.jarvis.gateway` payload under Jarvis Application Support.
