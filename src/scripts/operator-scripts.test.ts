@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -560,6 +561,739 @@ esac
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("not ai.jarvis.gateway");
+  });
+
+  it("Jarvis hotfix dry-run prints the fail-closed ship plan without invoking mutations", () => {
+    const root = makeTempRoot();
+    const mainRepo = path.join(root, "main");
+    const stateDir = path.join(root, "home", "Library", "Application Support", "Jarvis", ".jarvis");
+    const callsLog = path.join(root, "calls.log");
+    const normalBuildLog = path.join(root, "normal-build.log");
+    const installedAppManifest = path.join(root, "installed-app-manifest.json");
+    const prStateFile = path.join(root, "pr-state");
+    const releaseLockPath = path.join(root, "dry-run-release.lock");
+    const mergedSha = "feedfacefeedfacefeedfacefeedfacefeedface";
+    const binDir = path.join(root, "bin");
+    initMainRepo(mainRepo);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(
+      path.join(stateDir, ".consumer-bundled-runtime.json"),
+      JSON.stringify({ format: 1, bundleVersion: "300", gitCommit: "389c0513cf" }),
+    );
+    fs.writeFileSync(
+      installedAppManifest,
+      JSON.stringify({ format: 1, bundleVersion: "299", gitCommit: "a1b2c3d4e5" }),
+    );
+    fs.writeFileSync(prStateFile, "merged\n");
+
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: mainRepo,
+      encoding: "utf8",
+    }).trim();
+    const gh = path.join(binDir, "gh");
+    writeExecutable(
+      gh,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "pr view 123 --json number,state,isDraft,baseRefName,headRefOid,mergeCommit,title,url" ]]; then
+  if [[ "$(cat '${prStateFile}')" == "open" ]]; then
+    printf '%s\\n' '{"number":123,"state":"OPEN","isDraft":false,"baseRefName":"main","headRefOid":"abcdef1234567890abcdef1234567890abcdef12","mergeCommit":null,"title":"Fix Jarvis","url":"https://example.test/pr/123"}'
+  else
+    printf '%s\\n' '{"number":123,"state":"MERGED","isDraft":false,"baseRefName":"main","headRefOid":"${headSha}","mergeCommit":{"oid":"${mergedSha}"},"title":"Fix Jarvis","url":"https://example.test/pr/123"}'
+  fi
+  exit 0
+fi
+exit 9
+`,
+    );
+    const mutationStub = path.join(binDir, "mutation-stub");
+    writeExecutable(
+      mutationStub,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> '${callsLog}'
+exit 91
+`,
+    );
+    const canonicalBuildNode = path.join(binDir, "canonical-build-node");
+    writeExecutable(
+      canonicalBuildNode,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> '${normalBuildLog}'
+printf '%s\\n' '250'
+`,
+    );
+
+    const dryRunEnv = {
+      ...process.env,
+      OPENCLAW_GH_BIN: gh,
+      OPENCLAW_MAIN_REPO: mainRepo,
+      OPENCLAW_EXPECTED_MAIN_REPO: mainRepo,
+      OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE: "1",
+      OPENCLAW_SHIP_INSTALLED_MANIFEST: path.join(stateDir, ".consumer-bundled-runtime.json"),
+      OPENCLAW_SHIP_INSTALLED_APP_MANIFEST: installedAppManifest,
+      OPENCLAW_JARVIS_STATE_DIR: stateDir,
+      OPENCLAW_SHIP_INSTALLED_APP_VERSION: "2026.7.14.1",
+      OPENCLAW_NODE_BIN: canonicalBuildNode,
+      OPENCLAW_SHIP_PR_REQUIRED_SCRIPT: mutationStub,
+      OPENCLAW_SHIP_PACKAGE_SCRIPT: mutationStub,
+      OPENCLAW_SHIP_OPEN_APP_SCRIPT: mutationStub,
+      OPENCLAW_SHIP_PROTECT_SCRIPT: mutationStub,
+      OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE: releaseLockPath,
+    };
+    const result = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "123", "--dry-run"],
+      {
+        cwd: mainRepo,
+        env: dryRunEnv,
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("--wait --timeout 1800");
+    expect(result.stdout).toContain(
+      "already merged; required checks still remain part of ship proof",
+    );
+    expect(result.stdout).not.toContain("pr merge 123 --squash");
+    expect(result.stdout).toContain("pull --ff-only origin main");
+    expect(result.stdout).toContain(`MERGED PR dry-run models remote merge commit ${mergedSha}`);
+    expect(result.stdout).toContain(`commit=${mergedSha}`);
+    expect(result.stdout).toContain("APP_BUILD=301");
+    expect(result.stdout).toContain("APP_VERSION=2026.7.14.1");
+    expect(result.stdout).toContain("ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1");
+    expect(result.stdout).toContain("SKIP_PNPM_INSTALL=0");
+    expect(result.stdout).toContain("SKIP_TSC=0");
+    expect(result.stdout).toContain("dist/Jarvis.app");
+    expect(result.stdout).toContain("kickstart -k");
+    expect(result.stdout).toContain("--apply");
+    expect(result.stdout).toContain("no merge, pull, package, app launch, gateway restart");
+    expect(fs.readFileSync(normalBuildLog, "utf8")).toContain("canonical-build 2026.7.14.1");
+    expect(fs.existsSync(callsLog)).toBe(false);
+    expect(fs.existsSync(releaseLockPath)).toBe(false);
+
+    fs.writeFileSync(
+      installedAppManifest,
+      JSON.stringify({ format: 1, bundleVersion: "301", gitCommit: mergedSha }),
+    );
+    const sameCommitResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "123", "--dry-run"],
+      { cwd: mainRepo, env: dryRunEnv, encoding: "utf8" },
+    );
+    expect(sameCommitResult.status).toBe(1);
+    expect(sameCommitResult.stderr).toContain("installed Jarvis app already contains commit");
+    expect(sameCommitResult.stderr).toContain("use scripts/prove-jarvis-runtime.sh");
+    expect(sameCommitResult.stdout).not.toContain("APP_VERSION=");
+
+    fs.writeFileSync(prStateFile, "open\n");
+    const openProspectiveResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "123", "--dry-run"],
+      { cwd: mainRepo, env: dryRunEnv, encoding: "utf8" },
+    );
+    expect(openProspectiveResult.status).toBe(0);
+    expect(openProspectiveResult.stdout).toContain("pr merge 123 --squash --delete-branch");
+    expect(openProspectiveResult.stdout).toContain(
+      "OPEN PR dry-run uses prospective commit <post-merge-main>",
+    );
+    expect(openProspectiveResult.stdout).toContain("real commit resolves after merge and git pull");
+    expect(openProspectiveResult.stdout).toContain("commit=<post-merge-main>");
+    expect(openProspectiveResult.stdout).toContain("APP_VERSION=2026.7.14.1");
+    expect(openProspectiveResult.stdout).toContain("APP_BUILD=301");
+    expect(fs.existsSync(callsLog)).toBe(false);
+  });
+
+  it("Jarvis hotfix wrapper refuses a dirty sacred main before querying GitHub", () => {
+    const root = makeTempRoot();
+    const mainRepo = path.join(root, "main");
+    const binDir = path.join(root, "bin");
+    const ghCalls = path.join(root, "gh-calls.log");
+    initMainRepo(mainRepo);
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(path.join(mainRepo, "dirty.txt"), "operator state\n");
+    const gh = path.join(binDir, "gh");
+    writeExecutable(
+      gh,
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> '${ghCalls}'
+exit 9
+`,
+    );
+    const helper = path.join(binDir, "helper");
+    writeExecutable(helper, "#!/usr/bin/env bash\nexit 0\n");
+
+    const result = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "123", "--dry-run"],
+      {
+        cwd: mainRepo,
+        env: {
+          ...process.env,
+          OPENCLAW_GH_BIN: gh,
+          OPENCLAW_MAIN_REPO: mainRepo,
+          OPENCLAW_EXPECTED_MAIN_REPO: mainRepo,
+          OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE: "1",
+          OPENCLAW_SHIP_PR_REQUIRED_SCRIPT: helper,
+          OPENCLAW_SHIP_PACKAGE_SCRIPT: helper,
+          OPENCLAW_SHIP_OPEN_APP_SCRIPT: helper,
+          OPENCLAW_SHIP_PROTECT_SCRIPT: helper,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("sacred main has local changes");
+    expect(fs.existsSync(ghCalls)).toBe(false);
+  });
+
+  it("protects and verifies an exact offline seeded Jarvis payload", () => {
+    const root = makeTempRoot();
+    const appPath = path.join(root, "Applications", "Jarvis.app");
+    const appManifest = path.join(
+      appPath,
+      "Contents",
+      "Resources",
+      "OpenClawRuntime",
+      "manifest.json",
+    );
+    const stateDir = path.join(root, "Jarvis", ".jarvis");
+    const installedManifest = path.join(stateDir, ".consumer-bundled-runtime.json");
+    const markerPath = path.join(stateDir, ".consumer-bundled-runtime.protection.json");
+    const nodeBin = path.join(stateDir, "tools", "node", "bin", "node");
+    const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
+    fs.mkdirSync(path.dirname(appManifest), { recursive: true });
+    fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
+    fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+    fs.writeFileSync(
+      appManifest,
+      JSON.stringify({ format: 1, bundleVersion: "299", gitCommit: "not-a-sha" }),
+    );
+    fs.writeFileSync(
+      installedManifest,
+      JSON.stringify({ format: 1, bundleVersion: "301", gitCommit: "389c0513cf" }),
+    );
+    writeExecutable(nodeBin, "#!/usr/bin/env bash\nexit 0\n");
+    fs.writeFileSync(entrypoint, "fixture\n");
+
+    const baseArgs = [
+      "--expected-live-commit",
+      "389c0513cf",
+      "--app",
+      appPath,
+      "--state-dir",
+      stateDir,
+      "--offline-seeded-fallback",
+    ];
+    const malformedAppResult = runScript("scripts/protect-jarvis-runtime-from-app-reseed.sh", [
+      ...baseArgs,
+      "--apply",
+    ]);
+    expect(malformedAppResult.status).toBe(1);
+    expect(malformedAppResult.stderr).toContain("app manifest gitCommit is missing or invalid");
+    expect(JSON.parse(fs.readFileSync(installedManifest, "utf8")).gitCommit).toBe("389c0513cf");
+    expect(fs.existsSync(markerPath)).toBe(false);
+
+    fs.writeFileSync(
+      appManifest,
+      JSON.stringify({ format: 1, bundleVersion: "299", gitCommit: "a1b2c3d4e5" }),
+    );
+    const applyResult = runScript("scripts/protect-jarvis-runtime-from-app-reseed.sh", [
+      ...baseArgs,
+      "--apply",
+    ]);
+    expect(applyResult.status, applyResult.stderr).toBe(0);
+    expect(applyResult.stdout).toContain("offline_seeded_fallback_applied=true");
+    expect(applyResult.stdout).toContain("offline_seeded_fallback_verified=true");
+    expect(JSON.parse(fs.readFileSync(installedManifest, "utf8"))).toMatchObject({
+      bundleVersion: "299",
+      gitCommit: "a1b2c3d4e5",
+    });
+    const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+    expect(marker).toMatchObject({
+      protectedRuntimeGitCommit: "389c0513cf",
+      compatibilityManifestGitCommit: "a1b2c3d4e5",
+      compatibilityManifestBundleVersion: "299",
+    });
+    expect(JSON.parse(fs.readFileSync(marker.backupPath, "utf8"))).toMatchObject({
+      bundleVersion: "301",
+      gitCommit: "389c0513cf",
+    });
+
+    const verifyResult = runScript("scripts/protect-jarvis-runtime-from-app-reseed.sh", [
+      ...baseArgs,
+      "--verify",
+    ]);
+    expect(verifyResult.status, verifyResult.stderr).toBe(0);
+    expect(verifyResult.stdout).toContain("offline_seeded_fallback_verified=true");
+
+    // Simulate interruption after the compatibility manifest landed but its
+    // marker disappeared. Recovery may reuse only the expected-seed backup.
+    fs.rmSync(markerPath);
+    fs.writeFileSync(
+      marker.backupPath,
+      JSON.stringify({ format: 1, bundleVersion: "301", gitCommit: "bad" }),
+    );
+    const malformedBackupResult = runScript("scripts/protect-jarvis-runtime-from-app-reseed.sh", [
+      ...baseArgs,
+      "--apply",
+    ]);
+    expect(malformedBackupResult.status).toBe(1);
+    expect(malformedBackupResult.stderr).toContain(
+      "compatibility manifest exists without a verified backup",
+    );
+    expect(fs.existsSync(markerPath)).toBe(false);
+
+    fs.writeFileSync(
+      marker.backupPath,
+      JSON.stringify({ format: 1, bundleVersion: "301", gitCommit: "389c0513cf" }),
+    );
+    const recoveryResult = runScript("scripts/protect-jarvis-runtime-from-app-reseed.sh", [
+      ...baseArgs,
+      "--apply",
+    ]);
+    expect(recoveryResult.status, recoveryResult.stderr).toBe(0);
+    expect(recoveryResult.stdout).toContain("offline_seeded_fallback_applied=true");
+    expect(JSON.parse(fs.readFileSync(markerPath, "utf8"))).toMatchObject({
+      protectedRuntimeGitCommit: "389c0513cf",
+      compatibilityManifestGitCommit: "a1b2c3d4e5",
+    });
+  });
+
+  it("Jarvis hotfix waits for the replacement gateway RPC before protecting and prints redacted proof", () => {
+    const root = makeTempRoot();
+    const mainRepo = path.join(root, "main");
+    const originRepo = path.join(root, "origin.git");
+    const home = path.join(root, "home");
+    const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+    const nodeBin = path.join(stateDir, "tools", "node", "bin", "node");
+    const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
+    const manifest = path.join(stateDir, ".consumer-bundled-runtime.json");
+    const marker = path.join(stateDir, ".consumer-bundled-runtime.protection.json");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const installedAppManifest = path.join(root, "installed-app-manifest.json");
+    const logDir = path.join(stateDir, "logs");
+    const callsLog = path.join(root, "calls.log");
+    const launchctlCount = path.join(root, "launchctl-count");
+    const statusCount = path.join(root, "status-count");
+    const forceStatusFailure = path.join(root, "force-status-failure");
+    const forceOpenFailure = path.join(root, "force-open-failure");
+    const forcePostLaunchFailure = path.join(root, "force-post-launch-failure");
+    const forceMalformedAppCommit = path.join(root, "force-malformed-app-commit");
+    const forceAdvancedMain = path.join(root, "force-advanced-main");
+    const kicked = path.join(root, "kicked");
+    const releaseLockPath = path.join(root, "jarvis-release.lock");
+    const binDir = path.join(root, "bin");
+    const token = "123456789:super-secret-token-value";
+    initMainRepo(mainRepo);
+    const requestedAncestorSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: mainRepo,
+      encoding: "utf8",
+    }).trim();
+    fs.writeFileSync(path.join(mainRepo, "NEWER.md"), "unrelated newer main commit\n");
+    execFileSync("git", ["add", "NEWER.md"], { cwd: mainRepo });
+    execFileSync("git", ["commit", "-q", "-m", "newer main fixture"], {
+      cwd: mainRepo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    execFileSync("git", ["init", "-q", "--bare", originRepo]);
+    execFileSync("git", ["remote", "add", "origin", originRepo], { cwd: mainRepo });
+    execFileSync("git", ["push", "-q", "-u", "origin", "main"], { cwd: mainRepo });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: mainRepo,
+      encoding: "utf8",
+    }).trim();
+
+    fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
+    fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(entrypoint, "fixture\n");
+    fs.writeFileSync(
+      manifest,
+      JSON.stringify({ format: 1, bundleVersion: "300", gitCommit: "389c0513cf" }),
+    );
+    fs.writeFileSync(
+      installedAppManifest,
+      JSON.stringify({ format: 1, bundleVersion: "299", gitCommit: "a1b2c3d4e5" }),
+    );
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ channels: { telegram: { accounts: { default: { botToken: token } } } } }),
+    );
+    fs.writeFileSync(
+      path.join(logDir, "gateway.log"),
+      "2026-07-15T00:00:00Z [telegram] [default] connected @jarvis_test_bot\n",
+    );
+
+    const gh = path.join(binDir, "gh");
+    writeExecutable(
+      gh,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "pr view 124 --json number,state,isDraft,baseRefName,headRefOid,mergeCommit,title,url" ]]; then
+  merge_commit='${headSha}'
+  if [[ -f '${forceAdvancedMain}' ]]; then merge_commit='${requestedAncestorSha}'; fi
+  printf '%s\\n' '{"number":124,"state":"MERGED","isDraft":false,"baseRefName":"main","headRefOid":"${headSha}","mergeCommit":{"oid":"'"$merge_commit"'"},"title":"Fix Jarvis","url":"https://example.test/pr/124"}'
+  exit 0
+fi
+exit 9
+`,
+    );
+    const noOp = path.join(binDir, "no-op");
+    writeExecutable(
+      noOp,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "pr-required $*" >> '${callsLog}'
+`,
+    );
+    const packageScript = path.join(binDir, "package");
+    writeExecutable(
+      packageScript,
+      `#!/usr/bin/env bash
+set -euo pipefail
+app='${mainRepo}/dist/Jarvis.app'
+mkdir -p "$app/Contents/Resources/OpenClawRuntime/openclaw"
+commit='${headSha}'
+if [[ -f '${forceMalformedAppCommit}' ]]; then commit='bad'; fi
+printf '%s\\n' '{"gitCommit":"'"$commit"'","bundleVersion":"301"}' > "$app/Contents/Resources/OpenClawRuntime/manifest.json"
+printf '%s\\n' '{"version":"'"$APP_VERSION"'"}' > "$app/Contents/Resources/OpenClawRuntime/openclaw/package.json"
+printf '%s\\n' 'fixture plist' > "$app/Contents/Info.plist"
+printf '%s\\n' "package APP_VERSION=$APP_VERSION APP_BUILD=$APP_BUILD BUILD_ARCHS=$BUILD_ARCHS SKIP_PNPM_INSTALL=$SKIP_PNPM_INSTALL SKIP_TSC=$SKIP_TSC" >> '${callsLog}'
+`,
+    );
+    const openScript = path.join(binDir, "open-app");
+    writeExecutable(
+      openScript,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ -f '${forceOpenFailure}' ]]; then exit 1; fi
+if [[ -n "\${OPENCLAW_APP_LAUNCH_RECEIPT:-}" ]]; then
+  printf '%s\\n' "$2" > "\${OPENCLAW_APP_LAUNCH_RECEIPT}.tmp"
+  mv "\${OPENCLAW_APP_LAUNCH_RECEIPT}.tmp" "\${OPENCLAW_APP_LAUNCH_RECEIPT}"
+fi
+printf '%s\\n' '{"format":1,"bundleVersion":"301","gitCommit":"${headSha}"}' > '${manifest}'
+printf '%s\\n' 'open-app' >> '${callsLog}'
+if [[ -f '${forcePostLaunchFailure}' ]]; then exit 17; fi
+`,
+    );
+    const protectScript = path.join(binDir, "protect");
+    writeExecutable(
+      protectScript,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *" --offline-seeded-fallback "* && " $* " == *" --verify "* ]]; then
+  jq -e --arg commit '${headSha}' '.protectedRuntimeGitCommit == $commit' '${marker}' >/dev/null
+  printf '%s\\n' 'offline verify' >> '${callsLog}'
+elif [[ " $* " == *" --offline-seeded-fallback "* && " $* " == *" --apply "* ]]; then
+  backup='${manifest}.backup.transaction'
+  cp '${manifest}' "$backup"
+  printf '%s\\n' '{"format":1,"protectedRuntimeGitCommit":"${headSha}","compatibilityManifestGitCommit":"a1b2c3d4e5","compatibilityManifestBundleVersion":"299","backupPath":"'"$backup"'"}' > '${marker}'
+  printf '%s\\n' '{"format":1,"bundleVersion":"299","gitCommit":"a1b2c3d4e5"}' > '${manifest}'
+  printf '%s\\n' 'offline apply' >> '${callsLog}'
+elif [[ " $* " == *" --apply "* ]]; then
+  printf '%s\\n' 'protect apply' >> '${callsLog}'
+else
+  printf '%s\\n' 'protect dry-run' >> '${callsLog}'
+fi
+`,
+    );
+    const plistBuddy = path.join(binDir, "PlistBuddy");
+    writeExecutable(
+      plistBuddy,
+      `#!/usr/bin/env bash
+case "$2" in
+  "Print :CFBundleVersion") printf '%s\\n' '301' ;;
+  "Print :CFBundleShortVersionString") printf '%s\\n' '2026.7.14.1' ;;
+  *) exit 9 ;;
+esac
+`,
+    );
+    const launchctl = path.join(binDir, "launchctl");
+    writeExecutable(
+      launchctl,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  kickstart)
+    : > '${kicked}'
+    printf '%s\\n' 'kickstart' >> '${callsLog}'
+    ;;
+  print)
+    count=0
+    [[ ! -f '${launchctlCount}' ]] || count=$(cat '${launchctlCount}')
+    count=$((count + 1))
+    printf '%s' "$count" > '${launchctlCount}'
+    pid=100
+    if [[ -f '${kicked}' && "$count" -ge 3 ]]; then pid=200; fi
+    cat <<EOF
+gui/501/ai.jarvis.gateway = {
+  state = running
+  program = ${nodeBin}
+  arguments = {
+    ${nodeBin}
+    ${entrypoint}
+    gateway
+    --port
+    18789
+  }
+  pid = $pid
+}
+EOF
+    ;;
+  *) exit 9 ;;
+esac
+`,
+    );
+    const lsof = path.join(binDir, "lsof");
+    writeExecutable(
+      lsof,
+      `#!/usr/bin/env bash
+printf '%s\\n' 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME'
+printf '%s\\n' 'node 200 user 15u IPv4 0x1 0t0 TCP 127.0.0.1:18789 (LISTEN)'
+`,
+    );
+    writeExecutable(
+      nodeBin,
+      `#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f '${statusCount}' ]] || count=$(cat '${statusCount}')
+count=$((count + 1))
+printf '%s' "$count" > '${statusCount}'
+printf 'status %s\\n' "$count" >> '${callsLog}'
+if [[ -f '${forceStatusFailure}' ]]; then exit 1; fi
+if [[ "$count" == "1" ]]; then exit 1; fi
+source='jarvis-managed-bundle'
+[[ ! -f '${marker}' ]] || source='jarvis-break-glass-hotfix'
+printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"'"$source"'","runtimeCommit":"${headSha}","runtimePackageVersion":"2026.7.14.1","stateDir":"${stateDir}","configPath":"${configPath}"},"rpc":{"ok":true},"health":{"healthy":true}}'
+`,
+    );
+
+    const liveEnv = {
+      ...process.env,
+      OPENCLAW_GH_BIN: gh,
+      OPENCLAW_MAIN_REPO: mainRepo,
+      OPENCLAW_EXPECTED_MAIN_REPO: mainRepo,
+      OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE: "1",
+      OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD: "250",
+      OPENCLAW_SHIP_INSTALLED_APP_VERSION: "2026.7.14.1",
+      OPENCLAW_SHIP_PR_REQUIRED_SCRIPT: noOp,
+      OPENCLAW_SHIP_PACKAGE_SCRIPT: packageScript,
+      OPENCLAW_SHIP_OPEN_APP_SCRIPT: openScript,
+      OPENCLAW_SHIP_PROTECT_SCRIPT: protectScript,
+      OPENCLAW_SHIP_INSTALLED_MANIFEST: manifest,
+      OPENCLAW_SHIP_INSTALLED_APP_MANIFEST: installedAppManifest,
+      OPENCLAW_SHIP_PROTECTION_MARKER: marker,
+      OPENCLAW_JARVIS_HOME: path.dirname(stateDir),
+      OPENCLAW_JARVIS_STATE_DIR: stateDir,
+      OPENCLAW_JARVIS_CONFIG_PATH: configPath,
+      OPENCLAW_JARVIS_LOG_DIR: logDir,
+      OPENCLAW_JARVIS_NODE_BIN: nodeBin,
+      OPENCLAW_JARVIS_ENTRYPOINT: entrypoint,
+      OPENCLAW_LAUNCHCTL_BIN: launchctl,
+      OPENCLAW_LSOF_BIN: lsof,
+      OPENCLAW_PLISTBUDDY_BIN: plistBuddy,
+      OPENCLAW_SHIP_SEED_POLL_SECONDS: "0",
+      OPENCLAW_SHIP_GATEWAY_READY_POLL_SECONDS: "0",
+      OPENCLAW_SHIP_GATEWAY_READY_TIMEOUT_SECONDS: "5",
+      OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE: releaseLockPath,
+    };
+
+    // A live canonical release owner must block this wrapper before required
+    // checks, package writes, app launch, or any shared runtime mutation.
+    const ownerStart = execFileSync("/bin/ps", ["-p", String(process.pid), "-o", "lstart="], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    })
+      .trim()
+      .replace(/\s+/g, " ");
+    fs.mkdirSync(releaseLockPath, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(releaseLockPath, "owner"),
+      `pid=${process.pid}\ntoken=test-owner\nprocess_start=${ownerStart}\ncontext=fixture-holder\n`,
+    );
+    const contentionResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      { cwd: mainRepo, env: liveEnv, encoding: "utf8" },
+    );
+    expect(contentionResult.status).toBe(1);
+    expect(contentionResult.stderr).toContain("another Jarvis release owner is active");
+    expect(fs.existsSync(callsLog)).toBe(false);
+    fs.rmSync(path.join(releaseLockPath, "owner"));
+    fs.rmdirSync(releaseLockPath);
+
+    // The requested PR is a real ancestor of local main. Shipping must still
+    // stop before package because "contains PR" is weaker than "is PR".
+    expect(() =>
+      execFileSync("git", ["merge-base", "--is-ancestor", requestedAncestorSha, headSha], {
+        cwd: mainRepo,
+      }),
+    ).not.toThrow();
+    fs.writeFileSync(forceAdvancedMain, "1\n");
+    const advancedMainResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      { cwd: mainRepo, env: liveEnv, encoding: "utf8" },
+    );
+    expect(advancedMainResult.status).toBe(1);
+    expect(advancedMainResult.stderr).toContain("sacred main advanced beyond requested PR merge");
+    expect(advancedMainResult.stderr).toContain("Refusing to package unrelated newer commits");
+    const advancedCalls = fs.readFileSync(callsLog, "utf8");
+    expect(advancedCalls).toContain("pr-required --pr 124 --wait --timeout 1800");
+    expect(advancedCalls).not.toContain("package APP_VERSION=");
+    expect(advancedCalls).not.toContain("open-app");
+    expect(fs.existsSync(releaseLockPath)).toBe(false);
+    fs.rmSync(forceAdvancedMain);
+    fs.writeFileSync(callsLog, "");
+
+    // A malformed packaged commit must fail after package verification but
+    // before app launch. EXIT cleanup must also release the canonical lock.
+    fs.writeFileSync(forceMalformedAppCommit, "1\n");
+    const malformedPackageResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      { cwd: mainRepo, env: liveEnv, encoding: "utf8" },
+    );
+    expect(malformedPackageResult.status).toBe(1);
+    expect(malformedPackageResult.stderr).toContain(
+      "built Jarvis manifest gitCommit is missing or invalid: bad",
+    );
+    const malformedCalls = fs.readFileSync(callsLog, "utf8");
+    expect(malformedCalls).toContain("package APP_VERSION=");
+    expect(malformedCalls).not.toContain("open-app");
+    expect(malformedCalls).not.toContain("protect apply");
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(releaseLockPath)).toBe(false);
+    fs.rmSync(forceMalformedAppCommit);
+    fs.rmSync(path.join(mainRepo, "dist"), { recursive: true, force: true });
+    fs.writeFileSync(callsLog, "");
+
+    const result = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      {
+        cwd: mainRepo,
+        env: liveEnv,
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "gateway restart ready pid=200 port=18789 version=2026.7.14.1 rpc=true",
+    );
+    expect(result.stdout).toContain(`installed_runtime_commit=${headSha}`);
+    expect(result.stdout).toContain("runtime_package_version=2026.7.14.1");
+    expect(result.stdout).toContain("runtime_pid=200");
+    expect(result.stdout).toContain("runtime_port=18789");
+    expect(result.stdout).toContain("runtime_rpc=true");
+    expect(result.stdout).toContain("runtime_source=jarvis-break-glass-hotfix");
+    expect(result.stdout).toContain("telegram_default_bot=@jarvis_test_bot");
+    expect(result.stdout).toContain(
+      `telegram_token_fingerprint=${createHash("sha256").update(token).digest("hex").slice(0, 12)}`,
+    );
+    expect(result.stdout).toContain("applications_jarvis_app=untouched");
+    expect(result.stdout).toContain("public_release=false");
+    expect(result.stdout).not.toContain(token);
+    const calls = fs.readFileSync(callsLog, "utf8").trim().split("\n");
+    expect(calls).toContain("pr-required --pr 124 --wait --timeout 1800");
+    expect(calls).toContain(
+      `package APP_VERSION=2026.7.14.1 APP_BUILD=301 BUILD_ARCHS=${process.arch === "arm64" ? "arm64" : "x86_64"} SKIP_PNPM_INSTALL=0 SKIP_TSC=0`,
+    );
+    expect(calls.filter((line) => line.startsWith("status ")).length).toBeGreaterThanOrEqual(3);
+    expect(calls.indexOf("protect dry-run")).toBeGreaterThan(calls.indexOf("status 2"));
+    expect(calls.indexOf("protect apply")).toBeGreaterThan(calls.indexOf("protect dry-run"));
+
+    // Inject a permanent post-seed readiness failure. The wrapper must leave
+    // the new payload protected and prove that state before returning nonzero.
+    fs.rmSync(path.join(mainRepo, "dist"), { recursive: true, force: true });
+    fs.writeFileSync(
+      manifest,
+      JSON.stringify({ format: 1, bundleVersion: "300", gitCommit: "389c0513cf" }),
+    );
+    fs.rmSync(marker, { force: true });
+    fs.rmSync(launchctlCount, { force: true });
+    fs.rmSync(statusCount, { force: true });
+    fs.rmSync(kicked, { force: true });
+    fs.writeFileSync(forceStatusFailure, "1\n");
+    fs.writeFileSync(callsLog, "");
+    const failureResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      {
+        cwd: mainRepo,
+        env: {
+          ...liveEnv,
+          OPENCLAW_SHIP_GATEWAY_READY_TIMEOUT_SECONDS: "0",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(failureResult.status).toBe(1);
+    expect(failureResult.stdout).toContain(
+      "transaction_recovery=protection-verified-before-nonzero-exit",
+    );
+    expect(JSON.parse(fs.readFileSync(manifest, "utf8"))).toMatchObject({
+      gitCommit: "a1b2c3d4e5",
+      bundleVersion: "299",
+    });
+    const failureMarker = JSON.parse(fs.readFileSync(marker, "utf8"));
+    expect(failureMarker.protectedRuntimeGitCommit).toBe(headSha);
+    expect(JSON.parse(fs.readFileSync(failureMarker.backupPath, "utf8")).gitCommit).toBe(headSha);
+    expect(fs.readFileSync(callsLog, "utf8").trim().split("\n").at(-1)).toBe("offline verify");
+
+    // A launcher failure occurs before a seed is possible, so the recovery
+    // transaction must remain unarmed and preserve the launcher's exit code.
+    fs.rmSync(forceStatusFailure, { force: true });
+    fs.writeFileSync(forceOpenFailure, "1\n");
+    fs.writeFileSync(callsLog, "");
+    const launchFailureResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      { cwd: mainRepo, env: liveEnv, encoding: "utf8" },
+    );
+    expect(launchFailureResult.status).toBe(1);
+    expect(launchFailureResult.stdout).not.toContain("transaction_recovery=");
+    expect(launchFailureResult.stderr).not.toContain("CRITICAL:");
+    expect(fs.readFileSync(callsLog, "utf8")).not.toContain("offline verify");
+
+    // `/usr/bin/open` can succeed before activation setup fails. The receipt,
+    // not the helper's nonzero status, must arm protection for the async seed.
+    fs.rmSync(forceOpenFailure, { force: true });
+    fs.rmSync(path.join(mainRepo, "dist"), { recursive: true, force: true });
+    fs.writeFileSync(forcePostLaunchFailure, "1\n");
+    fs.writeFileSync(
+      manifest,
+      JSON.stringify({ format: 1, bundleVersion: "300", gitCommit: "389c0513cf" }),
+    );
+    fs.rmSync(marker, { force: true });
+    fs.writeFileSync(callsLog, "");
+    const postLaunchFailureResult = spawnSync(
+      "bash",
+      [path.join(repoRoot, "scripts/ship-jarvis-hotfix.sh"), "--pr", "124"],
+      { cwd: mainRepo, env: liveEnv, encoding: "utf8" },
+    );
+    expect(
+      postLaunchFailureResult.status,
+      `${postLaunchFailureResult.stdout}\n${postLaunchFailureResult.stderr}`,
+    ).toBe(17);
+    expect(postLaunchFailureResult.stdout).toContain(
+      "transaction_recovery=protection-verified-before-nonzero-exit",
+    );
+    expect(JSON.parse(fs.readFileSync(marker, "utf8")).protectedRuntimeGitCommit).toBe(headSha);
   });
 
   it("proves the loaded Jarvis runtime without using ai.openclaw.gateway", () => {
