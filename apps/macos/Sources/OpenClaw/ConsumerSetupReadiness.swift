@@ -4,7 +4,8 @@ import Observation
 import OpenClawKit
 import SwiftUI
 
-private let consumerBrowserProfileName = "user"
+private let consumerBrowserProfileName = "signed-in"
+private let legacyConsumerBrowserProfileName = "user"
 
 struct ConsumerShellCommandResult {
     let stdout: String
@@ -1628,47 +1629,28 @@ extension BrowserSetupModel {
         // app-local defaults, otherwise the product claims a browser is connected
         // while the gateway still has no idea which Chrome profile to clone.
         let managedUserCdpPort = OpenClawConfigFile.managedBrowserUserCdpPort()
+        for key in ["cdpUrl", "userDataDir", "sourceChromeDir", "attachOnly"] {
+            user.removeValue(forKey: key)
+        }
         user["cdpPort"] = managedUserCdpPort
-        user["driver"] = "openclaw"
+        user["driver"] = "existing-session"
         user["cloneFromUserProfile"] = true
         user["sourceProfileName"] = profile.directoryName
-        user["color"] = (user["color"] as? String) ?? "#00AA00"
+        user["profileDirectory"] = "Default"
+        user["color"] = (user["color"] as? String) ?? "#1F9D55"
         profiles[consumerBrowserProfileName] = user
+        profiles.removeValue(forKey: legacyConsumerBrowserProfileName)
         browser["enabled"] = true
-        // Consumer browser setup still captures a clone target for the managed
-        // fallback lane, but it should not force clone mode as the browser
-        // default after the core product moved away from the old MVP design.
-        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == consumerBrowserProfileName {
-            browser.removeValue(forKey: "defaultProfile")
-        }
+        browser["defaultProfile"] = consumerBrowserProfileName
         browser["profiles"] = profiles
         root["browser"] = browser
         OpenClawConfigFile.saveDict(root)
     }
 
     static func clearConsumerBrowserSelectionFromConfig() {
-        var root = OpenClawConfigFile.loadDict()
-        guard var browser = root["browser"] as? [String: Any] else { return }
-
-        if var profiles = browser["profiles"] as? [String: Any] {
-            profiles.removeValue(forKey: consumerBrowserProfileName)
-            if profiles.isEmpty {
-                browser.removeValue(forKey: "profiles")
-            } else {
-                browser["profiles"] = profiles
-            }
-        }
-
-        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == consumerBrowserProfileName {
-            browser.removeValue(forKey: "defaultProfile")
-        }
-
-        if browser.isEmpty {
-            root.removeValue(forKey: "browser")
-        } else {
-            root["browser"] = browser
-        }
-        OpenClawConfigFile.saveDict(root)
+        // Passive setup refreshes may run when Chrome is temporarily unavailable.
+        // Remove only fields owned by onboarding; preserve custom signed-in endpoints.
+        _ = OpenClawConfigFile.clearSelectedChromeProfileDirectoryName()
     }
 
     static func verifyConsumerBrowserSelection(

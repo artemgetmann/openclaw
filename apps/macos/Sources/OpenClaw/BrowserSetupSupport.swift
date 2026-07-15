@@ -55,8 +55,9 @@ enum BrowserRuntimeFailureTemplateKind: CaseIterable {
 }
 
 extension OpenClawConfigFile {
-    private static var managedBrowserProfileName: String { "user" }
-    private static var managedBrowserProfileColor: String { "#00AA00" }
+    private static var managedBrowserProfileName: String { "signed-in" }
+    private static var legacyManagedBrowserProfileName: String { "user" }
+    private static var managedBrowserProfileColor: String { "#1F9D55" }
     private static var defaultBrowserControlPort: Int { 18_791 }
     private static var defaultBrowserCdpRangeStart: Int { 18_800 }
     private static var defaultManagedUserBrowserCdpPort: Int { 18_801 }
@@ -64,37 +65,59 @@ extension OpenClawConfigFile {
     static func selectedChromeProfileDirectoryName() -> String? {
         let root = self.loadDict()
         guard let browser = root["browser"] as? [String: Any],
-              let profiles = browser["profiles"] as? [String: Any],
-              let userProfile = profiles[self.managedBrowserProfileName] as? [String: Any],
-              let raw = userProfile["sourceProfileName"] as? String
+              let profiles = browser["profiles"] as? [String: Any]
         else {
             return nil
         }
+
+        let configuredProfile = profiles[self.managedBrowserProfileName] as? [String: Any]
+        guard let raw = configuredProfile?["sourceProfileName"] as? String else { return nil }
 
         let selected = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !selected.isEmpty else { return nil }
         return selected
     }
 
+    static func legacySelectedChromeProfileDirectoryName() -> String? {
+        let root = self.loadDict()
+        guard let browser = root["browser"] as? [String: Any],
+              let profiles = browser["profiles"] as? [String: Any],
+              let legacyProfile = profiles[self.legacyManagedBrowserProfileName] as? [String: Any],
+              let raw = legacyProfile["sourceProfileName"] as? String
+        else {
+            return nil
+        }
+
+        let selected = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return selected.isEmpty ? nil : selected
+    }
+
     static func setSelectedChromeProfileDirectoryName(_ directoryName: String) -> Bool {
         let trimmed = directoryName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        // Browser setup persists the managed "user" lane as a schema-valid
-        // browser profile. The runtime rejects profiles without a CDP endpoint,
-        // so derive the managed-user port here instead of waiting for a reload.
+        // Browser setup pins the selected Chrome account directly onto the
+        // built-in signed-in lane used by normal Jarvis browser actions.
         let cdpPort = self.managedBrowserUserCdpPort()
         var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]
         browser["defaultProfile"] = self.managedBrowserProfileName
         var profiles = browser["profiles"] as? [String: Any] ?? [:]
         var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
+        // A URL, custom user-data root, or attach-only flag takes precedence over
+        // this managed clone lane. Remove those mutually exclusive settings when
+        // the user explicitly chooses the Chrome account Jarvis should manage.
+        for key in ["cdpUrl", "userDataDir", "sourceChromeDir", "attachOnly"] {
+            userProfile.removeValue(forKey: key)
+        }
         userProfile["cdpPort"] = cdpPort
-        userProfile["driver"] = "openclaw"
+        userProfile["driver"] = "existing-session"
         userProfile["cloneFromUserProfile"] = true
         userProfile["sourceProfileName"] = trimmed
+        userProfile["profileDirectory"] = "Default"
         userProfile["color"] = self.managedBrowserProfileColor
         profiles[self.managedBrowserProfileName] = userProfile
+        profiles.removeValue(forKey: self.legacyManagedBrowserProfileName)
         browser["profiles"] = profiles
         root["browser"] = browser
         self.saveDict(root)
@@ -105,20 +128,29 @@ extension OpenClawConfigFile {
         var root = self.loadDict()
         guard var browser = root["browser"] as? [String: Any] else { return true }
 
-        if var profiles = browser["profiles"] as? [String: Any],
-           var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any]
-        {
-            // Clearing the selection should remove the managed-user profile stub
-            // too. Leaving clone/driver/color behind keeps stale browser config.
-            userProfile.removeValue(forKey: "cdpPort")
-            userProfile.removeValue(forKey: "cloneFromUserProfile")
-            userProfile.removeValue(forKey: "driver")
-            userProfile.removeValue(forKey: "sourceProfileName")
-            userProfile.removeValue(forKey: "color")
-            if userProfile.isEmpty {
-                profiles.removeValue(forKey: self.managedBrowserProfileName)
-            } else {
-                profiles[self.managedBrowserProfileName] = userProfile
+        if var profiles = browser["profiles"] as? [String: Any] {
+            for profileName in [self.managedBrowserProfileName, self.legacyManagedBrowserProfileName] {
+                guard let profile = profiles[profileName] as? [String: Any] else { continue }
+                let isManagedSelection = profile["cloneFromUserProfile"] as? Bool == true &&
+                    ((profile["sourceProfileName"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                guard isManagedSelection else {
+                    continue
+                }
+                let appOwnedKeys: Set<String> = [
+                    "cdpPort",
+                    "cloneFromUserProfile",
+                    "driver",
+                    "sourceProfileName",
+                    "profileDirectory",
+                    "color",
+                ]
+                // Clear a profile only when every field belongs to onboarding.
+                // Any additional key means this is a custom profile, which must
+                // remain byte-for-byte intact and schema-valid during passive refresh.
+                if Set(profile.keys).isSubset(of: appOwnedKeys) {
+                    profiles.removeValue(forKey: profileName)
+                }
             }
 
             if profiles.isEmpty {
@@ -129,9 +161,9 @@ extension OpenClawConfigFile {
         }
 
         if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            == self.managedBrowserProfileName
+            == self.legacyManagedBrowserProfileName
         {
-            browser.removeValue(forKey: "defaultProfile")
+            browser["defaultProfile"] = self.managedBrowserProfileName
         }
 
         if browser.isEmpty {
@@ -144,7 +176,7 @@ extension OpenClawConfigFile {
         return self.selectedChromeProfileDirectoryName() == nil
     }
 
-    static func managedBrowserUserDataDirURL(profileName: String = "user") -> URL {
+    static func managedBrowserUserDataDirURL(profileName: String = "signed-in") -> URL {
         self.stateDirURL()
             .appendingPathComponent("browser", isDirectory: true)
             .appendingPathComponent(profileName, isDirectory: true)
@@ -584,10 +616,12 @@ final class BrowserSetupModel {
 
     private func restoreSelection(from profiles: [ChromeProfileCandidate]) -> ChromeProfileCandidate? {
         let hasDefaultsSelection = self.hasPersistedDefaultsSelection()
+        let signedInSelectedID = OpenClawConfigFile.selectedChromeProfileDirectoryName()
+        let legacySelectedID = OpenClawConfigFile.legacySelectedChromeProfileDirectoryName()
 
         // Config is the runtime source of truth. If we only trust UserDefaults here,
         // the setup sheet can claim success while the actual browser runtime stays global.
-        if let selectedID = OpenClawConfigFile.selectedChromeProfileDirectoryName(),
+        if let selectedID = signedInSelectedID ?? legacySelectedID,
            let selected = profiles.first(where: { $0.directoryName == selectedID })
         {
             // Some bootstrap paths can preseed browser.user.sourceProfileName before the
@@ -596,6 +630,13 @@ final class BrowserSetupModel {
             // explicit confirmation when no app-local browser choice was persisted yet.
             guard self.allowConfigOnlyRestore || hasDefaultsSelection else {
                 self.clearSelectionFromConfig()
+                return nil
+            }
+            // Older app builds wrote the account under browser.profiles.user.
+            // Move it onto the canonical signed-in lane before any readiness check.
+            if signedInSelectedID == nil, legacySelectedID != nil,
+               !self.persistRuntimeSelection(selected)
+            {
                 return nil
             }
             self.persistDefaultsSelection(selected)
