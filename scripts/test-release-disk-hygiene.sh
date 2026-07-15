@@ -14,6 +14,8 @@ IMMUTABLE_FIXTURE_PATH=""
 IMMUTABLE_FIXTURE_SET=0
 ACL_FIXTURE_PATH=""
 ACL_FIXTURE_SET=0
+PARENT_ACL_FIXTURE_PATH=""
+PARENT_ACL_FIXTURE_SET=0
 
 stop_active_process_fixture() {
   if [[ -z "$ACTIVE_PROCESS_PID" ]]; then
@@ -41,6 +43,10 @@ cleanup() {
   if [[ "$ACL_FIXTURE_SET" == "1" && -n "$ACL_FIXTURE_PATH" ]]; then
     chmod -N "$ACL_FIXTURE_PATH" 2>/dev/null || true
     ACL_FIXTURE_SET=0
+  fi
+  if [[ "$PARENT_ACL_FIXTURE_SET" == "1" && -n "$PARENT_ACL_FIXTURE_PATH" ]]; then
+    chmod -N "$PARENT_ACL_FIXTURE_PATH" 2>/dev/null || true
+    PARENT_ACL_FIXTURE_SET=0
   fi
   # The permission fixture is deliberately unreadable during the test. Restore
   # owner access only so the test harness can remove its own temporary tree.
@@ -230,6 +236,37 @@ if kill -0 "$STOPPED_ACTIVE_PROCESS_PID" 2>/dev/null; then
 fi
 pass "active process fixture is terminated and reaped"
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  PARENT_ACL_BUILD_ROOT="$TMP_DIR/parent-acl-build-artifacts"
+  PARENT_ACL_DIR="$PARENT_ACL_BUILD_ROOT/tmp"
+  PARENT_ACL_CANDIDATE="$PARENT_ACL_DIR/parent-acl-candidate"
+  PARENT_ACL_FIRST="$PARENT_ACL_CANDIDATE/first.txt"
+  PARENT_ACL_SECOND="$PARENT_ACL_CANDIDATE/second.txt"
+  mkdir -p "$PARENT_ACL_CANDIDATE"
+  printf 'first must survive\n' >"$PARENT_ACL_FIRST"
+  printf 'second must survive\n' >"$PARENT_ACL_SECOND"
+  touch -t 202001010000 "$PARENT_ACL_CANDIDATE"
+  chmod +a "everyone deny delete_child" "$PARENT_ACL_DIR"
+  PARENT_ACL_FIXTURE_PATH="$PARENT_ACL_DIR"
+  PARENT_ACL_FIXTURE_SET=1
+
+  OPENCLAW_BUILD_ARTIFACT_ROOT="$PARENT_ACL_BUILD_ROOT" \
+  OPENCLAW_CLEANUP_BUILD_TEMP_OLDER_THAN_DAYS=0 \
+    /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+      --build-cache \
+      --apply >"$OUT" 2>&1
+
+  assert_file_exists "$PARENT_ACL_FIRST" "parent ACL preflight keeps first candidate child"
+  assert_file_exists "$PARENT_ACL_SECOND" "parent ACL preflight keeps second candidate child"
+  assert_record "unknown" "$PARENT_ACL_CANDIDATE" "apply reports parent-ACL candidate size as unknown"
+  assert_output_has "protected_parent=$PARENT_ACL_DIR" "apply identifies exact ACL-protected parent"
+  assert_output_has "protected_acl=extended" "apply reports parent extended ACL protection"
+  [[ "$(find "$PARENT_ACL_DIR" -prune -acl -print)" == "$PARENT_ACL_DIR" ]] || fail "apply unexpectedly cleared parent ACL fixture"
+  pass "apply leaves parent ACL unchanged"
+else
+  printf 'SKIP: parent ACL fixture requires macOS chmod/find\n'
+fi
+
 RUNTIME_ROOT="$TMP_DIR/runtime-instances"
 OLD_LOG="$RUNTIME_ROOT/manual-instance/logs/old.log"
 mkdir -p "$(dirname "$OLD_LOG")"
@@ -290,6 +327,55 @@ JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE=4096 \
     --required-kib 2048 >"$OUT" 2>&1
 assert_output_has "shortfall_kib=0" "capacity pass has no shortfall"
 assert_output_has "status=pass" "capacity pass succeeds"
+
+DISK_PROBE_STUB="$TMP_DIR/disk-probe-stub.sh"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'case "$1" in'
+  printf '%s\n' '  */shared-output|*/shared-staging) printf "fs-shared\t/Volumes/shared\t4096\t%s\n" "$1" ;;'
+  printf '%s\n' '  */other-output) printf "fs-other\t/Volumes/other\t8192\t%s\n" "$1" ;;'
+  printf '%s\n' '  */low-staging) printf "fs-low\t/Volumes/low\t1024\t%s\n" "$1" ;;'
+  printf '%s\n' '  *) exit 1 ;;'
+  printf '%s\n' 'esac'
+} >"$DISK_PROBE_STUB"
+chmod +x "$DISK_PROBE_STUB"
+
+JARVIS_RELEASE_DISK_PROBE_COMMAND="$DISK_PROBE_STUB" \
+  /bin/bash "$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh" \
+    --target release-output "$TMP_DIR/shared-output" \
+    --target release-staging "$TMP_DIR/shared-staging" \
+    --target secondary-output "$TMP_DIR/other-output" \
+    --required-kib 2048 >"$OUT" 2>&1
+assert_output_has "target[2].deduplicated=true" "multi-target gate deduplicates shared filesystem"
+assert_output_has "filesystem[1].labels=release-output,release-staging" "deduplicated filesystem retains both labels"
+assert_output_has "targets_checked=3" "multi-target gate reports every selected target"
+assert_output_has "filesystems_checked=2" "multi-target gate checks each unique filesystem once"
+assert_output_has "status=pass" "multi-target gate passes when every filesystem has capacity"
+
+set +e
+JARVIS_RELEASE_DISK_PROBE_COMMAND="$DISK_PROBE_STUB" \
+  /bin/bash "$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh" \
+    --target release-output "$TMP_DIR/other-output" \
+    --target release-staging "$TMP_DIR/low-staging" \
+    --required-kib 2048 >"$OUT" 2>&1
+MULTI_LOW_STATUS=$?
+set -e
+[[ "$MULTI_LOW_STATUS" -eq 1 ]] || fail "multi-target low-space preflight expected status 1, got $MULTI_LOW_STATUS"
+assert_output_has "filesystem[2].shortfall_kib=1024" "low staging filesystem reports exact shortfall"
+assert_output_has "filesystem[2].status=fail" "low staging filesystem fails independently"
+assert_output_has "filesystems_checked=2" "low-space gate still reports both filesystems"
+assert_output_has "status=fail" "low space on any filesystem fails the gate"
+
+set +e
+JARVIS_RELEASE_DISK_PROBE_COMMAND="$DISK_PROBE_STUB" \
+  /bin/bash "$ROOT_DIR/scripts/preflight-jarvis-release-disk.sh" \
+    --target unresolved "$TMP_DIR/not-in-probe" \
+    --required-kib 2048 >"$OUT" 2>&1
+UNRESOLVED_STATUS=$?
+set -e
+[[ "$UNRESOLVED_STATUS" -eq 2 ]] || fail "unresolved target preflight expected status 2, got $UNRESOLVED_STATUS"
+assert_output_has "reason=filesystem-resolution-failed" "unresolved target fails conservatively"
+assert_output_has "status=fail" "unresolved target produces failed final status"
 
 /bin/bash -n \
   "$ROOT_DIR/scripts/lib/build-artifacts.sh" \

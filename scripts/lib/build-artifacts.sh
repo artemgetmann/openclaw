@@ -150,6 +150,7 @@ openclaw_build_tree_removal_protection_reason() {
   local descendant_dir
   local protected_acl_path=""
   local protected_flags_path=""
+  local protected_parent_acl_path=""
   local protection_reason
 
   if protection_reason="$(openclaw_build_path_permission_protection_reason "$target")"; then
@@ -161,6 +162,18 @@ openclaw_build_tree_removal_protection_reason() {
   if [[ ! -w "$target_parent" || ! -x "$target_parent" ]]; then
     printf 'removal-protected parent=%s; %s; operator action: inspect this exact parent and candidate; cleanup will not alter permissions\n' \
       "$target_parent" "$(openclaw_build_path_metadata "$target_parent")"
+    return 0
+  fi
+
+  # Deleting the candidate itself depends on its parent directory. A deny
+  # delete_child ACL there can let rm erase candidate contents first, then fail
+  # removing the now-empty candidate. Test the parent itself without descending.
+  while IFS= read -r -d '' protected_parent_acl_path; do
+    break
+  done < <(find "$target_parent" -prune -acl -print0 2>/dev/null)
+  if [[ -n "$protected_parent_acl_path" ]]; then
+    protection_reason="$(openclaw_build_path_extended_acl_reason "$protected_parent_acl_path")"
+    printf 'protected_parent=%s; %s\n' "$protected_parent_acl_path" "$protection_reason"
     return 0
   fi
 
