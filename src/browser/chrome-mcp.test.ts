@@ -1336,7 +1336,7 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("captures a navigated PDF viewer when an older viewer has the same URL", async () => {
+  it("captures only a navigated PDF viewer correlated to the clicked target", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
     const downloadDir = path.join(tempDir, "downloads");
     const finalPath = path.join(downloadDir, "statement.pdf");
@@ -1347,7 +1347,7 @@ describe("chrome MCP page parsing", () => {
     let httpServer: ReturnType<typeof createServer> | undefined;
     let wsServer: WebSocketServer | undefined;
     let resourceTreeCalls = 0;
-    let streamReadCalls = 0;
+    let unrelatedResourceCalls = 0;
     let viewerReady = false;
 
     try {
@@ -1363,13 +1363,18 @@ describe("chrome MCP page parsing", () => {
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket, request) => {
         const isViewerTarget = viewerReady && request.url === "/devtools/page/initial";
-        if (!isViewerTarget) {
+        const isUnrelatedTarget = request.url === "/devtools/page/unrelated";
+        if (!isViewerTarget && !isUnrelatedTarget) {
           activeSocket = socket;
         }
         socket.on("message", (data) => {
           const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
-          if (isViewerTarget && message.method === "Page.getResourceTree") {
-            resourceTreeCalls += 1;
+          if ((isViewerTarget || isUnrelatedTarget) && message.method === "Page.getResourceTree") {
+            if (isViewerTarget) {
+              resourceTreeCalls += 1;
+            } else {
+              unrelatedResourceCalls += 1;
+            }
             socket.send(
               JSON.stringify({
                 id: message.id,
@@ -1377,7 +1382,7 @@ describe("chrome MCP page parsing", () => {
                   frameTree: {
                     frame: {
                       id: "pdf-frame",
-                      url: responseUrl,
+                      url: isViewerTarget ? responseUrl : "https://unrelated.example/report.pdf",
                       mimeType: "application/pdf",
                     },
                     resources: [],
@@ -1387,48 +1392,20 @@ describe("chrome MCP page parsing", () => {
             );
             return;
           }
-          if (isViewerTarget && message.method === "Page.getResourceContent") {
+          if (
+            (isViewerTarget || isUnrelatedTarget) &&
+            message.method === "Page.getResourceContent"
+          ) {
             expect(message.params).toEqual({ frameId: "pdf-frame", url: responseUrl });
             socket.send(
               JSON.stringify({
                 id: message.id,
-                error: { message: "Content unavailable. Resource was not cached" },
-              }),
-            );
-            return;
-          }
-          if (isViewerTarget && message.method === "Network.loadNetworkResource") {
-            expect(message.params).toEqual({
-              frameId: "pdf-frame",
-              url: responseUrl,
-              options: { disableCache: false, includeCredentials: true },
-            });
-            socket.send(
-              JSON.stringify({
-                id: message.id,
-                result: { resource: { success: true, stream: "pdf-stream" } },
-              }),
-            );
-            return;
-          }
-          if (isViewerTarget && message.method === "IO.read") {
-            streamReadCalls += 1;
-            expect(message.params).toEqual({ handle: "pdf-stream" });
-            socket.send(
-              JSON.stringify({
-                id: message.id,
                 result: {
-                  data: pdfBytes.toString("base64"),
+                  content: pdfBytes.toString("base64"),
                   base64Encoded: true,
-                  eof: true,
                 },
               }),
             );
-            return;
-          }
-          if (isViewerTarget && message.method === "IO.close") {
-            expect(message.params).toEqual({ handle: "pdf-stream" });
-            socket.send(JSON.stringify({ id: message.id, result: {} }));
             return;
           }
           if (typeof message.id === "number") {
@@ -1443,15 +1420,27 @@ describe("chrome MCP page parsing", () => {
           res.end(
             JSON.stringify([
               {
+                id: "old-viewer",
                 type: "page",
                 url: responseUrl,
                 webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/old-viewer`,
               },
               {
+                id: "source-target",
                 type: "page",
                 url: viewerReady ? responseUrl : "https://example.com/statement",
                 webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/initial`,
               },
+              ...(viewerReady
+                ? [
+                    {
+                      id: "unrelated-target",
+                      type: "page",
+                      url: "https://unrelated.example/report.pdf",
+                      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/unrelated`,
+                    },
+                  ]
+                : []),
             ]),
           );
           return;
@@ -1510,7 +1499,7 @@ describe("chrome MCP page parsing", () => {
         path: finalPath,
       });
       expect(resourceTreeCalls).toBeGreaterThanOrEqual(1);
-      expect(streamReadCalls).toBe(1);
+      expect(unrelatedResourceCalls).toBe(0);
       expect(await fs.readFile(finalPath)).toEqual(pdfBytes);
     } finally {
       if (previousBrowserUrl === undefined) {
@@ -1534,6 +1523,36 @@ describe("chrome MCP page parsing", () => {
       });
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("does not replay an uncached PDF resource with a different HTTP request", async () => {
+    const responseUrl = "https://example.com/api/post-backed-statement";
+    const send = vi.fn(async (method: string) => {
+      if (method === "Page.getResourceTree") {
+        return {
+          frameTree: {
+            frame: {
+              id: "pdf-frame",
+              url: responseUrl,
+              mimeType: "application/pdf",
+            },
+            resources: [],
+          },
+        };
+      }
+      if (method === "Page.getResourceContent") {
+        throw new Error("Content unavailable. Resource was not cached");
+      }
+      throw new Error(`unexpected replay command: ${method}`);
+    });
+
+    await expect(
+      chromeMcpPdfResourceInternalsForTest.readChromeMcpPdfResourceWithSend(send),
+    ).rejects.toThrow("Content unavailable. Resource was not cached");
+    expect(send.mock.calls.map(([method]) => method)).toEqual([
+      "Page.getResourceTree",
+      "Page.getResourceContent",
+    ]);
   });
 
   it("preserves an existing inferred filename for implicit network PDF captures", async () => {
@@ -1568,6 +1587,7 @@ describe("chrome MCP page parsing", () => {
     let activeSocket: WebSocket | undefined;
     let cdpDownloadDir = "";
     let httpServer: ReturnType<typeof createServer> | undefined;
+    let targetListCalls = 0;
     let wsServer: WebSocketServer | undefined;
 
     const closeHttpServer = async () => {
@@ -1607,10 +1627,17 @@ describe("chrome MCP page parsing", () => {
 
       httpServer = createServer((req, res) => {
         if (req.url === "/json/list") {
+          targetListCalls += 1;
+          if (targetListCalls > 1) {
+            res.statusCode = 503;
+            res.end("temporarily unavailable");
+            return;
+          }
           res.setHeader("content-type", "application/json");
           res.end(
             JSON.stringify([
               {
+                id: "download-source",
                 type: "page",
                 url: "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
                 webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/1`,
@@ -1691,6 +1718,7 @@ describe("chrome MCP page parsing", () => {
         path: finalPath,
       });
       expect(await fs.readFile(finalPath, "utf8")).toBe("download ok");
+      expect(targetListCalls).toBe(2);
       expect(callTool).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "click",

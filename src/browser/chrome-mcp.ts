@@ -725,6 +725,8 @@ async function resolveChromeMcpBrowserHttpUrl(
 }
 
 type ChromeCdpTarget = {
+  id?: string;
+  openerId?: string;
   type?: string;
   url?: string;
   webSocketDebuggerUrl?: string;
@@ -1157,7 +1159,8 @@ function createChromeMcpPdfNetworkCapture(params: {
 
 function createChromeMcpTriggeredPdfResourceCapture(params: {
   browserHttpUrl: string;
-  beforeTargets: Map<string, string>;
+  sourceTargetId: string;
+  beforeTargets: Map<string, { url: string; wsUrl: string }>;
   timeoutMs: number;
 }) {
   let cancelled = false;
@@ -1185,21 +1188,28 @@ function createChromeMcpTriggeredPdfResourceCapture(params: {
     }
     started = true;
 
-    // Chrome can replace the clicked DevTools target or navigate it in place
-    // when entering its PDF viewer. Inspect only new targets or targets whose
-    // URL changed after the click, excluding unchanged older PDF tabs.
+    // Chrome can navigate the clicked target in place or open a PDF viewer in
+    // a direct popup. Correlate candidates to that click so an unrelated PDF
+    // opened elsewhere in the browser cannot win this capture race.
     void (async () => {
       const deadline = Date.now() + params.timeoutMs;
       while (!cancelled && Date.now() <= deadline) {
         try {
           const changedTargets = (await fetchChromeCdpTargets(params.browserHttpUrl)).filter(
             (target) => {
+              const targetId = target.id?.trim();
               const wsUrl = target.webSocketDebuggerUrl?.trim();
-              if (target.type !== "page" || !wsUrl) {
+              if (target.type !== "page" || !targetId || !wsUrl) {
                 return false;
               }
-              const previousUrl = params.beforeTargets.get(wsUrl);
-              return previousUrl === undefined || previousUrl !== target.url;
+              const previous = params.beforeTargets.get(targetId);
+              if (targetId === params.sourceTargetId) {
+                return (
+                  previous !== undefined &&
+                  (previous.url !== target.url || previous.wsUrl !== wsUrl)
+                );
+              }
+              return previous === undefined && target.openerId === params.sourceTargetId;
             },
           );
           for (const target of changedTargets) {
@@ -1255,44 +1265,9 @@ export const chromeMcpPdfResourceInternalsForTest = {
   collectPdfResourceCandidates,
   createChromeMcpPdfNetworkCapture,
   decodeChromeResourceContent,
+  readChromeMcpPdfResourceWithSend,
   writeCapturedPdfResponse,
 };
-
-async function loadChromeMcpNetworkResource(params: {
-  send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
-  frameId: string;
-  url: string;
-}): Promise<Buffer> {
-  const loadResult = asRecord(
-    await params.send("Network.loadNetworkResource", {
-      frameId: params.frameId,
-      url: params.url,
-      options: { disableCache: false, includeCredentials: true },
-    }),
-  );
-  const resource = asRecord(loadResult?.resource);
-  const stream = typeof resource?.stream === "string" ? resource.stream : "";
-  if (resource?.success !== true || !stream) {
-    throw new Error("Chrome could not replay the PDF resource");
-  }
-
-  const chunks: Buffer[] = [];
-  try {
-    while (true) {
-      const readResult = asRecord(await params.send("IO.read", { handle: stream }));
-      const data = typeof readResult?.data === "string" ? readResult.data : "";
-      if (data) {
-        chunks.push(Buffer.from(data, readResult?.base64Encoded === true ? "base64" : "utf8"));
-      }
-      if (readResult?.eof === true) {
-        break;
-      }
-    }
-  } finally {
-    await params.send("IO.close", { handle: stream }).catch(() => {});
-  }
-  return Buffer.concat(chunks);
-}
 
 async function readChromeMcpPdfResourceWithSend(
   send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
@@ -1306,23 +1281,14 @@ async function readChromeMcpPdfResourceWithSend(
   const errors: string[] = [];
   for (const candidate of candidates) {
     try {
-      let buffer: Buffer;
-      try {
-        const contentResult = await send("Page.getResourceContent", {
-          frameId: candidate.frameId,
-          url: candidate.url,
-        });
-        buffer = decodeChromeResourceContent(contentResult);
-      } catch {
-        // No-store PDF responses are visible in the viewer but absent from its
-        // resource cache. Replay the authenticated frame through Chrome and
-        // consume the resulting DevTools stream instead.
-        buffer = await loadChromeMcpNetworkResource({
-          send,
-          frameId: candidate.frameId,
-          url: candidate.url,
-        });
-      }
+      // Only accept bytes retained from the original navigation. Replaying the
+      // URL would silently change POST-backed downloads into GET requests and
+      // could save a different document that still has a valid PDF signature.
+      const contentResult = await send("Page.getResourceContent", {
+        frameId: candidate.frameId,
+        url: candidate.url,
+      });
+      const buffer = decodeChromeResourceContent(contentResult);
       assertNativePdfBuffer(buffer, candidate.url);
       return { url: candidate.url, buffer };
     } catch (err) {
@@ -1822,22 +1788,39 @@ async function runChromeMcpDownloadSession(params: {
     // Chrome's PDF viewer may replace the clicked target, and older viewer tabs
     // can share the same URL, so URL matching cannot identify this download.
     if (params.trigger) {
-      const browserHttpUrl = await resolveChromeMcpBrowserHttpUrl(
-        params.profileName,
-        params.userDataDir,
-      );
-      if (browserHttpUrl) {
-        const beforeTargets = new Map(
-          (await fetchChromeCdpTargets(browserHttpUrl)).flatMap((target) => {
-            const wsUrl = target.webSocketDebuggerUrl?.trim();
-            return wsUrl ? [[wsUrl, target.url ?? ""] as const] : [];
-          }),
+      try {
+        const browserHttpUrl = await resolveChromeMcpBrowserHttpUrl(
+          params.profileName,
+          params.userDataDir,
         );
-        triggeredPdfResourceCapture = createChromeMcpTriggeredPdfResourceCapture({
-          browserHttpUrl,
-          beforeTargets,
-          timeoutMs,
-        });
+        if (browserHttpUrl) {
+          const targets = await fetchChromeCdpTargets(browserHttpUrl);
+          const sourceTarget = targets.find(
+            (target) => target.webSocketDebuggerUrl?.trim() === wsUrl,
+          );
+          const sourceTargetId = sourceTarget?.id?.trim();
+          if (sourceTargetId) {
+            const beforeTargets = new Map(
+              targets.flatMap((target) => {
+                const targetId = target.id?.trim();
+                const targetWsUrl = target.webSocketDebuggerUrl?.trim();
+                return targetId && targetWsUrl
+                  ? [[targetId, { url: target.url ?? "", wsUrl: targetWsUrl }] as const]
+                  : [];
+              }),
+            );
+            triggeredPdfResourceCapture = createChromeMcpTriggeredPdfResourceCapture({
+              browserHttpUrl,
+              sourceTargetId,
+              beforeTargets,
+              timeoutMs,
+            });
+          }
+        }
+      } catch {
+        // Target correlation is a PDF-viewer enhancement. Ordinary downloads
+        // must still click and use the established filesystem/event path when
+        // Chrome's target endpoint is temporarily unavailable.
       }
     }
 
