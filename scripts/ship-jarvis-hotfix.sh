@@ -1,0 +1,892 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_NAME="ship-jarvis-hotfix"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/jarvis-release-lock.sh
+source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
+CANONICAL_MAIN_REPO="/Users/user/Programming_Projects/openclaw"
+MAIN_REPO_RAW="${OPENCLAW_MAIN_REPO:-${CANONICAL_MAIN_REPO}}"
+MAIN_REPO="${MAIN_REPO_RAW}"
+if [[ -d "${MAIN_REPO_RAW}" ]]; then
+  MAIN_REPO="$(cd -- "${MAIN_REPO_RAW}" && pwd -P)"
+fi
+
+GH_BIN="${OPENCLAW_GH_BIN:-gh}"
+GIT_BIN="${OPENCLAW_GIT_BIN:-git}"
+JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
+LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
+LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
+ID_BIN="${OPENCLAW_ID_BIN:-id}"
+UNAME_BIN="${OPENCLAW_UNAME_BIN:-uname}"
+SHASUM_BIN="${OPENCLAW_SHASUM_BIN:-shasum}"
+PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
+
+PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-required-status.sh}"
+PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
+OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
+PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
+
+JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
+INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
+INSTALLED_JARVIS_INFO_PLIST="${OPENCLAW_SHIP_INSTALLED_APP_INFO_PLIST:-${INSTALLED_JARVIS_APP_PATH}/Contents/Info.plist}"
+INSTALLED_JARVIS_APP_MANIFEST="${OPENCLAW_SHIP_INSTALLED_APP_MANIFEST:-${INSTALLED_JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json}"
+JARVIS_HOME="${OPENCLAW_JARVIS_HOME:-${HOME}/Library/Application Support/Jarvis}"
+JARVIS_STATE_DIR="${OPENCLAW_JARVIS_STATE_DIR:-${JARVIS_HOME}/.jarvis}"
+JARVIS_CONFIG_PATH="${OPENCLAW_JARVIS_CONFIG_PATH:-${JARVIS_STATE_DIR}/openclaw.json}"
+JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
+JARVIS_MANIFEST="${OPENCLAW_SHIP_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
+JARVIS_PROTECTION_MARKER="${OPENCLAW_SHIP_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
+JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
+JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
+JARVIS_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
+PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+SEED_TIMEOUT_SECONDS="${OPENCLAW_SHIP_SEED_TIMEOUT_SECONDS:-60}"
+SEED_POLL_SECONDS="${OPENCLAW_SHIP_SEED_POLL_SECONDS:-1}"
+GATEWAY_READY_TIMEOUT_SECONDS="${OPENCLAW_SHIP_GATEWAY_READY_TIMEOUT_SECONDS:-120}"
+GATEWAY_READY_POLL_SECONDS="${OPENCLAW_SHIP_GATEWAY_READY_POLL_SECONDS:-2}"
+CI_TIMEOUT_SECONDS="${OPENCLAW_SHIP_CI_TIMEOUT_SECONDS:-1800}"
+
+PR_NUMBER=""
+DRY_RUN=0
+STATUS_STDOUT_FILE=""
+STATUS_STDERR_FILE=""
+STATUS_JSON_FILE=""
+TRANSACTION_ARMED=0
+TRANSACTION_EXPECTED_COMMIT=""
+TRANSACTION_LAUNCH_RECEIPT_DIR=""
+CONFIRMED_PR_MERGE_COMMIT=""
+
+log() {
+  printf '[%s] %s\n' "${SCRIPT_NAME}" "$*"
+}
+
+die() {
+  log "ERROR: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/ship-jarvis-hotfix.sh --pr <number> [--dry-run]
+
+Merge a main-targeted PR and ship it to this Mac's default Jarvis as an
+explicit app-support break-glass hotfix. The wrapper builds and launches only
+dist/Jarvis.app; it never replaces /Applications/Jarvis.app and never claims a
+public release or managed-bundle steady state.
+EOF
+}
+
+parse_args() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --pr)
+        PR_NUMBER="${2:-}"
+        shift 2
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+
+  [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] || die "--pr must be a positive PR number"
+}
+
+require_command() {
+  local command_name="$1"
+  command -v "${command_name}" >/dev/null 2>&1 || die "missing required command: ${command_name}"
+}
+
+valid_commit() {
+  [[ "${1:-}" =~ ^[0-9a-fA-F]{7,40}$ ]]
+}
+
+commit_matches() {
+  local expected="$1"
+  local actual="$2"
+  valid_commit "${expected}" && valid_commit "${actual}" || return 1
+  [[ "${expected}" == "${actual}"* || "${actual}" == "${expected}"* ]]
+}
+
+require_preflight_tools() {
+  require_command "${GH_BIN}"
+  require_command "${GIT_BIN}"
+  require_command "${JQ_BIN}"
+  require_command "${LAUNCHCTL_BIN}"
+  require_command "${LSOF_BIN}"
+  require_command "${ID_BIN}"
+  require_command "${UNAME_BIN}"
+  require_command "${PLISTBUDDY_BIN}"
+  [[ -x "${PR_REQUIRED_SCRIPT}" ]] || die "required-check helper is missing or not executable: ${PR_REQUIRED_SCRIPT}"
+  [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
+  [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
+  [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
+}
+
+expected_main_repo() {
+  # Tests may exercise every fail-closed stage in a temporary git repository.
+  # Production callers cannot redirect the sacred-path check with an ambient
+  # variable alone; the explicit test-mode gate keeps the operator invariant.
+  if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_TEST_MODE:-0}" == "1" ]]; then
+    local test_root="${OPENCLAW_EXPECTED_MAIN_REPO:-${MAIN_REPO}}"
+    if [[ -d "${test_root}" ]]; then
+      (cd -- "${test_root}" && pwd -P)
+    else
+      printf '%s\n' "${test_root}"
+    fi
+    return
+  fi
+  printf '%s\n' "${CANONICAL_MAIN_REPO}"
+}
+
+assert_clean_sacred_main() {
+  local expected_root=""
+  local git_root=""
+  local branch=""
+  expected_root="$(expected_main_repo)"
+  git_root="$(${GIT_BIN} -C "${MAIN_REPO}" rev-parse --show-toplevel 2>/dev/null || true)"
+
+  [[ "$(pwd -P)" == "${expected_root}" ]] || \
+    die "run from clean sacred main: cd ${expected_root}"
+  [[ "${MAIN_REPO}" == "${expected_root}" ]] || \
+    die "OPENCLAW_MAIN_REPO resolved to ${MAIN_REPO}; expected ${expected_root}"
+  [[ "${git_root}" == "${expected_root}" ]] || \
+    die "${MAIN_REPO} is not the sacred main git root"
+
+  branch="$(${GIT_BIN} -C "${MAIN_REPO}" branch --show-current)"
+  [[ "${branch}" == "main" ]] || die "sacred repo must be on main, got ${branch:-detached}"
+  if [[ -n "$(${GIT_BIN} -C "${MAIN_REPO}" status --porcelain)" ]]; then
+    die "sacred main has local changes; refusing Jarvis runtime mutation"
+  fi
+}
+
+pr_json() {
+  "${GH_BIN}" pr view "${PR_NUMBER}" \
+    --json number,state,isDraft,baseRefName,headRefOid,mergeCommit,title,url
+}
+
+assert_pr_can_ship() {
+  local json="$1"
+  local base=""
+  local state=""
+  base="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.baseRefName // empty')"
+  state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state // empty')"
+
+  [[ "${base}" == "main" ]] || die "refusing PR #${PR_NUMBER}: baseRefName=${base:-missing}, expected main"
+  [[ "${state}" == "OPEN" || "${state}" == "MERGED" ]] || \
+    die "refusing PR #${PR_NUMBER}: state=${state:-missing}, expected OPEN or MERGED"
+}
+
+print_command() {
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+print_main_command() {
+  printf '+ cd %q &&' "${MAIN_REPO}"
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+merge_or_confirm_pr() {
+  local json="$1"
+  local state=""
+  local is_draft=""
+  local head_sha=""
+  local title=""
+  state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state')"
+
+  is_draft="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.isDraft')"
+  head_sha="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.headRefOid // empty')"
+  title="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.title // empty')"
+
+  if (( DRY_RUN == 1 )); then
+    if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
+      print_command "${GH_BIN}" pr ready "${PR_NUMBER}"
+    fi
+    print_command "${PR_REQUIRED_SCRIPT}" --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
+    if [[ "${state}" == "MERGED" ]]; then
+      log "PR #${PR_NUMBER} is already merged; required checks still remain part of ship proof"
+      return 0
+    fi
+    [[ "${head_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "PR head commit is missing or invalid"
+    [[ -n "${title}" ]] || die "PR title is missing"
+    print_command "${GH_BIN}" pr merge "${PR_NUMBER}" --squash --delete-branch \
+      --match-head-commit "${head_sha}" --subject "${title} (#${PR_NUMBER})"
+    return 0
+  fi
+
+  if [[ "${state}" == "OPEN" && "${is_draft}" == "true" ]]; then
+    "${GH_BIN}" pr ready "${PR_NUMBER}"
+  fi
+  "${PR_REQUIRED_SCRIPT}" --pr "${PR_NUMBER}" --wait --timeout "${CI_TIMEOUT_SECONDS}"
+  if [[ "${state}" == "MERGED" ]]; then
+    log "PR #${PR_NUMBER} is already merged; required checks confirmed"
+    return 0
+  fi
+  [[ "${head_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "PR head commit is missing or invalid"
+  [[ -n "${title}" ]] || die "PR title is missing"
+  "${GH_BIN}" pr merge "${PR_NUMBER}" --squash --delete-branch \
+    --match-head-commit "${head_sha}" --subject "${title} (#${PR_NUMBER})"
+}
+
+assert_installed_app_needs_hotfix() {
+  local expected_commit="$1"
+  local installed_app_commit=""
+  valid_commit "${expected_commit}" || die "expected hotfix commit is missing or invalid: ${expected_commit:-missing}"
+  [[ -r "${INSTALLED_JARVIS_APP_MANIFEST}" ]] || \
+    die "installed Jarvis app manifest is not readable: ${INSTALLED_JARVIS_APP_MANIFEST}"
+  installed_app_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${INSTALLED_JARVIS_APP_MANIFEST}")"
+  [[ "${installed_app_commit}" =~ ^[0-9a-fA-F]{7,40}$ ]] || \
+    die "installed Jarvis app manifest gitCommit is missing or invalid"
+
+  # If /Applications already contains this commit, app launch will preserve
+  # managed provenance and the break-glass protection step correctly becomes a
+  # no-op. Reject before packaging or runtime mutation instead of entering a
+  # workflow whose promised jarvis-break-glass-hotfix proof is impossible.
+  if commit_matches "${expected_commit}" "${installed_app_commit}"; then
+    die "installed Jarvis app already contains commit ${installed_app_commit}; refuse break-glass hotfix and use scripts/prove-jarvis-runtime.sh"
+  fi
+}
+
+pull_and_confirm_merge() {
+  if (( DRY_RUN == 1 )); then
+    print_main_command "${GIT_BIN}" pull --ff-only origin main
+    return 0
+  fi
+
+  (cd "${MAIN_REPO}" && "${GIT_BIN}" pull --ff-only origin main)
+  assert_clean_sacred_main
+
+  local merged_json=""
+  local merge_sha=""
+  local head_sha=""
+  merged_json="$(pr_json)"
+  assert_pr_can_ship "${merged_json}"
+  [[ "$(printf '%s\n' "${merged_json}" | "${JQ_BIN}" -r '.state')" == "MERGED" ]] || \
+    die "PR #${PR_NUMBER} did not confirm as merged after gh pr merge"
+  merge_sha="$(printf '%s\n' "${merged_json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
+  valid_commit "${merge_sha}" || die "merged PR is missing a valid mergeCommit.oid"
+  head_sha="$(${GIT_BIN} -C "${MAIN_REPO}" rev-parse HEAD)"
+  valid_commit "${head_sha}" || die "sacred main HEAD is not a valid git commit"
+  # Refetch after merge+pull is authoritative for both initially OPEN and
+  # already-MERGED PRs. An ancestor check is insufficient: a newer main HEAD
+  # would package unrelated commits under a misleading "ship this PR" action.
+  commit_matches "${merge_sha}" "${head_sha}" || \
+    die "sacred main advanced beyond requested PR merge ${merge_sha}; HEAD=${head_sha}. Refusing to package unrelated newer commits; start a new ship run for the intended PR or release."
+  CONFIRMED_PR_MERGE_COMMIT="${merge_sha}"
+}
+
+normal_package_build() {
+  local app_version="$1"
+  if [[ -n "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD:-}" ]]; then
+    printf '%s\n' "${OPENCLAW_SHIP_NORMAL_PACKAGE_BUILD}"
+    return 0
+  fi
+
+  # Match package-mac-app.sh instead of inventing a second version policy:
+  # normal build is max(git commit count, canonical Sparkle build for version).
+  (
+    cd "${MAIN_REPO}"
+    # shellcheck source=scripts/lib/validated-node.sh
+    local git_count=""
+    local canonical_build="0"
+    local node_bin="${OPENCLAW_NODE_BIN:-}"
+    if [[ -z "${node_bin}" ]]; then
+      source "${MAIN_REPO}/scripts/lib/validated-node.sh"
+      openclaw_use_validated_node "${MAIN_REPO}" >/dev/null
+      node_bin="${OPENCLAW_NODE_BIN}"
+    fi
+    [[ -x "${node_bin}" ]] || die "validated Node is missing or not executable: ${node_bin:-missing}"
+    git_count="$(${GIT_BIN} rev-list --count HEAD)"
+    [[ "${git_count}" =~ ^[0-9]+$ ]] || die "normal git-derived APP_BUILD is not numeric: ${git_count}"
+    if [[ "${app_version}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}([.-].*)?$ ]]; then
+      canonical_build="$("${node_bin}" --import tsx \
+        "${MAIN_REPO}/scripts/sparkle-build.ts" canonical-build "${app_version}")"
+    fi
+    [[ "${canonical_build}" =~ ^[0-9]+$ ]] || \
+      die "canonical package-derived APP_BUILD is not numeric: ${canonical_build}"
+    if (( canonical_build > git_count )); then
+      printf '%s\n' "${canonical_build}"
+    else
+      printf '%s\n' "${git_count}"
+    fi
+  )
+}
+
+select_hotfix_version() {
+  local installed_version="${OPENCLAW_SHIP_INSTALLED_APP_VERSION:-}"
+  if [[ -z "${installed_version}" ]]; then
+    [[ -r "${INSTALLED_JARVIS_INFO_PLIST}" ]] || \
+      die "installed Jarvis Info.plist is not readable: ${INSTALLED_JARVIS_INFO_PLIST}"
+    installed_version="$("${PLISTBUDDY_BIN}" -c 'Print :CFBundleShortVersionString' \
+      "${INSTALLED_JARVIS_INFO_PLIST}" 2>/dev/null || true)"
+  fi
+  [[ "${installed_version}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}([.-][0-9A-Za-z.-]+)?$ ]] || \
+    die "installed Jarvis CFBundleShortVersionString is invalid: ${installed_version:-missing}"
+  printf '%s\n' "${installed_version}"
+}
+
+select_hotfix_build() {
+  local app_version="$1"
+  [[ -r "${JARVIS_MANIFEST}" ]] || die "installed Jarvis manifest is not readable: ${JARVIS_MANIFEST}"
+  local installed_build=""
+  local normal_build=""
+  installed_build="$("${JQ_BIN}" -r '.bundleVersion // empty' "${JARVIS_MANIFEST}")"
+  normal_build="$(normal_package_build "${app_version}")"
+  [[ "${installed_build}" =~ ^[0-9]+$ ]] || die "installed Jarvis bundleVersion is not numeric: ${installed_build:-missing}"
+  [[ "${normal_build}" =~ ^[0-9]+$ ]] || die "normal package APP_BUILD is not numeric: ${normal_build:-missing}"
+
+  if (( installed_build + 1 > normal_build )); then
+    printf '%s\n' "$((installed_build + 1))"
+  else
+    printf '%s\n' "${normal_build}"
+  fi
+}
+
+package_hotfix() {
+  local app_build="$1"
+  local app_version="$2"
+  local host_arch="$3"
+  local command=(
+    env
+    "APP_BUILD=${app_build}"
+    "APP_VERSION=${app_version}"
+    "BUILD_ARCHS=${host_arch}"
+    "BUILD_CONFIG=release"
+    "ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1"
+    "ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1"
+    "SKIP_NOTARIZE=1"
+    "SKIP_DSYM=1"
+    "SKIP_PNPM_INSTALL=0"
+    "SKIP_TSC=0"
+    "SKIP_UI_BUILD=0"
+    bash "${PACKAGE_SCRIPT}"
+  )
+
+  if (( DRY_RUN == 1 )); then
+    print_main_command "${command[@]}"
+    return 0
+  fi
+  (cd "${MAIN_REPO}" && "${command[@]}")
+}
+
+verify_built_hotfix() {
+  local expected_commit="$1"
+  local expected_build="$2"
+  local expected_version="$3"
+  local app_manifest="${JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json"
+  local runtime_package_json="${JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/openclaw/package.json"
+  local info_plist="${JARVIS_APP_PATH}/Contents/Info.plist"
+  local app_commit=""
+  local app_build=""
+  local app_version=""
+  local runtime_package_version=""
+
+  [[ -r "${app_manifest}" ]] || die "built Jarvis runtime manifest is missing: ${app_manifest}"
+  [[ -r "${runtime_package_json}" ]] || die "built Jarvis runtime package.json is missing: ${runtime_package_json}"
+  [[ -r "${info_plist}" ]] || die "built Jarvis Info.plist is missing: ${info_plist}"
+  app_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${app_manifest}")"
+  app_build="$("${PLISTBUDDY_BIN}" -c 'Print :CFBundleVersion' "${info_plist}" 2>/dev/null || true)"
+  app_version="$("${PLISTBUDDY_BIN}" -c 'Print :CFBundleShortVersionString' "${info_plist}" 2>/dev/null || true)"
+  runtime_package_version="$("${JQ_BIN}" -r '.version // empty' "${runtime_package_json}")"
+  valid_commit "${app_commit}" || \
+    die "built Jarvis manifest gitCommit is missing or invalid: ${app_commit:-missing}"
+  commit_matches "${expected_commit}" "${app_commit}" || \
+    die "built Jarvis commit ${app_commit:-missing} does not match sacred main ${expected_commit}"
+  [[ "${app_build}" == "${expected_build}" ]] || \
+    die "built Jarvis CFBundleVersion ${app_build:-missing} does not match selected ${expected_build}"
+  [[ "${app_version}" == "${expected_version}" ]] || \
+    die "built Jarvis CFBundleShortVersionString ${app_version:-missing} does not preserve installed ${expected_version}"
+  [[ "${runtime_package_version}" == "${expected_version}" ]] || \
+    die "built runtime package version ${runtime_package_version:-missing} does not preserve installed ${expected_version}"
+}
+
+wait_for_seeded_runtime() {
+  local expected_commit="$1"
+  local expected_build="$2"
+  local deadline=$((SECONDS + SEED_TIMEOUT_SECONDS))
+  local installed_commit=""
+  local installed_build=""
+
+  while (( SECONDS <= deadline )); do
+    if [[ -r "${JARVIS_MANIFEST}" ]]; then
+      installed_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${JARVIS_MANIFEST}" 2>/dev/null || true)"
+      installed_build="$("${JQ_BIN}" -r '.bundleVersion // empty' "${JARVIS_MANIFEST}" 2>/dev/null || true)"
+      if [[ "${installed_build}" == "${expected_build}" ]] && \
+          commit_matches "${expected_commit}" "${installed_commit}"; then
+        return 0
+      fi
+    fi
+    sleep "${SEED_POLL_SECONDS}"
+  done
+  die "dist/Jarvis.app did not seed expected commit=${expected_commit} build=${expected_build} into app support"
+}
+
+run_offline_seeded_protection() {
+  local expected_commit="$1"
+  local action="$2"
+  local command=(
+    env
+    "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
+    "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
+    "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
+    "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
+    bash "${PROTECT_SCRIPT}"
+    --expected-live-commit "${expected_commit}"
+    --offline-seeded-fallback
+  )
+  case "${action}" in
+    apply)
+      "${command[@]}" --apply
+      ;;
+    verify)
+      "${command[@]}" --verify
+      ;;
+    *)
+      die "unknown offline protection action: ${action}"
+      ;;
+  esac
+}
+
+cleanup_launch_receipt() {
+  [[ -n "${TRANSACTION_LAUNCH_RECEIPT_DIR}" ]] || return 0
+  rm -f "${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
+  rmdir "${TRANSACTION_LAUNCH_RECEIPT_DIR}" 2>/dev/null || true
+  TRANSACTION_LAUNCH_RECEIPT_DIR=""
+}
+
+exit_after_transaction_cleanup() {
+  local status="$1"
+  # Lock release is deliberately last. Every seeded-runtime recovery and proof
+  # above this call still owns the same cross-worktree mutation boundary.
+  openclaw_jarvis_release_lock_release || true
+  exit "${status}"
+}
+
+transaction_exit_guard() {
+  local original_status=$?
+  trap - EXIT
+  set +e
+  # Final deep proof owns temporary status files. Clean them here so replacing
+  # its old EXIT trap cannot bypass transaction recovery on proof failure.
+  cleanup_status_files
+  cleanup_launch_receipt
+  if (( original_status == 0 || TRANSACTION_ARMED != 1 )); then
+    exit_after_transaction_cleanup "${original_status}"
+  fi
+
+  # A failed post-launch path must not return control while the newly seeded
+  # payload can be downgraded by the installed app. First prove protection;
+  # if an interrupted write left the exact seeded manifest in place, complete
+  # the same helper transaction and prove it before propagating the failure.
+  if run_offline_seeded_protection "${TRANSACTION_EXPECTED_COMMIT}" verify; then
+    log "transaction_recovery=protection-verified-before-nonzero-exit"
+    exit_after_transaction_cleanup "${original_status}"
+  fi
+
+  # The helper validates both recoverable states: the exact seeded manifest,
+  # or an installed-app compatibility manifest with a backup receipt bound to
+  # that seed. Keep state interpretation in one audited implementation.
+  if run_offline_seeded_protection "${TRANSACTION_EXPECTED_COMMIT}" apply && \
+      run_offline_seeded_protection "${TRANSACTION_EXPECTED_COMMIT}" verify; then
+    log "transaction_recovery=protection-applied-and-verified-before-nonzero-exit"
+    exit_after_transaction_cleanup "${original_status}"
+  fi
+
+  log "CRITICAL: transaction recovery could not prove compatibility protection; Jarvis app must remain closed pending manual recovery" >&2
+  exit_after_transaction_cleanup 125
+}
+
+launch_seed_and_restart() {
+  local expected_commit="$1"
+  local app_build="$2"
+  local app_version="$3"
+  local domain="gui/$(${ID_BIN} -u)"
+  local old_pid=""
+  local launch_receipt=""
+  local launched_app_path=""
+  local open_status=0
+
+  if (( DRY_RUN == 1 )); then
+    print_main_command bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}"
+    log "dry-run: wait for ${JARVIS_MANIFEST} commit=${expected_commit} version=${app_version} build=${app_build}"
+    print_command env \
+      "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
+      "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
+      "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
+      bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
+      --offline-seeded-fallback --apply
+    print_command env \
+      "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}" \
+      "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}" \
+      "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}" \
+      bash "${PROTECT_SCRIPT}" --expected-live-commit "${expected_commit}" \
+      --offline-seeded-fallback --verify
+    print_command "${LAUNCHCTL_BIN}" kickstart -k "${domain}/${JARVIS_LABEL}"
+    return 0
+  fi
+
+  TRANSACTION_EXPECTED_COMMIT="${expected_commit}"
+  TRANSACTION_LAUNCH_RECEIPT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-hotfix-launch.XXXXXX")"
+  chmod 700 "${TRANSACTION_LAUNCH_RECEIPT_DIR}"
+  launch_receipt="${TRANSACTION_LAUNCH_RECEIPT_DIR}/launched-app-path"
+  (cd "${MAIN_REPO}" && \
+    OPENCLAW_APP_LAUNCH_RECEIPT="${launch_receipt}" \
+      bash "${OPEN_APP_SCRIPT}" --replace "${JARVIS_APP_PATH}") || open_status=$?
+
+  # The helper can launch the app successfully and then fail while preparing
+  # foreground activation. Its atomic receipt is therefore the transaction
+  # boundary: receipt means async seeding may happen even when the helper exits
+  # nonzero; no receipt means the launch definitely did not complete.
+  if [[ -r "${launch_receipt}" ]]; then
+    launched_app_path="$(<"${launch_receipt}")"
+    [[ "${launched_app_path}" == "${JARVIS_APP_PATH}" ]] || \
+      die "app launcher receipt path=${launched_app_path:-missing}, expected ${JARVIS_APP_PATH}"
+    TRANSACTION_ARMED=1
+  fi
+  if (( open_status != 0 && TRANSACTION_ARMED != 1 )); then
+    return "${open_status}"
+  fi
+  (( TRANSACTION_ARMED == 1 )) || die "app launcher succeeded without publishing its launch receipt"
+  cleanup_launch_receipt
+  wait_for_seeded_runtime "${expected_commit}" "${app_build}"
+  run_offline_seeded_protection "${expected_commit}" apply
+  run_offline_seeded_protection "${expected_commit}" verify
+  if (( open_status != 0 )); then
+    # `open` is asynchronous. A post-launch setup failure still waits for and
+    # protects the exact seed before preserving the helper's nonzero status;
+    # EXIT recovery alone could otherwise race ahead of app bootstrap.
+    return "${open_status}"
+  fi
+  old_pid="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }' || true)"
+  "${LAUNCHCTL_BIN}" kickstart -k "${domain}/${JARVIS_LABEL}"
+  wait_for_restarted_gateway "${expected_commit}" "${app_version}" "${old_pid}"
+}
+
+gateway_status_is_ready() {
+  local expected_commit="$1"
+  local expected_version="$2"
+  local stdout_file=""
+  local json_file=""
+  local runtime_commit=""
+  local runtime_package_version=""
+  local rpc_ok=""
+  stdout_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.XXXXXX")"
+  json_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-ready.json.XXXXXX")"
+
+  if ! OPENCLAW_HOME="${JARVIS_HOME}" \
+      OPENCLAW_STATE_DIR="${JARVIS_STATE_DIR}" \
+      OPENCLAW_CONFIG_PATH="${JARVIS_CONFIG_PATH}" \
+      OPENCLAW_LOG_DIR="${JARVIS_LOG_DIR}" \
+      OPENCLAW_PROFILE=consumer \
+      OPENCLAW_LAUNCHD_LABEL="${JARVIS_LABEL}" \
+      "${JARVIS_NODE}" "${JARVIS_ENTRYPOINT}" gateway status --deep --require-rpc --json \
+        >"${stdout_file}" 2>/dev/null; then
+    rm -f "${stdout_file}" "${json_file}"
+    return 1
+  fi
+
+  # Status may prefix JSON with non-secret config warnings. Parse the payload
+  # privately and emit nothing so failed startup attempts cannot leak config.
+  if "${JQ_BIN}" -e . "${stdout_file}" >/dev/null 2>&1; then
+    cp "${stdout_file}" "${json_file}"
+  else
+    awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${stdout_file}" >"${json_file}"
+  fi
+  if ! "${JQ_BIN}" -e . "${json_file}" >/dev/null 2>&1; then
+    rm -f "${stdout_file}" "${json_file}"
+    return 1
+  fi
+
+  runtime_commit="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimeCommit // empty' "${json_file}")"
+  runtime_package_version="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimePackageVersion // empty' "${json_file}")"
+  rpc_ok="$("${JQ_BIN}" -r --arg url "ws://127.0.0.1:${PORT}" '
+    .rpc.ok // ([.targets[]? | select(.url == $url and .connect.rpcOk == true)] | length > 0)
+  ' "${json_file}")"
+  rm -f "${stdout_file}" "${json_file}"
+  commit_matches "${expected_commit}" "${runtime_commit}" && \
+    [[ "${runtime_package_version}" == "${expected_version}" ]] && \
+    [[ "${rpc_ok}" == "true" ]]
+}
+
+wait_for_restarted_gateway() {
+  local expected_commit="$1"
+  local expected_version="$2"
+  local old_pid="$3"
+  local domain="gui/$(${ID_BIN} -u)"
+  local deadline=$((SECONDS + GATEWAY_READY_TIMEOUT_SECONDS))
+  local print_output=""
+  local pid=""
+  local listener_output=""
+
+  # launchctl accepting kickstart only proves that it queued work. Protection
+  # reads the live daemon, so wait for the replacement PID, its listener, the
+  # expected commit, and deep RPC before allowing any manifest mutation.
+  while (( SECONDS <= deadline )); do
+    print_output="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null || true)"
+    pid="$(printf '%s\n' "${print_output}" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
+    if [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && \
+        { [[ -z "${old_pid}" ]] || [[ "${pid}" != "${old_pid}" ]]; }; then
+      listener_output="$(${LSOF_BIN} -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+      if printf '%s\n' "${listener_output}" | \
+          awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' && \
+          gateway_status_is_ready "${expected_commit}" "${expected_version}"; then
+        log "gateway restart ready pid=${pid} port=${PORT} version=${expected_version} rpc=true"
+        return 0
+      fi
+    fi
+    sleep "${GATEWAY_READY_POLL_SECONDS}"
+  done
+  die "${JARVIS_LABEL} did not reach new-PID/listener/commit/RPC readiness within ${GATEWAY_READY_TIMEOUT_SECONDS}s"
+}
+
+protect_runtime() {
+  local expected_commit="$1"
+  local base_command=(
+    env
+    "OPENCLAW_INSTALLED_JARVIS_APP_PATH=${INSTALLED_JARVIS_APP_PATH}"
+    "OPENCLAW_JARVIS_HOME=${JARVIS_HOME}"
+    "OPENCLAW_JARVIS_STATE_DIR=${JARVIS_STATE_DIR}"
+    "OPENCLAW_JARVIS_CONFIG_PATH=${JARVIS_CONFIG_PATH}"
+    bash "${PROTECT_SCRIPT}"
+    --expected-live-commit "${expected_commit}"
+  )
+
+  # The helper's no-flag mode is its audited dry run. Only after it proves the
+  # exact live daemon do we repeat the same proof and apply the compatibility
+  # manifest that prevents the older installed app from reseeding over it.
+  if (( DRY_RUN == 1 )); then
+    print_command "${base_command[@]}"
+    print_command "${base_command[@]}" --apply
+    return 0
+  fi
+  "${base_command[@]}"
+  "${base_command[@]}" --apply
+}
+
+cleanup_status_files() {
+  [[ -z "${STATUS_STDOUT_FILE}" ]] || rm -f "${STATUS_STDOUT_FILE}"
+  [[ -z "${STATUS_STDERR_FILE}" ]] || rm -f "${STATUS_STDERR_FILE}"
+  [[ -z "${STATUS_JSON_FILE}" ]] || rm -f "${STATUS_JSON_FILE}"
+}
+
+extract_status_json() {
+  if "${JQ_BIN}" -e . "${STATUS_STDOUT_FILE}" >/dev/null 2>&1; then
+    cp "${STATUS_STDOUT_FILE}" "${STATUS_JSON_FILE}"
+    return 0
+  fi
+  awk 'found || /^[[:space:]]*\{/ { found = 1; print }' "${STATUS_STDOUT_FILE}" >"${STATUS_JSON_FILE}"
+  "${JQ_BIN}" -e . "${STATUS_JSON_FILE}" >/dev/null 2>&1 || \
+    die "Jarvis status command did not emit parseable JSON"
+}
+
+telegram_default_proof() {
+  local username="unavailable"
+  local token=""
+  local fingerprint="unavailable"
+  local log_file="${JARVIS_LOG_DIR}/gateway.log"
+
+  if [[ -r "${log_file}" ]]; then
+    username="$(tail -n 500 "${log_file}" | sed -nE 's/^.*\[default\].*@([A-Za-z0-9_]+).*$/@\1/p' | tail -n 1)"
+    username="${username:-unavailable}"
+  fi
+  if [[ -r "${JARVIS_CONFIG_PATH}" ]]; then
+    token="$("${JQ_BIN}" -r '
+      .channels.telegram as $telegram
+      | ($telegram.accounts.default.botToken // $telegram.botToken // empty)
+      | select(type == "string")
+    ' "${JARVIS_CONFIG_PATH}" 2>/dev/null || true)"
+  fi
+  if [[ -n "${token}" ]] && command -v "${SHASUM_BIN}" >/dev/null 2>&1; then
+    # Hashing proves bot identity without exposing any token prefix or suffix.
+    fingerprint="$(printf '%s' "${token}" | "${SHASUM_BIN}" -a 256 | awk '{print substr($1, 1, 12)}')"
+  fi
+
+  printf 'telegram_default_bot=%s\n' "${username}"
+  printf 'telegram_token_fingerprint=%s\n' "${fingerprint}"
+}
+
+prove_break_glass_runtime() {
+  local expected_commit="$1"
+  local expected_version="$2"
+  local domain="gui/$(${ID_BIN} -u)"
+  local launchctl_output=""
+  local pid=""
+  local listener_output=""
+  local service_label=""
+  local runtime_source=""
+  local runtime_commit=""
+  local runtime_package_version=""
+  local state_dir=""
+  local config_path=""
+  local rpc_ok=""
+  local protected_commit=""
+
+  STATUS_STDOUT_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-status.XXXXXX")"
+  STATUS_STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-status.err.XXXXXX")"
+  STATUS_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-status.json.XXXXXX")"
+
+  [[ -x "${JARVIS_NODE}" ]] || die "installed Jarvis node is missing: ${JARVIS_NODE}"
+  [[ -r "${JARVIS_ENTRYPOINT}" ]] || die "installed Jarvis entrypoint is missing: ${JARVIS_ENTRYPOINT}"
+  OPENCLAW_HOME="${JARVIS_HOME}" \
+  OPENCLAW_STATE_DIR="${JARVIS_STATE_DIR}" \
+  OPENCLAW_CONFIG_PATH="${JARVIS_CONFIG_PATH}" \
+  OPENCLAW_LOG_DIR="${JARVIS_LOG_DIR}" \
+  OPENCLAW_PROFILE=consumer \
+  OPENCLAW_LAUNCHD_LABEL="${JARVIS_LABEL}" \
+    "${JARVIS_NODE}" "${JARVIS_ENTRYPOINT}" gateway status --deep --require-rpc --json \
+      >"${STATUS_STDOUT_FILE}" 2>"${STATUS_STDERR_FILE}" || {
+        # Status diagnostics can include config-derived text. Keep failure
+        # output closed instead of risking credential disclosure.
+        die "Jarvis deep RPC status failed"
+      }
+  extract_status_json
+
+  service_label="$("${JQ_BIN}" -r '.runtimeFingerprint.serviceLabel // empty' "${STATUS_JSON_FILE}")"
+  runtime_source="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimeSource // empty' "${STATUS_JSON_FILE}")"
+  runtime_commit="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimeCommit // empty' "${STATUS_JSON_FILE}")"
+  runtime_package_version="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimePackageVersion // empty' "${STATUS_JSON_FILE}")"
+  state_dir="$("${JQ_BIN}" -r '.runtimeFingerprint.stateDir // empty' "${STATUS_JSON_FILE}")"
+  config_path="$("${JQ_BIN}" -r '.runtimeFingerprint.configPath // empty' "${STATUS_JSON_FILE}")"
+  rpc_ok="$("${JQ_BIN}" -r --arg url "ws://127.0.0.1:${PORT}" '
+    .rpc.ok // ([.targets[]? | select(.url == $url and .connect.rpcOk == true)] | length > 0)
+  ' "${STATUS_JSON_FILE}")"
+
+  [[ "${service_label}" == "${JARVIS_LABEL}" ]] || die "status serviceLabel=${service_label:-missing}, expected ${JARVIS_LABEL}"
+  [[ "${runtime_source}" == "jarvis-break-glass-hotfix" ]] || \
+    die "status runtimeSource=${runtime_source:-missing}, expected jarvis-break-glass-hotfix"
+  commit_matches "${expected_commit}" "${runtime_commit}" || \
+    die "status runtimeCommit=${runtime_commit:-missing}, expected ${expected_commit}"
+  [[ "${runtime_package_version}" == "${expected_version}" ]] || \
+    die "status runtimePackageVersion=${runtime_package_version:-missing}, expected ${expected_version}"
+  [[ "${state_dir}" == "${JARVIS_STATE_DIR}" ]] || die "status stateDir=${state_dir:-missing}, expected ${JARVIS_STATE_DIR}"
+  [[ "${config_path}" == "${JARVIS_CONFIG_PATH}" ]] || die "status configPath=${config_path:-missing}, expected ${JARVIS_CONFIG_PATH}"
+  [[ "${rpc_ok}" == "true" ]] || die "Jarvis RPC proof failed"
+
+  [[ -r "${JARVIS_PROTECTION_MARKER}" ]] || die "Jarvis protection marker is missing after apply"
+  protected_commit="$("${JQ_BIN}" -r '.protectedRuntimeGitCommit // empty' "${JARVIS_PROTECTION_MARKER}")"
+  commit_matches "${expected_commit}" "${protected_commit}" || \
+    die "protection marker commit=${protected_commit:-missing}, expected ${expected_commit}"
+
+  # Never print the raw launchctl job: its environment can contain credentials.
+  # Parse only the process identity fields needed for proof, then emit a fixed
+  # credential-free command assembled from expected app-support paths.
+  launchctl_output="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null || true)"
+  pid="$(printf '%s\n' "${launchctl_output}" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
+  [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || die "launchctl did not report a live ${JARVIS_LABEL} PID"
+  printf '%s\n' "${launchctl_output}" | awk -v expected="program = ${JARVIS_NODE}" '
+    { line=$0; sub(/^[[:space:]]+/, "", line); if (line == expected) found=1 }
+    END { exit(found ? 0 : 1) }
+  ' || die "launchctl program does not match installed Jarvis node"
+  printf '%s\n' "${launchctl_output}" | awk -v expected="${JARVIS_ENTRYPOINT}" '
+    { line=$0; sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line); if (line == expected) found=1 }
+    END { exit(found ? 0 : 1) }
+  ' || die "launchctl arguments do not contain installed Jarvis entrypoint"
+
+  listener_output="$(${LSOF_BIN} -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+  printf '%s\n' "${listener_output}" | awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' || \
+    die "TCP port ${PORT} is not owned by ${JARVIS_LABEL} pid=${pid}"
+
+  printf 'installed_runtime_commit=%s\n' "${runtime_commit}"
+  printf 'runtime_package_version=%s\n' "${runtime_package_version}"
+  printf 'runtime_pid=%s\n' "${pid}"
+  printf 'runtime_command=%s %s gateway --port %s\n' "${JARVIS_NODE}" "${JARVIS_ENTRYPOINT}" "${PORT}"
+  printf 'runtime_port=%s\n' "${PORT}"
+  printf 'runtime_rpc=true\n'
+  printf 'runtime_source=%s\n' "${runtime_source}"
+  telegram_default_proof
+  printf 'applications_jarvis_app=untouched\n'
+  printf 'public_release=false\n'
+  printf 'managed_bundle_steady_state=false\n'
+  cleanup_status_files
+}
+
+main() {
+  trap transaction_exit_guard EXIT
+  parse_args "$@"
+  require_preflight_tools
+  assert_clean_sacred_main
+
+  local json=""
+  local pr_state=""
+  local expected_commit=""
+  local app_build=""
+  local app_version=""
+  local host_arch=""
+  json="$(pr_json)"
+  assert_pr_can_ship "${json}"
+  pr_state="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.state')"
+  if (( DRY_RUN != 1 )); then
+    # One canonical cross-worktree owner must cover GitHub merge, dist writes,
+    # app-support receipts, gateway restart, final proof, and EXIT recovery.
+    # Acquisition is fail-fast and precedes the first mutation.
+    openclaw_jarvis_release_lock_acquire "${MAIN_REPO}" "hotfix-ship-pr-${PR_NUMBER}"
+    # The shared helper installs release-only traps. Replace them only after a
+    # successful acquire so signals exit through transaction recovery first;
+    # lock release remains the final cleanup performed by that EXIT trap.
+    trap transaction_exit_guard EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
+  merge_or_confirm_pr "${json}"
+  pull_and_confirm_merge
+
+  if (( DRY_RUN == 1 )) && [[ "${pr_state}" == "OPEN" ]]; then
+    # Current main is pre-merge truth. Keep commit-dependent preview commands
+    # explicit about that uncertainty; the real commit is resolved only after
+    # the non-dry run merges and fast-forwards sacred main.
+    expected_commit="<post-merge-main>"
+    log "OPEN PR dry-run uses prospective commit ${expected_commit}; real commit resolves after merge and git pull"
+  elif (( DRY_RUN == 1 )); then
+    # A MERGED PR has immutable remote merge truth even when sacred main has
+    # not fast-forwarded yet. Model comparisons and the package/seed plan from
+    # that merge commit instead of silently substituting stale local HEAD.
+    expected_commit="$(printf '%s\n' "${json}" | "${JQ_BIN}" -r '.mergeCommit.oid // empty')"
+    [[ "${expected_commit}" =~ ^[0-9a-fA-F]{7,40}$ ]] || \
+      die "merged PR is missing a valid mergeCommit.oid for dry-run"
+    log "MERGED PR dry-run models remote merge commit ${expected_commit}; local main advances only in the live git pull"
+    assert_installed_app_needs_hotfix "${expected_commit}"
+  else
+    # Live packaging is pinned to the refetched PR receipt, not a fresh HEAD
+    # lookup that could silently widen scope after the equality gate above.
+    expected_commit="${CONFIRMED_PR_MERGE_COMMIT}"
+    valid_commit "${expected_commit}" || die "live PR merge commit was not confirmed after pull"
+    assert_installed_app_needs_hotfix "${expected_commit}"
+  fi
+  app_version="$(select_hotfix_version)"
+  app_build="$(select_hotfix_build "${app_version}")"
+  host_arch="$(${UNAME_BIN} -m)"
+  [[ "${host_arch}" == "arm64" || "${host_arch}" == "x86_64" ]] || die "unsupported host architecture: ${host_arch}"
+
+  log "selected APP_VERSION=${app_version} from installed Jarvis and APP_BUILD=${app_build} from installed-manifest+1 versus normal package build"
+  package_hotfix "${app_build}" "${app_version}" "${host_arch}"
+  if (( DRY_RUN == 1 )); then
+    log "dry-run: verify ${JARVIS_APP_PATH} commit=${expected_commit} CFBundleShortVersionString=${app_version} CFBundleVersion=${app_build} runtime_package_version=${app_version}"
+  else
+    verify_built_hotfix "${expected_commit}" "${app_build}" "${app_version}"
+  fi
+  launch_seed_and_restart "${expected_commit}" "${app_build}" "${app_version}"
+  protect_runtime "${expected_commit}"
+
+  if (( DRY_RUN == 1 )); then
+    log "dry-run complete; no merge, pull, package, app launch, gateway restart, or app-support mutation was performed"
+    log "proof would require runtime_source=jarvis-break-glass-hotfix; /Applications/Jarvis.app remains untouched"
+    return 0
+  fi
+  prove_break_glass_runtime "${expected_commit}" "${app_version}"
+  TRANSACTION_ARMED=0
+}
+
+main "$@"

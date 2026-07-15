@@ -11,6 +11,8 @@ INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
 REPLACE=0
 REFRESH_GATEWAY="${OPENCLAW_CONSUMER_REFRESH_GATEWAY:-0}"
+LAUNCH_RECEIPT="${OPENCLAW_APP_LAUNCH_RECEIPT:-}"
+LAUNCH_RECEIPT_PENDING=""
 
 usage() {
   cat <<'EOF'
@@ -173,6 +175,43 @@ require_refresh_gateway_scope_is_explicit() {
   exit 1
 }
 
+prepare_launch_receipt() {
+  local receipt_path="${LAUNCH_RECEIPT}"
+  local receipt_dir=""
+  local previous_umask=""
+
+  [[ -n "${receipt_path}" ]] || return 0
+  receipt_dir="$(dirname -- "${receipt_path}")"
+  [[ -d "${receipt_dir}" ]] || {
+    echo "ERROR: launch receipt parent directory does not exist: ${receipt_dir}" >&2
+    return 1
+  }
+
+  # Prewrite into the shipping caller's mode-0700 directory before launch.
+  # Publishing after `open` then needs only an atomic same-directory rename,
+  # so a full disk cannot erase the launch boundary after macOS accepted it.
+  # The receipt contains only the app path, never environment or credentials.
+  LAUNCH_RECEIPT_PENDING="${receipt_path}.pending.$$"
+  previous_umask="$(umask)"
+  umask 077
+  if ! printf '%s\n' "${APP_PATH}" >"${LAUNCH_RECEIPT_PENDING}"; then
+    umask "${previous_umask}"
+    return 1
+  fi
+  umask "${previous_umask}"
+}
+
+publish_launch_receipt() {
+  [[ -n "${LAUNCH_RECEIPT}" ]] || return 0
+  mv "${LAUNCH_RECEIPT_PENDING}" "${LAUNCH_RECEIPT}"
+  LAUNCH_RECEIPT_PENDING=""
+}
+
+cleanup_pending_launch_receipt() {
+  [[ -n "${LAUNCH_RECEIPT_PENDING}" ]] || return 0
+  rm -f "${LAUNCH_RECEIPT_PENDING}"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --instance)
@@ -285,6 +324,11 @@ if [[ "$REPLACE" == "1" ]]; then
   fi
 fi
 
+if [[ -n "${LAUNCH_RECEIPT}" ]]; then
+  trap cleanup_pending_launch_receipt EXIT
+  prepare_launch_receipt
+fi
+
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   env -i \
     HOME="${HOME}" \
@@ -309,6 +353,8 @@ else
     HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
     /usr/bin/open -n "$APP_PATH"
 fi
+
+publish_launch_receipt
 
 if [[ "$REFRESH_GATEWAY" == "1" ]]; then
   # Some rebuild/smoke flows intentionally refresh the isolated gateway after

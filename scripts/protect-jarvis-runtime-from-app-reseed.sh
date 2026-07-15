@@ -18,6 +18,8 @@ LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
 ID_BIN="${OPENCLAW_ID_BIN:-id}"
 EXPECTED_LIVE_COMMIT=""
 APPLY=0
+OFFLINE_SEEDED_FALLBACK=0
+VERIFY_ONLY=0
 
 log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*"
@@ -52,6 +54,10 @@ Options:
   --app <path>                  Jarvis app bundle. Default: /Applications/Jarvis.app
   --state-dir <path>            Jarvis state dir. Default: ~/Library/Application Support/Jarvis/.jarvis
   --apply                       Required for mutation. Without it, this is a dry run.
+  --offline-seeded-fallback     Protect an exact on-disk seeded commit without
+                                requiring a healthy live gateway. Recovery-only.
+  --verify                      With --offline-seeded-fallback, require an
+                                already-valid compatibility manifest and marker.
 EOF
 }
 
@@ -80,6 +86,14 @@ parse_args() {
         APPLY=1
         shift
         ;;
+      --offline-seeded-fallback)
+        OFFLINE_SEEDED_FALLBACK=1
+        shift
+        ;;
+      --verify)
+        VERIFY_ONLY=1
+        shift
+        ;;
       --help|-h)
         usage
         exit 0
@@ -90,18 +104,25 @@ parse_args() {
     esac
   done
 
-  [[ -n "${EXPECTED_LIVE_COMMIT}" ]] || die "--expected-live-commit is required"
+  [[ "${EXPECTED_LIVE_COMMIT}" =~ ^[0-9a-fA-F]{7,40}$ ]] || \
+    die "--expected-live-commit must be a 7-40 character hexadecimal SHA"
+  if (( VERIFY_ONLY == 1 && OFFLINE_SEEDED_FALLBACK != 1 )); then
+    die "--verify requires --offline-seeded-fallback"
+  fi
 }
 
 require_tools() {
   command -v jq >/dev/null 2>&1 || die "missing jq"
   command -v sed >/dev/null 2>&1 || die "missing sed"
   command -v awk >/dev/null 2>&1 || die "missing awk"
+  [[ -x "${JARVIS_NODE}" ]] || die "Jarvis node runtime is missing or not executable: ${JARVIS_NODE}"
+  [[ -r "${JARVIS_ENTRYPOINT}" ]] || die "Jarvis bundled runtime entrypoint is missing: ${JARVIS_ENTRYPOINT}"
+  if (( OFFLINE_SEEDED_FALLBACK == 1 )); then
+    return 0
+  fi
   command -v "${LAUNCHCTL_BIN}" >/dev/null 2>&1 || die "missing launchctl command"
   command -v "${LSOF_BIN}" >/dev/null 2>&1 || die "missing lsof command"
   command -v "${ID_BIN}" >/dev/null 2>&1 || die "missing id command"
-  [[ -x "${JARVIS_NODE}" ]] || die "Jarvis node runtime is missing or not executable: ${JARVIS_NODE}"
-  [[ -r "${JARVIS_ENTRYPOINT}" ]] || die "Jarvis bundled runtime entrypoint is missing: ${JARVIS_ENTRYPOINT}"
 }
 
 json_field() {
@@ -113,7 +134,8 @@ json_field() {
 commit_matches() {
   local expected="$1"
   local actual="$2"
-  [[ -n "${expected}" && -n "${actual}" ]] || return 1
+  [[ "${expected}" =~ ^[0-9a-fA-F]{7,40}$ ]] || return 1
+  [[ "${actual}" =~ ^[0-9a-fA-F]{7,40}$ ]] || return 1
   [[ "${expected}" == "${actual}"* || "${actual}" == "${expected}"* ]]
 }
 
@@ -348,6 +370,129 @@ write_marker() {
   mv "${marker_path}.tmp" "${marker_path}"
 }
 
+offline_protection_is_valid() {
+  local installed_manifest="$1"
+  local marker_path="$2"
+  local app_commit="$3"
+  local app_version="$4"
+  local installed_commit=""
+  local installed_version=""
+  local protected_commit=""
+  local compatibility_commit=""
+  local compatibility_version=""
+  local backup_path=""
+  local backup_commit=""
+
+  [[ -r "${installed_manifest}" && -r "${marker_path}" ]] || return 1
+  installed_commit="$(json_field "${installed_manifest}" "gitCommit")"
+  installed_version="$(json_field "${installed_manifest}" "bundleVersion")"
+  protected_commit="$(json_field "${marker_path}" "protectedRuntimeGitCommit")"
+  compatibility_commit="$(json_field "${marker_path}" "compatibilityManifestGitCommit")"
+  compatibility_version="$(json_field "${marker_path}" "compatibilityManifestBundleVersion")"
+  backup_path="$(json_field "${marker_path}" "backupPath")"
+
+  commit_matches "${app_commit}" "${installed_commit}" || return 1
+  [[ "${installed_version}" == "${app_version}" ]] || return 1
+  commit_matches "${EXPECTED_LIVE_COMMIT}" "${protected_commit}" || return 1
+  commit_matches "${app_commit}" "${compatibility_commit}" || return 1
+  [[ "${compatibility_version}" == "${app_version}" ]] || return 1
+  [[ -r "${backup_path}" ]] || return 1
+  backup_commit="$(json_field "${backup_path}" "gitCommit")"
+  commit_matches "${EXPECTED_LIVE_COMMIT}" "${backup_commit}"
+}
+
+seeded_backup_for() {
+  local installed_manifest="$1"
+  local marker_path="$2"
+  local candidate=""
+  local candidate_commit=""
+  local selected=""
+
+  # Prefer the marker's explicit receipt even when another marker field is
+  # invalid. If interruption happened before marker publication, discover only
+  # backups whose manifest commit matches the exact expected seed.
+  if [[ -r "${marker_path}" ]]; then
+    candidate="$(json_field "${marker_path}" "backupPath" 2>/dev/null || true)"
+    if [[ -r "${candidate}" ]]; then
+      candidate_commit="$(json_field "${candidate}" "gitCommit" 2>/dev/null || true)"
+      if commit_matches "${EXPECTED_LIVE_COMMIT}" "${candidate_commit}"; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+    fi
+  fi
+
+  for candidate in "${installed_manifest}".backup.*; do
+    [[ -r "${candidate}" ]] || continue
+    candidate_commit="$(json_field "${candidate}" "gitCommit" 2>/dev/null || true)"
+    if commit_matches "${EXPECTED_LIVE_COMMIT}" "${candidate_commit}"; then
+      selected="${candidate}"
+    fi
+  done
+  [[ -n "${selected}" ]] || return 1
+  printf '%s\n' "${selected}"
+}
+
+protect_offline_seeded_payload() {
+  local app_manifest="$1"
+  local installed_manifest="$2"
+  local marker_path="$3"
+  local app_commit="$4"
+  local app_version="$5"
+  local installed_commit=""
+  local installed_version=""
+  local backup_path=""
+
+  if offline_protection_is_valid \
+      "${installed_manifest}" "${marker_path}" "${app_commit}" "${app_version}"; then
+    log "offline_seeded_fallback_verified=true"
+    log "protected=true"
+    return 0
+  fi
+  if (( VERIFY_ONLY == 1 )); then
+    die "offline seeded fallback protection proof failed"
+  fi
+  (( APPLY == 1 )) || die "--offline-seeded-fallback requires --apply or --verify"
+
+  # The app seed is atomic and writes its manifest last. Bind fallback
+  # protection to that exact manifest plus the required runtime executables;
+  # never infer payload identity from the checkout that launched the app.
+  installed_commit="$(json_field "${installed_manifest}" "gitCommit")"
+  installed_version="$(json_field "${installed_manifest}" "bundleVersion")"
+  if commit_matches "${EXPECTED_LIVE_COMMIT}" "${installed_commit}"; then
+    backup_path="${installed_manifest}.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp "${installed_manifest}" "${backup_path}"
+  elif commit_matches "${app_commit}" "${installed_commit}" && \
+      [[ "${installed_version}" == "${app_version}" ]]; then
+    # The compatibility manifest may already have landed before interruption.
+    # Reuse only a backup receipt bound to the expected seed; this repairs a
+    # missing/corrupt marker without trusting arbitrary neighboring files.
+    backup_path="$(seeded_backup_for "${installed_manifest}" "${marker_path}" || true)"
+    [[ -n "${backup_path}" ]] || \
+      die "compatibility manifest exists without a verified backup for expected seed ${EXPECTED_LIVE_COMMIT}"
+    installed_commit="$(json_field "${backup_path}" "gitCommit")"
+  else
+    die "seeded manifest commit ${installed_commit:-missing} does not match expected ${EXPECTED_LIVE_COMMIT} or installed-app compatibility"
+  fi
+
+  # Publish the marker before replacing the installed manifest. If the process
+  # is interrupted between these atomic writes, the still-seeded manifest lets
+  # the wrapper retry this recovery. The reverse order would briefly leave an
+  # older compatibility manifest with no marker proving the newer payload.
+  write_marker \
+    "${marker_path}" "${installed_commit}" "${app_commit}" "${app_version}" "${backup_path}"
+  cp "${app_manifest}" "${installed_manifest}.tmp"
+  mv "${installed_manifest}.tmp" "${installed_manifest}"
+  offline_protection_is_valid \
+    "${installed_manifest}" "${marker_path}" "${app_commit}" "${app_version}" || \
+    die "offline seeded fallback write did not pass protection proof"
+
+  log "offline_seeded_fallback_applied=true"
+  log "offline_seeded_fallback_verified=true"
+  log "protected=true"
+  log "backup=${backup_path}"
+}
+
 main() {
   parse_args "$@"
   require_tools
@@ -366,17 +511,24 @@ main() {
   [[ -r "${app_manifest}" ]] || die "Jarvis app manifest is not readable: ${app_manifest}"
   [[ -r "${installed_manifest}" ]] || die "installed Jarvis runtime manifest is not readable: ${installed_manifest}"
 
+  app_commit="$(json_field "${app_manifest}" "gitCommit")"
+  app_version="$(json_field "${app_manifest}" "bundleVersion")"
+  [[ "${app_commit}" =~ ^[0-9a-fA-F]{7,40}$ ]] || \
+    die "app manifest gitCommit is missing or invalid"
+  [[ -n "${app_version}" ]] || die "app manifest is missing bundleVersion"
+
+  if (( OFFLINE_SEEDED_FALLBACK == 1 )); then
+    protect_offline_seeded_payload \
+      "${app_manifest}" "${installed_manifest}" "${marker_path}" "${app_commit}" "${app_version}"
+    return 0
+  fi
+
   labels="$("${LAUNCHCTL_BIN}" list 2>/dev/null || true)"
   jarvis_pid="$(require_single_jarvis_gateway_owner "${labels}")"
   require_live_launchctl_runtime "${jarvis_pid}"
   listener_output="$("${LSOF_BIN}" -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
   require_jarvis_listener_owner "${jarvis_pid}" "${listener_output}"
   require_live_gateway_log_owner "${jarvis_pid}"
-
-  app_commit="$(json_field "${app_manifest}" "gitCommit")"
-  app_version="$(json_field "${app_manifest}" "bundleVersion")"
-  [[ -n "${app_commit}" ]] || die "app manifest is missing gitCommit"
-  [[ -n "${app_version}" ]] || die "app manifest is missing bundleVersion"
 
   live_commit="$(prove_live_runtime_commit)"
   commit_matches "${EXPECTED_LIVE_COMMIT}" "${live_commit}" || \
@@ -388,6 +540,13 @@ main() {
   log "live_runtime_commit=${live_commit}"
   log "compatibility_manifest_commit=${app_commit}"
   log "compatibility_manifest_bundle_version=${app_version}"
+
+  if offline_protection_is_valid \
+      "${installed_manifest}" "${marker_path}" "${app_commit}" "${app_version}"; then
+    log "protection already installed and verified"
+    log "protected=true"
+    return 0
+  fi
 
   if commit_matches "${app_commit}" "${live_commit}"; then
     log "installed app manifest already matches live runtime; no protection shim needed"
