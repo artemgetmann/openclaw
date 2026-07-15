@@ -1,6 +1,15 @@
 import { Type } from "@sinclair/typebox";
+import { MONITOR_INSTRUCTIONS_MAX_LENGTH } from "../../../monitor/types.js";
 import { CronDeliverySchema, CronScheduleSchema } from "./cron.js";
 import { NonEmptyString } from "./primitives.js";
+
+// A durable task contract is carried in every wake. Bound it at ingress so a
+// monitor cannot turn its own persisted state into an unbounded prompt source.
+const MonitorInstructionsSchema = Type.String({
+  minLength: 1,
+  maxLength: MONITOR_INSTRUCTIONS_MAX_LENGTH,
+  pattern: "\\S",
+});
 
 const MonitorActionPolicySchema = Type.Union([
   Type.Literal("notify_draft"),
@@ -148,6 +157,8 @@ export const MonitorRecordSchema = Type.Object(
     monitorId: NonEmptyString,
     agentId: NonEmptyString,
     name: Type.Optional(Type.String()),
+    // Optional keeps monitor-store JSON written before this contract valid.
+    instructions: Type.Optional(MonitorInstructionsSchema),
     originSessionKey: NonEmptyString,
     originDelivery: Type.Optional(CronDeliverySchema),
     watchDelivery: Type.Optional(CronDeliverySchema),
@@ -207,7 +218,7 @@ export const MonitorGetParamsSchema = Type.Object(
 
 export const MonitorCreateParamsSchema = Type.Object(
   {
-    instructions: NonEmptyString,
+    instructions: MonitorInstructionsSchema,
     agentId: NonEmptyString,
     name: Type.Optional(Type.String()),
     originSessionKey: NonEmptyString,

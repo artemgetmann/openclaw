@@ -8,6 +8,8 @@ import {
   resolveMonitorStorePath,
   saveMonitorStore,
 } from "../../monitor/store.js";
+import { MONITOR_INSTRUCTIONS_MAX_LENGTH } from "../../monitor/types.js";
+import { buildMonitorWakeMessage } from "../../monitor/wake.js";
 import { ErrorCodes, validateMonitorRecord } from "../protocol/index.js";
 
 const { configState, seedMonitorSessionMock } = vi.hoisted(() => ({
@@ -136,6 +138,7 @@ describe("monitor gateway handlers", () => {
           monitorId: string;
           monitorSessionKey: string;
           originSessionKey: string;
+          instructions?: string;
           actionPolicy: string;
           sourceType: string;
           cronJobId: string;
@@ -149,6 +152,7 @@ describe("monitor gateway handlers", () => {
     expect(monitor).toMatchObject({
       monitorSessionKey: expect.stringMatching(/^agent:main:monitor:/),
       originSessionKey: "agent:main:telegram:direct:user-1",
+      instructions: "Monitor Empower replies and draft the next response.",
       actionPolicy: "notify_draft",
       sourceType: "gmail",
       cronJobId: "cron-job-1",
@@ -214,6 +218,102 @@ describe("monitor gateway handlers", () => {
       }),
     );
     expect(cronUpdate).not.toHaveBeenCalled();
+  });
+
+  it("retains the exact draft requirement across gateway create, store reload, and wake construction", async () => {
+    const invokeContext = createInvokeContext();
+    const instructions =
+      "When the matching WhatsApp reply arrives, quote it and draft a concise confirmation for approval. Do not send it.";
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions,
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:group:-1003783709877:topic:21581",
+        originDelivery: { mode: "announce", channel: "telegram", to: "-1003783709877" },
+        sourceType: "whatsapp",
+        sourceTarget: { target: "+971552857036" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "notify_draft",
+      },
+      "req-durable-original-task",
+    );
+
+    const reloaded = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    const persisted = reloaded.monitors[0];
+    expect(persisted?.instructions).toBe(instructions);
+
+    const wake = buildMonitorWakeMessage({
+      monitor: persisted,
+      nowIso: "2026-07-15T08:00:00.000Z",
+      wakeReason: "cron:matched-reply",
+    });
+    expect(wake).toContain("Authoritative original user task contract:");
+    expect(wake).toContain(instructions);
+    expect(wake).toContain("must include the actual draft text");
+  });
+
+  it("preserves an existing task contract on duplicate create but repairs a legacy record missing it", async () => {
+    const invokeContext = createInvokeContext();
+    const baseParams = {
+      agentId: "main",
+      originSessionKey: "agent:main:telegram:direct:user-1",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    };
+    const originalInstructions = "Draft the confirmation for approval. Do not send it.";
+
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, instructions: originalInstructions },
+      "req-contract-original",
+    );
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        ...baseParams,
+        instructions: "A duplicate retry must not replace the original task contract.",
+      },
+      "req-contract-duplicate",
+    );
+
+    let reloaded = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(reloaded.monitors).toHaveLength(1);
+    expect(reloaded.monitors[0]?.instructions).toBe(originalInstructions);
+    expect(reloaded.monitors[0]?.disclosure?.purpose).toBe(originalInstructions);
+    expect(invokeContext.cronAdd).toHaveBeenCalledOnce();
+
+    // Simulate a pre-change persisted record, then verify the next duplicate
+    // create repairs only the missing contract without changing its identity.
+    const legacyMonitor = reloaded.monitors[0];
+    delete legacyMonitor.instructions;
+    await saveMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+      reloaded,
+    );
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, instructions: originalInstructions },
+      "req-contract-legacy-repair",
+    );
+
+    reloaded = await loadMonitorStore(
+      resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath }),
+    );
+    expect(reloaded.monitors).toHaveLength(1);
+    expect(reloaded.monitors[0]).toMatchObject({
+      monitorId: legacyMonitor.monitorId,
+      instructions: originalInstructions,
+      cadence: baseParams.cadence,
+      sourceTarget: baseParams.sourceTarget,
+    });
+    expect(invokeContext.cronAdd).toHaveBeenCalledOnce();
   });
 
   it("keeps non-goal monitors on schedule-only trigger state", async () => {
@@ -2096,6 +2196,28 @@ describe("monitor gateway handlers", () => {
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("invalid monitor.create params");
+  });
+
+  it("rejects monitor.create instructions beyond the durable wake bound", async () => {
+    const invokeContext = createInvokeContext();
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        instructions: "x".repeat(MONITOR_INSTRUCTIONS_MAX_LENGTH + 1),
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "bounded-instructions" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      "req-overlong-instructions",
+    );
+
+    const call = invokeContext.respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(invokeContext.cronAdd).not.toHaveBeenCalled();
   });
 
   it("persists bounded matched listener evidence before cron enqueue", async () => {

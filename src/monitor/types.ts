@@ -11,6 +11,12 @@ export function isTerminalMonitorStatus(status: MonitorStatus): boolean {
 
 export type MonitorActionPolicy = "notify_draft" | "notify_only" | "auto_send";
 
+/**
+ * Monitor instructions are replayed in every wake, so retain enough context
+ * for a real task while keeping durable state and wake prompts bounded.
+ */
+export const MONITOR_INSTRUCTIONS_MAX_LENGTH = 16_000;
+
 export type MonitorNotificationEvent =
   | "unchanged"
   | "material_change"
@@ -113,6 +119,11 @@ export type MonitorRecord = {
   monitorId: string;
   agentId: string;
   name?: string;
+  /**
+   * Optional only for records written before durable task contracts existed.
+   * New monitor.create calls always persist normalized instructions.
+   */
+  instructions?: string;
   originSessionKey: string;
   originDelivery?: CronDelivery;
   watchDelivery?: CronDelivery;
@@ -152,6 +163,7 @@ export type MonitorCreateInput = {
   monitorId?: string;
   agentId: string;
   name?: string;
+  instructions: string;
   originSessionKey: string;
   originDelivery?: CronDelivery;
   watchDelivery?: CronDelivery;
