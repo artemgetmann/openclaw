@@ -50,7 +50,10 @@ function normalizeAnnounceDelivery(delivery: Record<string, unknown> | undefined
     // the same canonical target instead of forcing the agent to retry.
     const parsed = parseExplicitTargetForChannel(channel, to);
     const canonicalThreadId = parsed?.threadId ?? threadId;
-    const canonicalTo = parsed?.to ?? to;
+    // Some runtimes cannot load the channel plugin during monitor creation.
+    // Keep this narrow fallback for Telegram group targets so durable delivery
+    // stores the chat id, not the legacy `group:` wrapper.
+    const canonicalTo = parsed?.to ?? (to.startsWith("group:") ? to.slice("group:".length) : to);
     const { threadId: _transientThreadId, ...durableDelivery } = delivery;
     return {
       ...durableDelivery,

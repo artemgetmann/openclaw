@@ -131,7 +131,7 @@ describe("monitor tool", () => {
   it("canonicalizes a session-resolved Telegram topic before gateway validation", async () => {
     resolveAnnounceTargetMock.mockResolvedValueOnce({
       channel: "telegram",
-      to: "-1003783709877",
+      to: "group:-1003783709877",
       accountId: "default",
       threadId: "21581",
     });

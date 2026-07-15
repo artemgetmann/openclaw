@@ -1670,7 +1670,7 @@ describe("monitor gateway handlers", () => {
     expect(monitor?.originDelivery).toBeUndefined();
   });
 
-  it("preserves telegram topic routing when creating monitor delivery", async () => {
+  it("preserves the canonical Telegram topic contract through cron and durable monitor storage", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
     const originSessionKey = "agent:main:telegram:group:-1003783709877:topic:21581";
 
@@ -1716,6 +1716,7 @@ describe("monitor gateway handlers", () => {
     const monitorStore = await loadMonitorStore(resolveMonitorStorePath({ cronStorePath }));
     expect(monitorStore.monitors).toHaveLength(1);
     expect(monitorStore.monitors[0]).toMatchObject({
+      cronJobId: "cron-job-1",
       originSessionKey,
       originDelivery: {
         mode: "announce",
