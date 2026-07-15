@@ -946,6 +946,125 @@ struct BrowserSetupSupportTests {
         }
     }
 
+    @Test func `refresh migrates legacy user profile selection into signed in`() async {
+        let defaults = self.makeDefaults()
+        defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+        defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "browser": [
+                    "defaultProfile": "user",
+                    "profiles": [
+                        "user": [
+                            "cloneFromUserProfile": true,
+                            "sourceProfileName": "Profile 4",
+                        ],
+                    ],
+                ],
+            ])
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in nil })
+
+            await model.refresh()
+
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
+            let signedIn = profiles?["signed-in"] as? [String: Any]
+            #expect(model.phase == .ready(selected))
+            #expect(browser?["defaultProfile"] as? String == "signed-in")
+            #expect(signedIn?["sourceProfileName"] as? String == "Profile 4")
+            #expect(profiles?["user"] == nil)
+        }
+    }
+
+    @Test func `choosing account replaces conflicting signed in endpoint`() async {
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "browser": [
+                    "profiles": [
+                        "signed-in": [
+                            "cdpUrl": "http://example.test:9222",
+                            "userDataDir": "/tmp/custom-chrome",
+                            "attachOnly": true,
+                        ],
+                    ],
+                ],
+            ])
+
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
+            let signedIn = profiles?["signed-in"] as? [String: Any]
+            #expect(signedIn?["sourceProfileName"] as? String == "Profile 4")
+            #expect(signedIn?["cdpUrl"] == nil)
+            #expect(signedIn?["userDataDir"] == nil)
+            #expect(signedIn?["attachOnly"] == nil)
+        }
+    }
+
+    @Test func `passive clear preserves custom signed in profile`() async {
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "browser": [
+                    "defaultProfile": "signed-in",
+                    "profiles": [
+                        "signed-in": [
+                            "cdpUrl": "http://127.0.0.1:9222",
+                            "attachOnly": true,
+                        ],
+                    ],
+                ],
+            ])
+
+            BrowserSetupModel.clearConsumerBrowserSelectionFromConfig()
+
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
+            let signedIn = profiles?["signed-in"] as? [String: Any]
+            #expect(browser?["defaultProfile"] as? String == "signed-in")
+            #expect(signedIn?["cdpUrl"] as? String == "http://127.0.0.1:9222")
+            #expect(signedIn?["attachOnly"] as? Bool == true)
+        }
+    }
+
     @Test func `clear profile selection removes config backed browser selection`() async {
         let defaults = self.makeDefaults()
         let selected = ChromeProfileCandidate(

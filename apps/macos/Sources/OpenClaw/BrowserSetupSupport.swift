@@ -70,14 +70,26 @@ extension OpenClawConfigFile {
             return nil
         }
 
-        let configuredProfile =
-            profiles[self.managedBrowserProfileName] as? [String: Any]
-            ?? profiles[self.legacyManagedBrowserProfileName] as? [String: Any]
+        let configuredProfile = profiles[self.managedBrowserProfileName] as? [String: Any]
         guard let raw = configuredProfile?["sourceProfileName"] as? String else { return nil }
 
         let selected = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !selected.isEmpty else { return nil }
         return selected
+    }
+
+    static func legacySelectedChromeProfileDirectoryName() -> String? {
+        let root = self.loadDict()
+        guard let browser = root["browser"] as? [String: Any],
+              let profiles = browser["profiles"] as? [String: Any],
+              let legacyProfile = profiles[self.legacyManagedBrowserProfileName] as? [String: Any],
+              let raw = legacyProfile["sourceProfileName"] as? String
+        else {
+            return nil
+        }
+
+        let selected = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return selected.isEmpty ? nil : selected
     }
 
     static func setSelectedChromeProfileDirectoryName(_ directoryName: String) -> Bool {
@@ -92,6 +104,12 @@ extension OpenClawConfigFile {
         browser["defaultProfile"] = self.managedBrowserProfileName
         var profiles = browser["profiles"] as? [String: Any] ?? [:]
         var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
+        // A URL, custom user-data root, or attach-only flag takes precedence over
+        // this managed clone lane. Remove those mutually exclusive settings when
+        // the user explicitly chooses the Chrome account Jarvis should manage.
+        for key in ["cdpUrl", "userDataDir", "sourceChromeDir", "attachOnly"] {
+            userProfile.removeValue(forKey: key)
+        }
         userProfile["cdpPort"] = cdpPort
         userProfile["driver"] = "existing-session"
         userProfile["cloneFromUserProfile"] = true
@@ -113,6 +131,12 @@ extension OpenClawConfigFile {
         if var profiles = browser["profiles"] as? [String: Any] {
             for profileName in [self.managedBrowserProfileName, self.legacyManagedBrowserProfileName] {
                 guard var profile = profiles[profileName] as? [String: Any] else { continue }
+                let isManagedSelection = profile["cloneFromUserProfile"] as? Bool == true &&
+                    ((profile["sourceProfileName"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                guard profileName == self.legacyManagedBrowserProfileName || isManagedSelection else {
+                    continue
+                }
                 for key in [
                     "cdpPort",
                     "cloneFromUserProfile",
@@ -593,10 +617,12 @@ final class BrowserSetupModel {
 
     private func restoreSelection(from profiles: [ChromeProfileCandidate]) -> ChromeProfileCandidate? {
         let hasDefaultsSelection = self.hasPersistedDefaultsSelection()
+        let signedInSelectedID = OpenClawConfigFile.selectedChromeProfileDirectoryName()
+        let legacySelectedID = OpenClawConfigFile.legacySelectedChromeProfileDirectoryName()
 
         // Config is the runtime source of truth. If we only trust UserDefaults here,
         // the setup sheet can claim success while the actual browser runtime stays global.
-        if let selectedID = OpenClawConfigFile.selectedChromeProfileDirectoryName(),
+        if let selectedID = signedInSelectedID ?? legacySelectedID,
            let selected = profiles.first(where: { $0.directoryName == selectedID })
         {
             // Some bootstrap paths can preseed browser.user.sourceProfileName before the
@@ -605,6 +631,13 @@ final class BrowserSetupModel {
             // explicit confirmation when no app-local browser choice was persisted yet.
             guard self.allowConfigOnlyRestore || hasDefaultsSelection else {
                 self.clearSelectionFromConfig()
+                return nil
+            }
+            // Older app builds wrote the account under browser.profiles.user.
+            // Move it onto the canonical signed-in lane before any readiness check.
+            if signedInSelectedID == nil, legacySelectedID != nil,
+               !self.persistRuntimeSelection(selected)
+            {
                 return nil
             }
             self.persistDefaultsSelection(selected)

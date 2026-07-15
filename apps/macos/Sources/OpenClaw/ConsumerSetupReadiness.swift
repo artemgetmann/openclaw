@@ -1629,6 +1629,9 @@ extension BrowserSetupModel {
         // app-local defaults, otherwise the product claims a browser is connected
         // while the gateway still has no idea which Chrome profile to clone.
         let managedUserCdpPort = OpenClawConfigFile.managedBrowserUserCdpPort()
+        for key in ["cdpUrl", "userDataDir", "sourceChromeDir", "attachOnly"] {
+            user.removeValue(forKey: key)
+        }
         user["cdpPort"] = managedUserCdpPort
         user["driver"] = "existing-session"
         user["cloneFromUserProfile"] = true
@@ -1645,29 +1648,9 @@ extension BrowserSetupModel {
     }
 
     static func clearConsumerBrowserSelectionFromConfig() {
-        var root = OpenClawConfigFile.loadDict()
-        guard var browser = root["browser"] as? [String: Any] else { return }
-
-        if var profiles = browser["profiles"] as? [String: Any] {
-            profiles.removeValue(forKey: consumerBrowserProfileName)
-            profiles.removeValue(forKey: legacyConsumerBrowserProfileName)
-            if profiles.isEmpty {
-                browser.removeValue(forKey: "profiles")
-            } else {
-                browser["profiles"] = profiles
-            }
-        }
-
-        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == legacyConsumerBrowserProfileName {
-            browser["defaultProfile"] = consumerBrowserProfileName
-        }
-
-        if browser.isEmpty {
-            root.removeValue(forKey: "browser")
-        } else {
-            root["browser"] = browser
-        }
-        OpenClawConfigFile.saveDict(root)
+        // Passive setup refreshes may run when Chrome is temporarily unavailable.
+        // Remove only fields owned by onboarding; preserve custom signed-in endpoints.
+        _ = OpenClawConfigFile.clearSelectedChromeProfileDirectoryName()
     }
 
     static func verifyConsumerBrowserSelection(
