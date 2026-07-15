@@ -20,6 +20,16 @@ const backendMocks = vi.hoisted(() => ({
   sleep: vi.fn(async () => {}),
 }));
 
+const listenerHealthMocks = vi.hoisted(() => ({
+  classifyFatalListenerHealthError: vi.fn(() => "poll_failed:error"),
+  resolveListenerHealthStorePath: vi.fn(() => "/tmp/telegram-listener-health.json"),
+  updateListenerHealth: vi.fn(async () => ({
+    record: { lastError: null as string | null },
+    state: "healthy",
+    transition: null as "degraded" | "recovered" | null,
+  })),
+}));
+
 const backendMeta = {
   api_hash_source: "env-file" as const,
   api_id_source: "process-env" as const,
@@ -28,6 +38,7 @@ const backendMeta = {
 };
 
 vi.mock("../telegram-user/backend.js", () => backendMocks);
+vi.mock("../monitor/listener-health.js", () => listenerHealthMocks);
 
 const runtime: RuntimeEnv = {
   error: vi.fn(),
@@ -995,6 +1006,114 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenNthCalledWith(1, expect.stringContaining('"run": 1'));
     expect(runtime.log).toHaveBeenNthCalledWith(2, expect.stringContaining('"run": 2'));
+    expect(listenerHealthMocks.updateListenerHealth).toHaveBeenCalledTimes(2);
+    expect(listenerHealthMocks.updateListenerHealth).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        check: "success",
+        routedEvent: false,
+        service: "telegram-user",
+      }),
+    );
+  });
+
+  it("does not persist managed listener health for one-shot monitor polls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf-8");
+
+    await telegramUserMonitorPollCommand({ json: true, monitorStore }, runtime);
+
+    expect(listenerHealthMocks.updateListenerHealth).not.toHaveBeenCalled();
+  });
+
+  it("persists a bounded failure before a fatal watch poll exits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(monitorStore, "not-json", "utf8");
+
+    await expect(
+      telegramUserMonitorPollCommand(
+        { commitWithoutDispatch: true, monitorStore, watch: true },
+        runtime,
+      ),
+    ).rejects.toThrow();
+
+    expect(listenerHealthMocks.updateListenerHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        check: "failure",
+        error: "poll_failed:error",
+        service: "telegram-user",
+      }),
+    );
+  });
+
+  it("keeps polling when health persistence is temporarily unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf8");
+    listenerHealthMocks.updateListenerHealth.mockRejectedValueOnce(new Error("permission denied"));
+    const healthError = vi.fn();
+
+    await telegramUserMonitorPollCommand(
+      {
+        commitWithoutDispatch: true,
+        maxRuns: 2,
+        monitorStore,
+        pollIntervalMs: 1,
+        watch: true,
+      },
+      { error: healthError, exit: vi.fn(), log: vi.fn() },
+    );
+
+    expect(listenerHealthMocks.updateListenerHealth).toHaveBeenCalledTimes(2);
+    expect(healthError).toHaveBeenCalledTimes(1);
+    expect(healthError).toHaveBeenCalledWith(
+      expect.stringContaining("health persistence unavailable"),
+    );
+  });
+
+  it("surfaces degraded and recovered listener transitions once", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf-8");
+    listenerHealthMocks.updateListenerHealth
+      .mockResolvedValueOnce({
+        record: { lastError: "safe backend error" },
+        state: "degraded",
+        transition: "degraded",
+      })
+      .mockResolvedValueOnce({
+        record: { lastError: null },
+        state: "healthy",
+        transition: "recovered",
+      });
+    const transitionLog = vi.fn();
+    const runtimeWithErrors = { error: vi.fn(), log: transitionLog, exit: vi.fn() } as RuntimeEnv;
+
+    await telegramUserMonitorPollCommand(
+      {
+        commitWithoutDispatch: true,
+        json: true,
+        maxRuns: "2",
+        monitorStore,
+        pollIntervalMs: "1",
+        watch: true,
+      },
+      runtimeWithErrors,
+    );
+
+    expect(runtimeWithErrors.error).toHaveBeenCalledTimes(1);
+    expect(runtimeWithErrors.error).toHaveBeenCalledWith(
+      expect.stringContaining("listener health degraded"),
+    );
+    expect(runtimeWithErrors.log).toHaveBeenCalledWith(
+      expect.stringContaining("listener health recovered"),
+    );
+    expect(
+      transitionLog.mock.calls.filter(([message]) =>
+        String(message).includes("listener health recovered"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("accepts custom local hooks.path monitor-poll URLs", async () => {

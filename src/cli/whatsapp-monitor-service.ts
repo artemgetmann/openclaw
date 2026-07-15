@@ -23,6 +23,7 @@ import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service.js";
 import { resolveWhatsAppMonitorService } from "../daemon/whatsapp-monitor-service.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { readListenerHealth, resolveListenerHealthStorePath } from "../monitor/listener-health.js";
 import { defaultRuntime } from "../runtime.js";
 import { colorize } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
@@ -417,20 +418,50 @@ export async function runWhatsAppMonitorServiceStatus(
   });
 
   const hookUrl = readMonitorArgument(command?.programArguments ?? [], "--hook-url");
+  const monitorStorePath = readMonitorArgument(command?.programArguments ?? [], "--monitor-store");
+  const cronStorePath = readMonitorArgument(command?.programArguments ?? [], "--cron-store");
+  const pollIntervalMs =
+    parseStrictPositiveInteger(
+      readMonitorArgument(command?.programArguments ?? [], "--poll-interval-ms") ?? "1000",
+    ) ?? 1000;
+  let listenerHealthUnavailable = false;
+  const listenerHealth = await readListenerHealth({
+    pollIntervalMs,
+    service: "whatsapp",
+    storePath: resolveListenerHealthStorePath({
+      env: daemonEnv as NodeJS.ProcessEnv,
+      cronStorePath,
+      monitorStorePath,
+    }),
+  }).catch(() => {
+    listenerHealthUnavailable = true;
+    return undefined;
+  });
+  const listenerOwnerMatches =
+    runtime.pid === undefined || runtime.pid === listenerHealth?.record.owner.pid;
   const acceptance = {
     configured: command !== null,
     loaded,
-    healthy: command !== null && loaded && runtime.status === "running",
+    healthy:
+      command !== null &&
+      loaded &&
+      runtime.status === "running" &&
+      listenerHealth?.state === "healthy" &&
+      listenerOwnerMatches,
     unavailable: {
       configured: commandUnavailable,
       loaded: loadedUnavailable,
       runtime: runtimeUnavailable,
+      listenerHealth: listenerHealthUnavailable,
     },
     ownership: {
       profile: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_PROFILE"),
       config: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_CONFIG_PATH"),
       state: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_STATE_DIR"),
       hook: { configured: Boolean(hookUrl), loopback: isLoopbackHookUrl(hookUrl) },
+      listener: {
+        pidMatches: listenerOwnerMatches,
+      },
       selectors: {
         dbPath: Boolean(readMonitorArgument(command?.programArguments ?? [], "--db-path")),
         cronStore: Boolean(readMonitorArgument(command?.programArguments ?? [], "--cron-store")),
@@ -449,6 +480,9 @@ export async function runWhatsAppMonitorServiceStatus(
       command: json ? sanitizeServiceCommandForJson(command) : command,
       runtime,
       defaultHookUrl,
+      listenerHealth: listenerHealth
+        ? { ...listenerHealth.record, state: listenerHealth.state }
+        : { state: "unknown", unavailable: true },
       acceptance,
     },
   };
@@ -464,6 +498,13 @@ export async function runWhatsAppMonitorServiceStatus(
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
   defaultRuntime.log(
     `${label("Acceptance:")} ${infoText(`configured=${acceptance.configured} loaded=${acceptance.loaded} healthy=${acceptance.healthy} unavailable=${Object.values(acceptance.unavailable).some(Boolean)}`)}`,
+  );
+  defaultRuntime.log(
+    `${label("Listener health:")} ${infoText(
+      listenerHealth
+        ? `state=${listenerHealth.state} ownerPid=${listenerHealth.record.owner.pid ?? "-"} pidMatch=${listenerOwnerMatches} lastCheck=${listenerHealth.record.lastSuccessfulCheckAtMs === null ? "never" : new Date(listenerHealth.record.lastSuccessfulCheckAtMs).toISOString()} lastRouted=${listenerHealth.record.lastRoutedEventAtMs === null ? "never" : new Date(listenerHealth.record.lastRoutedEventAtMs).toISOString()} failures=${listenerHealth.record.consecutiveFailures} error=${listenerHealth.record.lastError ?? "-"}`
+        : "state=unknown ownerPid=- pidMatch=false lastCheck=never lastRouted=never failures=0 error=unavailable",
+    )}`,
   );
   if (command?.programArguments?.length) {
     defaultRuntime.log(

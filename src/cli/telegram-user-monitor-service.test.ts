@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConsumerRuntimeIdentity } from "../consumer/runtime-identity.js";
+import { updateListenerHealth } from "../monitor/listener-health.js";
 
 const readConfigMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -599,6 +600,16 @@ describe("telegram-user monitor-service cli", () => {
   });
 
   it("distinguishes a healthy service from unavailable observations", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-health-status-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await updateListenerHealth({
+      check: "success",
+      nowMs: Date.now(),
+      owner: { pid: 1234, profile: "test", startedAtMs: Date.now() - 1_000 },
+      pollIntervalMs: 1_000,
+      service: "telegram-user",
+      storePath: path.join(root, "listener-health.json"),
+    });
     const healthyLog = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     service.isLoaded.mockResolvedValueOnce(true);
     service.readCommand.mockResolvedValueOnce({
@@ -608,9 +619,13 @@ describe("telegram-user monitor-service cli", () => {
         "monitor-poll",
         "--hook-url",
         "https://[::1]:18789/hooks/telegram-user-monitor-event",
+        "--monitor-store",
+        monitorStore,
+        "--poll-interval-ms",
+        "1000",
       ],
     });
-    service.readRuntime.mockResolvedValueOnce({ status: "running" });
+    service.readRuntime.mockResolvedValueOnce({ pid: 1234, status: "running" });
 
     await runTelegramMonitorServiceStatus({ json: true });
 
@@ -620,7 +635,10 @@ describe("telegram-user monitor-service cli", () => {
           configured: true,
           loaded: true,
           healthy: true,
-          ownership: { hook: { configured: true, loopback: true } },
+          ownership: {
+            hook: { configured: true, loopback: true },
+            listener: { pidMatches: true },
+          },
         },
       },
     });
@@ -638,6 +656,111 @@ describe("telegram-user monitor-service cli", () => {
           healthy: false,
           unavailable: { configured: true, loaded: true, runtime: true },
         },
+      },
+    });
+  });
+
+  it("marks a running service unhealthy when its listener heartbeat is stale", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-health-status-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await updateListenerHealth({
+      check: "success",
+      nowMs: Date.now() - 31_000,
+      owner: { pid: 1234, profile: "test", startedAtMs: Date.now() - 10_000 },
+      pollIntervalMs: 1_000,
+      service: "telegram-user",
+      storePath: path.join(root, "listener-health.json"),
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: [
+        "openclaw",
+        "telegram-user",
+        "monitor-poll",
+        "--monitor-store",
+        monitorStore,
+        "--poll-interval-ms",
+        "1000",
+      ],
+    });
+    service.readRuntime.mockResolvedValueOnce({ status: "running" });
+
+    await runTelegramMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(log)).toMatchObject({
+      service: {
+        acceptance: { healthy: false },
+        listenerHealth: { state: "stale" },
+      },
+    });
+  });
+
+  it("renders bounded listener evidence in human status", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-health-human-"));
+    const monitorStore = path.join(root, "monitors.json");
+    const storePath = path.join(root, "listener-health.json");
+    const owner = { pid: 1234, profile: "test", startedAtMs: Date.now() - 10_000 };
+    await updateListenerHealth({
+      check: "success",
+      nowMs: Date.now() - 1_000,
+      owner,
+      pollIntervalMs: 1_000,
+      routedEvent: true,
+      service: "telegram-user",
+      storePath,
+    });
+    await updateListenerHealth({
+      check: "failure",
+      error: "read_error: private text",
+      owner,
+      pollIntervalMs: 1_000,
+      service: "telegram-user",
+      storePath,
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: ["openclaw", "--monitor-store", monitorStore],
+    });
+    service.readRuntime.mockResolvedValueOnce({ pid: 1234, status: "running" });
+
+    await runTelegramMonitorServiceStatus();
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/Listener health:.*state=healthy/));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /ownerPid=1234.*pidMatch=true.*lastCheck=.*lastRouted=.*failures=1.*error=read_error/,
+      ),
+    );
+  });
+
+  it("rejects a recent heartbeat owned by a prior process", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-health-owner-"));
+    const monitorStore = path.join(root, "monitors.json");
+    await updateListenerHealth({
+      check: "success",
+      owner: { pid: 1234 },
+      pollIntervalMs: 1_000,
+      service: "telegram-user",
+      storePath: path.join(root, "listener-health.json"),
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: ["openclaw", "--monitor-store", monitorStore],
+    });
+    service.readRuntime.mockResolvedValueOnce({ pid: 5678, status: "running" });
+
+    await runTelegramMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(log)).toMatchObject({
+      service: {
+        acceptance: {
+          healthy: false,
+          ownership: { listener: { pidMatches: false } },
+        },
+        listenerHealth: { state: "healthy" },
       },
     });
   });
