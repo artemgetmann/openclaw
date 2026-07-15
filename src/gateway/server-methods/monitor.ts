@@ -718,10 +718,13 @@ export const monitorHandlers: GatewayRequestHandlers = {
         );
         // Pre-change unnamed monitors stored their original task as the
         // disclosure purpose. Recover that persisted contract before trusting
-        // text from a later duplicate request.
+        // text from a later duplicate request. Named monitors stored only their
+        // display label there, so that value is not safe to promote to a task.
         const reconciledInstructions =
           existingMonitor.instructions?.trim() ||
-          existingMonitor.disclosure?.purpose.trim() ||
+          (!existingMonitor.name?.trim()
+            ? existingMonitor.disclosure?.purpose.trim()
+            : undefined) ||
           p.instructions;
         const disclosure = buildMonitorDisclosure({
           purpose: resolveMonitorDisclosurePurpose({

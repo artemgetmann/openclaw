@@ -319,6 +319,46 @@ describe("monitor gateway handlers", () => {
     expect(invokeContext.cronAdd).toHaveBeenCalledOnce();
   });
 
+  it("does not promote a named legacy monitor's display label into task instructions", async () => {
+    const invokeContext = createInvokeContext();
+    const baseParams = {
+      agentId: "main",
+      name: "Confirmation watch",
+      originSessionKey: "agent:main:telegram:direct:user-1",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "+971552857036" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    };
+
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, instructions: "Original transcript-only task." },
+      "req-named-contract-original",
+    );
+    const storePath = resolveMonitorStorePath({ cronStorePath: invokeContext.cronStorePath });
+    const legacyStore = await loadMonitorStore(storePath);
+    const namedLegacyMonitor = legacyStore.monitors[0];
+    if (!namedLegacyMonitor) {
+      throw new Error("monitor.create did not persist the named monitor");
+    }
+    expect(namedLegacyMonitor.disclosure?.purpose).toBe(baseParams.name);
+    delete namedLegacyMonitor.instructions;
+    await saveMonitorStore(storePath, legacyStore);
+
+    const recoverableInstructions = "Draft the confirmation for approval. Do not send it.";
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, instructions: recoverableInstructions },
+      "req-named-contract-repair",
+    );
+
+    const reloaded = await loadMonitorStore(storePath);
+    expect(reloaded.monitors).toHaveLength(1);
+    expect(reloaded.monitors[0]?.instructions).toBe(recoverableInstructions);
+    expect(reloaded.monitors[0]?.instructions).not.toBe(baseParams.name);
+    expect(invokeContext.cronAdd).toHaveBeenCalledOnce();
+  });
+
   it("keeps non-goal monitors on schedule-only trigger state", async () => {
     const invokeContext = createInvokeContext();
 
