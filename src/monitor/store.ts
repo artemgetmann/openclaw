@@ -20,6 +20,7 @@ import type {
   MonitorStoreFile,
   MonitorUpdatePatch,
 } from "./types.js";
+import { MONITOR_INSTRUCTIONS_MAX_LENGTH } from "./types.js";
 
 export const DEFAULT_MONITOR_DIR = path.join(CONFIG_DIR, "monitors");
 export const DEFAULT_MONITOR_STORE_PATH = path.join(DEFAULT_MONITOR_DIR, "monitors.json");
@@ -27,6 +28,17 @@ export const DEFAULT_MONITOR_STORE_PATH = path.join(DEFAULT_MONITOR_DIR, "monito
 const serializedStoreCache = new Map<string, string>();
 const monitorStoreWriteLocks = new Map<string, Promise<void>>();
 const MAX_LISTENER_EVIDENCE_IDENTIFIER_LENGTH = 512;
+
+/**
+ * Keep the durable task contract bounded even for trusted direct callers.
+ * Gateway creation rejects over-limit input; this defensive trim preserves the
+ * store invariant for callers that bypass the protocol schema.
+ */
+export function normalizeMonitorInstructions(instructions: string): string {
+  // JSON Schema maxLength counts Unicode code points, while String.slice
+  // counts UTF-16 units and can split a valid non-BMP character in half.
+  return Array.from(instructions.trim()).slice(0, MONITOR_INSTRUCTIONS_MAX_LENGTH).join("");
+}
 
 type MonitorIdentityInput = {
   agentId: string;
@@ -216,10 +228,12 @@ export function buildMonitorDisclosure(input: {
 export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): MonitorRecord {
   const actionPolicy = input.actionPolicy ?? "notify_draft";
   const notificationPolicy = resolveMonitorNotificationPolicy(input.notificationPolicy);
+  const instructions = normalizeMonitorInstructions(input.instructions);
   return {
     monitorId: input.monitorId ?? randomBytes(12).toString("hex"),
     agentId: input.agentId,
     ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+    instructions,
     originSessionKey: input.originSessionKey,
     ...(input.originDelivery ? { originDelivery: input.originDelivery } : {}),
     ...(input.watchDelivery ? { watchDelivery: input.watchDelivery } : {}),

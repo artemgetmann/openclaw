@@ -46,6 +46,7 @@ describe("browser reply observer isolated HTTP smoke", () => {
           {
             monitorId: "monitor-browser-smoke",
             agentId: "main",
+            instructions: "Watch the browser reply state for the matching confirmation.",
             originSessionKey: "agent:main:telegram:direct:1",
             monitorSessionKey: "agent:main:monitor:monitor-browser-smoke",
             sourceType: "browser",

@@ -30,6 +30,7 @@ describe("monitor store identity", () => {
     const monitor = createMonitorRecord(
       {
         agentId: "main",
+        instructions: "  Monitor the support thread and draft the next response.  ",
         originSessionKey: "agent:main:main",
         monitorSessionKey: "agent:main:monitor:new",
         purpose: "  Watch the support thread until resolved.  ",
@@ -45,6 +46,7 @@ describe("monitor store identity", () => {
     );
 
     expect(monitor).toMatchObject({
+      instructions: "Monitor the support thread and draft the next response.",
       notificationPolicy: {
         unchangedNoticeAfterChecks: 3,
         unchangedReminderIntervalMs: 43_200_000,
@@ -66,6 +68,7 @@ describe("monitor store identity", () => {
     const monitor = createMonitorRecord(
       {
         agentId: "main",
+        instructions: "Draft the customer reply without sending it.",
         originSessionKey: "agent:main:main",
         monitorSessionKey: "agent:main:monitor:short-purpose",
         name: "Customer reply",
@@ -86,6 +89,7 @@ describe("monitor store identity", () => {
     const monitor = createMonitorRecord(
       {
         agentId: "main",
+        instructions: "Report whether the support reply arrives.",
         originSessionKey: "agent:main:main",
         monitorSessionKey: "agent:main:monitor:no-expiry",
         sourceType: "whatsapp",

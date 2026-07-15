@@ -22,6 +22,7 @@ import {
   createMonitorIdentityKey,
   findMonitor,
   loadMonitorStore,
+  normalizeMonitorInstructions,
   resolveMonitorStorePath,
   saveMonitorStore,
   updateMonitorRecord,
@@ -661,9 +662,11 @@ export const monitorHandlers: GatewayRequestHandlers = {
       notificationPolicy?: MonitorNotificationPolicy;
       lastCheckpoint?: Record<string, unknown>;
     };
+    const instructions = normalizeMonitorInstructions(rawParams.instructions);
     const normalizedSource = normalizeMonitorCreateSource(rawParams);
     const p = {
       ...rawParams,
+      instructions,
       sourceType: normalizedSource.sourceType,
       sourceTarget: normalizedSource.sourceTarget,
       trigger: normalizeMonitorCreateTrigger(rawParams.trigger, normalizedSource.sourceType),
@@ -713,9 +716,20 @@ export const monitorHandlers: GatewayRequestHandlers = {
         const notificationPolicy = resolveMonitorNotificationPolicy(
           p.notificationPolicy ?? existingMonitor.notificationPolicy,
         );
+        // Pre-change unnamed monitors stored their original task as the
+        // disclosure purpose. Recover that persisted contract before trusting
+        // text from a later duplicate request. Named monitors stored only their
+        // display label there, so that value is not safe to promote to a task.
+        const reconciledInstructions = normalizeMonitorInstructions(
+          existingMonitor.instructions?.trim() ||
+            (!existingMonitor.name?.trim()
+              ? existingMonitor.disclosure?.purpose.trim()
+              : undefined) ||
+            p.instructions,
+        );
         const disclosure = buildMonitorDisclosure({
           purpose: resolveMonitorDisclosurePurpose({
-            instructions: p.instructions,
+            instructions: reconciledInstructions,
             name: p.name,
             existingName: existingMonitor.name,
           }),
@@ -734,11 +748,16 @@ export const monitorHandlers: GatewayRequestHandlers = {
             JSON.stringify(notificationPolicy) ||
           JSON.stringify(existingMonitor.disclosure) !== JSON.stringify(disclosure) ||
           existingMonitor.notificationState === undefined;
+        // Duplicate identity intentionally ignores instructions: retries must
+        // not create a second watcher or rewrite routing/cadence. Preserve an
+        // existing original task, but repair legacy records that predate it.
+        const instructionsChanged = !existingMonitor.instructions?.trim();
         const reconciled =
-          goalChanged || triggerChanged || contractChanged
+          goalChanged || triggerChanged || contractChanged || instructionsChanged
             ? updateMonitorRecord(
                 existingMonitor,
                 {
+                  ...(instructionsChanged ? { instructions: reconciledInstructions } : {}),
                   ...(goalChanged ? { goal } : {}),
                   ...(triggerChanged ? { trigger: nextTrigger } : {}),
                   ...(contractChanged
@@ -810,6 +829,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
           monitorId,
           agentId: p.agentId,
           name: p.name,
+          instructions: p.instructions,
           originSessionKey: p.originSessionKey,
           originDelivery: createdJob.delivery,
           ...(watchDelivery ? { watchDelivery } : {}),
