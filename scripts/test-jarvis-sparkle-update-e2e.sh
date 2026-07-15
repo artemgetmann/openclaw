@@ -123,6 +123,18 @@ EOF
 cat "${OPENCLAW_SPARKLE_E2E_TEST_ROOT:?}/control/processes"
 EOF
 
+  cat >"$fixture/bin/df" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Keep disk-gate fixtures independent of host free space. Sixteen GiB clears
+# the normal artifact-relative floor, while the 999999 GiB negative case still
+# exercises the harness's real insufficient-disk calculation and error path.
+[[ "$#" == "2" && "$1" == "-Pk" ]]
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf 'fixture     33554432    0    16777216  0%%       %s\n' "$2"
+EOF
+
   cat >"$fixture/bin/ditto" <<'EOF'
 #!/usr/bin/env bash
 set -e
@@ -310,6 +322,7 @@ harness_env() {
   OPENCLAW_SPCTL_BIN="$fixture/bin/spctl" \
   OPENCLAW_CURL_BIN="$fixture/bin/curl" \
   OPENCLAW_PS_BIN="$fixture/bin/ps" \
+  OPENCLAW_DF_BIN="$fixture/bin/df" \
   OPENCLAW_DEFAULTS_BIN="$fixture/bin/defaults" \
   OPENCLAW_DITTO_BIN="$fixture/bin/ditto" \
   OPENCLAW_LAUNCHCTL_BIN="$fixture/bin/launchctl" \
@@ -364,13 +377,14 @@ pass "harness parses"
 # Production mode must ignore every proof-command override. A nonexistent jq
 # override would fail before argument validation if the test seam leaked.
 set +e
-override_output="$(OPENCLAW_JQ_BIN=/definitely/not/jq "$HARNESS" 2>&1)"
+override_output="$(OPENCLAW_JQ_BIN=/definitely/not/jq OPENCLAW_DF_BIN=/definitely/not/df "$HARNESS" 2>&1)"
 override_status="$?"
 set -e
 [[ "$override_status" -ne 0 && "$override_output" == *"--old-app and --new-app are required"* ]] || \
   fail "production mode accepted a test command override"
 pass "production command paths cannot be overridden"
 grep -q '^PATH="/usr/bin:/bin:/usr/sbin:/sbin"$' "$HARNESS" || fail "production PATH is not pinned"
+grep -q '^DF_BIN="/bin/df"$' "$HARNESS" || fail "production df binary is not pinned"
 grep -q 'NODE_BIN="/opt/homebrew/bin/node"' "$HARNESS" || fail "Node proof binary is not allowlisted"
 grep -q 'BASH_BIN="/bin/bash"' "$HARNESS" || fail "runtime proof shell is not pinned"
 pass "production PATH and proof interpreters are pinned"
@@ -416,6 +430,7 @@ symlink_output="$(OPENCLAW_SPARKLE_E2E_TEST_MODE=1 \
   OPENCLAW_SPCTL_BIN="$case_root/bin/spctl" \
   OPENCLAW_CURL_BIN="$case_root/bin/curl" \
   OPENCLAW_PS_BIN="$case_root/bin/ps" \
+  OPENCLAW_DF_BIN="$case_root/bin/df" \
   OPENCLAW_DEFAULTS_BIN="$case_root/bin/defaults" \
   OPENCLAW_DITTO_BIN="$case_root/bin/ditto" \
   OPENCLAW_LAUNCHCTL_BIN="$case_root/bin/escaped-launchctl" \
@@ -427,6 +442,27 @@ set -e
 [[ "$symlink_status" -ne 0 && "$symlink_output" == *"OPENCLAW_LAUNCHCTL_BIN"* ]] || \
   fail "test-mode command symlink escaped the fixture root"
 pass "test mode rejects command symlink escapes"
+
+case_root="$(copy_case test-mode-df-symlink-escape)"
+ln -sf /bin/df "$case_root/bin/escaped-df"
+set +e
+df_symlink_output="$(OPENCLAW_SPARKLE_E2E_TEST_MODE=1 \
+  OPENCLAW_CODESIGN_BIN="$case_root/bin/codesign" \
+  OPENCLAW_SPCTL_BIN="$case_root/bin/spctl" \
+  OPENCLAW_CURL_BIN="$case_root/bin/curl" \
+  OPENCLAW_PS_BIN="$case_root/bin/ps" \
+  OPENCLAW_DF_BIN="$case_root/bin/escaped-df" \
+  OPENCLAW_DEFAULTS_BIN="$case_root/bin/defaults" \
+  OPENCLAW_DITTO_BIN="$case_root/bin/ditto" \
+  OPENCLAW_LAUNCHCTL_BIN="$case_root/bin/launchctl" \
+  OPENCLAW_JARVIS_CLI_BIN="$case_root/bin/openclaw" \
+  OPENCLAW_PROVE_JARVIS_RUNTIME_SCRIPT="$case_root/bin/prove-jarvis-runtime" \
+  "$HARNESS" --test-root "$case_root" 2>&1)"
+df_symlink_status="$?"
+set -e
+[[ "$df_symlink_status" -ne 0 && "$df_symlink_output" == *"OPENCLAW_DF_BIN"* ]] || \
+  fail "test-mode df symlink escaped the fixture root"
+pass "test mode rejects df symlink escapes"
 
 case_root="$(copy_case missing-old)"
 rm -rf "$case_root/apps/old/Jarvis.app"
