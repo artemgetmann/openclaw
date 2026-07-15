@@ -49,6 +49,7 @@ type CdpTestMessage = {
   id?: number;
   method?: string;
   params?: Record<string, unknown>;
+  sessionId?: string;
 };
 
 function decodeWsFrame(data: RawData): string {
@@ -1336,6 +1337,513 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a later exact response recover without reading a stale PDF resource", async () => {
+    const firstUrl = "https://example.com/first.pdf";
+    const intendedUrl = "https://example.com/intended.pdf";
+    const pdfBytes = Buffer.from("%PDF-1.7\nintended response\n%%EOF\n");
+    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "Network.getResponseBody") {
+        if (params?.requestId === "first-request") {
+          throw new Error("response body unavailable");
+        }
+        expect(params).toEqual({ requestId: "intended-request" });
+        return { body: pdfBytes.toString("base64"), base64Encoded: true };
+      }
+      throw new Error(`unexpected command: ${method}`);
+    });
+    const capture = chromeMcpPdfResourceInternalsForTest.createChromeMcpPdfNetworkCapture({
+      send,
+    });
+
+    for (const [requestId, url] of [
+      ["first-request", firstUrl],
+      ["intended-request", intendedUrl],
+    ] as const) {
+      capture.observeEvent("Network.responseReceived", {
+        requestId,
+        type: "Document",
+        response: {
+          url,
+          mimeType: "application/pdf",
+          headers: { "content-type": "application/pdf" },
+        },
+      });
+      capture.observeEvent("Network.loadingFinished", { requestId });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const result = await Promise.race([
+      capture.promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timed out waiting for later PDF recovery")), 1_000),
+      ),
+    ]);
+    capture.cancel();
+
+    expect(result).toEqual({
+      url: intendedUrl,
+      suggestedFilename: "intended.pdf",
+      buffer: pdfBytes,
+    });
+    expect(send.mock.calls.map(([method]) => method)).toEqual([
+      "Network.getResponseBody",
+      "Network.getResponseBody",
+    ]);
+  });
+
+  it("captures a no-store PDF popup from the clicked target before its body is discarded", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
+    const downloadDir = path.join(tempDir, "downloads");
+    const finalPath = path.join(downloadDir, "statement.pdf");
+    const pdfBytes = Buffer.from("%PDF-1.7\nresource-cache pdf\n%%EOF\n");
+    const responseUrl = "https://example.com/api/export-statement";
+    const previousBrowserUrl = process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+    let httpServer: ReturnType<typeof createServer> | undefined;
+    let wsServer: WebSocketServer | undefined;
+    let unrelatedResourceCalls = 0;
+    let popupFetchBodyCalls = 0;
+    let popupFetchContinueCalls = 0;
+    let markerActive = false;
+    let viewerReady = false;
+    let popupAutoAttachArmed = false;
+    const browserSockets = new Set<WebSocket>();
+
+    try {
+      wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((resolve, reject) => {
+        if (wsServer?.address()) {
+          resolve();
+          return;
+        }
+        wsServer?.once("listening", resolve);
+        wsServer?.once("error", reject);
+      });
+      const wsPort = (wsServer.address() as { port: number }).port;
+      wsServer.on("connection", (socket, request) => {
+        const isBrowserTarget = request.url === "/devtools/browser/test";
+        const isSourceTarget = request.url === "/devtools/page/initial";
+        const isDuplicateTarget = request.url === "/devtools/page/duplicate";
+        const isViewerTarget = viewerReady && request.url === "/devtools/page/popup";
+        const isUnrelatedTarget = request.url === "/devtools/page/unrelated";
+        if (isBrowserTarget) {
+          browserSockets.add(socket);
+          socket.once("close", () => browserSockets.delete(socket));
+        }
+        socket.on("message", (data) => {
+          const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
+          if ((isSourceTarget || isDuplicateTarget) && message.method === "Runtime.evaluate") {
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: { result: { type: "boolean", value: markerActive && isSourceTarget } },
+              }),
+            );
+            return;
+          }
+          if (isBrowserTarget && message.method === "Target.setAutoAttach") {
+            popupAutoAttachArmed = message.params?.autoAttach === true;
+            if (popupAutoAttachArmed) {
+              expect(message.params?.filter).toEqual([{ type: "page", exclude: false }]);
+            }
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
+            return;
+          }
+          if (
+            isBrowserTarget &&
+            message.sessionId === "popup-session" &&
+            message.method === "Fetch.getResponseBody"
+          ) {
+            popupFetchBodyCalls += 1;
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                sessionId: message.sessionId,
+                result: { body: pdfBytes.toString("base64"), base64Encoded: true },
+              }),
+            );
+            return;
+          }
+          if (
+            isBrowserTarget &&
+            message.sessionId === "popup-session" &&
+            message.method === "Fetch.continueRequest"
+          ) {
+            popupFetchContinueCalls += 1;
+          }
+          if (
+            isBrowserTarget &&
+            message.sessionId === "popup-session" &&
+            message.method === "Runtime.runIfWaitingForDebugger"
+          ) {
+            socket.send(
+              JSON.stringify({ id: message.id, sessionId: message.sessionId, result: {} }),
+            );
+            socket.send(
+              JSON.stringify({
+                method: "Fetch.requestPaused",
+                sessionId: message.sessionId,
+                params: {
+                  requestId: "paused-popup-pdf-request",
+                  resourceType: "Document",
+                  responseStatusCode: 200,
+                  request: {
+                    url: responseUrl,
+                  },
+                  responseHeaders: [
+                    { name: "content-type", value: "application/pdf" },
+                    {
+                      name: "content-disposition",
+                      value: 'inline; filename="statement.pdf"',
+                    },
+                    { name: "cache-control", value: "no-store" },
+                  ],
+                },
+              }),
+            );
+            return;
+          }
+          if (isBrowserTarget && message.method === "Target.getTargets") {
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: {
+                  targetInfos: [
+                    {
+                      targetId: "source-target",
+                      type: "page",
+                      url: "https://example.com/statement",
+                    },
+                    ...(viewerReady
+                      ? [
+                          {
+                            targetId: "popup-viewer",
+                            type: "page",
+                            url: responseUrl,
+                            openerId: "source-target",
+                          },
+                          {
+                            targetId: "unrelated-target",
+                            type: "page",
+                            url: "https://unrelated.example/report.pdf",
+                          },
+                        ]
+                      : []),
+                  ],
+                },
+              }),
+            );
+            return;
+          }
+          if ((isViewerTarget || isUnrelatedTarget) && message.method === "Page.getResourceTree") {
+            if (isUnrelatedTarget) {
+              unrelatedResourceCalls += 1;
+            }
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: {
+                  frameTree: {
+                    frame: {
+                      id: "pdf-frame",
+                      url: isViewerTarget ? responseUrl : "https://unrelated.example/report.pdf",
+                      mimeType: "application/pdf",
+                    },
+                    resources: [],
+                  },
+                },
+              }),
+            );
+            return;
+          }
+          if (
+            (isViewerTarget || isUnrelatedTarget) &&
+            message.method === "Page.getResourceContent"
+          ) {
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                error: { code: -32000, message: "Content unavailable. Resource was not cached" },
+              }),
+            );
+            return;
+          }
+          if (typeof message.id === "number") {
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
+          }
+        });
+      });
+
+      httpServer = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/test`,
+            }),
+          );
+          return;
+        }
+        if (req.url === "/json/list") {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify([
+              {
+                id: "old-viewer",
+                type: "page",
+                url: responseUrl,
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/old-viewer`,
+              },
+              {
+                id: "duplicate-source-target",
+                type: "page",
+                url: "https://example.com/statement",
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/duplicate`,
+              },
+              {
+                id: "source-target",
+                type: "page",
+                url: "https://example.com/statement",
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/initial`,
+              },
+              ...(viewerReady
+                ? [
+                    {
+                      id: "popup-viewer",
+                      type: "page",
+                      url: responseUrl,
+                      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/popup`,
+                    },
+                    {
+                      id: "unrelated-target",
+                      type: "page",
+                      url: "https://unrelated.example/report.pdf",
+                      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/unrelated`,
+                    },
+                  ]
+                : []),
+            ]),
+          );
+          return;
+        }
+        res.statusCode = 404;
+        res.end("not found");
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.once("error", reject);
+        httpServer?.listen(0, "127.0.0.1", resolve);
+      });
+      const httpPort = (httpServer.address() as { port: number }).port;
+      process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
+
+      const callTool = vi.fn(async ({ name, arguments: toolArguments }: ToolCall) => {
+        if (name === "list_pages") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## Pages\n1: ${viewerReady ? responseUrl : "https://example.com/statement"} [selected]`,
+              },
+            ],
+          };
+        }
+        if (name === "evaluate_script") {
+          const fn = toolArguments?.function;
+          markerActive = typeof fn === "string" && !fn.includes("delete globalThis");
+          return { content: [{ type: "text", text: "true" }] };
+        }
+        if (name === "click") {
+          viewerReady = true;
+          if (popupAutoAttachArmed) {
+            for (const socket of browserSockets) {
+              socket.send(
+                JSON.stringify({
+                  method: "Target.attachedToTarget",
+                  params: {
+                    sessionId: "popup-session",
+                    waitingForDebugger: true,
+                    targetInfo: {
+                      targetId: "popup-viewer",
+                      type: "page",
+                      url: responseUrl,
+                      openerId: "source-target",
+                    },
+                  },
+                }),
+              );
+            }
+          }
+          return { content: [{ type: "text", text: "ok" }] };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      setChromeMcpSessionFactoryForTest(
+        async () =>
+          ({
+            client: {
+              callTool,
+              listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+              close: vi.fn().mockResolvedValue(undefined),
+              connect: vi.fn().mockResolvedValue(undefined),
+            },
+            transport: { pid: 123 },
+            ready: Promise.resolve(),
+          }) as unknown as ChromeMcpSession,
+      );
+
+      const result = await downloadChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "download-button",
+        downloadDir,
+        path: finalPath,
+        timeoutMs: 5_000,
+      });
+
+      expect(result).toEqual({
+        url: responseUrl,
+        suggestedFilename: "statement.pdf",
+        path: finalPath,
+      });
+      expect(unrelatedResourceCalls).toBe(0);
+      expect(popupFetchBodyCalls).toBe(1);
+      expect(popupFetchContinueCalls).toBe(1);
+      expect(await fs.readFile(finalPath)).toEqual(pdfBytes);
+    } finally {
+      if (previousBrowserUrl === undefined) {
+        delete process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+      } else {
+        process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = previousBrowserUrl;
+      }
+      await new Promise<void>((resolve) => {
+        if (!wsServer) {
+          resolve();
+          return;
+        }
+        wsServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        if (!httpServer) {
+          resolve();
+          return;
+        }
+        httpServer.close(() => resolve());
+      });
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("disables browser auto-attach and closes its socket when setup times out", async () => {
+    let httpServer: ReturnType<typeof createServer> | undefined;
+    let wsServer: WebSocketServer | undefined;
+    let disableSeen = false;
+    let socketClosed = false;
+
+    try {
+      wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((resolve, reject) => {
+        if (wsServer?.address()) {
+          resolve();
+          return;
+        }
+        wsServer?.once("listening", resolve);
+        wsServer?.once("error", reject);
+      });
+      const wsPort = (wsServer.address() as { port: number }).port;
+      wsServer.on("connection", (socket) => {
+        socket.once("close", () => {
+          socketClosed = true;
+        });
+        socket.on("message", (data) => {
+          const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
+          if (message.method !== "Target.setAutoAttach") {
+            return;
+          }
+          if (message.params?.autoAttach === false) {
+            disableSeen = true;
+          }
+          // Deliberately omit both responses. The first command must time out,
+          // and cleanup must still write the disable command before closing.
+        });
+      });
+
+      httpServer = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/test`,
+            }),
+          );
+          return;
+        }
+        res.statusCode = 404;
+        res.end("not found");
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.once("error", reject);
+        httpServer?.listen(0, "127.0.0.1", resolve);
+      });
+      const httpPort = (httpServer.address() as { port: number }).port;
+
+      await expect(
+        chromeMcpPdfResourceInternalsForTest.createChromeMcpTriggeredPdfAutoAttachCapture({
+          browserHttpUrl: `http://127.0.0.1:${httpPort}`,
+          sourceTargetId: "source-target",
+          timeoutMs: 200,
+        }),
+      ).rejects.toThrow("Target.setAutoAttach timed out");
+      await vi.waitFor(() => {
+        expect(disableSeen).toBe(true);
+        expect(socketClosed).toBe(true);
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        if (!wsServer) {
+          resolve();
+          return;
+        }
+        wsServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        if (!httpServer) {
+          resolve();
+          return;
+        }
+        httpServer.close(() => resolve());
+      });
+    }
+  });
+
+  it("does not replay an uncached PDF resource with a different HTTP request", async () => {
+    const responseUrl = "https://example.com/api/post-backed-statement";
+    const send = vi.fn(async (method: string) => {
+      if (method === "Page.getResourceTree") {
+        return {
+          frameTree: {
+            frame: {
+              id: "pdf-frame",
+              url: responseUrl,
+              mimeType: "application/pdf",
+            },
+            resources: [],
+          },
+        };
+      }
+      if (method === "Page.getResourceContent") {
+        throw new Error("Content unavailable. Resource was not cached");
+      }
+      throw new Error(`unexpected replay command: ${method}`);
+    });
+
+    await expect(
+      chromeMcpPdfResourceInternalsForTest.readChromeMcpPdfResourceWithSend(send),
+    ).rejects.toThrow("Content unavailable. Resource was not cached");
+    expect(send.mock.calls.map(([method]) => method)).toEqual([
+      "Page.getResourceTree",
+      "Page.getResourceContent",
+    ]);
+  });
+
   it("preserves an existing inferred filename for implicit network PDF captures", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-collision-"));
     const originalPath = path.join(tempDir, "account-statement.pdf");
@@ -1368,6 +1876,7 @@ describe("chrome MCP page parsing", () => {
     let activeSocket: WebSocket | undefined;
     let cdpDownloadDir = "";
     let httpServer: ReturnType<typeof createServer> | undefined;
+    let targetListCalls = 0;
     let wsServer: WebSocketServer | undefined;
 
     const closeHttpServer = async () => {
@@ -1391,7 +1900,14 @@ describe("chrome MCP page parsing", () => {
 
     try {
       wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+      await new Promise<void>((resolve, reject) => {
+        if (wsServer?.address()) {
+          resolve();
+          return;
+        }
+        wsServer?.once("listening", resolve);
+        wsServer?.once("error", reject);
+      });
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket) => {
         activeSocket = socket;
@@ -1407,10 +1923,17 @@ describe("chrome MCP page parsing", () => {
 
       httpServer = createServer((req, res) => {
         if (req.url === "/json/list") {
+          targetListCalls += 1;
+          if (targetListCalls > 1) {
+            res.statusCode = 503;
+            res.end("temporarily unavailable");
+            return;
+          }
           res.setHeader("content-type", "application/json");
           res.end(
             JSON.stringify([
               {
+                id: "download-source",
                 type: "page",
                 url: "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
                 webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/1`,
@@ -1422,7 +1945,10 @@ describe("chrome MCP page parsing", () => {
         res.statusCode = 404;
         res.end("not found");
       });
-      await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.once("error", reject);
+        httpServer?.listen(0, "127.0.0.1", resolve);
+      });
       const httpPort = (httpServer.address() as { port: number }).port;
       process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
 
@@ -1491,6 +2017,7 @@ describe("chrome MCP page parsing", () => {
         path: finalPath,
       });
       expect(await fs.readFile(finalPath, "utf8")).toBe("download ok");
+      expect(targetListCalls).toBe(2);
       expect(callTool).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "click",

@@ -9,6 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocket, type RawData } from "ws";
 import { loadConfig } from "../config/config.js";
+import { appendCdpPath, fetchJson, withCdpSocket } from "./cdp.helpers.js";
+import { normalizeCdpWsUrl } from "./cdp.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
 import type { BrowserTab } from "./client.js";
@@ -725,6 +727,7 @@ async function resolveChromeMcpBrowserHttpUrl(
 }
 
 type ChromeCdpTarget = {
+  id?: string;
   type?: string;
   url?: string;
   webSocketDebuggerUrl?: string;
@@ -747,6 +750,34 @@ async function fetchChromeCdpTargets(browserHttpUrl: string): Promise<ChromeCdpT
   }
 }
 
+async function fetchChromeCdpTargetOpenerIds(browserHttpUrl: string): Promise<Map<string, string>> {
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+    appendCdpPath(browserHttpUrl, "/json/version"),
+    CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+  );
+  const rawWsUrl = version.webSocketDebuggerUrl?.trim();
+  if (!rawWsUrl) {
+    return new Map();
+  }
+  const wsUrl = normalizeCdpWsUrl(rawWsUrl, browserHttpUrl);
+  return await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      const result = asRecord(await send("Target.getTargets"));
+      const targetInfos = Array.isArray(result?.targetInfos) ? result.targetInfos : [];
+      return new Map(
+        targetInfos.flatMap((entry) => {
+          const info = asRecord(entry);
+          const targetId = typeof info?.targetId === "string" ? info.targetId.trim() : "";
+          const openerId = typeof info?.openerId === "string" ? info.openerId.trim() : "";
+          return targetId && openerId ? [[targetId, openerId] as const] : [];
+        }),
+      );
+    },
+    { handshakeTimeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS },
+  );
+}
+
 export async function resolveChromeMcpPageWebSocketUrl(params: {
   profileName: string;
   userDataDir?: string;
@@ -767,9 +798,56 @@ export async function resolveChromeMcpPageWebSocketUrl(params: {
       typeof target.webSocketDebuggerUrl === "string" &&
       target.webSocketDebuggerUrl.trim(),
   );
-  const byUrl = page.url ? targets.find((target) => target.url === page.url) : undefined;
+  const byUrl = page.url ? targets.filter((target) => target.url === page.url) : [];
   const byIndex = targets[pageId - 1];
-  return (byUrl ?? byIndex)?.webSocketDebuggerUrl ?? null;
+  if (byUrl.length === 1) {
+    return byUrl[0]?.webSocketDebuggerUrl ?? null;
+  }
+  if (byUrl.length > 1) {
+    const markerKey = `__openclawCdpTarget_${randomUUID().replaceAll("-", "")}`;
+    const markerValue = randomUUID();
+    try {
+      await evaluateChromeMcpScript({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+        fn: `() => { globalThis[${JSON.stringify(markerKey)}] = ${JSON.stringify(markerValue)}; return true; }`,
+        timeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+      });
+      for (const target of byUrl) {
+        const targetWsUrl = target.webSocketDebuggerUrl?.trim();
+        if (!targetWsUrl) {
+          continue;
+        }
+        const matches = await withCdpSocket(
+          targetWsUrl,
+          async (send) => {
+            const evaluated = asRecord(
+              await send("Runtime.evaluate", {
+                expression: `globalThis[${JSON.stringify(markerKey)}] === ${JSON.stringify(markerValue)}`,
+                returnByValue: true,
+              }),
+            );
+            return asRecord(evaluated?.result)?.value === true;
+          },
+          { handshakeTimeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS },
+        ).catch(() => false);
+        if (matches) {
+          return targetWsUrl;
+        }
+      }
+    } finally {
+      await evaluateChromeMcpScript({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+        fn: `() => { delete globalThis[${JSON.stringify(markerKey)}]; return true; }`,
+        timeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+      }).catch(() => {});
+    }
+    return null;
+  }
+  return byIndex?.webSocketDebuggerUrl ?? null;
 }
 
 type CdpResponse = {
@@ -813,17 +891,20 @@ async function withChromeDevToolsPageSession<T>(params: {
   profileName: string;
   userDataDir?: string;
   targetId: string;
+  wsUrl?: string;
   timeoutMs?: number;
   run: (
     send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
   ) => Promise<T>;
 }): Promise<T> {
   const timeoutMs = Math.max(1_000, params.timeoutMs ?? CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
-  const wsUrl = await resolveChromeMcpPageWebSocketUrl({
-    profileName: params.profileName,
-    userDataDir: params.userDataDir,
-    targetId: params.targetId,
-  });
+  const wsUrl =
+    params.wsUrl ??
+    (await resolveChromeMcpPageWebSocketUrl({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+    }));
   if (!wsUrl) {
     throw new Error(
       "existing-session CDP access requires a per-tab DevTools websocket; retry after Chrome exposes remote debugging for this profile.",
@@ -984,6 +1065,73 @@ function assertNativePdfBuffer(buffer: Buffer, url: string): void {
   }
 }
 
+function createChromeMcpPdfFetchCapture(params: {
+  send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
+}) {
+  let cancelled = false;
+  let resolved = false;
+  let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
+  const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
+    resolvePdf = resolve;
+  });
+
+  const observeEvent = (method: string, event: Record<string, unknown> | undefined): void => {
+    if (cancelled || resolved || method !== "Fetch.requestPaused" || !event) {
+      return;
+    }
+    const requestId = typeof event.requestId === "string" ? event.requestId : "";
+    const request = asRecord(event.request);
+    const url = typeof request?.url === "string" ? request.url : "";
+    const responseHeaders = Array.isArray(event.responseHeaders) ? event.responseHeaders : [];
+    const headers = Object.fromEntries(
+      responseHeaders.flatMap((entry) => {
+        const header = asRecord(entry);
+        const name = typeof header?.name === "string" ? header.name.trim() : "";
+        const value = typeof header?.value === "string" ? header.value : "";
+        return name ? [[name, value] as const] : [];
+      }),
+    );
+    const isPdfResponse =
+      requestId &&
+      typeof event.responseStatusCode === "number" &&
+      pdfResponseHasCredibleDownloadIntent({ url, headers }, { resourceType: event.resourceType });
+
+    void (async () => {
+      let payload: ChromeMcpCapturedPdfResponse | undefined;
+      try {
+        if (isPdfResponse) {
+          const bodyResult = await params.send("Fetch.getResponseBody", { requestId });
+          const buffer = decodeCdpResponseBody(bodyResult);
+          if (hasPdfSignature(buffer) && !cancelled && !resolved) {
+            payload = {
+              url,
+              suggestedFilename: inferPdfResponseFilename({ url, headers }),
+              buffer,
+            };
+          }
+        }
+      } catch {
+        // Network and resource-cache capture remain available when this Chrome
+        // build cannot read a paused response body.
+      } finally {
+        if (requestId) {
+          await params.send("Fetch.continueRequest", { requestId }).catch(() => {});
+        }
+      }
+      if (payload && !cancelled && !resolved) {
+        resolved = true;
+        resolvePdf?.(payload);
+      }
+    })();
+  };
+
+  const cancel = (): void => {
+    cancelled = true;
+  };
+
+  return { promise, observeEvent, cancel };
+}
+
 function createChromeMcpPdfNetworkCapture(params: {
   send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
 }) {
@@ -992,10 +1140,24 @@ function createChromeMcpPdfNetworkCapture(params: {
     { url: string; headers: Record<string, unknown>; mimeType?: unknown }
   >();
   let resolved = false;
+  let cancelled = false;
   let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
   const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
     resolvePdf = resolve;
   });
+
+  const cancel = (): void => {
+    cancelled = true;
+  };
+
+  const settle = (payload: ChromeMcpCapturedPdfResponse): void => {
+    if (cancelled || resolved) {
+      return;
+    }
+    resolved = true;
+    cancel();
+    resolvePdf?.(payload);
+  };
 
   const observeEvent = (method: string, event: Record<string, unknown> | undefined) => {
     if (!event) {
@@ -1035,35 +1197,457 @@ function createChromeMcpPdfNetworkCapture(params: {
       try {
         const bodyResult = await params.send("Network.getResponseBody", { requestId });
         const buffer = decodeCdpResponseBody(bodyResult);
-        if (resolved || !hasPdfSignature(buffer)) {
+        if (resolved) {
           return;
         }
-        resolved = true;
-        resolvePdf?.({
-          url: candidate.url,
-          suggestedFilename: inferPdfResponseFilename(candidate),
-          buffer,
-        });
+        if (hasPdfSignature(buffer)) {
+          settle({
+            url: candidate.url,
+            suggestedFilename: inferPdfResponseFilename(candidate),
+            buffer,
+          });
+        }
       } catch {
-        // Keep the normal filesystem download waiter alive. Some Chrome
-        // versions do not retain every response body even when metadata says
-        // PDF, and that should not break ordinary downloads.
+        // Keep the exact-response Fetch and filesystem capture paths alive.
+        // A resource-cache lookup is deliberately unsafe here: dynamic PDF
+        // endpoints can reuse one URL, so the cache may contain an older bill.
       } finally {
         candidates.delete(requestId);
       }
     })();
   };
 
-  return { promise, observeEvent };
+  return { promise, observeEvent, cancel };
+}
+
+function createChromeMcpTriggeredPdfResourceCapture(params: {
+  browserHttpUrl: string;
+  sourceTargetId: string;
+  beforeTargets: Map<string, { url: string; wsUrl: string }>;
+  timeoutMs: number;
+}) {
+  let cancelled = false;
+  let started = false;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollTimerResolve: (() => void) | undefined;
+  let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
+  const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
+    resolvePdf = resolve;
+  });
+
+  const cancel = (): void => {
+    cancelled = true;
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
+    }
+    pollTimerResolve?.();
+    pollTimerResolve = undefined;
+  };
+
+  const start = (): void => {
+    if (started || cancelled) {
+      return;
+    }
+    started = true;
+
+    // Chrome can navigate the clicked target in place or open a PDF viewer in
+    // a direct popup. Correlate candidates to that click so an unrelated PDF
+    // opened elsewhere in the browser cannot win this capture race.
+    void (async () => {
+      const deadline = Date.now() + params.timeoutMs;
+      while (!cancelled && Date.now() <= deadline) {
+        try {
+          const targets = await fetchChromeCdpTargets(params.browserHttpUrl);
+          const hasNewTarget = targets.some((target) => {
+            const targetId = target.id?.trim();
+            return targetId && !params.beforeTargets.has(targetId);
+          });
+          const openerIds = hasNewTarget
+            ? await fetchChromeCdpTargetOpenerIds(params.browserHttpUrl).catch(() => new Map())
+            : new Map<string, string>();
+          const changedTargets = targets.filter((target) => {
+            const targetId = target.id?.trim();
+            const wsUrl = target.webSocketDebuggerUrl?.trim();
+            if (target.type !== "page" || !targetId || !wsUrl) {
+              return false;
+            }
+            const previous = params.beforeTargets.get(targetId);
+            if (targetId === params.sourceTargetId) {
+              return (
+                previous !== undefined && (previous.url !== target.url || previous.wsUrl !== wsUrl)
+              );
+            }
+            return previous === undefined && openerIds.get(targetId) === params.sourceTargetId;
+          });
+          for (const target of changedTargets) {
+            if (cancelled || !target.webSocketDebuggerUrl) {
+              return;
+            }
+            try {
+              const resource = await readChromeMcpPdfResourceFromWebSocket({
+                wsUrl: target.webSocketDebuggerUrl,
+                timeoutMs: Math.min(2_000, Math.max(1_000, deadline - Date.now())),
+              });
+              if (cancelled) {
+                return;
+              }
+              resolvePdf?.({
+                ...resource,
+                suggestedFilename: inferPdfResponseFilename({
+                  url: resource.url,
+                  headers: {},
+                  mimeType: "application/pdf",
+                }),
+              });
+              return;
+            } catch {
+              // Newly created non-PDF tabs are irrelevant to this race.
+            }
+          }
+        } catch {
+          // The target list can be unavailable while Chrome swaps viewers.
+        }
+        if (cancelled || Date.now() >= deadline) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          pollTimerResolve = resolve;
+          pollTimer = setTimeout(() => {
+            pollTimer = undefined;
+            pollTimerResolve = undefined;
+            resolve();
+          }, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS);
+        });
+      }
+    })().catch(() => {
+      // This is a best-effort race alongside the normal download waiter.
+    });
+  };
+
+  return { promise, start, cancel };
+}
+
+async function createChromeMcpTriggeredPdfAutoAttachCapture(params: {
+  browserHttpUrl: string;
+  sourceTargetId: string;
+  timeoutMs: number;
+}) {
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+    appendCdpPath(params.browserHttpUrl, "/json/version"),
+    CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+  );
+  const rawWsUrl = version.webSocketDebuggerUrl?.trim();
+  if (!rawWsUrl) {
+    throw new Error("Chrome did not expose its browser DevTools websocket");
+  }
+
+  const ws = new WebSocket(normalizeCdpWsUrl(rawWsUrl, params.browserHttpUrl), {
+    handshakeTimeout: Math.min(params.timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+  });
+  let nextId = 0;
+  let cancelled = false;
+  let resolved = false;
+  let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
+  const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
+    resolvePdf = resolve;
+  });
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  const relatedSessions = new Set<string>();
+  const fetchCaptures = new Map<string, ReturnType<typeof createChromeMcpPdfFetchCapture>>();
+  const candidates = new Map<
+    string,
+    Map<string, { url: string; headers: Record<string, unknown>; mimeType?: unknown }>
+  >();
+
+  const failPending = (err: Error): void => {
+    for (const [id, entry] of pending) {
+      clearTimeout(entry.timer);
+      pending.delete(id);
+      entry.reject(err);
+    }
+  };
+  const send = async (
+    method: string,
+    commandParams: Record<string, unknown> = {},
+    sessionId?: string,
+  ): Promise<unknown> => {
+    const id = ++nextId;
+    return await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(new Error(`${method} timed out`));
+        },
+        Math.min(params.timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+      );
+      pending.set(id, { resolve, reject, timer });
+      ws.send(JSON.stringify({ id, method, params: commandParams, sessionId }), (err) => {
+        if (!err) {
+          return;
+        }
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(err);
+      });
+    });
+  };
+
+  const settle = (payload: ChromeMcpCapturedPdfResponse): void => {
+    if (cancelled || resolved) {
+      return;
+    }
+    resolved = true;
+    resolvePdf?.(payload);
+  };
+
+  ws.on("message", (data: RawData) => {
+    let message: CdpEvent & { sessionId?: string };
+    try {
+      message = JSON.parse(decodeChromeDevToolsRawMessage(data)) as CdpEvent & {
+        sessionId?: string;
+      };
+    } catch {
+      return;
+    }
+    if (typeof message.id === "number") {
+      const entry = pending.get(message.id);
+      if (entry) {
+        clearTimeout(entry.timer);
+        pending.delete(message.id);
+        if (message.error) {
+          entry.reject(new Error(message.error.message ?? "Chrome DevTools command failed"));
+        } else {
+          entry.resolve(message.result);
+        }
+      }
+      return;
+    }
+
+    const event = asRecord(message.params);
+    if (message.method === "Target.attachedToTarget" && event) {
+      const sessionId = typeof event.sessionId === "string" ? event.sessionId : "";
+      const targetInfo = asRecord(event.targetInfo);
+      const isRelatedPopup =
+        sessionId && targetInfo?.type === "page" && targetInfo.openerId === params.sourceTargetId;
+      if (isRelatedPopup) {
+        relatedSessions.add(sessionId);
+        candidates.set(sessionId, new Map());
+        const fetchCapture = createChromeMcpPdfFetchCapture({
+          send: async (method, commandParams) => await send(method, commandParams, sessionId),
+        });
+        fetchCaptures.set(sessionId, fetchCapture);
+        void fetchCapture.promise.then(settle);
+      }
+
+      // waitForDebuggerOnStart closes the race for no-store responses. Always
+      // resume targets promptly, including unrelated targets Chrome reports on
+      // this browser-scoped connection.
+      void (async () => {
+        if (isRelatedPopup) {
+          await send("Page.enable", {}, sessionId).catch(() => {});
+          await send("Network.enable", {}, sessionId).catch(() => {});
+          await send(
+            "Fetch.enable",
+            {
+              patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Response" }],
+            },
+            sessionId,
+          ).catch(() => {});
+        }
+        await send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {});
+      })();
+      return;
+    }
+    if (message.method === "Target.detachedFromTarget" && event) {
+      const sessionId = typeof event.sessionId === "string" ? event.sessionId : "";
+      relatedSessions.delete(sessionId);
+      candidates.delete(sessionId);
+      fetchCaptures.get(sessionId)?.cancel();
+      fetchCaptures.delete(sessionId);
+      return;
+    }
+
+    const sessionId = message.sessionId?.trim();
+    if (!sessionId || !relatedSessions.has(sessionId) || !event) {
+      return;
+    }
+    const eventMethod = message.method;
+    if (typeof eventMethod === "string" && eventMethod.startsWith("Fetch.")) {
+      fetchCaptures.get(sessionId)?.observeEvent(eventMethod, event);
+      return;
+    }
+    if (message.method === "Network.responseReceived") {
+      const requestId = typeof event.requestId === "string" ? event.requestId : "";
+      const response = asRecord(event.response);
+      const url = typeof response?.url === "string" ? response.url : "";
+      const headers = asRecord(response?.headers) ?? {};
+      const mimeType = response?.mimeType;
+      if (
+        requestId &&
+        pdfResponseHasCredibleDownloadIntent(
+          { url, headers, mimeType },
+          { resourceType: event.type },
+        )
+      ) {
+        candidates.get(sessionId)?.set(requestId, { url, headers, mimeType });
+      }
+      return;
+    }
+    if (message.method !== "Network.loadingFinished") {
+      return;
+    }
+    const requestId = typeof event.requestId === "string" ? event.requestId : "";
+    const candidate = candidates.get(sessionId)?.get(requestId);
+    if (!requestId || !candidate) {
+      return;
+    }
+    candidates.get(sessionId)?.delete(requestId);
+    void (async () => {
+      try {
+        const bodyResult = await send("Network.getResponseBody", { requestId }, sessionId);
+        const buffer = decodeCdpResponseBody(bodyResult);
+        if (!hasPdfSignature(buffer)) {
+          return;
+        }
+        settle({
+          url: candidate.url,
+          suggestedFilename: inferPdfResponseFilename(candidate),
+          buffer,
+        });
+      } catch {
+        // The resource-cache fallback remains in the race for Chrome versions
+        // that expose a viewer target but do not retain the network body.
+      }
+    })();
+  });
+  ws.on("error", (err) => failPending(err instanceof Error ? err : new Error(String(err))));
+  ws.on("close", () => failPending(new Error("Chrome browser DevTools WebSocket closed")));
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Chrome browser DevTools WebSocket open timed out")),
+      Math.min(params.timeoutMs, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS),
+    );
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+  const disableAutoAttachAndClose = (): void => {
+    if (cancelled) {
+      return;
+    }
+    cancelled = true;
+    for (const fetchCapture of fetchCaptures.values()) {
+      fetchCapture.cancel();
+    }
+    fetchCaptures.clear();
+    failPending(new Error("Chrome PDF popup capture cancelled"));
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          id: ++nextId,
+          method: "Target.setAutoAttach",
+          params: { autoAttach: false, waitForDebuggerOnStart: false, flatten: true },
+        }),
+        () => ws.close(),
+      );
+    } else {
+      ws.close();
+    }
+  };
+
+  try {
+    await send("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      // A browser connection can expose hundreds of iframes and workers in a
+      // busy profile. Only page targets can be the PDF popup we need to pause.
+      filter: [{ type: "page", exclude: false }],
+    });
+  } catch (err) {
+    disableAutoAttachAndClose();
+    throw err;
+  }
+
+  const cancel = (): void => {
+    disableAutoAttachAndClose();
+  };
+
+  return { promise, cancel };
 }
 
 export const chromeMcpPdfResourceInternalsForTest = {
   assertNativePdfBuffer,
   collectPdfResourceCandidates,
   createChromeMcpPdfNetworkCapture,
+  createChromeMcpTriggeredPdfAutoAttachCapture,
   decodeChromeResourceContent,
+  readChromeMcpPdfResourceWithSend,
   writeCapturedPdfResponse,
 };
+
+async function readChromeMcpPdfResourceWithSend(
+  send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>,
+): Promise<ChromeMcpPdfResourceResult> {
+  const resourceTreeResult = asRecord(await send("Page.getResourceTree"));
+  const candidates = collectPdfResourceCandidates(resourceTreeResult?.frameTree);
+  if (candidates.length === 0) {
+    throw new Error("No application/pdf resource is loaded in the current tab");
+  }
+
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      // Only accept bytes retained from the original navigation. Replaying the
+      // URL would silently change POST-backed downloads into GET requests and
+      // could save a different document that still has a valid PDF signature.
+      const contentResult = await send("Page.getResourceContent", {
+        frameId: candidate.frameId,
+        url: candidate.url,
+      });
+      const buffer = decodeChromeResourceContent(contentResult);
+      assertNativePdfBuffer(buffer, candidate.url);
+      return { url: candidate.url, buffer };
+    } catch (err) {
+      errors.push(`${candidate.url}: ${String(err instanceof Error ? err.message : err)}`);
+    }
+  }
+
+  throw new Error(`Failed to read native PDF resource from current tab: ${errors.join("; ")}`);
+}
+
+async function readChromeMcpPdfResourceFromWebSocket(params: {
+  wsUrl: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpPdfResourceResult> {
+  return await withChromeDevToolsPageSession({
+    profileName: "",
+    targetId: "",
+    wsUrl: params.wsUrl,
+    timeoutMs: params.timeoutMs,
+    run: async (send) => {
+      // Replacement viewer targets start with no Page agent attached. Enable
+      // the domain on this fresh connection before reading its resource cache.
+      await send("Page.enable");
+      await send("Network.enable");
+      return await readChromeMcpPdfResourceWithSend(send);
+    },
+  });
+}
 
 export async function readChromeMcpPdfResource(params: {
   profileName: string;
@@ -1076,30 +1660,7 @@ export async function readChromeMcpPdfResource(params: {
     userDataDir: params.userDataDir,
     targetId: params.targetId,
     timeoutMs: params.timeoutMs,
-    run: async (send) => {
-      const resourceTreeResult = asRecord(await send("Page.getResourceTree"));
-      const candidates = collectPdfResourceCandidates(resourceTreeResult?.frameTree);
-      if (candidates.length === 0) {
-        throw new Error("No application/pdf resource is loaded in the current tab");
-      }
-
-      const errors: string[] = [];
-      for (const candidate of candidates) {
-        try {
-          const contentResult = await send("Page.getResourceContent", {
-            frameId: candidate.frameId,
-            url: candidate.url,
-          });
-          const buffer = decodeChromeResourceContent(contentResult);
-          assertNativePdfBuffer(buffer, candidate.url);
-          return { url: candidate.url, buffer };
-        } catch (err) {
-          errors.push(`${candidate.url}: ${String(err instanceof Error ? err.message : err)}`);
-        }
-      }
-
-      throw new Error(`Failed to read native PDF resource from current tab: ${errors.join("; ")}`);
-    },
+    run: readChromeMcpPdfResourceWithSend,
   });
 }
 
@@ -1465,6 +2026,15 @@ async function runChromeMcpDownloadSession(params: {
   const pdfNetworkCapture = createChromeMcpPdfNetworkCapture({
     send: async (method, commandParams) => await send(method, commandParams),
   });
+  const pdfFetchCapture = createChromeMcpPdfFetchCapture({
+    send: async (method, commandParams) => await send(method, commandParams),
+  });
+  let triggeredPdfResourceCapture:
+    | ReturnType<typeof createChromeMcpTriggeredPdfResourceCapture>
+    | undefined;
+  let triggeredPdfAutoAttachCapture:
+    | Awaited<ReturnType<typeof createChromeMcpTriggeredPdfAutoAttachCapture>>
+    | undefined;
 
   ws.on("message", (data: RawData) => {
     let message: CdpEvent;
@@ -1484,6 +2054,7 @@ async function runChromeMcpDownloadSession(params: {
         completed = true;
       }
       pdfNetworkCapture.observeEvent(message.method, event ?? undefined);
+      pdfFetchCapture.observeEvent(message.method, event ?? undefined);
     }
     if (typeof message.id !== "number") {
       return;
@@ -1545,12 +2116,65 @@ async function runChromeMcpDownloadSession(params: {
   try {
     await send("Page.enable");
     await send("Network.enable").catch(() => {});
+    await send("Fetch.enable", {
+      patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Response" }],
+    }).catch(() => {});
     await send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: downloadDir,
     });
 
+    // Capture the target set at the last possible moment before the click.
+    // Chrome's PDF viewer may replace the clicked target, and older viewer tabs
+    // can share the same URL, so URL matching cannot identify this download.
+    if (params.trigger) {
+      try {
+        const browserHttpUrl = await resolveChromeMcpBrowserHttpUrl(
+          params.profileName,
+          params.userDataDir,
+        );
+        if (browserHttpUrl) {
+          const targets = await fetchChromeCdpTargets(browserHttpUrl);
+          const sourceTarget = targets.find(
+            (target) => target.webSocketDebuggerUrl?.trim() === wsUrl,
+          );
+          const sourceTargetId = sourceTarget?.id?.trim();
+          if (sourceTargetId) {
+            const beforeTargets = new Map(
+              targets.flatMap((target) => {
+                const targetId = target.id?.trim();
+                const targetWsUrl = target.webSocketDebuggerUrl?.trim();
+                return targetId && targetWsUrl
+                  ? [[targetId, { url: target.url ?? "", wsUrl: targetWsUrl }] as const]
+                  : [];
+              }),
+            );
+            triggeredPdfResourceCapture = createChromeMcpTriggeredPdfResourceCapture({
+              browserHttpUrl,
+              sourceTargetId,
+              beforeTargets,
+              timeoutMs,
+            });
+            // Arm browser-level popup capture before the click. A no-store PDF
+            // can disappear from Chrome's resource cache before post-click
+            // target polling attaches, so newly opened related pages must pause
+            // long enough to enable Network on their original response.
+            triggeredPdfAutoAttachCapture = await createChromeMcpTriggeredPdfAutoAttachCapture({
+              browserHttpUrl,
+              sourceTargetId,
+              timeoutMs,
+            });
+          }
+        }
+      } catch {
+        // Target correlation is a PDF-viewer enhancement. Ordinary downloads
+        // must still click and use the established filesystem/event path when
+        // Chrome's target endpoint is temporarily unavailable.
+      }
+    }
+
     await params.trigger?.();
+    triggeredPdfResourceCapture?.start();
     let downloadWaitCancelled = false;
     const downloadPromise = waitForChromeDownloadFile({
       directory: downloadDir,
@@ -1564,6 +2188,13 @@ async function runChromeMcpDownloadSession(params: {
     const result = await Promise.race([
       downloadPromise,
       pdfNetworkCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf })),
+      pdfFetchCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf })),
+      ...(triggeredPdfResourceCapture
+        ? [triggeredPdfResourceCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf }))]
+        : []),
+      ...(triggeredPdfAutoAttachCapture
+        ? [triggeredPdfAutoAttachCapture.promise.then((pdf) => ({ kind: "pdf" as const, pdf }))]
+        : []),
     ]);
     if (result.kind === "pdf") {
       downloadWaitCancelled = true;
@@ -1590,6 +2221,11 @@ async function runChromeMcpDownloadSession(params: {
       path: savedPath,
     };
   } finally {
+    pdfNetworkCapture.cancel();
+    pdfFetchCapture.cancel();
+    triggeredPdfResourceCapture?.cancel();
+    triggeredPdfAutoAttachCapture?.cancel();
+    await send("Fetch.disable").catch(() => {});
     failAll(new Error("Chrome DevTools WebSocket closed"));
     ws.close();
   }
