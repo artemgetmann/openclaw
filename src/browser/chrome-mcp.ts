@@ -9,6 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocket, type RawData } from "ws";
 import { loadConfig } from "../config/config.js";
+import { appendCdpPath, fetchJson, withCdpSocket } from "./cdp.helpers.js";
+import { normalizeCdpWsUrl } from "./cdp.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
 import type { BrowserTab } from "./client.js";
@@ -726,7 +728,6 @@ async function resolveChromeMcpBrowserHttpUrl(
 
 type ChromeCdpTarget = {
   id?: string;
-  openerId?: string;
   type?: string;
   url?: string;
   webSocketDebuggerUrl?: string;
@@ -747,6 +748,34 @@ async function fetchChromeCdpTargets(browserHttpUrl: string): Promise<ChromeCdpT
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchChromeCdpTargetOpenerIds(browserHttpUrl: string): Promise<Map<string, string>> {
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+    appendCdpPath(browserHttpUrl, "/json/version"),
+    CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+  );
+  const rawWsUrl = version.webSocketDebuggerUrl?.trim();
+  if (!rawWsUrl) {
+    return new Map();
+  }
+  const wsUrl = normalizeCdpWsUrl(rawWsUrl, browserHttpUrl);
+  return await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      const result = asRecord(await send("Target.getTargets"));
+      const targetInfos = Array.isArray(result?.targetInfos) ? result.targetInfos : [];
+      return new Map(
+        targetInfos.flatMap((entry) => {
+          const info = asRecord(entry);
+          const targetId = typeof info?.targetId === "string" ? info.targetId.trim() : "";
+          const openerId = typeof info?.openerId === "string" ? info.openerId.trim() : "";
+          return targetId && openerId ? [[targetId, openerId] as const] : [];
+        }),
+      );
+    },
+    { handshakeTimeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS },
+  );
 }
 
 export async function resolveChromeMcpPageWebSocketUrl(params: {
@@ -999,9 +1028,8 @@ function createChromeMcpPdfNetworkCapture(params: {
   >();
   let resolved = false;
   let cancelled = false;
-  let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
-  let fallbackTimerResolve: (() => void) | undefined;
-  let resourceFallbackPromise: Promise<void> | undefined;
+  const fallbackWaiters = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const resourceFallbackRequests = new Set<string>();
   let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
   const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
     resolvePdf = resolve;
@@ -1009,12 +1037,11 @@ function createChromeMcpPdfNetworkCapture(params: {
 
   const cancel = (): void => {
     cancelled = true;
-    if (fallbackTimer) {
-      clearTimeout(fallbackTimer);
-      fallbackTimer = undefined;
+    for (const [timer, resolve] of fallbackWaiters) {
+      clearTimeout(timer);
+      resolve();
     }
-    fallbackTimerResolve?.();
-    fallbackTimerResolve = undefined;
+    fallbackWaiters.clear();
   };
 
   const settle = (payload: ChromeMcpCapturedPdfResponse): void => {
@@ -1026,14 +1053,18 @@ function createChromeMcpPdfNetworkCapture(params: {
     resolvePdf?.(payload);
   };
 
-  const startResourceFallback = (candidate: {
-    url: string;
-    headers: Record<string, unknown>;
-    mimeType?: unknown;
-  }): void => {
-    if (resourceFallbackPromise || cancelled || resolved) {
+  const startResourceFallback = (
+    requestId: string,
+    candidate: {
+      url: string;
+      headers: Record<string, unknown>;
+      mimeType?: unknown;
+    },
+  ): void => {
+    if (resourceFallbackRequests.has(requestId) || cancelled || resolved) {
       return;
     }
+    resourceFallbackRequests.add(requestId);
 
     // Network.getResponseBody can return an empty body after a POST-backed PDF
     // has already moved into Chrome's viewer cache. Poll that cache briefly,
@@ -1041,52 +1072,55 @@ function createChromeMcpPdfNetworkCapture(params: {
     // prevents a pre-existing/background PDF in the same tab from becoming a
     // false download success.
     const deadline = Date.now() + Math.max(1_000, params.timeoutMs ?? 30_000);
-    resourceFallbackPromise = (async () => {
-      while (!cancelled && !resolved && Date.now() <= deadline) {
-        try {
-          const resourceTreeResult = asRecord(await params.send("Page.getResourceTree"));
-          const resourceCandidates = collectPdfResourceCandidates(
-            resourceTreeResult?.frameTree,
-          ).filter((resource) => resource.url === candidate.url);
-          for (const resource of resourceCandidates) {
-            if (cancelled || resolved) {
-              return;
-            }
-            try {
-              const contentResult = await params.send("Page.getResourceContent", {
-                frameId: resource.frameId,
-                url: resource.url,
-              });
-              const buffer = decodeChromeResourceContent(contentResult);
-              if (!hasPdfSignature(buffer)) {
-                continue;
+    void (async () => {
+      try {
+        while (!cancelled && !resolved && Date.now() <= deadline) {
+          try {
+            const resourceTreeResult = asRecord(await params.send("Page.getResourceTree"));
+            const resourceCandidates = collectPdfResourceCandidates(
+              resourceTreeResult?.frameTree,
+            ).filter((resource) => resource.url === candidate.url);
+            for (const resource of resourceCandidates) {
+              if (cancelled || resolved) {
+                return;
               }
-              settle({
-                url: candidate.url,
-                suggestedFilename: inferPdfResponseFilename(candidate),
-                buffer,
-              });
-              return;
-            } catch {
-              // The resource can disappear while Chrome swaps viewer frames;
-              // retry the tree instead of failing the ordinary download waiter.
+              try {
+                const contentResult = await params.send("Page.getResourceContent", {
+                  frameId: resource.frameId,
+                  url: resource.url,
+                });
+                const buffer = decodeChromeResourceContent(contentResult);
+                if (!hasPdfSignature(buffer)) {
+                  continue;
+                }
+                settle({
+                  url: candidate.url,
+                  suggestedFilename: inferPdfResponseFilename(candidate),
+                  buffer,
+                });
+                return;
+              } catch {
+                // The resource can disappear while Chrome swaps viewer frames;
+                // retry the tree instead of failing the ordinary download waiter.
+              }
             }
+          } catch {
+            // Page.getResourceTree is best-effort across Chrome versions. Keep
+            // polling while the response remains eligible and the session lives.
           }
-        } catch {
-          // Page.getResourceTree is best-effort across Chrome versions. Keep
-          // polling while the response remains eligible and the session lives.
+          if (cancelled || resolved || Date.now() >= deadline) {
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              fallbackWaiters.delete(timer);
+              resolve();
+            }, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS);
+            fallbackWaiters.set(timer, resolve);
+          });
         }
-        if (cancelled || resolved || Date.now() >= deadline) {
-          return;
-        }
-        await new Promise<void>((resolve) => {
-          fallbackTimerResolve = resolve;
-          fallbackTimer = setTimeout(() => {
-            fallbackTimer = undefined;
-            fallbackTimerResolve = undefined;
-            resolve();
-          }, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS);
-        });
+      } finally {
+        resourceFallbackRequests.delete(requestId);
       }
     })().catch(() => {
       // Resource fallback must never reject the Promise.race loser.
@@ -1141,13 +1175,13 @@ function createChromeMcpPdfNetworkCapture(params: {
             buffer,
           });
         } else {
-          startResourceFallback(candidate);
+          startResourceFallback(requestId, candidate);
         }
       } catch {
         // Keep the normal filesystem download waiter alive. Some Chrome
         // versions do not retain every response body even when metadata says
         // PDF, and that should not break ordinary downloads.
-        startResourceFallback(candidate);
+        startResourceFallback(requestId, candidate);
       } finally {
         candidates.delete(requestId);
       }
@@ -1195,23 +1229,28 @@ function createChromeMcpTriggeredPdfResourceCapture(params: {
       const deadline = Date.now() + params.timeoutMs;
       while (!cancelled && Date.now() <= deadline) {
         try {
-          const changedTargets = (await fetchChromeCdpTargets(params.browserHttpUrl)).filter(
-            (target) => {
-              const targetId = target.id?.trim();
-              const wsUrl = target.webSocketDebuggerUrl?.trim();
-              if (target.type !== "page" || !targetId || !wsUrl) {
-                return false;
-              }
-              const previous = params.beforeTargets.get(targetId);
-              if (targetId === params.sourceTargetId) {
-                return (
-                  previous !== undefined &&
-                  (previous.url !== target.url || previous.wsUrl !== wsUrl)
-                );
-              }
-              return previous === undefined && target.openerId === params.sourceTargetId;
-            },
-          );
+          const targets = await fetchChromeCdpTargets(params.browserHttpUrl);
+          const hasNewTarget = targets.some((target) => {
+            const targetId = target.id?.trim();
+            return targetId && !params.beforeTargets.has(targetId);
+          });
+          const openerIds = hasNewTarget
+            ? await fetchChromeCdpTargetOpenerIds(params.browserHttpUrl).catch(() => new Map())
+            : new Map<string, string>();
+          const changedTargets = targets.filter((target) => {
+            const targetId = target.id?.trim();
+            const wsUrl = target.webSocketDebuggerUrl?.trim();
+            if (target.type !== "page" || !targetId || !wsUrl) {
+              return false;
+            }
+            const previous = params.beforeTargets.get(targetId);
+            if (targetId === params.sourceTargetId) {
+              return (
+                previous !== undefined && (previous.url !== target.url || previous.wsUrl !== wsUrl)
+              );
+            }
+            return previous === undefined && openerIds.get(targetId) === params.sourceTargetId;
+          });
           for (const target of changedTargets) {
             if (cancelled || !target.webSocketDebuggerUrl) {
               return;
