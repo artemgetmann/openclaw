@@ -189,6 +189,28 @@ lane. For normal hotfix validation, follow the fast runtime/app-support split in
 `docs/agent-guides/runtime-ops.md` instead of rebuilding, notarizing, or
 publishing app artifacts.
 
+Run the read-only disk gate before starting a release package. It requires 25
+GiB free by default and prints the required, free, and shortfall capacity. A
+failure is a hard stop before packaging:
+
+```bash
+bash scripts/preflight-jarvis-release-disk.sh
+```
+
+If old failed staging is consuming space, report it first, then apply the same
+conservative policy explicitly:
+
+```bash
+bash scripts/cleanup-build-artifacts.sh --build-cache
+bash scripts/cleanup-build-artifacts.sh --build-cache --apply
+```
+
+Cleanup keeps the newest Jarvis release/Sparkle staging run, skips live or
+explicitly protected runs, and reports owner/mode for permission-protected
+entries instead of changing permissions. It never scans installed apps,
+`/Applications`, user config/runtime state, or resumable/final `dist/`
+artifacts and receipts.
+
 ```bash
 # Read-only. Reports missing/present state without printing secret values.
 bash scripts/preflight-consumer-mac-release.sh
