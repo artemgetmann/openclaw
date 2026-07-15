@@ -264,6 +264,7 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["get_goal", "create_goal", "update_goal", "monitor"],
+      skillsPrompt: "<available_skills><skill><name>goal-mode</name></skill></available_skills>",
     });
 
     expect(prompt).toContain("## Goal Tools");
@@ -272,34 +273,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Scoped autonomy");
     expect(prompt).not.toContain('Call update_goal(status="complete") only with evidence');
     expect(prompt).toContain(
-      "Before finalizing, after an important external send/action whose useful next step depends on a later reply/status, offer once in the same final response to watch and continue;",
+      "if the user's stated next step depends on a later reply/status, treat this as a post-action handoff",
     );
+    expect(prompt).toContain("before the same final, read `goal-mode`");
+    expect(prompt).toContain("even if another skill handled the action");
   });
 
   it("omits monitor-specific goal guidance when monitor is unavailable", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["get_goal", "create_goal", "update_goal"],
+      skillsPrompt: "<available_skills><skill><name>goal-mode</name></skill></available_skills>",
     });
 
     expect(prompt).toContain("## Goal Tools");
-    expect(prompt).not.toContain("offer once in the same final response to watch and continue");
+    expect(prompt).not.toContain("treat this as a post-action handoff");
   });
 
   it("keeps the proactive monitor cue compact", () => {
     const promptWithMonitor = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["get_goal", "create_goal", "update_goal", "monitor"],
+      skillsPrompt: "<available_skills><skill><name>goal-mode</name></skill></available_skills>",
     });
     const goalToolsSection = promptWithMonitor.split("## Goal Tools")[1]?.split("\n## ")[0] ?? "";
 
-    expect(goalToolsSection).toContain("Before finalizing");
-    expect(goalToolsSection).toContain("important external send/action");
-    expect(goalToolsSection).toContain(
-      "offer once in the same final response to watch and continue",
-    );
+    expect(goalToolsSection).toContain("After an external send/action");
+    expect(goalToolsSection).toContain("user's stated next step depends");
+    expect(goalToolsSection).toContain("before the same final");
+    expect(goalToolsSection).toContain("even if another skill handled the action");
     expect(goalToolsSection).toContain("skip casual sends");
-    expect(goalToolsSection).toContain("do not start monitoring without approval");
+    expect(goalToolsSection).toContain("never create one without approval");
     expect(goalToolsSection).not.toContain("default notify with a drafted next response");
     expect(goalToolsSection).not.toContain("buttons, settings, or commands");
   });

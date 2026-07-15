@@ -24,12 +24,16 @@ waiting, negotiation, completion tracking, or multiple external turns.
 
 - After sending a message or taking an external action, offer to keep watching
   only when a later reply/status is the next useful step.
+- If the user's stated next step depends on that reply/status, make the offer in
+  the same final response as the send result. This is a post-action handoff, so
+  read this skill before finalizing even when a channel-specific skill handled
+  the send; do not stop at a send-only final.
 - Do not offer on casual sends that have no meaningful next step.
 - Offer once. If the user declines, stop asking.
 - Do not create a goal or monitor before approval unless the original request
   already authorizes continued pursuit.
-- Offer naturally and concretely: target, desired outcome, expiry, and default
-  notify with a drafted next response.
+- Offer naturally and concretely: target, desired outcome, stop condition,
+  expiry, cadence, and the default `notify_draft` delivery policy.
 - Do not make slash commands the primary experience. `/goal` is a recovery and
   control surface.
 - Natural-language UX only: no buttons, settings, or commands in the offer.
@@ -39,6 +43,8 @@ waiting, negotiation, completion tracking, or multiple external turns.
 When a goal needs waiting on another person or system, create or reuse a
 durable monitor.
 
+- Before creation, confirm the target, desired outcome, cadence, stop condition,
+  expiry, and delivery policy. The user's approval must cover that scope.
 - Default to `notify_draft` with the drafted next response included.
 - Use `actionPolicy: "auto_send"` only when the user explicitly authorized
   autonomous sending within scope and the monitor has a real watched-surface
