@@ -85,8 +85,11 @@ ACTIVE="$RUNS/20210102T000000Z-sparkle-400.active"
 RELEASE_NEW="$RUNS/20220101T000000Z-jarvis-release-500.newest"
 PERMISSION_PROTECTED="$RUNS/20200102T000000Z-package-mac-app-600.protected"
 PROCESS_ACTIVE="$RUNS/20200103T000000Z-package-mac-app-700.active-process"
+PARTIAL_CANDIDATE="$BUILD_ROOT/tmp/partial-delete-candidate"
+PARTIAL_NESTED="$PARTIAL_CANDIDATE/nested-inaccessible"
+PARTIAL_SIBLING="$PARTIAL_CANDIDATE/accessible-sibling.txt"
 
-mkdir -p "$GENERIC_OLD" "$RELEASE_OLD" "$PROTECTED" "$ACTIVE" "$RELEASE_NEW" "$PERMISSION_PROTECTED" "$PROCESS_ACTIVE"
+mkdir -p "$GENERIC_OLD" "$RELEASE_OLD" "$PROTECTED" "$ACTIVE" "$RELEASE_NEW" "$PERMISSION_PROTECTED" "$PROCESS_ACTIVE" "$PARTIAL_NESTED"
 printf 'generic\n' >"$GENERIC_OLD/payload"
 printf 'release\n' >"$RELEASE_OLD/payload"
 printf 'keep\n' >"$PROTECTED/.openclaw-protected"
@@ -94,6 +97,8 @@ printf 'active\n' >"$ACTIVE/.openclaw-active"
 printf 'newest\n' >"$RELEASE_NEW/payload"
 printf 'protected\n' >"$PERMISSION_PROTECTED/payload"
 printf 'actively tailed\n' >"$PROCESS_ACTIVE/payload"
+printf 'must survive whole\n' >"$PARTIAL_SIBLING"
+printf 'blocked child\n' >"$PARTIAL_NESTED/payload"
 
 # Explicit mtimes make newest-retention deterministic on macOS and Linux. Touch
 # marker-bearing directories last because creating the marker updates mtime.
@@ -103,7 +108,9 @@ touch -t 202101020000 "$ACTIVE"
 touch -t 202201010000 "$RELEASE_NEW"
 touch -t 202001020000 "$PERMISSION_PROTECTED"
 touch -t 202001030000 "$PROCESS_ACTIVE"
+touch -t 202001040000 "$PARTIAL_NESTED" "$PARTIAL_CANDIDATE"
 chmod 000 "$PERMISSION_PROTECTED"
+chmod 000 "$PARTIAL_NESTED"
 
 # The path is present in tail's command line and the payload remains open. This
 # exercises the real process/open-file safety gates instead of marker logic.
@@ -123,6 +130,7 @@ assert_record "skip" "$ACTIVE" "dry-run keeps active marker"
 assert_record "active-process" "$PROCESS_ACTIVE" "dry-run detects genuinely active process"
 assert_record "skip" "$PERMISSION_PROTECTED" "dry-run reports permission-protected entry"
 assert_record "unknown" "$PERMISSION_PROTECTED" "dry-run does not misreport unreadable size as zero"
+assert_record "unknown" "$PARTIAL_CANDIDATE" "dry-run rejects candidate with inaccessible descendant"
 assert_output_has "owner=" "permission report includes owner metadata"
 assert_output_has "mode=" "permission report includes mode metadata"
 
@@ -138,7 +146,11 @@ assert_file_exists "$PROTECTED" "apply keeps protected marker"
 assert_file_exists "$ACTIVE" "apply keeps active marker"
 assert_file_exists "$PROCESS_ACTIVE" "apply keeps genuinely active run"
 assert_file_exists "$PERMISSION_PROTECTED" "apply keeps permission-protected entry and continues"
+assert_file_exists "$PARTIAL_NESTED" "apply keeps candidate with inaccessible descendant"
+assert_file_exists "$PARTIAL_SIBLING" "pre-delete validation leaves accessible sibling untouched"
 assert_record "active-process" "$PROCESS_ACTIVE" "apply reports active process skip"
+assert_record "unknown" "$PARTIAL_CANDIDATE" "apply reports inaccessible tree size as unknown"
+assert_output_has "protected_descendant=$PARTIAL_NESTED" "apply identifies blocked nested directory"
 assert_output_has "operator action:" "apply prints narrow permission remediation"
 STOPPED_ACTIVE_PROCESS_PID="$ACTIVE_PROCESS_PID"
 stop_active_process_fixture
@@ -146,6 +158,23 @@ if kill -0 "$STOPPED_ACTIVE_PROCESS_PID" 2>/dev/null; then
   fail "active process fixture was not terminated and reaped"
 fi
 pass "active process fixture is terminated and reaped"
+
+RUNTIME_ROOT="$TMP_DIR/runtime-instances"
+OLD_LOG="$RUNTIME_ROOT/manual-instance/logs/old.log"
+mkdir -p "$(dirname "$OLD_LOG")"
+printf 'ordinary generated log\n' >"$OLD_LOG"
+chmod 600 "$OLD_LOG"
+touch -t 202001010000 "$OLD_LOG"
+[[ ! -x "$OLD_LOG" ]] || fail "old log fixture must be non-executable"
+
+OPENCLAW_RUNTIME_INSTANCES_ROOT="$RUNTIME_ROOT" \
+OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS=0 \
+  /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+    --runtime-instances \
+    --apply >"$OUT" 2>&1
+
+assert_file_missing "$OLD_LOG" "apply deletes eligible non-executable old log"
+assert_record "deleted" "$OLD_LOG" "cleanup reports non-executable log deletion"
 
 WORKTREES_ROOT="$TMP_DIR/worktrees"
 RELEASE_WORKTREE="$WORKTREES_ROOT/release-lane"

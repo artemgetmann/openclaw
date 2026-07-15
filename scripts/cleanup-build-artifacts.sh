@@ -131,8 +131,8 @@ path_size_kib_or_zero() {
   printf '%s\n' "${size_kib:-0}"
 }
 
-path_permission_protection_reason() {
-  openclaw_build_path_permission_protection_reason "$1"
+tree_removal_protection_reason() {
+  openclaw_build_tree_removal_protection_reason "$1"
 }
 
 path_has_retention_marker() {
@@ -226,15 +226,30 @@ delete_or_report_candidate() {
   local size_kib="$5"
 
   local protection_reason=""
+  local validated_size_kib=""
 
   if path_has_retention_marker "$target_path"; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "protected-marker" "explicit-retention"
     return 0
   fi
-  if protection_reason="$(path_permission_protection_reason "$target_path")"; then
+  # Validate the full directory tree before rm can touch an accessible sibling.
+  # This also validates a regular file's parent removal access without requiring
+  # the file itself to be executable.
+  if protection_reason="$(tree_removal_protection_reason "$target_path")"; then
     print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "$protection_reason" "operator-remediation-required"
     return 0
   fi
+
+  # A successful fresh du is the final read-only proof that traversal reaches
+  # the complete candidate. Never treat a failed size probe as zero or proceed
+  # to a potentially partial recursive deletion.
+  if ! validated_size_kib="$(path_size_kib "$target_path")"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" \
+      "pre-delete-size-validation-failed; $(openclaw_build_path_metadata "$target_path"); operator action: inspect inaccessible descendants before retrying" \
+      "operator-remediation-required"
+    return 0
+  fi
+  size_kib="$validated_size_kib"
 
   record_candidate_total "$size_kib"
 

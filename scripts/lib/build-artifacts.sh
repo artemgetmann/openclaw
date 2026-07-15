@@ -96,11 +96,61 @@ openclaw_build_path_permission_protection_reason() {
     return 0
   fi
 
-  # Read and search access are both required for trustworthy sizing and a
-  # complete recursive delete. Skipping early prevents partial cleanup and the
-  # misleading 0K reports produced by a suppressed du error.
-  if [[ ! -r "$target" || ! -x "$target" ]]; then
+  # Directories need read access to enumerate children and search access to
+  # traverse them. Regular generated files only need read access; requiring an
+  # executable bit would incorrectly protect every ordinary log file.
+  if [[ -d "$target" && ( ! -r "$target" || ! -x "$target" ) ]]; then
     printf 'permission-protected; %s; operator action: inspect this exact cache path as its owner and remove it only if confirmed disposable; cleanup will not alter permissions\n' "$metadata"
+    return 0
+  fi
+  if [[ ! -d "$target" && ! -r "$target" ]]; then
+    printf 'permission-protected; %s; operator action: inspect this exact cache path as its owner and remove it only if confirmed disposable; cleanup will not alter permissions\n' "$metadata"
+    return 0
+  fi
+
+  return 1
+}
+
+openclaw_build_tree_removal_protection_reason() {
+  local target="$1"
+  local target_parent
+  local descendant_dir
+  local protection_reason
+
+  if protection_reason="$(openclaw_build_path_permission_protection_reason "$target")"; then
+    printf '%s\n' "$protection_reason"
+    return 0
+  fi
+
+  target_parent="$(dirname "$target")"
+  if [[ ! -w "$target_parent" || ! -x "$target_parent" ]]; then
+    printf 'removal-protected parent=%s; %s; operator action: inspect this exact parent and candidate; cleanup will not alter permissions\n' \
+      "$target_parent" "$(openclaw_build_path_metadata "$target_parent")"
+    return 0
+  fi
+
+  [[ -d "$target" ]] || return 1
+
+  # rm -rf can delete accessible siblings before discovering a blocked nested
+  # directory. Walk every directory first and require enumerate, search, and
+  # removal access before the caller is allowed to mutate anything.
+  while IFS= read -r -d '' descendant_dir; do
+    if protection_reason="$(openclaw_build_path_permission_protection_reason "$descendant_dir")"; then
+      printf 'protected_descendant=%s; %s\n' "$descendant_dir" "$protection_reason"
+      return 0
+    fi
+    if [[ ! -w "$descendant_dir" ]]; then
+      printf 'removal-protected descendant=%s; %s; operator action: inspect this exact nested directory; cleanup will not alter permissions\n' \
+        "$descendant_dir" "$(openclaw_build_path_metadata "$descendant_dir")"
+      return 0
+    fi
+  done < <(find "$target" -type d -print0 2>/dev/null)
+
+  # A second traversal captures errors that occur before find can emit a path.
+  # No deletion happens if the complete tree cannot be enumerated reliably.
+  if ! find "$target" -type d -print0 >/dev/null 2>&1; then
+    printf 'traversal-protected target=%s; %s; operator action: inspect inaccessible descendants; cleanup will not alter permissions\n' \
+      "$target" "$(openclaw_build_path_metadata "$target")"
     return 0
   fi
 
@@ -131,7 +181,7 @@ openclaw_build_prune_old_runs() {
     if openclaw_build_path_has_retention_marker "$run_dir"; then
       continue
     fi
-    if openclaw_build_path_permission_protection_reason "$run_dir" >/dev/null; then
+    if openclaw_build_tree_removal_protection_reason "$run_dir" >/dev/null; then
       continue
     fi
     if rm -rf "$run_dir"; then
@@ -155,7 +205,7 @@ openclaw_build_prune_old_temp_artifacts() {
       if openclaw_build_path_has_retention_marker "$artifact_dir"; then
         continue
       fi
-      if openclaw_build_path_permission_protection_reason "$artifact_dir" >/dev/null; then
+      if openclaw_build_tree_removal_protection_reason "$artifact_dir" >/dev/null; then
         continue
       fi
       if rm -rf "$artifact_dir"; then
