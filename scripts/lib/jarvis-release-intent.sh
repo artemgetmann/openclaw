@@ -55,10 +55,76 @@ openclaw_jarvis_release_intent_new_id() {
   /usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]'
 }
 
+openclaw_jarvis_release_intent_tracked_diff() {
+  local root="$1"
+  local scope="$2"
+
+  case "$scope" in
+    index)
+      set -- --cached HEAD
+      ;;
+    worktree)
+      set --
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  LC_ALL=C TZ=UTC git -C "$root" --no-pager \
+    -c color.ui=false \
+    -c core.quotePath=true \
+    diff \
+    --binary \
+    --full-index \
+    --abbrev=40 \
+    --no-color \
+    --no-ext-diff \
+    --no-textconv \
+    --no-renames \
+    --no-indent-heuristic \
+    --diff-algorithm=minimal \
+    --src-prefix=a/ \
+    --dst-prefix=b/ \
+    "$@" --
+}
+
+openclaw_jarvis_release_intent_tracked_fingerprint() {
+  local root="$1"
+
+  # Hash two domain-separated canonical binary patches. Keeping HEAD-to-index
+  # and index-to-worktree distinct prevents a staged edit plus an unstaged
+  # reversal from canceling into an apparently clean combined diff. The fixed
+  # diff options also prevent config, locale, textconv, or external drivers
+  # from changing the digest. Untracked files remain intentionally out of scope.
+  (
+    set -o pipefail
+    {
+      printf 'jarvis-release-index-v1\0'
+      openclaw_jarvis_release_intent_tracked_diff "$root" index || exit 1
+      printf '\0jarvis-release-worktree-v1\0'
+      openclaw_jarvis_release_intent_tracked_diff "$root" worktree || exit 1
+    } \
+      | /usr/bin/shasum -a 256 \
+      | /usr/bin/awk '{ print $1 }'
+  )
+}
+
+openclaw_jarvis_release_intent_clean_tracked_fingerprint() {
+  # Match the domain separators above with empty index and worktree patches.
+  {
+    printf 'jarvis-release-index-v1\0'
+    printf '\0jarvis-release-worktree-v1\0'
+  } | /usr/bin/shasum -a 256 | /usr/bin/awk '{ print $1 }'
+}
+
 openclaw_jarvis_release_intent_authorize() {
   local root="$1"
   local ttl_seconds="${2:-7200}"
-  local intent_path intent_parent intent_tmp intent_id repo_identity commit now expires
+  local intent_path intent_parent intent_tmp intent_id repo_identity commit confirmed_commit now expires
+  local tracked_fingerprint clean_tracked_fingerprint
+
+  OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
 
   case "$ttl_seconds" in
     ''|*[!0-9]*)
@@ -76,6 +142,26 @@ openclaw_jarvis_release_intent_authorize() {
   intent_id="$(openclaw_jarvis_release_intent_new_id)" || return 1
   repo_identity="$(openclaw_jarvis_release_intent_repo_identity "$root")" || return 1
   commit="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || return 1
+  tracked_fingerprint="$(openclaw_jarvis_release_intent_tracked_fingerprint "$root")" || {
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="tracked-state-unavailable"
+    echo "ERROR: unable to fingerprint tracked release state; authorization was not created." >&2
+    return 1
+  }
+  clean_tracked_fingerprint="$(openclaw_jarvis_release_intent_clean_tracked_fingerprint)"
+  if [[ "$tracked_fingerprint" != "$clean_tracked_fingerprint" ]]; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="tracked-state-dirty"
+    echo "ERROR: tracked release state is dirty; authorization was not created." >&2
+    return 1
+  fi
+  # Refuse a successful authorization if HEAD moved during fingerprinting.
+  # Validation would later catch this too, but the operator should not receive
+  # an execution command that is already invalid.
+  confirmed_commit="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || return 1
+  if [[ "$commit" != "$confirmed_commit" ]]; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="commit"
+    echo "ERROR: release commit changed during authorization; authorization was not created." >&2
+    return 1
+  fi
   now="$(openclaw_jarvis_release_intent_now_epoch)"
   expires=$((now + ttl_seconds))
   intent_tmp="${intent_path}.tmp.${intent_id}"
@@ -85,10 +171,11 @@ openclaw_jarvis_release_intent_authorize() {
   # whichever completed replacement last is the only executable intent.
   (umask 077 && mkdir -p "$intent_parent" && chmod 700 "$intent_parent")
   {
-    printf 'JARVIS_RELEASE_INTENT_VERSION=1\n'
+    printf 'JARVIS_RELEASE_INTENT_VERSION=2\n'
     printf 'JARVIS_RELEASE_INTENT_ID=%s\n' "$intent_id"
     printf 'JARVIS_RELEASE_INTENT_REPO_IDENTITY=%s\n' "$repo_identity"
     printf 'JARVIS_RELEASE_INTENT_GIT_COMMIT=%s\n' "$commit"
+    printf 'JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT=%s\n' "$tracked_fingerprint"
     printf 'JARVIS_RELEASE_INTENT_AUTHORIZED_AT_EPOCH=%s\n' "$now"
     printf 'JARVIS_RELEASE_INTENT_EXPIRES_AT_EPOCH=%s\n' "$expires"
   } >"$intent_tmp"
@@ -102,7 +189,8 @@ openclaw_jarvis_release_intent_validate() {
   local root="$1"
   local expected_intent_id="$2"
   local intent_path version actual_intent_id actual_identity expected_identity
-  local actual_commit expected_commit authorized_at expires now
+  local actual_commit expected_commit actual_tracked_fingerprint expected_tracked_fingerprint
+  local authorized_at expires now
 
   OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
   if [[ -z "$expected_intent_id" ]]; then
@@ -123,10 +211,11 @@ openclaw_jarvis_release_intent_validate() {
   actual_intent_id="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ID)"
   actual_identity="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_REPO_IDENTITY)"
   actual_commit="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_GIT_COMMIT)"
+  actual_tracked_fingerprint="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT)"
   authorized_at="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_AUTHORIZED_AT_EPOCH)"
   expires="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_EXPIRES_AT_EPOCH)"
 
-  if [[ "$version" != "1" ]]; then
+  if [[ "$version" != "2" ]]; then
     OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="schema"
     return 1
   fi
@@ -157,6 +246,24 @@ openclaw_jarvis_release_intent_validate() {
     OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="commit"
     return 1
   fi
+  case "$actual_tracked_fingerprint" in
+    ''|*[!0-9a-f]*)
+      OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="schema"
+      return 1
+      ;;
+  esac
+  if [[ "${#actual_tracked_fingerprint}" -ne 64 ]]; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="schema"
+    return 1
+  fi
+  expected_tracked_fingerprint="$(openclaw_jarvis_release_intent_tracked_fingerprint "$root")" || {
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="tracked-state-unavailable"
+    return 1
+  }
+  if [[ "$actual_tracked_fingerprint" != "$expected_tracked_fingerprint" ]]; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="tracked-state-drift"
+    return 1
+  fi
 
   now="$(openclaw_jarvis_release_intent_now_epoch)"
   case "$now" in
@@ -185,6 +292,6 @@ openclaw_require_jarvis_release_intent() {
   fi
 
   echo "ERROR: Jarvis release intent is ${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-invalid}; refusing $boundary." >&2
-  echo "Only the latest unexpired authorization for the current commit may mutate release state." >&2
+  echo "Only the latest unexpired authorization for the current commit and tracked state may mutate release state." >&2
   return 1
 }

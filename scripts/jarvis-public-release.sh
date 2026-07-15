@@ -42,9 +42,10 @@ artifacts, notary receipts, and dist/jarvis-release-manifest.env.
 
 Options:
   --authorize
-      Create the latest expiring release intent for the current commit and
-      print the one exact command that may execute it. Authorization does not
-      build, sign, notarize, upload, or inspect release artifacts.
+      Create the latest expiring release intent for the current commit and bind
+      it to clean tracked state, then print the one exact command that may
+      execute it. Authorization does not build, sign, notarize, upload, or
+      inspect release artifacts.
   --release-intent <id>
       Required for every non-dry-run release execution. Only the latest
       unexpired intent created by --authorize is accepted.
@@ -214,7 +215,7 @@ fail_before_execute() {
   echo "  elapsed_seconds=0" >&2
   echo "  summary=$SUMMARY_REPORT" >&2
   echo "  timing_report=$TIMING_REPORT" >&2
-  if [[ "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "expired" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "replaced" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "missing" ]]; then
+  if [[ "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "expired" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "replaced" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "missing" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "tracked-state-drift" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "tracked-state-unavailable" ]]; then
     echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
   else
     echo "recovery_command=$RECOVERY_COMMAND" >&2
@@ -391,7 +392,10 @@ if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
     exit 1
   fi
   openclaw_require_jarvis_release_worktree "$ROOT_DIR"
-  RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS")"
+  if ! RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS")"; then
+    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+    exit 2
+  fi
   echo "jarvis_release_intent=authorized"
   echo "jarvis_release_intent_id=$RELEASE_INTENT_ID"
   echo "next_command=bash scripts/jarvis-public-release.sh --release-intent $RELEASE_INTENT_ID"

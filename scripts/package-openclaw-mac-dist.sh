@@ -51,7 +51,7 @@ release_package_exit() {
   openclaw_jarvis_release_lock_release
   if [[ "$status" -ne 0 && "${OPENCLAW_JARVIS_RELEASE_RECOVERY_OWNER:-package}" != "wrapper" ]]; then
     case "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" in
-      missing|expired|replaced|commit|identity|schema)
+      missing|expired|replaced|commit|identity|schema|tracked-state-drift|tracked-state-unavailable)
         echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
         ;;
       *)

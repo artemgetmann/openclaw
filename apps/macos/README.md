@@ -394,14 +394,18 @@ bash scripts/jarvis-public-release.sh --authorize
 ```
 
 `--dry-run` is strictly read-only: it does not acquire the release lock or
-create an authorization. `--authorize` creates one expiring release intent for
-the current commit and prints the only command allowed to execute it. The
+create an authorization. `--authorize` requires clean tracked state, then
+creates one expiring release intent bound to the current commit and a stable
+fingerprint of the index and tracked working tree, then prints the only command
+allowed to execute it. The
 default lease is two hours, sized above the observed end-to-end release time;
 use `--intent-ttl-seconds <1-14400>` only when the operator deliberately needs a
 different window. Expiry is a backstop, while creating a newer intent remains
 the primary cancellation mechanism because it immediately replaces the older
-one. An expired or replaced queued command fails before build, artifact
-deletion, notary submission, or upload.
+one. Tracked staged changes, unstaged changes, and deletions are rejected during
+authorization. Any later tracked-state drift, expiry, or replacement fails at
+the existing validation boundaries before build, artifact deletion, notary
+submission, or upload.
 
 The wrapper inspects existing `dist/` artifacts and strict artifact
 checkpoints, chooses the next safe package phase, and delegates to

@@ -69,6 +69,19 @@ make_fake_app() {
   printf 'fixture plist; values supplied by stub\n' >"$app/Contents/Info.plist"
 }
 
+make_clean_intent_repo() {
+  local repo="$1"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.name "Release Control Test"
+  git -C "$repo" config user.email "release-control-test@example.invalid"
+  printf '#!/usr/bin/env bash\necho release\n' >"$repo/release.sh"
+  printf 'release.sh diff=unstable\n' >"$repo/.gitattributes"
+  chmod +x "$repo/release.sh"
+  git -C "$repo" add .gitattributes release.sh
+  git -C "$repo" commit -q -m "test: seed release fixture"
+}
+
 write_notary_receipt() {
   local path="$1"
   local artifact="$2"
@@ -146,6 +159,89 @@ test_intent_default_and_maximum_ttl() {
     fail "intent TTL above 14400 seconds was accepted"
   fi
   pass "intent lease defaults to two hours and is capped at four hours"
+}
+
+test_intent_tracked_state_binding() {
+  local repo="$TMP_DIR/tracked-state-repo"
+  local intent_path="$TMP_DIR/tracked-state.intent"
+  local err="$TMP_DIR/tracked-state.err"
+  local driver="$TMP_DIR/unstable-diff-driver"
+  local driver_marker="$TMP_DIR/unstable-diff-driver.called"
+  local clean_one clean_two dirty_one dirty_two intent_id
+
+  make_clean_intent_repo "$repo"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=3500
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=tracked-state-intent
+
+  clean_one="$(TMPDIR="$TMP_DIR/one" LC_ALL=C TZ=UTC openclaw_jarvis_release_intent_tracked_fingerprint "$repo")"
+  clean_two="$(TMPDIR="$TMP_DIR/two" LC_ALL=C TZ=Asia/Makassar openclaw_jarvis_release_intent_tracked_fingerprint "$repo")"
+  [[ "$clean_one" == "$clean_two" ]] \
+    || fail "clean tracked fingerprint changed across TMPDIR/locale/timezone"
+  [[ "${#clean_one}" == "64" ]] || fail "tracked fingerprint was not SHA-256"
+
+  apply_stub "$driver" '#!/usr/bin/env bash
+: >"${DIFF_DRIVER_MARKER:?}"
+printf "unstable-%s-%s\n" "$$" "${RANDOM:-0}"'
+  export DIFF_DRIVER_MARKER="$driver_marker"
+  git -C "$repo" config diff.external "$driver"
+  git -C "$repo" config diff.unstable.textconv "$driver"
+  printf '#!/usr/bin/env bash\necho dirty-unstaged\n' >"$repo/release.sh"
+  dirty_one="$(TMPDIR="$TMP_DIR/three" LC_ALL=C TZ=UTC openclaw_jarvis_release_intent_tracked_fingerprint "$repo")"
+  dirty_two="$(TMPDIR="$TMP_DIR/four" LC_ALL=C TZ=Asia/Makassar openclaw_jarvis_release_intent_tracked_fingerprint "$repo")"
+  [[ "$dirty_one" == "$dirty_two" ]] \
+    || fail "dirty tracked fingerprint changed across process/environment state"
+  [[ ! -e "$driver_marker" ]] \
+    || fail "tracked fingerprint executed an external diff or textconv driver"
+  if openclaw_jarvis_release_intent_authorize "$repo" 60 >/dev/null 2>"$err"; then
+    fail "dirty unstaged release logic was authorized"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "tracked-state-dirty" ]] \
+    || fail "dirty authorization reported wrong failure"
+  [[ ! -f "$intent_path" ]] || fail "dirty authorization persisted an intent"
+  ! grep -q 'release.sh' "$err" || fail "dirty authorization leaked a tracked path"
+  git -C "$repo" restore release.sh
+
+  printf '#!/usr/bin/env bash\necho dirty-staged\n' >"$repo/release.sh"
+  git -C "$repo" add release.sh
+  if openclaw_jarvis_release_intent_authorize "$repo" 60 >/dev/null 2>"$err"; then
+    fail "staged release logic was authorized"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "tracked-state-dirty" ]] \
+    || fail "staged tracked state reported wrong failure"
+  git -C "$repo" restore --staged release.sh
+  git -C "$repo" restore release.sh
+
+  # A staged edit and an unstaged reversal have no combined HEAD-to-worktree
+  # diff. They must still fail because the dirty index is an independent input.
+  printf '#!/usr/bin/env bash\necho staged-but-reversed\n' >"$repo/release.sh"
+  git -C "$repo" add release.sh
+  git -C "$repo" restore --worktree release.sh
+  if openclaw_jarvis_release_intent_authorize "$repo" 60 >/dev/null 2>"$err"; then
+    fail "staged change canceled by worktree reversal was authorized"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "tracked-state-dirty" ]] \
+    || fail "staged-plus-reversed state reported wrong failure"
+  git -C "$repo" restore --staged release.sh
+
+  rm "$repo/release.sh"
+  if openclaw_jarvis_release_intent_authorize "$repo" 60 >/dev/null 2>"$err"; then
+    fail "tracked deletion was authorized"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "tracked-state-dirty" ]] \
+    || fail "tracked deletion reported wrong failure"
+  git -C "$repo" restore release.sh
+
+  intent_id="$(openclaw_jarvis_release_intent_authorize "$repo" 60)"
+  [[ "$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT)" == "$clean_one" ]] \
+    || fail "clean tracked fingerprint was not persisted"
+  printf '#!/usr/bin/env bash\necho drift-after-authorization\n' >"$repo/release.sh"
+  if openclaw_jarvis_release_intent_validate "$repo" "$intent_id"; then
+    fail "tracked state drift after authorization remained executable"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "tracked-state-drift" ]] \
+    || fail "tracked state drift reported wrong failure"
+  pass "authorization rejects tracked dirt and later tracked-state drift"
 }
 
 test_operator_authorization_interface() {
@@ -322,12 +418,55 @@ test_expired_intent_prints_one_recovery_command() {
   pass "expired execution prints exactly one actionable recovery command"
 }
 
+test_tracked_drift_stops_real_package_entrypoint() {
+  local intent_path="$TMP_DIR/package-drift.intent"
+  local intent_tmp="$TMP_DIR/package-drift.intent.tmp"
+  local intent_id
+  local err="$TMP_DIR/package-drift.err"
+  local manifest="$TMP_DIR/package-drift-manifest.env"
+  local status=0
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=4000
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=package-drift-run
+  intent_id="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 60)"
+
+  # Simulate the exact intent mismatch produced by a tracked edit after
+  # authorization without dirtying this real checkout during the test.
+  /usr/bin/sed \
+    's/^JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT=.*/JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT=0000000000000000000000000000000000000000000000000000000000000000/' \
+    "$intent_path" >"$intent_tmp"
+  mv -f "$intent_tmp" "$intent_path"
+
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/package-drift.lock" \
+  OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
+    /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase full \
+      --release-intent "$intent_id" \
+      >/dev/null 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "tracked-drift package intent unexpectedly executed"
+  grep -q 'tracked-state-drift' "$err" \
+    || fail "real package boundary did not report tracked-state drift"
+  [[ "$(grep -c '^recovery_command=' "$err")" == "1" ]] \
+    || fail "tracked drift did not print exactly one recovery command"
+  grep -q '^recovery_command=bash scripts/jarvis-public-release.sh --authorize$' "$err" \
+    || fail "tracked drift printed the wrong recovery command"
+  [[ ! -e "$manifest" ]] || fail "package wrote release state after tracked-drift rejection"
+  pass "real package entrypoint rejects tracked drift before release mutation"
+}
+
 make_stub_tools
 test_intent_latest_wins_and_expiry
 test_intent_path_stability
 test_intent_default_and_maximum_ttl
+test_intent_tracked_state_binding
 test_operator_authorization_interface
 test_checkpoint_invalid_and_valid_resume
 test_expired_intent_prints_one_recovery_command
+test_tracked_drift_stops_real_package_entrypoint
 
 echo "All Jarvis release control tests passed."
