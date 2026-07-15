@@ -1337,31 +1337,22 @@ describe("chrome MCP page parsing", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a later PDF response recover after an earlier candidate misses the resource cache", async () => {
+  it("lets a later exact response recover without reading a stale PDF resource", async () => {
     const firstUrl = "https://example.com/first.pdf";
     const intendedUrl = "https://example.com/intended.pdf";
     const pdfBytes = Buffer.from("%PDF-1.7\nintended response\n%%EOF\n");
     const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "Network.getResponseBody") {
-        throw new Error("response body unavailable");
-      }
-      if (method === "Page.getResourceTree") {
-        return {
-          frameTree: {
-            frame: { id: "pdf-frame", url: intendedUrl, mimeType: "application/pdf" },
-            resources: [],
-          },
-        };
-      }
-      if (method === "Page.getResourceContent") {
-        expect(params).toEqual({ frameId: "pdf-frame", url: intendedUrl });
-        return { content: pdfBytes.toString("base64"), base64Encoded: true };
+        if (params?.requestId === "first-request") {
+          throw new Error("response body unavailable");
+        }
+        expect(params).toEqual({ requestId: "intended-request" });
+        return { body: pdfBytes.toString("base64"), base64Encoded: true };
       }
       throw new Error(`unexpected command: ${method}`);
     });
     const capture = chromeMcpPdfResourceInternalsForTest.createChromeMcpPdfNetworkCapture({
       send,
-      timeoutMs: 1_000,
     });
 
     for (const [requestId, url] of [
@@ -1394,7 +1385,10 @@ describe("chrome MCP page parsing", () => {
       suggestedFilename: "intended.pdf",
       buffer: pdfBytes,
     });
-    expect(send.mock.calls.some(([method]) => method === "Page.getResourceContent")).toBe(true);
+    expect(send.mock.calls.map(([method]) => method)).toEqual([
+      "Network.getResponseBody",
+      "Network.getResponseBody",
+    ]);
   });
 
   it("captures a no-store PDF popup from the clicked target before its body is discarded", async () => {
@@ -1448,6 +1442,9 @@ describe("chrome MCP page parsing", () => {
           }
           if (isBrowserTarget && message.method === "Target.setAutoAttach") {
             popupAutoAttachArmed = message.params?.autoAttach === true;
+            if (popupAutoAttachArmed) {
+              expect(message.params?.filter).toEqual([{ type: "page", exclude: false }]);
+            }
             socket.send(JSON.stringify({ id: message.id, result: {} }));
             return;
           }
@@ -1732,6 +1729,88 @@ describe("chrome MCP page parsing", () => {
         httpServer.close(() => resolve());
       });
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("disables browser auto-attach and closes its socket when setup times out", async () => {
+    let httpServer: ReturnType<typeof createServer> | undefined;
+    let wsServer: WebSocketServer | undefined;
+    let disableSeen = false;
+    let socketClosed = false;
+
+    try {
+      wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((resolve, reject) => {
+        if (wsServer?.address()) {
+          resolve();
+          return;
+        }
+        wsServer?.once("listening", resolve);
+        wsServer?.once("error", reject);
+      });
+      const wsPort = (wsServer.address() as { port: number }).port;
+      wsServer.on("connection", (socket) => {
+        socket.once("close", () => {
+          socketClosed = true;
+        });
+        socket.on("message", (data) => {
+          const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
+          if (message.method !== "Target.setAutoAttach") {
+            return;
+          }
+          if (message.params?.autoAttach === false) {
+            disableSeen = true;
+          }
+          // Deliberately omit both responses. The first command must time out,
+          // and cleanup must still write the disable command before closing.
+        });
+      });
+
+      httpServer = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/test`,
+            }),
+          );
+          return;
+        }
+        res.statusCode = 404;
+        res.end("not found");
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.once("error", reject);
+        httpServer?.listen(0, "127.0.0.1", resolve);
+      });
+      const httpPort = (httpServer.address() as { port: number }).port;
+
+      await expect(
+        chromeMcpPdfResourceInternalsForTest.createChromeMcpTriggeredPdfAutoAttachCapture({
+          browserHttpUrl: `http://127.0.0.1:${httpPort}`,
+          sourceTargetId: "source-target",
+          timeoutMs: 200,
+        }),
+      ).rejects.toThrow("Target.setAutoAttach timed out");
+      await vi.waitFor(() => {
+        expect(disableSeen).toBe(true);
+        expect(socketClosed).toBe(true);
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        if (!wsServer) {
+          resolve();
+          return;
+        }
+        wsServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        if (!httpServer) {
+          resolve();
+          return;
+        }
+        httpServer.close(() => resolve());
+      });
     }
   });
 

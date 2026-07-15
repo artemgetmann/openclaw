@@ -1134,7 +1134,6 @@ function createChromeMcpPdfFetchCapture(params: {
 
 function createChromeMcpPdfNetworkCapture(params: {
   send: (method: string, commandParams?: Record<string, unknown>) => Promise<unknown>;
-  timeoutMs?: number;
 }) {
   const candidates = new Map<
     string,
@@ -1142,8 +1141,6 @@ function createChromeMcpPdfNetworkCapture(params: {
   >();
   let resolved = false;
   let cancelled = false;
-  const fallbackWaiters = new Map<ReturnType<typeof setTimeout>, () => void>();
-  const resourceFallbackRequests = new Set<string>();
   let resolvePdf: ((payload: ChromeMcpCapturedPdfResponse) => void) | undefined;
   const promise = new Promise<ChromeMcpCapturedPdfResponse>((resolve) => {
     resolvePdf = resolve;
@@ -1151,11 +1148,6 @@ function createChromeMcpPdfNetworkCapture(params: {
 
   const cancel = (): void => {
     cancelled = true;
-    for (const [timer, resolve] of fallbackWaiters) {
-      clearTimeout(timer);
-      resolve();
-    }
-    fallbackWaiters.clear();
   };
 
   const settle = (payload: ChromeMcpCapturedPdfResponse): void => {
@@ -1165,80 +1157,6 @@ function createChromeMcpPdfNetworkCapture(params: {
     resolved = true;
     cancel();
     resolvePdf?.(payload);
-  };
-
-  const startResourceFallback = (
-    requestId: string,
-    candidate: {
-      url: string;
-      headers: Record<string, unknown>;
-      mimeType?: unknown;
-    },
-  ): void => {
-    if (resourceFallbackRequests.has(requestId) || cancelled || resolved) {
-      return;
-    }
-    resourceFallbackRequests.add(requestId);
-
-    // Network.getResponseBody can return an empty body after a POST-backed PDF
-    // has already moved into Chrome's viewer cache. Poll that cache briefly,
-    // but only accept a resource whose URL matches the eligible response. This
-    // prevents a pre-existing/background PDF in the same tab from becoming a
-    // false download success.
-    const deadline = Date.now() + Math.max(1_000, params.timeoutMs ?? 30_000);
-    void (async () => {
-      try {
-        while (!cancelled && !resolved && Date.now() <= deadline) {
-          try {
-            const resourceTreeResult = asRecord(await params.send("Page.getResourceTree"));
-            const resourceCandidates = collectPdfResourceCandidates(
-              resourceTreeResult?.frameTree,
-            ).filter((resource) => resource.url === candidate.url);
-            for (const resource of resourceCandidates) {
-              if (cancelled || resolved) {
-                return;
-              }
-              try {
-                const contentResult = await params.send("Page.getResourceContent", {
-                  frameId: resource.frameId,
-                  url: resource.url,
-                });
-                const buffer = decodeChromeResourceContent(contentResult);
-                if (!hasPdfSignature(buffer)) {
-                  continue;
-                }
-                settle({
-                  url: candidate.url,
-                  suggestedFilename: inferPdfResponseFilename(candidate),
-                  buffer,
-                });
-                return;
-              } catch {
-                // The resource can disappear while Chrome swaps viewer frames;
-                // retry the tree instead of failing the ordinary download waiter.
-              }
-            }
-          } catch {
-            // Page.getResourceTree is best-effort across Chrome versions. Keep
-            // polling while the response remains eligible and the session lives.
-          }
-          if (cancelled || resolved || Date.now() >= deadline) {
-            return;
-          }
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(() => {
-              fallbackWaiters.delete(timer);
-              resolve();
-            }, CHROME_MCP_DOWNLOAD_POLL_INTERVAL_MS);
-            fallbackWaiters.set(timer, resolve);
-          });
-        }
-      } finally {
-        resourceFallbackRequests.delete(requestId);
-      }
-    })().catch(() => {
-      // Resource fallback must never reject the Promise.race loser.
-    });
   };
 
   const observeEvent = (method: string, event: Record<string, unknown> | undefined) => {
@@ -1288,14 +1206,11 @@ function createChromeMcpPdfNetworkCapture(params: {
             suggestedFilename: inferPdfResponseFilename(candidate),
             buffer,
           });
-        } else {
-          startResourceFallback(requestId, candidate);
         }
       } catch {
-        // Keep the normal filesystem download waiter alive. Some Chrome
-        // versions do not retain every response body even when metadata says
-        // PDF, and that should not break ordinary downloads.
-        startResourceFallback(requestId, candidate);
+        // Keep the exact-response Fetch and filesystem capture paths alive.
+        // A resource-cache lookup is deliberately unsafe here: dynamic PDF
+        // endpoints can reuse one URL, so the cache may contain an older bill.
       } finally {
         candidates.delete(requestId);
       }
@@ -1630,13 +1545,7 @@ async function createChromeMcpTriggeredPdfAutoAttachCapture(params: {
       reject(err instanceof Error ? err : new Error(String(err)));
     });
   });
-  await send("Target.setAutoAttach", {
-    autoAttach: true,
-    waitForDebuggerOnStart: true,
-    flatten: true,
-  });
-
-  const cancel = (): void => {
+  const disableAutoAttachAndClose = (): void => {
     if (cancelled) {
       return;
     }
@@ -1660,6 +1569,24 @@ async function createChromeMcpTriggeredPdfAutoAttachCapture(params: {
     }
   };
 
+  try {
+    await send("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      // A browser connection can expose hundreds of iframes and workers in a
+      // busy profile. Only page targets can be the PDF popup we need to pause.
+      filter: [{ type: "page", exclude: false }],
+    });
+  } catch (err) {
+    disableAutoAttachAndClose();
+    throw err;
+  }
+
+  const cancel = (): void => {
+    disableAutoAttachAndClose();
+  };
+
   return { promise, cancel };
 }
 
@@ -1667,6 +1594,7 @@ export const chromeMcpPdfResourceInternalsForTest = {
   assertNativePdfBuffer,
   collectPdfResourceCandidates,
   createChromeMcpPdfNetworkCapture,
+  createChromeMcpTriggeredPdfAutoAttachCapture,
   decodeChromeResourceContent,
   readChromeMcpPdfResourceWithSend,
   writeCapturedPdfResponse,
@@ -2097,7 +2025,6 @@ async function runChromeMcpDownloadSession(params: {
   };
   const pdfNetworkCapture = createChromeMcpPdfNetworkCapture({
     send: async (method, commandParams) => await send(method, commandParams),
-    timeoutMs,
   });
   const pdfFetchCapture = createChromeMcpPdfFetchCapture({
     send: async (method, commandParams) => await send(method, commandParams),
