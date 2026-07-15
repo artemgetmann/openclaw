@@ -1065,6 +1065,44 @@ struct BrowserSetupSupportTests {
         }
     }
 
+    @Test func `passive clear preserves complete custom cloned profile`() async {
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            let customProfile: [String: Any] = [
+                "cdpPort": 19901,
+                "driver": "existing-session",
+                "cloneFromUserProfile": true,
+                "sourceChromeDir": "/tmp/custom-chrome",
+                "sourceProfileName": "Profile 4",
+                "profileDirectory": "Default",
+                "color": "#00AA00",
+            ]
+            OpenClawConfigFile.saveDict([
+                "browser": [
+                    "defaultProfile": "signed-in",
+                    "profiles": ["signed-in": customProfile],
+                ],
+            ])
+
+            BrowserSetupModel.clearConsumerBrowserSelectionFromConfig()
+
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
+            let signedIn = profiles?["signed-in"] as? [String: Any]
+            #expect(signedIn?["sourceChromeDir"] as? String == "/tmp/custom-chrome")
+            #expect(signedIn?["sourceProfileName"] as? String == "Profile 4")
+            #expect(signedIn?["color"] as? String == "#00AA00")
+        }
+    }
+
     @Test func `clear profile selection removes config backed browser selection`() async {
         let defaults = self.makeDefaults()
         let selected = ChromeProfileCandidate(

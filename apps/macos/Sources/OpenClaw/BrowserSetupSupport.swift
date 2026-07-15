@@ -130,27 +130,26 @@ extension OpenClawConfigFile {
 
         if var profiles = browser["profiles"] as? [String: Any] {
             for profileName in [self.managedBrowserProfileName, self.legacyManagedBrowserProfileName] {
-                guard var profile = profiles[profileName] as? [String: Any] else { continue }
+                guard let profile = profiles[profileName] as? [String: Any] else { continue }
                 let isManagedSelection = profile["cloneFromUserProfile"] as? Bool == true &&
                     ((profile["sourceProfileName"] as? String)?
                         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                guard profileName == self.legacyManagedBrowserProfileName || isManagedSelection else {
+                guard isManagedSelection else {
                     continue
                 }
-                for key in [
+                let appOwnedKeys: Set<String> = [
                     "cdpPort",
                     "cloneFromUserProfile",
                     "driver",
                     "sourceProfileName",
                     "profileDirectory",
                     "color",
-                ] {
-                    profile.removeValue(forKey: key)
-                }
-                if profile.isEmpty {
+                ]
+                // Clear a profile only when every field belongs to onboarding.
+                // Any additional key means this is a custom profile, which must
+                // remain byte-for-byte intact and schema-valid during passive refresh.
+                if Set(profile.keys).isSubset(of: appOwnedKeys) {
                     profiles.removeValue(forKey: profileName)
-                } else {
-                    profiles[profileName] = profile
                 }
             }
 
