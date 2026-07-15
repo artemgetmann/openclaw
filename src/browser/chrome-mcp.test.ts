@@ -1352,7 +1352,14 @@ describe("chrome MCP page parsing", () => {
 
     try {
       wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+      await new Promise<void>((resolve, reject) => {
+        if (wsServer?.address()) {
+          resolve();
+          return;
+        }
+        wsServer?.once("listening", resolve);
+        wsServer?.once("error", reject);
+      });
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket, request) => {
         const isViewerTarget = viewerReady && request.url === "/devtools/page/initial";
