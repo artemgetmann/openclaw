@@ -798,9 +798,56 @@ export async function resolveChromeMcpPageWebSocketUrl(params: {
       typeof target.webSocketDebuggerUrl === "string" &&
       target.webSocketDebuggerUrl.trim(),
   );
-  const byUrl = page.url ? targets.find((target) => target.url === page.url) : undefined;
+  const byUrl = page.url ? targets.filter((target) => target.url === page.url) : [];
   const byIndex = targets[pageId - 1];
-  return (byUrl ?? byIndex)?.webSocketDebuggerUrl ?? null;
+  if (byUrl.length === 1) {
+    return byUrl[0]?.webSocketDebuggerUrl ?? null;
+  }
+  if (byUrl.length > 1) {
+    const markerKey = `__openclawCdpTarget_${randomUUID().replaceAll("-", "")}`;
+    const markerValue = randomUUID();
+    try {
+      await evaluateChromeMcpScript({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+        fn: `() => { globalThis[${JSON.stringify(markerKey)}] = ${JSON.stringify(markerValue)}; return true; }`,
+        timeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+      });
+      for (const target of byUrl) {
+        const targetWsUrl = target.webSocketDebuggerUrl?.trim();
+        if (!targetWsUrl) {
+          continue;
+        }
+        const matches = await withCdpSocket(
+          targetWsUrl,
+          async (send) => {
+            const evaluated = asRecord(
+              await send("Runtime.evaluate", {
+                expression: `globalThis[${JSON.stringify(markerKey)}] === ${JSON.stringify(markerValue)}`,
+                returnByValue: true,
+              }),
+            );
+            return asRecord(evaluated?.result)?.value === true;
+          },
+          { handshakeTimeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS },
+        ).catch(() => false);
+        if (matches) {
+          return targetWsUrl;
+        }
+      }
+    } finally {
+      await evaluateChromeMcpScript({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+        fn: `() => { delete globalThis[${JSON.stringify(markerKey)}]; return true; }`,
+        timeoutMs: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+      }).catch(() => {});
+    }
+    return null;
+  }
+  return byIndex?.webSocketDebuggerUrl ?? null;
 }
 
 type CdpResponse = {

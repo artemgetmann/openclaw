@@ -1407,6 +1407,7 @@ describe("chrome MCP page parsing", () => {
     let wsServer: WebSocketServer | undefined;
     let resourceTreeCalls = 0;
     let unrelatedResourceCalls = 0;
+    let markerActive = false;
     let viewerReady = false;
 
     try {
@@ -1422,10 +1423,21 @@ describe("chrome MCP page parsing", () => {
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket, request) => {
         const isBrowserTarget = request.url === "/devtools/browser/test";
+        const isSourceTarget = request.url === "/devtools/page/initial";
+        const isDuplicateTarget = request.url === "/devtools/page/duplicate";
         const isViewerTarget = viewerReady && request.url === "/devtools/page/popup";
         const isUnrelatedTarget = request.url === "/devtools/page/unrelated";
         socket.on("message", (data) => {
           const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
+          if ((isSourceTarget || isDuplicateTarget) && message.method === "Runtime.evaluate") {
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                result: { result: { type: "boolean", value: markerActive && isSourceTarget } },
+              }),
+            );
+            return;
+          }
           if (isBrowserTarget && message.method === "Target.getTargets") {
             socket.send(
               JSON.stringify({
@@ -1524,6 +1536,12 @@ describe("chrome MCP page parsing", () => {
                 webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/old-viewer`,
               },
               {
+                id: "duplicate-source-target",
+                type: "page",
+                url: "https://example.com/statement",
+                webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/page/duplicate`,
+              },
+              {
                 id: "source-target",
                 type: "page",
                 url: "https://example.com/statement",
@@ -1559,7 +1577,7 @@ describe("chrome MCP page parsing", () => {
       const httpPort = (httpServer.address() as { port: number }).port;
       process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
 
-      const callTool = vi.fn(async ({ name }: ToolCall) => {
+      const callTool = vi.fn(async ({ name, arguments: toolArguments }: ToolCall) => {
         if (name === "list_pages") {
           return {
             content: [
@@ -1569,6 +1587,11 @@ describe("chrome MCP page parsing", () => {
               },
             ],
           };
+        }
+        if (name === "evaluate_script") {
+          const fn = toolArguments?.function;
+          markerActive = typeof fn === "string" && !fn.includes("delete globalThis");
+          return { content: [{ type: "text", text: "true" }] };
         }
         if (name === "click") {
           viewerReady = true;
