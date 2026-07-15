@@ -179,7 +179,11 @@ function buildMessagingSection(params: {
   ];
 }
 
-function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+function buildGoalModeSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  hasGoalModeSkill: boolean;
+}) {
   if (params.isMinimal) {
     return [];
   }
@@ -194,9 +198,9 @@ function buildGoalModeSection(params: { isMinimal: boolean; availableTools: Set<
     "## Goal Tools",
     "Goal tools manage durable, user-approved session goals. For goal-mode behavior, use the `goal-mode` skill from <available_skills> when present instead of relying on inline prompt rules.",
     "Use /goal as a recovery/control surface; do not make slash commands the primary consumer UX.",
-    ...(params.availableTools.has("monitor")
+    ...(params.availableTools.has("monitor") && params.hasGoalModeSkill
       ? [
-          "Before finalizing, after an important external send/action whose useful next step depends on a later reply/status, offer once in the same final response to watch and continue; skip casual sends and do not start monitoring without approval unless already authorized.",
+          "After an external send/action, if the user's stated next step depends on a later reply/status, treat this as a post-action handoff: before the same final, read `goal-mode` (even if another skill handled the action) and offer its scoped monitor; skip casual sends and never create one without approval unless already authorized.",
         ]
       : []),
     "",
@@ -426,6 +430,7 @@ export function buildAgentSystemPrompt(params: {
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
+  const hasGoalModeSkill = skillsPrompt?.includes("<name>goal-mode</name>") ?? false;
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
     ? `Heartbeat prompt: ${heartbeatPrompt}`
@@ -669,7 +674,7 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }),
-    ...buildGoalModeSection({ isMinimal, availableTools }),
+    ...buildGoalModeSection({ isMinimal, availableTools, hasGoalModeSkill }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
