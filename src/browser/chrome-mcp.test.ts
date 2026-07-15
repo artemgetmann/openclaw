@@ -1448,7 +1448,10 @@ describe("chrome MCP page parsing", () => {
         res.statusCode = 404;
         res.end("not found");
       });
-      await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.once("error", reject);
+        httpServer?.listen(0, "127.0.0.1", resolve);
+      });
       const httpPort = (httpServer.address() as { port: number }).port;
       process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
 
@@ -1611,7 +1614,14 @@ describe("chrome MCP page parsing", () => {
 
     try {
       wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+      await new Promise<void>((resolve, reject) => {
+        if (wsServer?.address()) {
+          resolve();
+          return;
+        }
+        wsServer?.once("listening", resolve);
+        wsServer?.once("error", reject);
+      });
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket) => {
         activeSocket = socket;
@@ -1649,7 +1659,10 @@ describe("chrome MCP page parsing", () => {
         res.statusCode = 404;
         res.end("not found");
       });
-      await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.once("error", reject);
+        httpServer?.listen(0, "127.0.0.1", resolve);
+      });
       const httpPort = (httpServer.address() as { port: number }).port;
       process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = `http://127.0.0.1:${httpPort}`;
 
