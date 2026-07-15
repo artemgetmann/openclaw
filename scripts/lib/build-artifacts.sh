@@ -137,9 +137,9 @@ openclaw_build_path_permission_protection_reason() {
 openclaw_build_tree_removal_protection_reason() {
   local target="$1"
   local target_parent
-  local descendant_path
+  local descendant_dir
+  local protected_flags_path=""
   local protection_reason
-  local file_flags_supported=0
 
   if protection_reason="$(openclaw_build_path_permission_protection_reason "$target")"; then
     printf '%s\n' "$protection_reason"
@@ -153,37 +153,34 @@ openclaw_build_tree_removal_protection_reason() {
     return 0
   fi
 
-  # Probe once per candidate. On macOS every descendant must be inspected,
-  # including regular files; Linux skips the unsupported BSD stat format.
-  if stat -f '%Sf' "$target" >/dev/null 2>&1; then
-    file_flags_supported=1
-  fi
-  if [[ "$file_flags_supported" == "1" ]] && protection_reason="$(openclaw_build_path_protected_file_flags_reason "$target")"; then
-    printf 'protected_descendant=%s; %s\n' "$target" "$protection_reason"
+  # BSD find evaluates file flags inside one traversal, avoiding a stat process
+  # for every regular file. GNU find rejects -flags; stderr is suppressed and
+  # an empty result safely bypasses this macOS-only protection on Linux.
+  while IFS= read -r -d '' protected_flags_path; do
+    break
+  done < <(find "$target" -flags +uchg,schg,uappnd,sappnd -print0 -quit 2>/dev/null)
+  if [[ -n "$protected_flags_path" ]]; then
+    protection_reason="$(openclaw_build_path_protected_file_flags_reason "$protected_flags_path")"
+    printf 'protected_descendant=%s; %s\n' "$protected_flags_path" "$protection_reason"
     return 0
   fi
 
   [[ -d "$target" ]] || return 1
 
   # rm -rf can delete accessible siblings before discovering a blocked nested
-  # path. Walk every file and directory for protected flags, then apply
-  # enumerate/search/removal checks to directories before any mutation.
-  while IFS= read -r -d '' descendant_path; do
-    if [[ "$file_flags_supported" == "1" ]] && protection_reason="$(openclaw_build_path_protected_file_flags_reason "$descendant_path")"; then
-      printf 'protected_descendant=%s; %s\n' "$descendant_path" "$protection_reason"
+  # directory. Keep permission/removal validation on directories only; the
+  # batched flag query above already covers every regular file.
+  while IFS= read -r -d '' descendant_dir; do
+    if protection_reason="$(openclaw_build_path_permission_protection_reason "$descendant_dir")"; then
+      printf 'protected_descendant=%s; %s\n' "$descendant_dir" "$protection_reason"
       return 0
     fi
-    [[ -d "$descendant_path" ]] || continue
-    if protection_reason="$(openclaw_build_path_permission_protection_reason "$descendant_path")"; then
-      printf 'protected_descendant=%s; %s\n' "$descendant_path" "$protection_reason"
-      return 0
-    fi
-    if [[ ! -w "$descendant_path" ]]; then
+    if [[ ! -w "$descendant_dir" ]]; then
       printf 'removal-protected descendant=%s; %s; operator action: inspect this exact nested directory; cleanup will not alter permissions\n' \
-        "$descendant_path" "$(openclaw_build_path_metadata "$descendant_path")"
+        "$descendant_dir" "$(openclaw_build_path_metadata "$descendant_dir")"
       return 0
     fi
-  done < <(find "$target" -print0 2>/dev/null)
+  done < <(find "$target" -type d -print0 2>/dev/null)
 
   # A second traversal captures errors that occur before find can emit a path.
   # No deletion happens if the complete tree cannot be enumerated reliably.
