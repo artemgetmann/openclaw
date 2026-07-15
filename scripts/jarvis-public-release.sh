@@ -30,7 +30,7 @@ PARALLEL_SAFE_LOCAL_ASSETS=0
 URGENT_SPARKLE_ONLY=0
 AUTHORIZE_RELEASE=0
 RELEASE_INTENT_ID=""
-RELEASE_INTENT_TTL_SECONDS=900
+RELEASE_INTENT_TTL_SECONDS=7200
 RELEASE_INTENT_TTL_EXPLICIT=0
 
 usage() {
@@ -49,7 +49,7 @@ Options:
       Required for every non-dry-run release execution. Only the latest
       unexpired intent created by --authorize is accepted.
   --intent-ttl-seconds <seconds>
-      Authorization lifetime for --authorize (default 900, maximum 3600).
+      Authorization lifetime for --authorize (default 7200, maximum 14400).
   --dry-run
       Print the selected phase and command without building, notarizing,
       uploading, or verifying public URLs.
@@ -260,7 +260,7 @@ select_checkpoint_safe_phase() {
   fi
 
   if [[ "$URGENT_SPARKLE_ONLY" == "1" ]]; then
-    if ! checkpoint_valid "$zip" zip sparkle-zip || ! checkpoint_valid "$appcast" appcast sparkle-appcast; then
+    if ! checkpoint_valid "$zip" zip sparkle-zip "" "$app" || ! checkpoint_valid "$appcast" appcast sparkle-appcast "" "$app"; then
       printf '%s\n' "create-local-release-assets-only"
     elif [[ "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
       printf '%s\n' "verify-sparkle-assets-only"
@@ -272,17 +272,17 @@ select_checkpoint_safe_phase() {
     return 0
   fi
 
-  if checkpoint_valid "$dmg" dmg dmg-notarized "$dmg_receipt"; then
+  if checkpoint_valid "$dmg" dmg dmg-notarized "$dmg_receipt" "$app"; then
     dmg_state="notarized"
-  elif checkpoint_valid "$dmg" dmg dmg-notary-submitted "$dmg_receipt"; then
+  elif checkpoint_valid "$dmg" dmg dmg-notary-submitted "$dmg_receipt" "$app"; then
     dmg_state="submitted"
-  elif checkpoint_valid "$dmg" dmg dmg-signed; then
+  elif checkpoint_valid "$dmg" dmg dmg-signed "" "$app"; then
     dmg_state="signed"
   fi
 
   case "$dmg_state" in
     notarized)
-      if ! checkpoint_valid "$zip" zip sparkle-zip || ! checkpoint_valid "$appcast" appcast sparkle-appcast; then
+      if ! checkpoint_valid "$zip" zip sparkle-zip "" "$app" || ! checkpoint_valid "$appcast" appcast sparkle-appcast "" "$app"; then
         printf '%s\n' "create-local-release-assets-only"
       elif [[ "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
         printf '%s\n' "verify-public-assets-only"
@@ -294,7 +294,7 @@ select_checkpoint_safe_phase() {
       ;;
     submitted)
       if [[ "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" ]] \
-        && { ! checkpoint_valid "$zip" zip sparkle-zip || ! checkpoint_valid "$appcast" appcast sparkle-appcast; }; then
+        && { ! checkpoint_valid "$zip" zip sparkle-zip "" "$app" || ! checkpoint_valid "$appcast" appcast sparkle-appcast "" "$app"; }; then
         printf '%s\n' "create-local-release-assets-only"
       else
         printf '%s\n' "poll-dmg-notarization"

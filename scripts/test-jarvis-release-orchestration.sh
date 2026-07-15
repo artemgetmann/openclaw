@@ -35,11 +35,16 @@ case "$2" in
   "Print OpenClawGitCommit") git -C "${CHECKPOINT_TEST_GIT_ROOT:?}" rev-parse HEAD ;;
   *) exit 1 ;;
 esac'
+  write_release_control_stub "$bin_dir/codesign" '#!/usr/bin/env bash
+if [[ "$1" == "-dv" ]]; then
+  echo "CDHash=1111111111111111111111111111111111111111" >&2
+fi
+exit 0'
   write_release_control_stub "$bin_dir/success" '#!/usr/bin/env bash
 exit 0'
   export CHECKPOINT_TEST_GIT_ROOT="$ROOT_DIR"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_PLISTBUDDY="$bin_dir/plistbuddy"
-  export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$bin_dir/success"
+  export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$bin_dir/codesign"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_XCRUN_BIN="$bin_dir/success"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN="$bin_dir/success"
 }
@@ -102,17 +107,17 @@ seed_wrapper_checkpoints() {
       fi
     } >"$dmg_receipt"
     if [[ "$dmg_state" == "submitted" ]]; then
-      openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted submitted dmg-submission >/dev/null
+      openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted submitted dmg-submission "$app" >/dev/null
     else
-      openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notarized Accepted dmg-submission >/dev/null
+      openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notarized Accepted dmg-submission "$app" >/dev/null
     fi
   fi
 
   if [[ "$assets" == "1" ]]; then
     [[ -f "$root/dist/Jarvis.zip" ]] || printf 'zip fixture\n' >"$root/dist/Jarvis.zip"
     [[ -f "$root/dist/jarvis-appcast.xml" ]] || printf '<rss/>\n' >"$root/dist/jarvis-appcast.xml"
-    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$root/dist/Jarvis.zip" zip sparkle-zip >/dev/null
-    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$root/dist/jarvis-appcast.xml" appcast sparkle-appcast >/dev/null
+    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$root/dist/Jarvis.zip" zip sparkle-zip not-required "" "$app" >/dev/null
+    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$root/dist/jarvis-appcast.xml" appcast sparkle-appcast not-required "" "$app" >/dev/null
   fi
 }
 

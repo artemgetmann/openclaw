@@ -25,10 +25,20 @@ make_stub_tools() {
 case "$2" in
   "Print CFBundleShortVersionString") printf "%s\n" "${STUB_APP_VERSION:-2026.7.15}" ;;
   "Print CFBundleVersion") printf "%s\n" "${STUB_APP_BUILD:-1179}" ;;
-  "Print OpenClawGitCommit") git -C "${STUB_GIT_ROOT:?}" rev-parse HEAD ;;
+  "Print OpenClawGitCommit")
+    if [[ -n "${STUB_APP_COMMIT:-}" ]]; then
+      printf "%s\n" "$STUB_APP_COMMIT"
+    else
+      git -C "${STUB_GIT_ROOT:?}" rev-parse HEAD
+    fi
+    ;;
   *) exit 1 ;;
 esac'
   apply_stub "$bin_dir/codesign" '#!/usr/bin/env bash
+if [[ "$1" == "-dv" ]]; then
+  printf "CDHash=%s\n" "${STUB_APP_CDHASH:-1111111111111111111111111111111111111111}" >&2
+  exit 0
+fi
 [[ "${STUB_CODESIGN_FAIL:-0}" != "1" ]]'
   apply_stub "$bin_dir/xcrun" '#!/usr/bin/env bash
 [[ "${STUB_STAPLER_FAIL:-0}" != "1" ]]'
@@ -118,6 +128,26 @@ test_intent_path_stability() {
   pass "intent identity is stable across TMPDIR, locale, and timezone"
 }
 
+test_intent_default_and_maximum_ttl() {
+  local intent_path="$TMP_DIR/ttl.intent"
+  local expires
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=3000
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=default-ttl
+
+  openclaw_jarvis_release_intent_authorize "$ROOT_DIR" >/dev/null
+  expires="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_EXPIRES_AT_EPOCH)"
+  [[ "$expires" == "10200" ]] || fail "default intent TTL was not 7200 seconds"
+
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=max-ttl
+  openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 14400 >/dev/null \
+    || fail "maximum documented intent TTL was rejected"
+  if openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 14401 >/dev/null 2>&1; then
+    fail "intent TTL above 14400 seconds was accepted"
+  fi
+  pass "intent lease defaults to two hours and is capped at four hours"
+}
+
 test_operator_authorization_interface() {
   local out="$TMP_DIR/authorize.out"
   export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$TMP_DIR/operator.intent"
@@ -143,12 +173,17 @@ test_checkpoint_invalid_and_valid_resume() {
   local app_receipt="$TMP_DIR/dist/Jarvis.app.notary.env"
   local dmg="$TMP_DIR/dist/Jarvis.dmg"
   local dmg_receipt="$TMP_DIR/dist/Jarvis.dmg.notary.env"
+  local zip="$TMP_DIR/dist/Jarvis.zip"
+  local appcast="$TMP_DIR/dist/jarvis-appcast.xml"
+  local checkpoint checkpoint_tmp artifact
   local app_absolute
   local dmg_absolute
 
   mkdir -p "$TMP_DIR/dist"
   make_fake_app "$app"
   printf 'signed dmg bytes\n' >"$dmg"
+  printf 'sparkle zip bytes\n' >"$zip"
+  printf '<rss/>\n' >"$appcast"
   app_absolute="$(openclaw_jarvis_release_checkpoint_absolute_path "$app")"
   dmg_absolute="$(openclaw_jarvis_release_checkpoint_absolute_path "$dmg")"
   write_notary_receipt "$app_receipt" "$TMP_DIR/app-upload.zip" "$app_absolute" Accepted app-submission-1
@@ -163,13 +198,69 @@ test_checkpoint_invalid_and_valid_resume() {
   openclaw_jarvis_release_checkpoint_write \
     "$ROOT_DIR" "$app" app app-notarized Accepted app-submission-1 >/dev/null
   openclaw_jarvis_release_checkpoint_write \
-    "$ROOT_DIR" "$dmg" dmg dmg-notarized Accepted dmg-submission-1 >/dev/null
+    "$ROOT_DIR" "$dmg" dmg dmg-notarized Accepted dmg-submission-1 "$app" >/dev/null
+  openclaw_jarvis_release_checkpoint_write \
+    "$ROOT_DIR" "$zip" zip sparkle-zip not-required "" "$app" >/dev/null
+  openclaw_jarvis_release_checkpoint_write \
+    "$ROOT_DIR" "$appcast" appcast sparkle-appcast not-required "" "$app" >/dev/null
   openclaw_jarvis_release_checkpoint_validate \
     "$ROOT_DIR" "$app" app app-notarized "$app_receipt" \
     || fail "valid notarized app checkpoint did not authorize resume"
   openclaw_jarvis_release_checkpoint_validate \
-    "$ROOT_DIR" "$dmg" dmg dmg-notarized "$dmg_receipt" \
+    "$ROOT_DIR" "$dmg" dmg dmg-notarized "$dmg_receipt" "$app" \
     || fail "valid notarized DMG checkpoint did not authorize resume"
+
+  # Every distributable artifact must carry non-empty app identity metadata.
+  # A DMG, ZIP, or appcast without this context can accidentally mix releases.
+  for artifact in "$dmg" "$zip" "$appcast"; do
+    checkpoint="$(openclaw_jarvis_release_checkpoint_path "$artifact")"
+    [[ "$(openclaw_jarvis_release_checkpoint_value "$checkpoint" JARVIS_RELEASE_CHECKPOINT_APP_VERSION)" == "2026.7.15" ]] \
+      || fail "artifact checkpoint omitted the exact app version"
+    [[ "$(openclaw_jarvis_release_checkpoint_value "$checkpoint" JARVIS_RELEASE_CHECKPOINT_APP_BUILD)" == "1179" ]] \
+      || fail "artifact checkpoint omitted the exact app build"
+    [[ -n "$(openclaw_jarvis_release_checkpoint_value "$checkpoint" JARVIS_RELEASE_CHECKPOINT_APP_GIT_COMMIT)" ]] \
+      || fail "artifact checkpoint omitted the embedded app commit"
+  done
+
+  # Signature verification still succeeds, but the signed-code identity is
+  # different. This must invalidate every checkpoint inherited by that app.
+  export STUB_APP_CDHASH=2222222222222222222222222222222222222222
+  if openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$app" app app-notarized "$app_receipt"; then
+    fail "different valid signed-code identity inherited an app checkpoint"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" == "app-signed-code-identity" ]] \
+    || fail "CDHash mismatch reported wrong checkpoint failure"
+  unset STUB_APP_CDHASH
+
+  # Tampering a non-app checkpoint's recorded app build is rejected even when
+  # the artifact bytes and the current app are otherwise unchanged.
+  checkpoint="$(openclaw_jarvis_release_checkpoint_path "$dmg")"
+  checkpoint_tmp="${checkpoint}.tampered"
+  /usr/bin/sed 's/^JARVIS_RELEASE_CHECKPOINT_APP_BUILD=1179$/JARVIS_RELEASE_CHECKPOINT_APP_BUILD=1180/' "$checkpoint" >"$checkpoint_tmp"
+  mv -f "$checkpoint_tmp" "$checkpoint"
+  if openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$dmg" dmg dmg-notarized "$dmg_receipt" "$app"; then
+    fail "tampered DMG app-build binding passed checkpoint validation"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" == "app-metadata" ]] \
+    || fail "tampered DMG app-build binding reported wrong failure"
+  openclaw_jarvis_release_checkpoint_write \
+    "$ROOT_DIR" "$dmg" dmg dmg-notarized Accepted dmg-submission-1 "$app" >/dev/null
+
+  export STUB_APP_VERSION=2026.7.16
+  if openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$zip" zip sparkle-zip "" "$app"; then
+    fail "ZIP checkpoint ignored a changed app version"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" == "app-metadata" ]] \
+    || fail "ZIP app-version mismatch reported wrong failure"
+  unset STUB_APP_VERSION
+
+  export STUB_APP_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  if openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$appcast" appcast sparkle-appcast "" "$app"; then
+    fail "appcast checkpoint ignored a changed embedded app commit"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" == "app-metadata" ]] \
+    || fail "appcast embedded-commit mismatch reported wrong failure"
+  unset STUB_APP_COMMIT
 
   APP_BUILD=9999
   export APP_BUILD
@@ -234,6 +325,7 @@ test_expired_intent_prints_one_recovery_command() {
 make_stub_tools
 test_intent_latest_wins_and_expiry
 test_intent_path_stability
+test_intent_default_and_maximum_ttl
 test_operator_authorization_interface
 test_checkpoint_invalid_and_valid_resume
 test_expired_intent_prints_one_recovery_command

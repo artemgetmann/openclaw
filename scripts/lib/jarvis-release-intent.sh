@@ -57,7 +57,7 @@ openclaw_jarvis_release_intent_new_id() {
 
 openclaw_jarvis_release_intent_authorize() {
   local root="$1"
-  local ttl_seconds="${2:-900}"
+  local ttl_seconds="${2:-7200}"
   local intent_path intent_parent intent_tmp intent_id repo_identity commit now expires
 
   case "$ttl_seconds" in
@@ -66,8 +66,8 @@ openclaw_jarvis_release_intent_authorize() {
       return 1
       ;;
   esac
-  if [[ "$ttl_seconds" -lt 1 || "$ttl_seconds" -gt 3600 ]]; then
-    echo "ERROR: release intent TTL must be between 1 and 3600 seconds." >&2
+  if [[ "$ttl_seconds" -lt 1 || "$ttl_seconds" -gt 14400 ]]; then
+    echo "ERROR: release intent TTL must be between 1 and 14400 seconds." >&2
     return 1
   fi
 

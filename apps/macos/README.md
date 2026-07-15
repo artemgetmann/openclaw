@@ -396,20 +396,23 @@ bash scripts/jarvis-public-release.sh --authorize
 `--dry-run` is strictly read-only: it does not acquire the release lock or
 create an authorization. `--authorize` creates one expiring release intent for
 the current commit and prints the only command allowed to execute it. The
-default lease is 15 minutes; use `--intent-ttl-seconds <1-3600>` only when the
-operator deliberately needs a different window. Creating a newer intent
-immediately replaces the older one. An expired or replaced queued command fails
-before build, artifact deletion, notary submission, or upload.
+default lease is two hours, sized above the observed end-to-end release time;
+use `--intent-ttl-seconds <1-14400>` only when the operator deliberately needs a
+different window. Expiry is a backstop, while creating a newer intent remains
+the primary cancellation mechanism because it immediately replaces the older
+one. An expired or replaced queued command fails before build, artifact
+deletion, notary submission, or upload.
 
 The wrapper inspects existing `dist/` artifacts and strict artifact
 checkpoints, chooses the next safe package phase, and delegates to
 `scripts/package-openclaw-mac-dist.sh`. The release manifest remains a readable
 operator summary, but neither `Accepted` text nor file existence authorizes
-reuse. Checkpoints bind the full Git commit, app version/build, intended phase,
-exact artifact path and checksum, live signature verification, notary receipt
-and submission ID, and live staple/Gatekeeper validation where applicable. If
-any field or artifact fails validation, the wrapper falls back to the earliest
-safe rebuild/resubmit phase.
+reuse. Every app, DMG, ZIP, and appcast checkpoint binds the exact app path,
+version/build, embedded Git commit, and signed-code CDHash in addition to the
+release commit, intended phase, exact artifact path and checksum, live signature
+verification, notary receipt and submission ID, and live staple/Gatekeeper
+validation where applicable. If any field or artifact fails validation, the
+wrapper falls back to the earliest safe rebuild/resubmit phase.
 
 With
 `--parallel-safe-local-assets`, the wrapper may create local `Jarvis.zip` and

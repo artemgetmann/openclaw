@@ -1015,7 +1015,7 @@ create_signed_dmg() {
   dmg_sign_started_ms="$(release_phase_now_ms)"
   sign_dmg_if_possible "$DMG" "$SIGNING_AUTHORITY"
   release_phase_log_elapsed "$dmg_sign_started_ms" "DMG sign"
-  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$DMG" dmg dmg-signed
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$DMG" dmg dmg-signed not-required "" "$APP_PATH"
 }
 
 submit_dmg_notarization_only() {
@@ -1091,8 +1091,8 @@ create_local_release_assets_only() {
   ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP"
   assert_sparkle_zip_has_no_macos_metadata "$ZIP"
   generate_jarvis_appcast
-  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip
-  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip not-required "" "$APP_PATH"
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast not-required "" "$APP_PATH"
   write_release_manifest
 }
 
@@ -1122,7 +1122,7 @@ write_dmg_checkpoint_from_receipt() {
   status="$(notary_receipt_status "$receipt_path")"
   submission_id="$(release_checkpoint_receipt_submission_id "$receipt_path")"
   openclaw_jarvis_release_checkpoint_write \
-    "$ROOT_DIR" "$DMG" dmg "$intended_phase" "$status" "$submission_id"
+    "$ROOT_DIR" "$DMG" dmg "$intended_phase" "$status" "$submission_id" "$APP_PATH"
 }
 
 require_resume_checkpoints_for_phase() {
@@ -1144,20 +1144,20 @@ require_resume_checkpoints_for_phase() {
       ;;
     poll-dmg-notarization)
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notary-submitted "$dmg_receipt"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notary-submitted "$dmg_receipt" "$APP_PATH"
       ;;
     publish-assets-only|verify-public-assets-only)
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notarized "$dmg_receipt"
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$ZIP" zip sparkle-zip
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$appcast" appcast sparkle-appcast
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notarized "$dmg_receipt" "$APP_PATH"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$ZIP" zip sparkle-zip "" "$APP_PATH"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$appcast" appcast sparkle-appcast "" "$APP_PATH"
       ;;
     publish-sparkle-assets-only|verify-sparkle-assets-only)
       # Sparkle truth remains independent of DMG truth. Validate only the
       # notarized app plus its immutable ZIP/appcast pair here.
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$ZIP" zip sparkle-zip
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$appcast" appcast sparkle-appcast
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$ZIP" zip sparkle-zip "" "$APP_PATH"
+      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$appcast" appcast sparkle-appcast "" "$APP_PATH"
       ;;
   esac
 }
@@ -1645,8 +1645,8 @@ assert_sparkle_zip_has_no_macos_metadata "$ZIP"
 release_phase_log_elapsed "$zip_started_ms" "Sparkle ZIP create/verify"
 appcast_started_ms="$(release_phase_now_ms)"
 generate_jarvis_appcast
-openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip
-openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast
+openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip not-required "" "$APP_PATH"
+openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast not-required "" "$APP_PATH"
 release_phase_log_elapsed "$appcast_started_ms" "Jarvis appcast"
 write_release_manifest
 
