@@ -13,6 +13,7 @@ source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
@@ -167,6 +168,48 @@ release_run_root() {
     RELEASE_RUN_ROOT="${OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT:-$(openclaw_build_run_root "jarvis-release")}"
   fi
   printf '%s\n' "$RELEASE_RUN_ROOT"
+}
+
+release_staging_preflight_path() {
+  if [[ -n "${OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT:-}" ]]; then
+    # An explicit run root may live on another volume. Probe the exact path the
+    # operator selected without creating it before capacity is established.
+    printf '%s\n' "$OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT"
+    return 0
+  fi
+
+  # openclaw_build_run_root creates its unique child below runs/. Probe that
+  # parent now; calling release_run_root here would mutate the filesystem.
+  printf '%s/runs\n' "$(openclaw_build_artifact_root)"
+}
+
+package_phase_creates_heavy_local_artifacts() {
+  case "$1" in
+    full|local-proof|post-app-build|build-app-only|submit-app-notarization|submit-dmg-notarization|create-local-release-assets-only|trusted-ring-fast)
+      return 0
+      ;;
+    poll-app-notarization|poll-dmg-notarization|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only)
+      return 1
+      ;;
+    *)
+      echo "ERROR: unknown package phase for disk preflight: $1" >&2
+      return 2
+      ;;
+  esac
+}
+
+require_release_disk_preflight() {
+  local required_kib
+  local staging_path
+
+  required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+  staging_path="$(release_staging_preflight_path)"
+
+  # Preserve the helper's complete multi-target report on stdout. Operators
+  # need each target, filesystem, free-space, shortfall, and final status line.
+  jarvis_release_disk_preflight_targets "$required_kib" \
+    release-output "$ROOT_DIR/dist" \
+    release-staging "$staging_path"
 }
 
 release_phase_now_ms() {
@@ -1388,14 +1431,22 @@ case "$PACKAGE_PHASE" in
     ;;
 esac
 
+# All argument, checkpoint, prewarm, and clean-tree gates above are read-only.
+# Validate authorization around the potentially slow filesystem probes, then
+# proceed immediately to the heavy-artifact path. The post-probe validation
+# closes replacement races before run-root creation, stale deletion, or package
+# invocation. Poll/publish/verify phases skip this gate.
+if package_phase_creates_heavy_local_artifacts "$PACKAGE_PHASE"; then
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release disk preflight"
+  require_release_disk_preflight
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release artifact mutation"
+fi
+
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
 if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]; then
-  # Authorization can be replaced while this process is waiting on preflight.
-  # Revalidate at the final boundary before deleting stale outputs or building.
-  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "release app build"
   # Stale release artifacts under dist/ can get copied into the bundled runtime
   # before the fresh app is assembled. Remove only mac release outputs here; JS
   # build outputs under dist/ are still needed by the packaged CLI/runtime.
@@ -1443,7 +1494,17 @@ fi
 
 ZIP="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.zip"
 DMG="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.dmg"
-NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
+NOTARY_ZIP=""
+case "$PACKAGE_PHASE" in
+  submit-app-notarization)
+    NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
+    ;;
+  full|post-app-build)
+    if [[ "$NOTARIZE" == "1" ]]; then
+      NOTARY_ZIP="$(release_run_root)/${APP_NAME}-${VERSION}.notary.zip"
+    fi
+    ;;
+esac
 DSYM_ZIP="$ROOT_DIR/dist/${PRODUCT}-${VERSION}.dSYM.zip"
 SIGNING_AUTHORITY="$(bundle_signing_authority "$APP_PATH")"
 write_app_build_receipt

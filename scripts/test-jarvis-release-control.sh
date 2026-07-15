@@ -6,7 +6,15 @@ source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
 
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+PACKAGE_MUTATION_SENTINEL=""
+
+cleanup() {
+  if [[ -n "$PACKAGE_MUTATION_SENTINEL" ]]; then
+    rm -f "$PACKAGE_MUTATION_SENTINEL"
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 
 fail() {
   echo "FAIL: $*" >&2
@@ -432,11 +440,16 @@ test_tracked_drift_stops_real_package_entrypoint() {
   local intent_id
   local err="$TMP_DIR/package-drift.err"
   local manifest="$TMP_DIR/package-drift-manifest.env"
+  local probe="$TMP_DIR/package-drift-probe"
+  local probe_marker="$TMP_DIR/package-drift-probe.called"
   local status=0
   export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
   export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=4000
   export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=package-drift-run
   intent_id="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 60)"
+  apply_stub "$probe" '#!/usr/bin/env bash
+: >"${PACKAGE_DRIFT_PROBE_MARKER:?}"
+printf "fs-drift\t/Volumes/drift\t99999999\t%s\n" "$1"'
 
   # Simulate the exact intent mismatch produced by a tracked edit after
   # authorization without dirtying this real checkout during the test.
@@ -450,6 +463,8 @@ test_tracked_drift_stops_real_package_entrypoint() {
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/package-drift.lock" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
+  PACKAGE_DRIFT_PROBE_MARKER="$probe_marker" \
+  JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
     /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase full \
       --release-intent "$intent_id" \
@@ -464,7 +479,164 @@ test_tracked_drift_stops_real_package_entrypoint() {
   grep -q '^recovery_command=bash scripts/jarvis-public-release.sh --authorize$' "$err" \
     || fail "tracked drift printed the wrong recovery command"
   [[ ! -e "$manifest" ]] || fail "package wrote release state after tracked-drift rejection"
+  [[ ! -e "$probe_marker" ]] || fail "disk preflight ran before tracked-drift rejection"
   pass "real package entrypoint rejects tracked drift before release mutation"
+}
+
+test_package_disk_preflight_targets_and_boundaries() {
+  local app_name="JarvisDiskGateTest-$$"
+  local explicit_staging="$TMP_DIR/explicit-release-staging"
+  local default_artifact_root="$TMP_DIR/default-build-artifacts"
+  local default_staging="$default_artifact_root/runs"
+  local probe="$TMP_DIR/package-disk-probe"
+  local intent_path="$TMP_DIR/package-disk.intent"
+  local intent_id
+  local out="$TMP_DIR/package-disk.out"
+  local err="$TMP_DIR/package-disk.err"
+  local race_staging="$TMP_DIR/race-release-staging"
+  local replacement_once="$TMP_DIR/package-disk-replacement.once"
+  local replacement_marker="$TMP_DIR/package-disk-replacement.done"
+  local release_home release_name status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd -P)"
+  release_name="$(basename "$ROOT_DIR")"
+  PACKAGE_MUTATION_SENTINEL="$ROOT_DIR/dist/${app_name}.zip"
+  mkdir -p "$(dirname "$PACKAGE_MUTATION_SENTINEL")"
+  printf 'must survive failed disk gate\n' >"$PACKAGE_MUTATION_SENTINEL"
+
+  apply_stub "$probe" '#!/usr/bin/env bash
+if [[ "${PACKAGE_DISK_PROBE_MODE:?}" == "race" ]]; then
+  if mkdir "${PACKAGE_DISK_REPLACEMENT_ONCE:?}" 2>/dev/null; then
+    source "${PACKAGE_DISK_INTENT_HELPER:?}"
+    OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=replacement-during-disk-probe \
+      openclaw_jarvis_release_intent_authorize "${PACKAGE_DISK_GIT_ROOT:?}" 60 >/dev/null
+    : >"${PACKAGE_DISK_REPLACEMENT_MARKER:?}"
+  fi
+  printf "fs-race\t/Volumes/race\t4096\t%s\n" "$1"
+  exit 0
+fi
+case "${PACKAGE_DISK_PROBE_MODE:?}:$1" in
+  "cross:${PACKAGE_DISK_EXPECTED_OUTPUT:?}")
+    printf "fs-output\t/Volumes/output\t4096\t%s\n" "$1"
+    ;;
+  "cross:${PACKAGE_DISK_EXPECTED_STAGING:?}")
+    printf "fs-staging\t/Volumes/staging\t1024\t%s\n" "$1"
+    ;;
+  "same:${PACKAGE_DISK_EXPECTED_OUTPUT:?}"|"same:${PACKAGE_DISK_EXPECTED_STAGING:?}")
+    printf "fs-shared\t/Volumes/shared\t1024\t%s\n" "$1"
+    ;;
+  *)
+    exit 1
+    ;;
+esac'
+
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=4500
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=package-disk-run
+  intent_id="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 60)"
+
+  set +e
+  APP_NAME="$app_name" \
+  SKIP_NOTARIZE=1 \
+  ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1 \
+  ALLOW_COLD_RELEASE_LANE=1 \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/package-disk-cross.lock" \
+  OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT="$explicit_staging" \
+  PACKAGE_DISK_PROBE_MODE=cross \
+  PACKAGE_DISK_EXPECTED_OUTPUT="$ROOT_DIR/dist" \
+  PACKAGE_DISK_EXPECTED_STAGING="$explicit_staging" \
+  JARVIS_RELEASE_DISK_REQUIRED_KIB=2048 \
+  JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
+    /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase build-app-only \
+      --release-intent "$intent_id" \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 1 ]] || fail "cross-filesystem package disk gate expected status 1, got $status"
+  grep -Fq "target[1].label=release-output" "$out" || fail "package disk gate omitted release-output label"
+  grep -Fq "target[1].path=$ROOT_DIR/dist" "$out" || fail "package disk gate used the wrong release output path"
+  grep -Fq "target[2].label=release-staging" "$out" || fail "package disk gate omitted release-staging label"
+  grep -Fq "target[2].path=$explicit_staging" "$out" || fail "package disk gate changed explicit staging path"
+  grep -Fq "filesystem[2].shortfall_kib=1024" "$out" || fail "package disk gate omitted staging shortfall"
+  grep -Fq "status=fail" "$out" || fail "package disk gate did not preserve final failure status"
+  [[ -f "$PACKAGE_MUTATION_SENTINEL" ]] || fail "cross-filesystem failure deleted the mutation sentinel"
+  [[ ! -e "$explicit_staging" ]] || fail "cross-filesystem preflight created explicit staging"
+
+  set +e
+  APP_NAME="$app_name" \
+  SKIP_NOTARIZE=1 \
+  ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1 \
+  ALLOW_COLD_RELEASE_LANE=1 \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/package-disk-shared.lock" \
+  OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT= \
+  OPENCLAW_BUILD_ARTIFACT_ROOT="$default_artifact_root" \
+  PACKAGE_DISK_PROBE_MODE=same \
+  PACKAGE_DISK_EXPECTED_OUTPUT="$ROOT_DIR/dist" \
+  PACKAGE_DISK_EXPECTED_STAGING="$default_staging" \
+  JARVIS_RELEASE_DISK_REQUIRED_KIB=2048 \
+  JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
+    /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase build-app-only \
+      --release-intent "$intent_id" \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 1 ]] || fail "same-filesystem package disk gate expected status 1, got $status"
+  grep -Fq "target[2].path=$default_staging" "$out" || fail "package disk gate used the wrong default staging parent"
+  grep -Fq "target[2].deduplicated=true" "$out" || fail "package disk gate lost same-filesystem deduplication"
+  grep -Fq "filesystem[1].labels=release-output,release-staging" "$out" || fail "deduplicated output lost both target labels"
+  grep -Fq "filesystems_checked=1" "$out" || fail "same-filesystem package gate checked duplicate filesystems"
+  [[ -f "$PACKAGE_MUTATION_SENTINEL" ]] || fail "same-filesystem failure deleted the mutation sentinel"
+  [[ ! -e "$default_artifact_root" ]] || fail "default package preflight created staging before capacity pass"
+
+  # Replace the latest intent during the first successful filesystem probe.
+  # The second validation must reject the original queued process before its
+  # stale-output cleanup glob or release-run-root creation can execute.
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=package-disk-race-original
+  intent_id="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 60)"
+  set +e
+  APP_NAME="$app_name" \
+  SKIP_NOTARIZE=1 \
+  ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1 \
+  ALLOW_COLD_RELEASE_LANE=1 \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/package-disk-race.lock" \
+  OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT="$race_staging" \
+  PACKAGE_DISK_PROBE_MODE=race \
+  PACKAGE_DISK_REPLACEMENT_ONCE="$replacement_once" \
+  PACKAGE_DISK_REPLACEMENT_MARKER="$replacement_marker" \
+  PACKAGE_DISK_INTENT_HELPER="$ROOT_DIR/scripts/lib/jarvis-release-intent.sh" \
+  PACKAGE_DISK_GIT_ROOT="$ROOT_DIR" \
+  JARVIS_RELEASE_DISK_REQUIRED_KIB=2048 \
+  JARVIS_RELEASE_DISK_PROBE_COMMAND="$probe" \
+    /bin/bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+      --phase build-app-only \
+      --release-intent "$intent_id" \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "intent replacement during disk probe unexpectedly reached mutation"
+  [[ -d "$replacement_once" && -f "$replacement_marker" ]] \
+    || fail "disk probe did not atomically replace the release intent"
+  grep -Fq "targets_checked=2" "$out" || fail "replacement fixture did not complete both disk probes"
+  grep -Fq "status=pass" "$out" || fail "replacement fixture did not return passing disk data"
+  grep -q 'release intent is replaced' "$err" || fail "post-probe boundary did not reject the replaced intent"
+  [[ "$(grep -c '^recovery_command=' "$err")" == "1" ]] \
+    || fail "post-probe replacement did not print exactly one recovery command"
+  grep -q '^recovery_command=bash scripts/jarvis-public-release.sh --authorize$' "$err" \
+    || fail "post-probe replacement printed the wrong recovery command"
+  [[ -f "$PACKAGE_MUTATION_SENTINEL" ]] || fail "post-probe replacement deleted the mutation sentinel"
+  [[ ! -e "$race_staging" ]] || fail "post-probe replacement created release staging"
+
+  rm -f "$PACKAGE_MUTATION_SENTINEL"
+  PACKAGE_MUTATION_SENTINEL=""
+  pass "package disk gate preserves exact targets, dedup output, and mutation ordering"
 }
 
 make_stub_tools
@@ -476,5 +648,6 @@ test_operator_authorization_interface
 test_checkpoint_invalid_and_valid_resume
 test_expired_intent_prints_one_recovery_command
 test_tracked_drift_stops_real_package_entrypoint
+test_package_disk_preflight_targets_and_boundaries
 
 echo "All Jarvis release control tests passed."

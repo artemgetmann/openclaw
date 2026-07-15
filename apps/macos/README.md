@@ -200,26 +200,20 @@ deduplicated. A low-space or unresolved target is a hard stop before packaging:
 bash scripts/preflight-jarvis-release-disk.sh
 ```
 
-Release-wrapper integration is intentionally deferred from this PR. The future
-wrapper must source `scripts/lib/jarvis-release-disk-preflight.sh` and call the
-multi-target contract before its first packaging mutation, passing the actual
-final output and heavy-staging paths selected for that run:
+`package-openclaw-mac-dist.sh` invokes the same multi-target gate automatically
+for phases that build an app, notary upload, DMG, ZIP, or appcast. It runs after
+the lock, intent, checkpoint, prewarm, and clean-tree gates, then revalidates
+intent both immediately before and after checking capacity. The post-probe
+validation closes intent-replacement races before the first packaging mutation.
+Pure poll, publish, and verify phases do not create heavy local artifacts and
+skip this capacity gate.
 
-```bash
-jarvis_release_disk_preflight_targets "$required_kib" \
-  release-output "$actual_dist_path" \
-  release-staging "$actual_release_run_root"
-```
-
-If a wrapper adds another output or staging volume, append another label/path
-pair. Do not replace this with a repo-root-only check: that recreates the
-cross-volume blind spot.
-
-The standalone default checks the build-artifact `runs/` parent without
-creating a unique release run. The package wrapper normally creates its
-`jarvis-release` child there. If `OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT` selects an
-alternate exact path, the caller must pass that path with `--staging-path` or as
-the `release-staging` pair above.
+Both automatic targets are reported verbatim: `release-output` is the repo's
+actual `dist/` directory, while `release-staging` is either the exact explicit
+`OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT` or the build-artifact `runs/` parent where
+the package creates its unique run. The capacity check resolves these paths
+read-only and does not create staging first. Do not replace this with a
+repo-root-only check: that recreates the cross-volume blind spot.
 
 If old failed staging is consuming space, report it first, then apply the same
 conservative policy explicitly:
