@@ -170,8 +170,9 @@ log "live_telegram_send=disabled"
 # Apply is still synthetic: write only lane-owned disposable copies.  The
 # actual package/publish/restart operations are explicitly out of scope.
 [[ ! -e "$RUN_ROOT" ]] || die "preflight blocked: lane root already exists; refusing to reclaim it"
-mkdir -p "$RUN_ROOT/sparkle-staging" "$RUN_ROOT/temp-prefs" "$RUN_ROOT/installed-app"
+mkdir -p "$RUN_ROOT"
 printf 'lane=jarvis-sparkle-update-e2e\n' >"$RUN_SENTINEL"
+mkdir -p "$RUN_ROOT/sparkle-staging" "$RUN_ROOT/temp-prefs" "$RUN_ROOT/installed-app"
 cp -- "$INSTALLED_META" "$RUN_ROOT/installed-app/before.env"
 cp -- "$MANAGED_META" "$RUN_ROOT/managed-before.env"
 cp -- "$NEW_META" "$RUN_ROOT/sparkle-staging/new-app.env"
