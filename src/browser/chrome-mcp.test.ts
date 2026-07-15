@@ -49,6 +49,7 @@ type CdpTestMessage = {
   id?: number;
   method?: string;
   params?: Record<string, unknown>;
+  sessionId?: string;
 };
 
 function decodeWsFrame(data: RawData): string {
@@ -1396,7 +1397,7 @@ describe("chrome MCP page parsing", () => {
     expect(send.mock.calls.some(([method]) => method === "Page.getResourceContent")).toBe(true);
   });
 
-  it("captures only a navigated PDF viewer correlated to the clicked target", async () => {
+  it("captures a no-store PDF popup from the clicked target before its body is discarded", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-pdf-resource-fallback-"));
     const downloadDir = path.join(tempDir, "downloads");
     const finalPath = path.join(downloadDir, "statement.pdf");
@@ -1405,10 +1406,13 @@ describe("chrome MCP page parsing", () => {
     const previousBrowserUrl = process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
     let httpServer: ReturnType<typeof createServer> | undefined;
     let wsServer: WebSocketServer | undefined;
-    let resourceTreeCalls = 0;
     let unrelatedResourceCalls = 0;
+    let popupFetchBodyCalls = 0;
+    let popupFetchContinueCalls = 0;
     let markerActive = false;
     let viewerReady = false;
+    let popupAutoAttachArmed = false;
+    const browserSockets = new Set<WebSocket>();
 
     try {
       wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
@@ -1427,6 +1431,10 @@ describe("chrome MCP page parsing", () => {
         const isDuplicateTarget = request.url === "/devtools/page/duplicate";
         const isViewerTarget = viewerReady && request.url === "/devtools/page/popup";
         const isUnrelatedTarget = request.url === "/devtools/page/unrelated";
+        if (isBrowserTarget) {
+          browserSockets.add(socket);
+          socket.once("close", () => browserSockets.delete(socket));
+        }
         socket.on("message", (data) => {
           const message = JSON.parse(decodeWsFrame(data)) as CdpTestMessage;
           if ((isSourceTarget || isDuplicateTarget) && message.method === "Runtime.evaluate") {
@@ -1434,6 +1442,65 @@ describe("chrome MCP page parsing", () => {
               JSON.stringify({
                 id: message.id,
                 result: { result: { type: "boolean", value: markerActive && isSourceTarget } },
+              }),
+            );
+            return;
+          }
+          if (isBrowserTarget && message.method === "Target.setAutoAttach") {
+            popupAutoAttachArmed = message.params?.autoAttach === true;
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
+            return;
+          }
+          if (
+            isBrowserTarget &&
+            message.sessionId === "popup-session" &&
+            message.method === "Fetch.getResponseBody"
+          ) {
+            popupFetchBodyCalls += 1;
+            socket.send(
+              JSON.stringify({
+                id: message.id,
+                sessionId: message.sessionId,
+                result: { body: pdfBytes.toString("base64"), base64Encoded: true },
+              }),
+            );
+            return;
+          }
+          if (
+            isBrowserTarget &&
+            message.sessionId === "popup-session" &&
+            message.method === "Fetch.continueRequest"
+          ) {
+            popupFetchContinueCalls += 1;
+          }
+          if (
+            isBrowserTarget &&
+            message.sessionId === "popup-session" &&
+            message.method === "Runtime.runIfWaitingForDebugger"
+          ) {
+            socket.send(
+              JSON.stringify({ id: message.id, sessionId: message.sessionId, result: {} }),
+            );
+            socket.send(
+              JSON.stringify({
+                method: "Fetch.requestPaused",
+                sessionId: message.sessionId,
+                params: {
+                  requestId: "paused-popup-pdf-request",
+                  resourceType: "Document",
+                  responseStatusCode: 200,
+                  request: {
+                    url: responseUrl,
+                  },
+                  responseHeaders: [
+                    { name: "content-type", value: "application/pdf" },
+                    {
+                      name: "content-disposition",
+                      value: 'inline; filename="statement.pdf"',
+                    },
+                    { name: "cache-control", value: "no-store" },
+                  ],
+                },
               }),
             );
             return;
@@ -1471,9 +1538,7 @@ describe("chrome MCP page parsing", () => {
             return;
           }
           if ((isViewerTarget || isUnrelatedTarget) && message.method === "Page.getResourceTree") {
-            if (isViewerTarget) {
-              resourceTreeCalls += 1;
-            } else {
+            if (isUnrelatedTarget) {
               unrelatedResourceCalls += 1;
             }
             socket.send(
@@ -1497,14 +1562,10 @@ describe("chrome MCP page parsing", () => {
             (isViewerTarget || isUnrelatedTarget) &&
             message.method === "Page.getResourceContent"
           ) {
-            expect(message.params).toEqual({ frameId: "pdf-frame", url: responseUrl });
             socket.send(
               JSON.stringify({
                 id: message.id,
-                result: {
-                  content: pdfBytes.toString("base64"),
-                  base64Encoded: true,
-                },
+                error: { code: -32000, message: "Content unavailable. Resource was not cached" },
               }),
             );
             return;
@@ -1595,6 +1656,25 @@ describe("chrome MCP page parsing", () => {
         }
         if (name === "click") {
           viewerReady = true;
+          if (popupAutoAttachArmed) {
+            for (const socket of browserSockets) {
+              socket.send(
+                JSON.stringify({
+                  method: "Target.attachedToTarget",
+                  params: {
+                    sessionId: "popup-session",
+                    waitingForDebugger: true,
+                    targetInfo: {
+                      targetId: "popup-viewer",
+                      type: "page",
+                      url: responseUrl,
+                      openerId: "source-target",
+                    },
+                  },
+                }),
+              );
+            }
+          }
           return { content: [{ type: "text", text: "ok" }] };
         }
         throw new Error(`unexpected tool ${name}`);
@@ -1624,11 +1704,12 @@ describe("chrome MCP page parsing", () => {
 
       expect(result).toEqual({
         url: responseUrl,
-        suggestedFilename: "download.pdf",
+        suggestedFilename: "statement.pdf",
         path: finalPath,
       });
-      expect(resourceTreeCalls).toBeGreaterThanOrEqual(1);
       expect(unrelatedResourceCalls).toBe(0);
+      expect(popupFetchBodyCalls).toBe(1);
+      expect(popupFetchContinueCalls).toBe(1);
       expect(await fs.readFile(finalPath)).toEqual(pdfBytes);
     } finally {
       if (previousBrowserUrl === undefined) {
