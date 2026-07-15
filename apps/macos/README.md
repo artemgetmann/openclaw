@@ -189,6 +189,51 @@ lane. For normal hotfix validation, follow the fast runtime/app-support split in
 `docs/agent-guides/runtime-ops.md` instead of rebuilding, notarizing, or
 publishing app artifacts.
 
+Run the read-only disk gate before starting a release package. By default it
+checks both repo `dist/` output and build-artifact `runs/` staging, requires 25
+GiB free on each unique filesystem, and prints target resolution plus the
+required, free, and shortfall capacity. Targets sharing a filesystem are
+deduplicated. A low-space or unresolved target is a hard stop before packaging:
+
+```bash
+bash scripts/preflight-jarvis-release-disk.sh
+```
+
+Release-wrapper integration is intentionally deferred from this PR. The future
+wrapper must source `scripts/lib/jarvis-release-disk-preflight.sh` and call the
+multi-target contract before its first packaging mutation, passing the actual
+final output and heavy-staging paths selected for that run:
+
+```bash
+jarvis_release_disk_preflight_targets "$required_kib" \
+  release-output "$actual_dist_path" \
+  release-staging "$actual_release_run_root"
+```
+
+If a wrapper adds another output or staging volume, append another label/path
+pair. Do not replace this with a repo-root-only check: that recreates the
+cross-volume blind spot.
+
+The standalone default checks the build-artifact `runs/` parent without
+creating a unique release run. The package wrapper normally creates its
+`jarvis-release` child there. If `OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT` selects an
+alternate exact path, the caller must pass that path with `--staging-path` or as
+the `release-staging` pair above.
+
+If old failed staging is consuming space, report it first, then apply the same
+conservative policy explicitly:
+
+```bash
+bash scripts/cleanup-build-artifacts.sh --build-cache
+bash scripts/cleanup-build-artifacts.sh --build-cache --apply
+```
+
+Cleanup keeps the newest Jarvis release/Sparkle staging run, skips live or
+explicitly protected runs, and reports owner/mode for permission-protected
+entries instead of changing permissions. It never scans installed apps,
+`/Applications`, user config/runtime state, or resumable/final `dist/`
+artifacts and receipts.
+
 ```bash
 # Read-only. Reports missing/present state without printing secret values.
 bash scripts/preflight-consumer-mac-release.sh
