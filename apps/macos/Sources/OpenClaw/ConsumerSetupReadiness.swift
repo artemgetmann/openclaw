@@ -5,6 +5,7 @@ import OpenClawKit
 import SwiftUI
 
 private let consumerBrowserProfileName = "user"
+private let consumerDefaultBrowserProfileName = "signed-in"
 
 struct ConsumerShellCommandResult {
     let stdout: String
@@ -1635,12 +1636,9 @@ extension BrowserSetupModel {
         user["color"] = (user["color"] as? String) ?? "#00AA00"
         profiles[consumerBrowserProfileName] = user
         browser["enabled"] = true
-        // Consumer browser setup still captures a clone target for the managed
-        // fallback lane, but it should not force clone mode as the browser
-        // default after the core product moved away from the old MVP design.
-        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == consumerBrowserProfileName {
-            browser.removeValue(forKey: "defaultProfile")
-        }
+        // Browser setup records the chosen Chrome source for the compatibility
+        // lane, while normal Jarvis work stays on the built-in signed-in clone.
+        browser["defaultProfile"] = consumerDefaultBrowserProfileName
         browser["profiles"] = profiles
         root["browser"] = browser
         OpenClawConfigFile.saveDict(root)

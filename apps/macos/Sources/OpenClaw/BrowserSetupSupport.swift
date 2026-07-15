@@ -56,6 +56,7 @@ enum BrowserRuntimeFailureTemplateKind: CaseIterable {
 
 extension OpenClawConfigFile {
     private static var managedBrowserProfileName: String { "user" }
+    private static var defaultBrowserProfileName: String { "signed-in" }
     private static var managedBrowserProfileColor: String { "#00AA00" }
     private static var defaultBrowserControlPort: Int { 18_791 }
     private static var defaultBrowserCdpRangeStart: Int { 18_800 }
@@ -86,7 +87,7 @@ extension OpenClawConfigFile {
         let cdpPort = self.managedBrowserUserCdpPort()
         var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]
-        browser["defaultProfile"] = self.managedBrowserProfileName
+        browser["defaultProfile"] = self.defaultBrowserProfileName
         var profiles = browser["profiles"] as? [String: Any] ?? [:]
         var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
         userProfile["cdpPort"] = cdpPort

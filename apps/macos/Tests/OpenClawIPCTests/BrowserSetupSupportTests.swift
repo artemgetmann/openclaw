@@ -570,7 +570,7 @@ struct BrowserSetupSupportTests {
             let browser = root["browser"] as? [String: Any]
             let profiles = browser?["profiles"] as? [String: Any]
             let userProfile = profiles?["user"] as? [String: Any]
-            #expect(browser?["defaultProfile"] as? String == nil)
+            #expect(browser?["defaultProfile"] as? String == "signed-in")
             #expect((userProfile?["cdpPort"] as? NSNumber)?.intValue == OpenClawConfigFile.managedBrowserUserCdpPort())
             #expect(userProfile?["cloneFromUserProfile"] as? Bool == true)
             #expect(userProfile?["sourceProfileName"] as? String == "Profile 4")
@@ -966,7 +966,7 @@ struct BrowserSetupSupportTests {
             let root = OpenClawConfigFile.loadDict()
             let browser = root["browser"] as? [String: Any]
             let profiles = browser?["profiles"] as? [String: Any]
-            #expect((browser?["defaultProfile"] as? String) == nil)
+            #expect(browser?["defaultProfile"] as? String == "signed-in")
             #expect(profiles?["user"] == nil)
         }
     }
