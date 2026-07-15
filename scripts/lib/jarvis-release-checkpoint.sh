@@ -5,6 +5,7 @@
 # of a signed or notarized artifact.
 
 OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE=""
+OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE=""
 
 openclaw_jarvis_release_checkpoint_value() {
   local metadata_path="$1"
@@ -99,10 +100,29 @@ openclaw_jarvis_release_checkpoint_verify_notarized() {
   local xcrun_bin="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_XCRUN_BIN:-/usr/bin/xcrun}"
   local spctl_bin="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN:-/usr/sbin/spctl}"
 
-  "$xcrun_bin" stapler validate "$artifact_path" >/dev/null 2>&1 || return 1
-  if [[ "$artifact_kind" == "dmg" ]]; then
-    "$spctl_bin" -a -t open --context context:primary-signature "$artifact_path" >/dev/null 2>&1 || return 1
-  fi
+  OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE=""
+  "$xcrun_bin" stapler validate "$artifact_path" >/dev/null 2>&1 || {
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE="staple"
+    return 1
+  }
+  case "$artifact_kind" in
+    app)
+      "$spctl_bin" -a -vv "$artifact_path" >/dev/null 2>&1 || {
+        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE="gatekeeper"
+        return 1
+      }
+      ;;
+    dmg)
+      "$spctl_bin" -a -t open --context context:primary-signature "$artifact_path" >/dev/null 2>&1 || {
+        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE="gatekeeper"
+        return 1
+      }
+      ;;
+    *)
+      OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE="artifact-kind"
+      return 1
+      ;;
+  esac
 }
 
 openclaw_jarvis_release_checkpoint_receipt_matches() {
@@ -181,8 +201,20 @@ openclaw_jarvis_release_checkpoint_write() {
       ;;
     Accepted)
       [[ -n "$notary_submission_id" ]] || return 1
-      openclaw_jarvis_release_checkpoint_verify_notarized "$absolute_path" "$artifact_kind" || return 1
-      staple_validated="true"
+      case "$intended_phase" in
+        app-notary-accepted|dmg-notary-accepted)
+          [[ "$artifact_kind:$intended_phase" == "app:app-notary-accepted" \
+            || "$artifact_kind:$intended_phase" == "dmg:dmg-notary-accepted" ]] || return 1
+          # Apple acceptance is durable even when local stapling or current
+          # Gatekeeper policy fails. Preserve the exact accepted submission and
+          # artifact identity so recovery polls/staples again without resubmit.
+          staple_validated="pending"
+          ;;
+        *)
+          openclaw_jarvis_release_checkpoint_verify_notarized "$absolute_path" "$artifact_kind" || return 1
+          staple_validated="true"
+          ;;
+      esac
       ;;
     *)
       return 1
@@ -361,6 +393,21 @@ openclaw_jarvis_release_checkpoint_validate() {
         return 1
       }
       ;;
+    app-notary-accepted|dmg-notary-accepted)
+      if [[ "$artifact_kind:$intended_phase" != "app:app-notary-accepted" \
+        && "$artifact_kind:$intended_phase" != "dmg:dmg-notary-accepted" ]]; then
+        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="phase"
+        return 1
+      fi
+      [[ "$notary_status" == "Accepted" && -n "$submission_id" && "$staple_validated" == "pending" ]] || {
+        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="notary-metadata"
+        return 1
+      }
+      openclaw_jarvis_release_checkpoint_receipt_matches "$receipt_path" "$absolute_path" "$artifact_kind" "Accepted" "$submission_id" || {
+        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="notary-receipt"
+        return 1
+      }
+      ;;
     app-notarized|dmg-notarized)
       [[ "$notary_status" == "Accepted" && -n "$submission_id" && "$staple_validated" == "true" ]] || {
         OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="notary-metadata"
@@ -371,7 +418,7 @@ openclaw_jarvis_release_checkpoint_validate() {
         return 1
       }
       openclaw_jarvis_release_checkpoint_verify_notarized "$absolute_path" "$artifact_kind" || {
-        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="staple"
+        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE:-notarized-validation}"
         return 1
       }
       ;;

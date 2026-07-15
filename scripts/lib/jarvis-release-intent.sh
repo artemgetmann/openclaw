@@ -171,8 +171,12 @@ openclaw_jarvis_release_intent_authorize() {
   # Each authorizer writes a private complete record and atomically replaces
   # the public record. Concurrent authorizers therefore have a single winner:
   # whichever completed replacement last is the only executable intent.
-  (umask 077 && mkdir -p "$intent_parent" && chmod 700 "$intent_parent")
-  {
+  if ! (umask 077 && mkdir -p "$intent_parent" && chmod 700 "$intent_parent"); then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="persistence"
+    echo "ERROR: unable to prepare durable release-intent storage; authorization was not created." >&2
+    return 1
+  fi
+  if ! {
     printf 'JARVIS_RELEASE_INTENT_VERSION=2\n'
     printf 'JARVIS_RELEASE_INTENT_ID=%s\n' "$intent_id"
     printf 'JARVIS_RELEASE_INTENT_REPO_IDENTITY=%s\n' "$repo_identity"
@@ -180,9 +184,18 @@ openclaw_jarvis_release_intent_authorize() {
     printf 'JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT=%s\n' "$tracked_fingerprint"
     printf 'JARVIS_RELEASE_INTENT_AUTHORIZED_AT_EPOCH=%s\n' "$now"
     printf 'JARVIS_RELEASE_INTENT_EXPIRES_AT_EPOCH=%s\n' "$expires"
-  } >"$intent_tmp"
-  chmod 600 "$intent_tmp"
-  mv -f "$intent_tmp" "$intent_path"
+  } >"$intent_tmp"; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="persistence"
+    rm -f "$intent_tmp"
+    echo "ERROR: unable to write the durable release intent; authorization was not created." >&2
+    return 1
+  fi
+  if ! chmod 600 "$intent_tmp" || ! mv -f "$intent_tmp" "$intent_path"; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="persistence"
+    rm -f "$intent_tmp"
+    echo "ERROR: unable to publish the durable release intent; authorization was not created." >&2
+    return 1
+  fi
 
   printf '%s\n' "$intent_id"
 }

@@ -201,6 +201,7 @@ package_phase_creates_heavy_local_artifacts() {
 require_release_disk_preflight() {
   local required_kib
   local staging_path
+  local package_temp_path="${TMPDIR:-/tmp}"
 
   required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
   staging_path="$(release_staging_preflight_path)"
@@ -209,7 +210,9 @@ require_release_disk_preflight() {
   # need each target, filesystem, free-space, shortfall, and final status line.
   jarvis_release_disk_preflight_targets "$required_kib" \
     release-output "$ROOT_DIR/dist" \
-    release-staging "$staging_path"
+    release-staging "$staging_path" \
+    package-temp "$package_temp_path" \
+    dmg-temp /tmp
 }
 
 release_phase_now_ms() {
@@ -520,7 +523,7 @@ verify_dmg_gatekeeper() {
   if [[ $spctl_status -ne 0 ]]; then
     echo "ERROR: release DMG failed Gatekeeper verification." >&2
     echo "spctl output: ${spctl_output//$'\n'/ | }" >&2
-    exit 1
+    return 1
   fi
 
   echo "✅ DMG Gatekeeper accepted: ${spctl_output//$'\n'/ | }"
@@ -543,13 +546,12 @@ publish_release_assets() {
   require_local_appcast_targets_current_tag
 
   github_release_upload_preflight
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload"
 
   echo "🚀 Uploading Jarvis release assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   jarvis_release_retry \
     "gh release upload Jarvis assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
-    gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
-      --repo "$GITHUB_RELEASE_REPO" \
-      --clobber
+    jarvis_release_upload_full_assets_attempt
 
   verify_public_release_assets
 }
@@ -609,6 +611,7 @@ publish_sparkle_release_assets() {
   require_local_appcast_targets_current_tag
 
   github_release_upload_preflight
+  openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload"
 
   # Existing users update through Sparkle using the ZIP and appcast. The DMG is
   # a separate fresh-install/sendable installer truth, so this urgent path keeps
@@ -616,11 +619,31 @@ publish_sparkle_release_assets() {
   echo "🚀 Uploading Jarvis Sparkle update assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG"
   jarvis_release_retry \
     "gh release upload Jarvis Sparkle assets to $GITHUB_RELEASE_REPO@$GITHUB_RELEASE_TAG" \
-    gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" "$appcast" \
-      --repo "$GITHUB_RELEASE_REPO" \
-      --clobber
+    jarvis_release_upload_sparkle_assets_attempt
 
   verify_sparkle_public_release_assets
+}
+
+# Retry boundaries re-check the short-lived operator authorization immediately
+# before each mutating GitHub call. `jarvis_release_retry` deliberately disables
+# errexit while it captures command output, so the explicit return preserves the
+# guard: a replaced/expired intent must never fall through to `gh`.
+jarvis_release_upload_full_assets_attempt() {
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub full release upload attempt" \
+    || return $?
+  gh release upload "$GITHUB_RELEASE_TAG" "$DMG" "$ZIP" "$appcast" \
+    --repo "$GITHUB_RELEASE_REPO" \
+    --clobber
+}
+
+jarvis_release_upload_sparkle_assets_attempt() {
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "GitHub Sparkle release upload attempt" \
+    || return $?
+  gh release upload "$GITHUB_RELEASE_TAG" "$ZIP" "$appcast" \
+    --repo "$GITHUB_RELEASE_REPO" \
+    --clobber
 }
 
 sign_dmg_if_possible() {
@@ -764,6 +787,25 @@ notary_receipt_submission_id() {
   fi
 
   receipt_value "$receipt_path" "NOTARY_SUBMISSION_ID"
+}
+
+notary_receipt_has_submitted_submission_id() {
+  local receipt_path="$1"
+  local submission_id
+
+  submission_id="$(jarvis_release_normalize_optional_metadata_value "$(notary_receipt_submission_id "$receipt_path")")"
+  [[ "$(notary_receipt_status "$receipt_path")" == "submitted" && -n "$submission_id" ]]
+}
+
+require_blocking_notary_result_intent() {
+  local artifact_kind="$1"
+
+  # Blocking submit --wait includes Apple's slow status wait and local staple.
+  # Revalidate again in the package caller before any final manifest/checkpoint
+  # mutation. A nonzero result with durable submitted proof is handled first by
+  # the narrow exception that prevents duplicate submission.
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "$artifact_kind blocking notarization result"
 }
 
 write_release_manifest() {
@@ -982,16 +1024,40 @@ verify_resume_app_bundle() {
 submit_app_notarization_only() {
   local notary_zip="$NOTARY_ZIP"
   local receipt_path
+  local status=0
 
   receipt_path="$(app_notary_receipt_path)"
   echo "📦 Notary zip: $notary_zip"
   rm -f "$notary_zip"
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$notary_zip"
+  set +e
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID="$RELEASE_INTENT_ID" \
   STAPLE_APP_PATH="$APP_PATH" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --submit-only \
     --receipt "$receipt_path" \
     "$notary_zip"
+  status=$?
+  set -e
+
+  # Apple may have accepted the job even when the submit transport exits
+  # nonzero. That receipt is irreversible external truth, so preserve a strict
+  # submitted checkpoint without revalidating a now-expired/replaced intent;
+  # otherwise wrapper recovery could mistakenly submit the same bytes again.
+  if [[ $status -ne 0 ]] && notary_receipt_has_submitted_submission_id "$receipt_path"; then
+    write_release_manifest
+    write_app_checkpoint_from_receipt app-notary-submitted
+    return "$status"
+  fi
+
+  # No durable Apple job exists to recover from this error. Preserve the
+  # original failure without advancing the manifest to a guessed state.
+  if [[ $status -ne 0 ]]; then
+    return "$status"
+  fi
+
   write_release_manifest
+  return "$status"
 }
 
 poll_app_notarization_only() {
@@ -1029,21 +1095,44 @@ poll_app_notarization_only() {
   fi
 
   set +e
-  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID="$RELEASE_INTENT_ID" \
+    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --poll "$submission_id" \
     --artifact "$artifact" \
     --receipt "$receipt_path" \
     --staple-app "$staple_app"
   status=$?
   set -e
+  # The helper may return from a deliberately non-errexit poll capture. Do not
+  # let an old intent write manifest/checkpoint state after that slow call.
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "app notarization poll result" \
+    || return $?
   write_release_manifest
   if [[ $status -ne 0 ]]; then
-    exit "$status"
+    if [[ "$(notary_receipt_status "$receipt_path")" == "Accepted" ]]; then
+      openclaw_require_jarvis_release_intent \
+        "$ROOT_DIR" "$RELEASE_INTENT_ID" "app accepted notarization checkpoint" \
+        || return $?
+      write_app_checkpoint_from_receipt app-notary-accepted
+    fi
+    return "$status"
   fi
 
+  set +e
   OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
   SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
     verify_app_bundle
+  status=$?
+  set -e
+  if [[ $status -ne 0 ]]; then
+    openclaw_require_jarvis_release_intent \
+      "$ROOT_DIR" "$RELEASE_INTENT_ID" "app accepted notarization checkpoint" \
+      || return $?
+    write_app_checkpoint_from_receipt app-notary-accepted
+    return "$status"
+  fi
 }
 
 create_signed_dmg() {
@@ -1058,20 +1147,45 @@ create_signed_dmg() {
   dmg_sign_started_ms="$(release_phase_now_ms)"
   sign_dmg_if_possible "$DMG" "$SIGNING_AUTHORITY"
   release_phase_log_elapsed "$dmg_sign_started_ms" "DMG sign"
-  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$DMG" dmg dmg-signed not-required "" "$APP_PATH"
+  if [[ -n "$SIGNING_AUTHORITY" ]]; then
+    # An ad-hoc app has no Authority line, so sign_dmg_if_possible deliberately
+    # leaves its local-smoke DMG unsigned. Do not mislabel those bytes as the
+    # signed public-resume checkpoint consumed by the release wrapper.
+    openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$DMG" dmg dmg-signed not-required "" "$APP_PATH"
+  fi
 }
 
 submit_dmg_notarization_only() {
   local receipt_path
+  local status=0
 
   receipt_path="$(dmg_notary_receipt_path)"
   require_app_notarized_manifest
   create_signed_dmg
-  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+  set +e
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID="$RELEASE_INTENT_ID" \
+    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --submit-only \
     --receipt "$receipt_path" \
     "$DMG"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]] && notary_receipt_has_submitted_submission_id "$receipt_path"; then
+    # Preserve Apple-side job recovery even if the operator authorization was
+    # replaced during upload. The checkpoint is metadata, not a new submit.
+    write_release_manifest
+    write_dmg_checkpoint_from_receipt dmg-notary-submitted
+    return "$status"
+  fi
+
+  if [[ $status -ne 0 ]]; then
+    return "$status"
+  fi
+
   write_release_manifest
+  return "$status"
 }
 
 poll_dmg_notarization_only() {
@@ -1103,18 +1217,35 @@ poll_dmg_notarization_only() {
   fi
 
   set +e
-  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID="$RELEASE_INTENT_ID" \
+    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --poll "$submission_id" \
     --artifact "$artifact" \
     --receipt "$receipt_path"
   status=$?
   set -e
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarization poll result" \
+    || return $?
   if [[ $status -eq 0 ]]; then
+    set +e
     verify_dmg_gatekeeper "$DMG"
+    status=$?
+    set -e
   fi
+  openclaw_require_jarvis_release_intent \
+    "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarization poll manifest" \
+    || return $?
   write_release_manifest
   if [[ $status -ne 0 ]]; then
-    exit "$status"
+    if [[ "$(notary_receipt_status "$receipt_path")" == "Accepted" ]]; then
+      openclaw_require_jarvis_release_intent \
+        "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG accepted notarization checkpoint" \
+        || return $?
+      write_dmg_checkpoint_from_receipt dmg-notary-accepted
+    fi
+    return "$status"
   fi
 }
 
@@ -1137,6 +1268,26 @@ create_local_release_assets_only() {
   openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip not-required "" "$APP_PATH"
   openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast not-required "" "$APP_PATH"
   write_release_manifest
+}
+
+report_local_release_assets_next_phase() {
+  local dmg_receipt
+  local next_phase="submit-dmg-notarization"
+
+  dmg_receipt="$(dmg_notary_receipt_path)"
+  if openclaw_jarvis_release_checkpoint_validate \
+    "$ROOT_DIR" "$DMG" dmg dmg-notarized "$dmg_receipt" "$APP_PATH"; then
+    next_phase="publish-assets-only"
+  elif openclaw_jarvis_release_checkpoint_validate \
+    "$ROOT_DIR" "$DMG" dmg dmg-notary-accepted "$dmg_receipt" "$APP_PATH" \
+    || openclaw_jarvis_release_checkpoint_validate \
+      "$ROOT_DIR" "$DMG" dmg dmg-notary-submitted "$dmg_receipt" "$APP_PATH"; then
+    # Accepted-with-pending-staple and submitted proofs both resume the same
+    # Apple job. Neither state is sendable or publishable yet.
+    next_phase="poll-dmg-notarization"
+  fi
+
+  printf 'next_phase=%s\n' "$next_phase"
 }
 
 release_checkpoint_receipt_submission_id() {
@@ -1180,14 +1331,18 @@ require_resume_checkpoints_for_phase() {
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-signed
       ;;
     poll-app-notarization)
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notary-submitted "$app_receipt"
+      if ! openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$APP_PATH" app app-notary-accepted "$app_receipt"; then
+        openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notary-submitted "$app_receipt"
+      fi
       ;;
     submit-dmg-notarization|create-local-release-assets-only)
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
       ;;
     poll-dmg-notarization)
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
-      openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notary-submitted "$dmg_receipt" "$APP_PATH"
+      if ! openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$DMG" dmg dmg-notary-accepted "$dmg_receipt" "$APP_PATH"; then
+        openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$DMG" dmg dmg-notary-submitted "$dmg_receipt" "$APP_PATH"
+      fi
       ;;
     publish-assets-only|verify-public-assets-only)
       openclaw_require_jarvis_release_checkpoint "$ROOT_DIR" "$APP_PATH" app app-notarized "$app_receipt"
@@ -1282,11 +1437,21 @@ case "$PACKAGE_PHASE" in
     ;;
 esac
 
+trap release_package_exit EXIT
+
 openclaw_require_jarvis_release_worktree "$ROOT_DIR"
 
 # Every package phase can update release receipts or the manifest, including
 # public verification. Keep one owner across the whole delegated package run.
-openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"
+# The lock helper temporarily owns signal/exit cleanup while acquiring. Restore
+# the package-level recovery contract on both success and ordinary contention.
+if openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"; then
+  :
+else
+  lock_status=$?
+  trap release_package_exit EXIT
+  exit "$lock_status"
+fi
 trap release_package_exit EXIT
 
 # Direct callers and delegated wrapper children share the same authorization
@@ -1562,7 +1727,7 @@ case "$PACKAGE_PHASE" in
     create_local_release_assets_only
     echo "release_sendable=false"
     echo "reason=local Sparkle ZIP/appcast were generated but not uploaded/verified"
-    echo "next_phase=publish-assets-only"
+    report_local_release_assets_next_phase
     exit 0
     ;;
   publish-assets-only)
@@ -1633,14 +1798,28 @@ fi
 case "$PACKAGE_PHASE" in
   submit-app-notarization)
     openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "app notarization submission"
+    # Keep the original submit status after the helper has persisted a
+    # submitted receipt/checkpoint for any ambiguous Apple-side handoff.
+    phase_status=0
+    set +e
     submit_app_notarization_only
+    phase_status=$?
+    set -e
+    if [[ $phase_status -ne 0 ]]; then
+      exit "$phase_status"
+    fi
     write_app_checkpoint_from_receipt app-notary-submitted
     echo "release_sendable=false"
     echo "reason=app notarization was submitted; poll the saved receipt before continuing"
     exit 0
     ;;
   poll-app-notarization)
+    # Polling can rewrite the receipt and staple the app. Revalidate immediately
+    # before that mutation so a replaced intent cannot finish an old release.
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "app notarization poll"
     poll_app_notarization_only
+    openclaw_require_jarvis_release_intent \
+      "$ROOT_DIR" "$RELEASE_INTENT_ID" "app notarized checkpoint"
     write_app_checkpoint_from_receipt app-notarized
     echo "release_sendable=false"
     echo "reason=app notarization accepted; continue with --phase submit-dmg-notarization"
@@ -1648,14 +1827,26 @@ case "$PACKAGE_PHASE" in
     ;;
   submit-dmg-notarization)
     openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG creation and notarization submission"
+    phase_status=0
+    set +e
     submit_dmg_notarization_only
+    phase_status=$?
+    set -e
+    if [[ $phase_status -ne 0 ]]; then
+      exit "$phase_status"
+    fi
     write_dmg_checkpoint_from_receipt dmg-notary-submitted
     echo "release_sendable=false"
     echo "reason=DMG notarization was submitted; poll the saved receipt before continuing"
     exit 0
     ;;
   poll-dmg-notarization)
+    # The accepted path staples the DMG and rewrites its receipt, so bind this
+    # external poll to the still-current operator intent at the mutation seam.
+    openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarization poll"
     poll_dmg_notarization_only
+    openclaw_require_jarvis_release_intent \
+      "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarized checkpoint"
     write_dmg_checkpoint_from_receipt dmg-notarized
     echo "release_sendable=false"
     if [[ ! -f "$ZIP" || ! -f "$ROOT_DIR/dist/jarvis-appcast.xml" ]]; then
@@ -1672,15 +1863,50 @@ if [[ "$NOTARIZE" == "1" ]]; then
   echo "📦 Notary zip: $NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
+  phase_status=0
+  set +e
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID="$RELEASE_INTENT_ID" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID="$RELEASE_INTENT_ID" \
   STAPLE_APP_PATH="$APP_PATH" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --receipt "$(app_notary_receipt_path)" \
     "$NOTARY_ZIP"
+  phase_status=$?
+  set -e
+  if [[ $phase_status -ne 0 ]] && notary_receipt_has_submitted_submission_id "$(app_notary_receipt_path)"; then
+    # Apple-side recovery must survive a transport error even if the intent
+    # expired during the upload; this preserves facts, not a new mutation of
+    # Apple's submission state.
+    write_release_manifest
+    write_app_checkpoint_from_receipt app-notary-submitted
+    rm -f "$NOTARY_ZIP"
+    exit "$phase_status"
+  fi
+
+  require_blocking_notary_result_intent app
   rm -f "$NOTARY_ZIP"
-  write_app_checkpoint_from_receipt app-notarized
+  require_blocking_notary_result_intent app
   write_release_manifest
-  OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
-  SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
-    verify_app_bundle
+  if [[ "$phase_status" -eq 0 ]]; then
+    set +e
+    OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
+    SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
+      verify_app_bundle
+    phase_status=$?
+    set -e
+  fi
+  if [[ "$phase_status" -ne 0 ]]; then
+    if [[ "$(notary_receipt_status "$(app_notary_receipt_path)")" == "Accepted" ]]; then
+      require_blocking_notary_result_intent app
+      write_app_checkpoint_from_receipt app-notary-accepted
+    fi
+    exit "$phase_status"
+  fi
+  # Only make the accepted app resumable after the stricter release verifier
+  # proves Gatekeeper plus the embedded production Sparkle identity.
+  require_blocking_notary_result_intent app
+  write_app_checkpoint_from_receipt app-notarized
 fi
 
 openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG creation"
@@ -1688,12 +1914,41 @@ create_signed_dmg
 
 if [[ "$NOTARIZE" == "1" ]]; then
   openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "DMG notarization"
-  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
+  phase_status=0
+  set +e
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID="$RELEASE_INTENT_ID" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT="$ROOT_DIR" \
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID="$RELEASE_INTENT_ID" \
+    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" \
     --receipt "$(dmg_notary_receipt_path)" \
     "$DMG"
-  verify_dmg_gatekeeper "$DMG"
-  write_dmg_checkpoint_from_receipt dmg-notarized
+  phase_status=$?
+  set -e
+  if [[ $phase_status -ne 0 ]] && notary_receipt_has_submitted_submission_id "$(dmg_notary_receipt_path)"; then
+    write_release_manifest
+    write_dmg_checkpoint_from_receipt dmg-notary-submitted
+    exit "$phase_status"
+  fi
+
+  require_blocking_notary_result_intent dmg
+  set +e
+  if [[ "$phase_status" -eq 0 ]]; then
+    verify_dmg_gatekeeper "$DMG"
+    phase_status=$?
+  fi
+  set -e
+  require_blocking_notary_result_intent dmg
   write_release_manifest
+  if [[ "$phase_status" -ne 0 ]]; then
+    if [[ "$(notary_receipt_status "$(dmg_notary_receipt_path)")" == "Accepted" ]]; then
+      require_blocking_notary_result_intent dmg
+      write_dmg_checkpoint_from_receipt dmg-notary-accepted
+    fi
+    exit "$phase_status"
+  fi
+  require_blocking_notary_result_intent dmg
+  write_dmg_checkpoint_from_receipt dmg-notarized
 fi
 
 echo "📦 Zip: $ZIP"
@@ -1707,7 +1962,11 @@ release_phase_log_elapsed "$zip_started_ms" "Sparkle ZIP create/verify"
 appcast_started_ms="$(release_phase_now_ms)"
 generate_jarvis_appcast
 openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ZIP" zip sparkle-zip not-required "" "$APP_PATH"
-openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast not-required "" "$APP_PATH"
+if [[ "$NOTARIZE" == "1" ]]; then
+  # Local smoke packaging intentionally skips appcast generation because it has
+  # no production Sparkle signature. Only checkpoint a file created this run.
+  openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$ROOT_DIR/dist/jarvis-appcast.xml" appcast sparkle-appcast not-required "" "$APP_PATH"
+fi
 release_phase_log_elapsed "$appcast_started_ms" "Jarvis appcast"
 write_release_manifest
 
@@ -1741,6 +2000,10 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
   release_phase_log_elapsed "$dsym_started_ms" "dSYM package"
 fi
 
+# Notarization and dSYM assembly can be long enough for an operator to replace
+# or let the lease expire. Revalidate at the final distribution seam so a
+# canceled run cannot overwrite artifacts that humans may send to customers.
+openclaw_require_jarvis_release_intent "$ROOT_DIR" "$RELEASE_INTENT_ID" "handoff artifact copy"
 handoff_started_ms="$(release_phase_now_ms)"
 copy_handoff_artifacts
 release_phase_log_elapsed "$handoff_started_ms" "Handoff artifact copy"

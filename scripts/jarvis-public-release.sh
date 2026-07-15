@@ -32,6 +32,8 @@ AUTHORIZE_RELEASE=0
 RELEASE_INTENT_ID=""
 RELEASE_INTENT_TTL_SECONDS=7200
 RELEASE_INTENT_TTL_EXPLICIT=0
+ORIGINAL_WRAPPER_ARGS=("$@")
+WRAPPER_RECOVERY_EMITTED=0
 
 usage() {
   cat <<'EOF'
@@ -100,6 +102,19 @@ quote_cmd() {
     printf '%q ' "$arg"
   done
   printf '\n'
+}
+
+original_wrapper_command() {
+  quote_cmd bash scripts/jarvis-public-release.sh "${ORIGINAL_WRAPPER_ARGS[@]}"
+}
+
+release_wrapper_exit() {
+  local status="$?"
+  openclaw_jarvis_release_lock_release
+  if [[ "$status" -ne 0 && "$WRAPPER_RECOVERY_EMITTED" != "1" ]]; then
+    echo "recovery_command=$(original_wrapper_command)" >&2
+  fi
+  exit "$status"
 }
 
 resolve_latest_github_release_tag() {
@@ -215,11 +230,16 @@ fail_before_execute() {
   echo "  elapsed_seconds=0" >&2
   echo "  summary=$SUMMARY_REPORT" >&2
   echo "  timing_report=$TIMING_REPORT" >&2
-  if [[ "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "expired" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "replaced" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "missing" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "tracked-state-drift" || "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" == "tracked-state-unavailable" ]]; then
-    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
-  else
-    echo "recovery_command=$RECOVERY_COMMAND" >&2
-  fi
+  case "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" in
+    missing|expired|replaced|commit|identity|schema|tracked-state-drift|tracked-state-unavailable)
+      WRAPPER_RECOVERY_EMITTED=1
+      echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+      ;;
+    *)
+      WRAPPER_RECOVERY_EMITTED=1
+      echo "recovery_command=$RECOVERY_COMMAND" >&2
+      ;;
+  esac
   exit "$status"
 }
 
@@ -242,6 +262,8 @@ select_checkpoint_safe_phase() {
   # is operator context, not proof that those bytes belong to this commit.
   if checkpoint_valid "$app" app app-notarized "$app_receipt"; then
     app_state="notarized"
+  elif checkpoint_valid "$app" app app-notary-accepted "$app_receipt"; then
+    app_state="accepted"
   elif checkpoint_valid "$app" app app-notary-submitted "$app_receipt"; then
     app_state="submitted"
   elif checkpoint_valid "$app" app app-signed; then
@@ -255,7 +277,7 @@ select_checkpoint_safe_phase() {
     printf '%s\n' "submit-app-notarization"
     return 0
   fi
-  if [[ "$app_state" == "submitted" ]]; then
+  if [[ "$app_state" == "submitted" || "$app_state" == "accepted" ]]; then
     printf '%s\n' "poll-app-notarization"
     return 0
   fi
@@ -275,6 +297,8 @@ select_checkpoint_safe_phase() {
 
   if checkpoint_valid "$dmg" dmg dmg-notarized "$dmg_receipt" "$app"; then
     dmg_state="notarized"
+  elif checkpoint_valid "$dmg" dmg dmg-notary-accepted "$dmg_receipt" "$app"; then
+    dmg_state="accepted"
   elif checkpoint_valid "$dmg" dmg dmg-notary-submitted "$dmg_receipt" "$app"; then
     dmg_state="submitted"
   elif checkpoint_valid "$dmg" dmg dmg-signed "" "$app"; then
@@ -293,7 +317,7 @@ select_checkpoint_safe_phase() {
         printf '%s\n' "ready-local-assets"
       fi
       ;;
-    submitted)
+    submitted|accepted)
       if [[ "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" ]] \
         && { ! checkpoint_valid "$zip" zip sparkle-zip "" "$app" || ! checkpoint_valid "$appcast" appcast sparkle-appcast "" "$app"; }; then
         printf '%s\n' "create-local-release-assets-only"
@@ -435,8 +459,16 @@ if [[ "$DRY_RUN" != "1" ]]; then
   # Own the state snapshot and delegated package execution as one operation.
   # Locking only the package child leaves a race where two wrappers choose the
   # same stale next phase before either child starts.
+  trap release_wrapper_exit EXIT
   openclaw_require_jarvis_release_worktree "$ROOT_DIR"
-  openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"
+  if openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"; then
+    :
+  else
+    lock_status=$?
+    trap release_wrapper_exit EXIT
+    exit "$lock_status"
+  fi
+  trap release_wrapper_exit EXIT
   SELECTED_PHASE="authorization"
   COMMAND_TEXT="bash scripts/jarvis-public-release.sh"
   RECOVERY_COMMAND="bash scripts/jarvis-public-release.sh --authorize"
@@ -464,7 +496,13 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   echo "Jarvis public release local assets are ready, but no public action was requested."
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  echo "  next_publish_command=bash scripts/jarvis-public-release.sh --publish-release-assets --latest-release-tag"
+  if [[ -n "$RELEASE_INTENT_ID" ]]; then
+    printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
+  else
+    # A dry-run has no executable authorization to preserve. Point the operator
+    # at the standalone authorization step instead of printing a doomed command.
+    echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
+  fi
   echo "  appcast_upload_remains_last=true"
   exit 0
 fi
@@ -474,7 +512,11 @@ if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
   echo "  selected_phase=$SELECTED_PHASE"
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  echo "  next_publish_command=bash scripts/jarvis-public-release.sh --urgent-sparkle --publish-release-assets --latest-release-tag"
+  if [[ -n "$RELEASE_INTENT_ID" ]]; then
+    printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --urgent-sparkle --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
+  else
+    echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
+  fi
   echo "  appcast_upload_remains_last_for_sparkle=true"
   echo "  fresh_install_sendable=false"
   echo "  dmg_update_live=false"
@@ -506,6 +548,18 @@ esac
 
 COMMAND_TEXT="$(quote_cmd "${CMD[@]}")"
 RECOVERY_COMMAND="$COMMAND_TEXT"
+if [[ "$FORCED_PHASE" != "auto" ]]; then
+  # A rejected forced resume cannot repair its own checkpoint. Return to the
+  # automatic selector while preserving the operator's publish/verify intent.
+  AUTO_RECOVERY_CMD=(bash scripts/jarvis-public-release.sh --release-intent "$RELEASE_INTENT_ID")
+  [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--parallel-safe-local-assets)
+  [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTO_RECOVERY_CMD+=(--urgent-sparkle)
+  [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--publish-release-assets)
+  [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--verify-public-assets)
+  [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTO_RECOVERY_CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
+  [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTO_RECOVERY_CMD+=(--size-report)
+  RECOVERY_COMMAND="$(quote_cmd "${AUTO_RECOVERY_CMD[@]}")"
+fi
 
 if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
   fail_before_execute 2 \
@@ -597,8 +651,10 @@ if [[ "$status" -ne 0 ]]; then
   # Child shell state cannot propagate its failure reason back to this wrapper.
   # Re-read the durable lease before choosing the sole recovery command.
   if ! openclaw_jarvis_release_intent_validate "$ROOT_DIR" "$RELEASE_INTENT_ID"; then
+    WRAPPER_RECOVERY_EMITTED=1
     echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize"
   else
+    WRAPPER_RECOVERY_EMITTED=1
     echo "recovery_command=$RECOVERY_COMMAND"
   fi
 fi

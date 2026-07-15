@@ -423,6 +423,7 @@ the Sparkle appcast signs an immutable tagged `Jarvis.zip` URL:
 
 ```bash
 bash scripts/jarvis-public-release.sh \
+  --release-intent "<id-from-authorize>" \
   --parallel-safe-local-assets \
   --latest-release-tag
 ```
@@ -441,6 +442,7 @@ as a fresh-install/sendable release:
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
+  --release-intent "<id-from-authorize>" \
   --urgent-sparkle \
   --publish-release-assets \
   --latest-release-tag
@@ -462,6 +464,7 @@ accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
+  --release-intent "<id-from-authorize>" \
   --publish-release-assets \
   --latest-release-tag
 ```
@@ -594,7 +597,8 @@ Create only local Sparkle release assets from the existing notarized
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase create-local-release-assets-only \
-  --release-intent "<id-from-authorize>"
+  --release-intent "<id-from-authorize>" \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
 This phase creates `dist/Jarvis.zip` and `dist/jarvis-appcast.xml` only. It

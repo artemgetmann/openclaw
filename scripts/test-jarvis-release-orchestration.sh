@@ -74,7 +74,7 @@ seed_wrapper_checkpoints() {
     signed)
       openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$app" app app-signed >/dev/null
       ;;
-    submitted|notarized)
+    submitted|accepted|notarized)
       {
         printf 'NOTARY_SUBMISSION_ID=app-submission\n'
         printf 'NOTARY_ARTIFACT=%s/app-upload.zip\n' "$root"
@@ -87,6 +87,8 @@ seed_wrapper_checkpoints() {
       } >"$app_receipt"
       if [[ "$app_state" == "submitted" ]]; then
         openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$app" app app-notary-submitted submitted app-submission >/dev/null
+      elif [[ "$app_state" == "accepted" ]]; then
+        openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$app" app app-notary-accepted Accepted app-submission >/dev/null
       else
         openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$app" app app-notarized Accepted app-submission >/dev/null
       fi
@@ -108,6 +110,8 @@ seed_wrapper_checkpoints() {
     } >"$dmg_receipt"
     if [[ "$dmg_state" == "submitted" ]]; then
       openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted submitted dmg-submission "$app" >/dev/null
+    elif [[ "$dmg_state" == "accepted" ]]; then
+      openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notary-accepted Accepted dmg-submission "$app" >/dev/null
     else
       openclaw_jarvis_release_checkpoint_write "$ROOT_DIR" "$dmg" dmg dmg-notarized Accepted dmg-submission "$app" >/dev/null
     fi
@@ -346,6 +350,7 @@ test_wrapper_dry_run() {
   local out="$TMP_DIR/wrapper-dry-run.out"
   local asset_root="$TMP_DIR/wrapper-local-assets"
   local asset_out="$TMP_DIR/wrapper-local-assets.out"
+  local asset_ready_out="$TMP_DIR/wrapper-local-assets-ready.out"
   local asset_err="$TMP_DIR/wrapper-local-assets.err"
   local verify_root="$TMP_DIR/wrapper-verify-assets"
   local verify_out="$TMP_DIR/wrapper-verify-assets.out"
@@ -362,6 +367,7 @@ test_wrapper_dry_run() {
   local urgent_out="$TMP_DIR/wrapper-urgent-sparkle.out"
   local urgent_ready_root="$TMP_DIR/wrapper-urgent-sparkle-ready"
   local urgent_ready_out="$TMP_DIR/wrapper-urgent-sparkle-ready.out"
+  local urgent_ready_live_out="$TMP_DIR/wrapper-urgent-sparkle-ready-live.out"
   local latest_fake_bin="$TMP_DIR/fake-latest-gh"
   local latest_retry_fake_bin="$TMP_DIR/fake-latest-retry-gh"
   local latest_retry_out="$TMP_DIR/wrapper-latest-retry.out"
@@ -374,6 +380,10 @@ test_wrapper_dry_run() {
   local p2_asset_out="$TMP_DIR/wrapper-p2-local-assets.out"
   local p2_poll_root="$TMP_DIR/wrapper-p2-poll-dmg"
   local p2_poll_out="$TMP_DIR/wrapper-p2-poll-dmg.out"
+  local accepted_app_root="$TMP_DIR/wrapper-accepted-app"
+  local accepted_app_out="$TMP_DIR/wrapper-accepted-app.out"
+  local accepted_dmg_root="$TMP_DIR/wrapper-accepted-dmg"
+  local accepted_dmg_out="$TMP_DIR/wrapper-accepted-dmg.out"
   local release_home release_name
   local status
 
@@ -396,6 +406,13 @@ test_wrapper_dry_run() {
     fail "wrapper dry run did not stay dry"
   fi
   pass "wrapper dry run synthetic state"
+
+  seed_wrapper_checkpoints "$accepted_app_root" accepted
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$accepted_app_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$accepted_app_out"
+  grep -q 'selected_phase=poll-app-notarization' "$accepted_app_out" \
+    || fail "accepted app proof rebuilt or resubmitted instead of retrying staple verification"
+  pass "accepted app proof retries polling without rebuild or resubmit"
 
   mkdir -p "$p2_asset_root/dist/Jarvis.app"
   : >"$p2_asset_root/dist/Jarvis.dmg"
@@ -441,6 +458,13 @@ test_wrapper_dry_run() {
   fi
   pass "wrapper p2 resumes dmg polling after local assets"
 
+  seed_wrapper_checkpoints "$accepted_dmg_root" notarized accepted
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$accepted_dmg_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$accepted_dmg_out"
+  grep -q 'selected_phase=poll-dmg-notarization' "$accepted_dmg_out" \
+    || fail "accepted DMG proof rebuilt or resubmitted instead of retrying staple verification"
+  pass "accepted DMG proof retries polling without rebuild or resubmit"
+
   mkdir -p "$urgent_ready_root/dist/Jarvis.app"
   : >"$urgent_ready_root/dist/Jarvis.zip"
   write_fake_tagged_appcast "$urgent_ready_root" v-current
@@ -460,7 +484,25 @@ test_wrapper_dry_run() {
     cat "$urgent_ready_out" >&2
     fail "wrapper urgent sparkle ready output did not keep fresh-install truth false"
   fi
+  if ! grep -q '^  next_publish_command=bash scripts/jarvis-public-release.sh --authorize$' "$urgent_ready_out"; then
+    cat "$urgent_ready_out" >&2
+    fail "wrapper urgent sparkle dry run printed a publish command without executable authorization"
+  fi
   pass "wrapper urgent sparkle ready dry run keeps public action explicit"
+
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/urgent-ready-live.lock" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$urgent_ready_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent "$TEST_RELEASE_INTENT_ID" \
+      --urgent-sparkle \
+      >"$urgent_ready_live_out"
+  if ! grep -Fq "next_publish_command=bash scripts/jarvis-public-release.sh --release-intent $TEST_RELEASE_INTENT_ID --urgent-sparkle --publish-release-assets --latest-release-tag" "$urgent_ready_live_out"; then
+    cat "$urgent_ready_live_out" >&2
+    fail "wrapper urgent sparkle ready output did not preserve the active release intent"
+  fi
+  pass "wrapper urgent sparkle next command preserves active intent"
 
   mkdir -p "$asset_root/dist/Jarvis.app"
   : >"$asset_root/dist/Jarvis.dmg"
@@ -493,6 +535,23 @@ test_wrapper_dry_run() {
     fail "wrapper tagged local asset command did not forward github release tag"
   fi
   pass "wrapper local assets forward tag"
+
+  # The ready state exits before package execution, so this live authorized
+  # invocation safely proves the printed follow-up remains executable under the
+  # latest-intent gate.
+  seed_wrapper_checkpoints "$asset_root" notarized notarized 1
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/local-ready-live.lock" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$asset_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent "$TEST_RELEASE_INTENT_ID" \
+      >"$asset_ready_out"
+  if ! grep -Fq "next_publish_command=bash scripts/jarvis-public-release.sh --release-intent $TEST_RELEASE_INTENT_ID --publish-release-assets --latest-release-tag" "$asset_ready_out"; then
+    cat "$asset_ready_out" >&2
+    fail "wrapper local ready output did not preserve the active release intent"
+  fi
+  pass "wrapper local next command preserves active intent"
 
   mkdir -p "$verify_root/dist/Jarvis.app"
   : >"$verify_root/dist/Jarvis.dmg"
@@ -889,6 +948,38 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   pass "package sparkle-only publish ignores skip notarize"
 }
 
+test_forced_invalid_checkpoint_recovers_automatically() {
+  local out="$TMP_DIR/forced-invalid-checkpoint.out"
+  local err="$TMP_DIR/forced-invalid-checkpoint.err"
+  local combined="$TMP_DIR/forced-invalid-checkpoint.combined"
+  local release_home release_name status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
+  set +e
+  APP_NAME="JarvisMissingCheckpoint-$$" \
+  SPARKLE_FEED_URL="https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml" \
+  SPARKLE_PUBLIC_ED_KEY="fixture-consumer-key" \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/forced-invalid-checkpoint.lock" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --phase poll-app-notarization \
+      --release-intent "$TEST_RELEASE_INTENT_ID" \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "forced invalid checkpoint unexpectedly executed"
+  { /bin/cat "$out"; /bin/cat "$err"; } >"$combined"
+  [[ "$(grep -c '^recovery_command=' "$combined")" == "1" ]] \
+    || fail "forced invalid checkpoint did not emit exactly one recovery command"
+  grep -Fq "recovery_command=bash scripts/jarvis-public-release.sh --release-intent $TEST_RELEASE_INTENT_ID " "$combined" \
+    || fail "forced invalid checkpoint did not return to automatic phase selection"
+  ! grep -q '^recovery_command=.*--phase poll-app-notarization' "$combined" \
+    || fail "forced invalid checkpoint repeated the rejected forced phase"
+  pass "forced invalid checkpoint recovers through automatic phase selection"
+}
+
 setup_checkpoint_stubs
 setup_release_intent
 test_phase_selection
@@ -897,3 +988,4 @@ test_wrapper_dry_run
 test_package_sparkle_publish_gate_does_not_require_dmg
 test_package_sparkle_publish_only_ignores_skip_notarize
 test_package_script_rejects_noncanonical_release_worktree
+test_forced_invalid_checkpoint_recovers_automatically

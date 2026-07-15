@@ -407,6 +407,8 @@ test_package_integration_contention() {
   set -e
   [[ "$status" -ne 0 ]] || fail "mutating package phase bypassed contention"
   grep -q "another Jarvis release owner is active" "$mutate_err" || fail "mutating package phase did not fail at the lock"
+  [[ "$(grep -c '^recovery_command=' "$mutate_err")" == "1" ]] \
+    || fail "package lock contention did not print exactly one recovery command"
   kill -0 "$holder_pid" 2>/dev/null || fail "package contention harmed the owner"
 
   set +e
@@ -432,6 +434,7 @@ test_parent_delegation_and_wrapper_contention() {
   local delegated_out="$TMP_DIR/delegated.out"
   local contender_out="$TMP_DIR/wrapper-contender.out"
   local contender_err="$TMP_DIR/wrapper-contender.err"
+  local contender_combined="$TMP_DIR/wrapper-contender.combined"
   local dry_run_out="$TMP_DIR/wrapper-dry-run.out"
   local delegated_wrapper_out="$TMP_DIR/wrapper-delegated.out"
   local delegated_wrapper_err="$TMP_DIR/wrapper-delegated.err"
@@ -469,6 +472,11 @@ test_parent_delegation_and_wrapper_contention() {
   [[ "$status" -ne 0 ]] || fail "second public wrapper bypassed the owner"
   grep -q "another Jarvis release owner is active" "$contender_err" || fail "second wrapper did not fail at the lock"
   ! grep -q "selected_phase=" "$contender_out" || fail "second wrapper selected a stale phase before locking"
+  { /bin/cat "$contender_out"; /bin/cat "$contender_err"; } >"$contender_combined"
+  [[ "$(grep -c '^recovery_command=' "$contender_combined")" == "1" ]] \
+    || fail "wrapper lock contention did not print exactly one recovery command"
+  grep -Fq "recovery_command=bash scripts/jarvis-public-release.sh --phase full --release-intent $intent_id " "$contender_combined" \
+    || fail "wrapper lock contention did not print the replayable wrapper command"
   kill -0 "$holder_pid" 2>/dev/null || fail "wrapper contention harmed the live owner"
 
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
