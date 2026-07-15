@@ -4,8 +4,8 @@ import Observation
 import OpenClawKit
 import SwiftUI
 
-private let consumerBrowserProfileName = "user"
-private let consumerDefaultBrowserProfileName = "signed-in"
+private let consumerBrowserProfileName = "signed-in"
+private let legacyConsumerBrowserProfileName = "user"
 
 struct ConsumerShellCommandResult {
     let stdout: String
@@ -1630,15 +1630,15 @@ extension BrowserSetupModel {
         // while the gateway still has no idea which Chrome profile to clone.
         let managedUserCdpPort = OpenClawConfigFile.managedBrowserUserCdpPort()
         user["cdpPort"] = managedUserCdpPort
-        user["driver"] = "openclaw"
+        user["driver"] = "existing-session"
         user["cloneFromUserProfile"] = true
         user["sourceProfileName"] = profile.directoryName
-        user["color"] = (user["color"] as? String) ?? "#00AA00"
+        user["profileDirectory"] = "Default"
+        user["color"] = (user["color"] as? String) ?? "#1F9D55"
         profiles[consumerBrowserProfileName] = user
+        profiles.removeValue(forKey: legacyConsumerBrowserProfileName)
         browser["enabled"] = true
-        // Browser setup records the chosen Chrome source for the compatibility
-        // lane, while normal Jarvis work stays on the built-in signed-in clone.
-        browser["defaultProfile"] = consumerDefaultBrowserProfileName
+        browser["defaultProfile"] = consumerBrowserProfileName
         browser["profiles"] = profiles
         root["browser"] = browser
         OpenClawConfigFile.saveDict(root)
@@ -1650,6 +1650,7 @@ extension BrowserSetupModel {
 
         if var profiles = browser["profiles"] as? [String: Any] {
             profiles.removeValue(forKey: consumerBrowserProfileName)
+            profiles.removeValue(forKey: legacyConsumerBrowserProfileName)
             if profiles.isEmpty {
                 browser.removeValue(forKey: "profiles")
             } else {
@@ -1657,8 +1658,8 @@ extension BrowserSetupModel {
             }
         }
 
-        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == consumerBrowserProfileName {
-            browser.removeValue(forKey: "defaultProfile")
+        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == legacyConsumerBrowserProfileName {
+            browser["defaultProfile"] = consumerBrowserProfileName
         }
 
         if browser.isEmpty {

@@ -569,12 +569,15 @@ struct BrowserSetupSupportTests {
             let root = OpenClawConfigFile.loadDict()
             let browser = root["browser"] as? [String: Any]
             let profiles = browser?["profiles"] as? [String: Any]
-            let userProfile = profiles?["user"] as? [String: Any]
+            let userProfile = profiles?["signed-in"] as? [String: Any]
             #expect(browser?["defaultProfile"] as? String == "signed-in")
             #expect((userProfile?["cdpPort"] as? NSNumber)?.intValue == OpenClawConfigFile.managedBrowserUserCdpPort())
+            #expect(userProfile?["driver"] as? String == "existing-session")
             #expect(userProfile?["cloneFromUserProfile"] as? Bool == true)
             #expect(userProfile?["sourceProfileName"] as? String == "Profile 4")
-            #expect(userProfile?["color"] as? String == "#00AA00")
+            #expect(userProfile?["profileDirectory"] as? String == "Default")
+            #expect(userProfile?["color"] as? String == "#1F9D55")
+            #expect(profiles?["user"] == nil)
 
             let userDataDir = OpenClawConfigFile.managedBrowserUserDataDirURL()
             #expect(FileManager.default.fileExists(atPath: userDataDir.path))
@@ -630,6 +633,7 @@ struct BrowserSetupSupportTests {
         let stateDir = try! makeTempDirForTests()
         let configPath = stateDir.appendingPathComponent("openclaw.json")
         var browserStatusCalled = false
+        var browserStatusArgs: [String] = []
 
         defer { try? FileManager.default.removeItem(at: stateDir) }
 
@@ -651,8 +655,9 @@ struct BrowserSetupSupportTests {
 
             let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
                 expectedProfile: selected,
-                runBrowserStatus: { _, _, _ in
+                runBrowserStatus: { _, args, _ in
                     browserStatusCalled = true
+                    browserStatusArgs = args
                     return ConsumerShellCommandResult(
                         stdout: payload,
                         stderr: "",
@@ -661,6 +666,7 @@ struct BrowserSetupSupportTests {
                 })
 
             #expect(browserStatusCalled)
+            #expect(browserStatusArgs == ["--json", "--browser-profile", "signed-in", "status"])
             #expect(result == nil)
             #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
         }
@@ -930,6 +936,13 @@ struct BrowserSetupSupportTests {
             #expect(model.phase == .ready(selected))
             #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
             #expect(FileManager.default.fileExists(atPath: OpenClawConfigFile.managedBrowserUserDataDirURL().path))
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
+            let signedIn = profiles?["signed-in"] as? [String: Any]
+            #expect(browser?["defaultProfile"] as? String == "signed-in")
+            #expect(signedIn?["sourceProfileName"] as? String == "Profile 4")
+            #expect(profiles?["user"] == nil)
         }
     }
 
@@ -967,6 +980,7 @@ struct BrowserSetupSupportTests {
             let browser = root["browser"] as? [String: Any]
             let profiles = browser?["profiles"] as? [String: Any]
             #expect(browser?["defaultProfile"] as? String == "signed-in")
+            #expect(profiles?["signed-in"] == nil)
             #expect(profiles?["user"] == nil)
         }
     }

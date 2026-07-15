@@ -55,9 +55,9 @@ enum BrowserRuntimeFailureTemplateKind: CaseIterable {
 }
 
 extension OpenClawConfigFile {
-    private static var managedBrowserProfileName: String { "user" }
-    private static var defaultBrowserProfileName: String { "signed-in" }
-    private static var managedBrowserProfileColor: String { "#00AA00" }
+    private static var managedBrowserProfileName: String { "signed-in" }
+    private static var legacyManagedBrowserProfileName: String { "user" }
+    private static var managedBrowserProfileColor: String { "#1F9D55" }
     private static var defaultBrowserControlPort: Int { 18_791 }
     private static var defaultBrowserCdpRangeStart: Int { 18_800 }
     private static var defaultManagedUserBrowserCdpPort: Int { 18_801 }
@@ -65,12 +65,15 @@ extension OpenClawConfigFile {
     static func selectedChromeProfileDirectoryName() -> String? {
         let root = self.loadDict()
         guard let browser = root["browser"] as? [String: Any],
-              let profiles = browser["profiles"] as? [String: Any],
-              let userProfile = profiles[self.managedBrowserProfileName] as? [String: Any],
-              let raw = userProfile["sourceProfileName"] as? String
+              let profiles = browser["profiles"] as? [String: Any]
         else {
             return nil
         }
+
+        let configuredProfile =
+            profiles[self.managedBrowserProfileName] as? [String: Any]
+            ?? profiles[self.legacyManagedBrowserProfileName] as? [String: Any]
+        guard let raw = configuredProfile?["sourceProfileName"] as? String else { return nil }
 
         let selected = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !selected.isEmpty else { return nil }
@@ -81,21 +84,22 @@ extension OpenClawConfigFile {
         let trimmed = directoryName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        // Browser setup persists the managed "user" lane as a schema-valid
-        // browser profile. The runtime rejects profiles without a CDP endpoint,
-        // so derive the managed-user port here instead of waiting for a reload.
+        // Browser setup pins the selected Chrome account directly onto the
+        // built-in signed-in lane used by normal Jarvis browser actions.
         let cdpPort = self.managedBrowserUserCdpPort()
         var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]
-        browser["defaultProfile"] = self.defaultBrowserProfileName
+        browser["defaultProfile"] = self.managedBrowserProfileName
         var profiles = browser["profiles"] as? [String: Any] ?? [:]
         var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
         userProfile["cdpPort"] = cdpPort
-        userProfile["driver"] = "openclaw"
+        userProfile["driver"] = "existing-session"
         userProfile["cloneFromUserProfile"] = true
         userProfile["sourceProfileName"] = trimmed
+        userProfile["profileDirectory"] = "Default"
         userProfile["color"] = self.managedBrowserProfileColor
         profiles[self.managedBrowserProfileName] = userProfile
+        profiles.removeValue(forKey: self.legacyManagedBrowserProfileName)
         browser["profiles"] = profiles
         root["browser"] = browser
         self.saveDict(root)
@@ -106,20 +110,24 @@ extension OpenClawConfigFile {
         var root = self.loadDict()
         guard var browser = root["browser"] as? [String: Any] else { return true }
 
-        if var profiles = browser["profiles"] as? [String: Any],
-           var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any]
-        {
-            // Clearing the selection should remove the managed-user profile stub
-            // too. Leaving clone/driver/color behind keeps stale browser config.
-            userProfile.removeValue(forKey: "cdpPort")
-            userProfile.removeValue(forKey: "cloneFromUserProfile")
-            userProfile.removeValue(forKey: "driver")
-            userProfile.removeValue(forKey: "sourceProfileName")
-            userProfile.removeValue(forKey: "color")
-            if userProfile.isEmpty {
-                profiles.removeValue(forKey: self.managedBrowserProfileName)
-            } else {
-                profiles[self.managedBrowserProfileName] = userProfile
+        if var profiles = browser["profiles"] as? [String: Any] {
+            for profileName in [self.managedBrowserProfileName, self.legacyManagedBrowserProfileName] {
+                guard var profile = profiles[profileName] as? [String: Any] else { continue }
+                for key in [
+                    "cdpPort",
+                    "cloneFromUserProfile",
+                    "driver",
+                    "sourceProfileName",
+                    "profileDirectory",
+                    "color",
+                ] {
+                    profile.removeValue(forKey: key)
+                }
+                if profile.isEmpty {
+                    profiles.removeValue(forKey: profileName)
+                } else {
+                    profiles[profileName] = profile
+                }
             }
 
             if profiles.isEmpty {
@@ -130,9 +138,9 @@ extension OpenClawConfigFile {
         }
 
         if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            == self.managedBrowserProfileName
+            == self.legacyManagedBrowserProfileName
         {
-            browser.removeValue(forKey: "defaultProfile")
+            browser["defaultProfile"] = self.managedBrowserProfileName
         }
 
         if browser.isEmpty {
@@ -145,7 +153,7 @@ extension OpenClawConfigFile {
         return self.selectedChromeProfileDirectoryName() == nil
     }
 
-    static func managedBrowserUserDataDirURL(profileName: String = "user") -> URL {
+    static func managedBrowserUserDataDirURL(profileName: String = "signed-in") -> URL {
         self.stateDirURL()
             .appendingPathComponent("browser", isDirectory: true)
             .appendingPathComponent(profileName, isDirectory: true)
