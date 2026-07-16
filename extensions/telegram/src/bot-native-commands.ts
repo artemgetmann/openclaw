@@ -40,6 +40,7 @@ import type {
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
 import { danger, logVerbose } from "../../../src/globals.js";
+import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
 import { getChildLogger } from "../../../src/logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import {
@@ -685,6 +686,15 @@ export const registerTelegramNativeCommands = ({
             tableMode,
             chunkMode,
           } = runtimeContext;
+          // Native slash commands bypass bot-message-context, which normally
+          // records admitted inbound activity. Record only after auth and route
+          // resolution succeed so rejected, skipped, or unroutable updates
+          // cannot make the resolved account look recently active.
+          recordChannelActivity({
+            channel: "telegram",
+            accountId: route.accountId,
+            direction: "inbound",
+          });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
           const rawText = ctx.match?.trim() ?? "";
           if (command.name === "ping") {
@@ -750,6 +760,22 @@ export const registerTelegramNativeCommands = ({
                 }),
             });
             return;
+          }
+          if (command.name === "compact") {
+            // Manual compaction can take minutes and produces its normal final
+            // reply only after dispatch completes. This topic-aware notice is
+            // deliberately best-effort: Telegram send failure is logged by the
+            // shared API wrapper, but must not prevent the requested compaction.
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  chatId,
+                  "⚙️ Compacting this conversation — this may take a few minutes.",
+                  threadParams,
+                ),
+            }).catch(() => undefined);
           }
           const baseSessionKey = resolveTelegramConversationBaseSessionKey({
             cfg,
@@ -1003,6 +1029,19 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          // Plugin-backed native commands bypass bot-message-context too. Only
+          // authenticated invocations are listener-health evidence: public
+          // requireAuth:false commands may be admitted with commandAuthorized
+          // false, so recording them would let unauthenticated traffic refresh
+          // the account timestamp. Keep route resolution first so unroutable
+          // commands remain excluded as well.
+          if (commandAuthorized) {
+            recordChannelActivity({
+              channel: "telegram",
+              accountId: route.accountId,
+              direction: "inbound",
+            });
+          }
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,
