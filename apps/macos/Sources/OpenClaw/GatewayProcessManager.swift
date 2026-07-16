@@ -6,11 +6,14 @@ import Observation
 final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
     typealias RecoveryNotificationSender = @MainActor @Sendable (GatewayRecoveryIncident) async -> Void
-    // Real launchd restarts on this machine routinely take 13-14s because the gateway
-    // may regenerate auth config and then bootstrap channels before the health RPC
-    // answers again. A 6s deadline turns successful restarts into fake "not connecting"
-    // errors in the app, so keep one explicit, shared readiness budget here.
+    typealias ManagedJobRunningProbe = @Sendable () async -> Bool?
+    /// This is the initial RPC budget, not an outage deadline. Cold startup can spend
+    /// minutes in secrets/config preflight before binding its port. After this budget,
+    /// a launchd job with a live PID keeps the UI in Starting while health polling continues.
     static let gatewayReadinessTimeout: TimeInterval = 20
+    /// Five minutes covers the observed 146s secrets preflight with roughly 2x
+    /// margin, but still converts a launchd-owned hung process into a real incident.
+    static let gatewayMaximumReadinessTimeout: TimeInterval = 300
     private static let readinessPollIntervalNanos: UInt64 = 400_000_000
     /// launchd normally restarts a crashed gateway itself. This slower app-owned
     /// check covers the different failure mode where the job registration vanishes
@@ -61,7 +64,9 @@ final class GatewayProcessManager {
     private var launchAgentReconciliationGeneration: UInt = 0
     private var recoveryIncidentTracker = GatewayRecoveryIncidentTracker()
     private let recoveryReadinessTimeout: TimeInterval
+    private let maximumReadinessTimeout: TimeInterval
     private let recoveryNotificationSender: RecoveryNotificationSender
+    private let managedJobRunningProbe: ManagedJobRunningProbe
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -72,9 +77,12 @@ final class GatewayProcessManager {
 
     init(
         recoveryReadinessTimeout: TimeInterval = GatewayProcessManager.gatewayReadinessTimeout,
-        recoveryNotificationSender: RecoveryNotificationSender? = nil)
+        maximumReadinessTimeout: TimeInterval = GatewayProcessManager.gatewayMaximumReadinessTimeout,
+        recoveryNotificationSender: RecoveryNotificationSender? = nil,
+        managedJobRunningProbe: ManagedJobRunningProbe? = nil)
     {
         self.recoveryReadinessTimeout = recoveryReadinessTimeout
+        self.maximumReadinessTimeout = maximumReadinessTimeout
         self.recoveryNotificationSender = recoveryNotificationSender ?? { incident in
             _ = await NotificationManager().send(
                 title: incident.title,
@@ -83,6 +91,10 @@ final class GatewayProcessManager {
                 priority: .active,
                 identifier: GatewayProcessManager.recoveryNotificationIdentifier,
                 categoryIdentifier: NotificationManager.gatewayRecoveryCategoryIdentifier)
+        }
+        let managedJobLabel = gatewayLaunchdLabel
+        self.managedJobRunningProbe = managedJobRunningProbe ?? {
+            await GatewayProcessManager.readManagedGatewayJobRunning(label: managedJobLabel)
         }
     }
 
@@ -204,30 +216,16 @@ final class GatewayProcessManager {
             return
         }
 
-        // A restart keeps launchd ownership intact, so only wait for the daemon to
-        // come back and reattach to the existing service instead of reinstalling it.
-        let deadline = Date().addingTimeInterval(Self.gatewayReadinessTimeout)
-        while Date() < deadline {
-            if !self.desiredActive { return }
-            do {
-                let data = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
-                let instance = await PortGuardian.shared.describe(port: port)
-                let details = self.describe(
-                    details: instance.map { self.describe(instance: $0) },
-                    port: port,
-                    snap: decodeHealthSnapshot(from: data))
-                self.existingGatewayDetails = details
-                self.status = .running(details: details)
-                self.clearRecoveryIncidentAfterHealthyRPC()
-                self.appendLog("[gateway] managed restart succeeded: \(details)\n")
-                self.logger.info("gateway managed restart succeeded details=\(details)")
-                self.refreshControlChannelIfNeeded(reason: "gateway restarted")
-                self.refreshLog()
-                return
-            } catch {
-                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
-            }
+        // A restart keeps launchd ownership intact. A live launchd PID is stronger
+        // evidence than an arbitrary RPC deadline, so cold preflight remains Starting.
+        if await self.waitForManagedGatewayHealth(
+            port: port,
+            initialTimeout: Self.gatewayReadinessTimeout,
+            context: "managed restart")
+        {
+            return
         }
+        guard self.desiredActive else { return }
 
         self.status = .failed("Gateway did not restart in time")
         self.lastFailureReason = "launchd restart timeout"
@@ -652,25 +650,14 @@ final class GatewayProcessManager {
             return
         }
 
-        // Best-effort: wait for the gateway to accept connections.
-        let deadline = Date().addingTimeInterval(Self.gatewayReadinessTimeout)
-        while Date() < deadline {
-            if !self.desiredActive { return }
-            do {
-                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
-                let instance = await PortGuardian.shared.describe(port: port)
-                let details = instance.map { "pid \($0.pid)" }
-                self.clearLastFailure()
-                self.clearRecoveryIncidentAfterHealthyRPC()
-                self.status = .running(details: details)
-                self.logger.info("gateway started details=\(details ?? "ok")")
-                self.refreshControlChannelIfNeeded(reason: "gateway started")
-                self.refreshLog()
-                return
-            } catch {
-                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
-            }
+        if await self.waitForManagedGatewayHealth(
+            port: port,
+            initialTimeout: Self.gatewayReadinessTimeout,
+            context: "startup")
+        {
+            return
         }
+        guard self.desiredActive else { return }
 
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
@@ -715,6 +702,58 @@ final class GatewayProcessManager {
         return false
     }
 
+    /// Poll health through the normal readiness budget, then continue only while
+    /// launchd proves that this app's managed job still has a running process.
+    /// A missing, exited, or uninspectable job remains a real failure and returns.
+    private func waitForManagedGatewayHealth(
+        port: Int,
+        initialTimeout: TimeInterval,
+        context: String,
+        publishHealthyState: Bool = true) async -> Bool
+    {
+        let startedAt = Date()
+        let deadline = startedAt.addingTimeInterval(initialTimeout)
+        let maximumDeadline = startedAt.addingTimeInterval(max(initialTimeout, self.maximumReadinessTimeout))
+        var isExtendedColdStart = false
+
+        while self.desiredActive {
+            do {
+                let data = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                self.clearLastFailure()
+                self.clearRecoveryIncidentAfterHealthyRPC()
+                guard publishHealthyState else { return true }
+                let instance = await PortGuardian.shared.describe(port: port)
+                let details = self.describe(
+                    details: instance.map { self.describe(instance: $0) },
+                    port: port,
+                    snap: decodeHealthSnapshot(from: data))
+                self.existingGatewayDetails = details
+                self.status = .running(details: details)
+                self.appendLog("[gateway] \(context) succeeded: \(details)\n")
+                self.logger.info("gateway \(context) succeeded details=\(details)")
+                self.refreshControlChannelIfNeeded(reason: "gateway \(context)")
+                self.refreshLog()
+                return true
+            } catch {
+                // Health can legitimately fail while secrets/config preflight runs.
+                // Do not inspect launchd until the ordinary readiness budget expires.
+            }
+
+            if Date() >= deadline {
+                guard Date() < maximumDeadline else { return false }
+                guard await self.managedJobRunningProbe() == true else { return false }
+                if !isExtendedColdStart {
+                    isExtendedColdStart = true
+                    self.status = .starting
+                    self.appendLog("[gateway] \(context) still running in launchd; extending health polling\n")
+                    self.logger.info("gateway \(context) exceeded initial RPC budget but launchd job is running")
+                }
+            }
+            try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
+        }
+        return false
+    }
+
     /// Unknown launchd status is not an outage. Only the combination of repeated
     /// observer uncertainty and a bounded live-health failure activates recovery.
     private func verifyUnverifiableGatewayState() async {
@@ -731,10 +770,18 @@ final class GatewayProcessManager {
               !CommandResolver.connectionModeIsRemote()
         else { return }
 
-        if await self.waitForGatewayReady(timeout: self.recoveryReadinessTimeout) {
+        let priorStatus = self.status
+        if await self.waitForManagedGatewayHealth(
+            port: GatewayEnvironment.gatewayPort(),
+            initialTimeout: self.recoveryReadinessTimeout,
+            context: "recovery")
+        {
             return
         }
         guard self.desiredActive, !CommandResolver.connectionModeIsRemote() else { return }
+        // The extended wait temporarily presents Starting. Restore the concrete
+        // failure that triggered recovery once launchd no longer has a live process.
+        self.status = priorStatus
         await self.presentRecoveryIncident()
     }
 
@@ -796,6 +843,44 @@ final class GatewayProcessManager {
         if text.count <= limit { return text }
         return String(text.suffix(limit))
     }
+
+    /// `launchctl print` exposes both a running state and PID. Require both so a
+    /// merely loaded crash-loop/dead unit cannot suppress a genuine recovery incident.
+    nonisolated static func launchdPrintDescribesRunningJob(_ output: String) -> Bool {
+        var stateIsRunning = false
+        var hasLivePID = false
+        for rawLine in output.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line == "state = running" {
+                stateIsRunning = true
+            } else if line.hasPrefix("pid = "),
+                      let pid = Int32(line.dropFirst("pid = ".count)),
+                      pid > 0
+            {
+                hasLivePID = true
+            }
+        }
+        return stateIsRunning && hasLivePID
+    }
+
+    private nonisolated static func readManagedGatewayJobRunning(label: String) async -> Bool? {
+        await Task.detached(priority: .utility) {
+            let process = Process()
+            process.launchPath = "/bin/launchctl"
+            process.arguments = ["print", "gui/\(getuid())/\(label)"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            do {
+                let data = try process.runAndReadToEnd(from: pipe)
+                guard process.terminationStatus == 0 else { return false }
+                let output = String(data: data, encoding: .utf8) ?? ""
+                return self.launchdPrintDescribesRunningJob(output)
+            } catch {
+                return nil
+            }
+        }.value
+    }
 }
 
 #if DEBUG
@@ -836,6 +921,24 @@ extension GatewayProcessManager {
 
     func testingPresentRecoveryIncident() async {
         await self.presentRecoveryIncident()
+    }
+
+    func testingConfirmGatewayUnavailableBeforePresentingIncident() async {
+        await self.confirmGatewayUnavailableBeforePresentingIncident()
+    }
+
+    /// Exercise the complete slow-start decision without starting unrelated UI/
+    /// control-channel singletons after the synthetic RPC succeeds in SwiftPM tests.
+    func testingConfirmSlowManagedGatewayWithoutHealthySideEffects() async -> Bool {
+        let ready = await self.waitForManagedGatewayHealth(
+            port: GatewayEnvironment.gatewayPort(),
+            initialTimeout: self.recoveryReadinessTimeout,
+            context: "test recovery",
+            publishHealthyState: false)
+        if !ready {
+            await self.presentRecoveryIncident()
+        }
+        return ready
     }
 
     func testingRecordHealthyRPC() {

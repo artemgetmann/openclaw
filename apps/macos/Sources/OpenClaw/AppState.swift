@@ -9,7 +9,6 @@ import SwiftUI
 final class AppState {
     private struct LaunchAtLoginPreference {
         let enabled: Bool
-        let needsBootstrapInstall: Bool
     }
 
     private let isPreview: Bool
@@ -360,16 +359,12 @@ final class AppState {
         if !self.isPreview {
             self.startConfigWatcher()
             Task.detached(priority: .utility) {
-                let launchAgentEnabled = await LaunchAgentManager.status()
-                if launchAgentEnabled != launchAtLoginPreference.enabled {
-                    if launchAtLoginPreference.needsBootstrapInstall && launchAtLoginPreference.enabled {
-                        await LaunchAgentManager.registerForNextLogin(bundlePath: Bundle.main.bundlePath)
-                    } else {
-                        await LaunchAgentManager.set(
-                            enabled: launchAtLoginPreference.enabled,
-                            bundlePath: Bundle.main.bundlePath)
-                    }
-                }
+                // Reconcile even when launchd reports the desired enabled state.
+                // Older Jarvis builds registered a direct KeepAlive GUI executable,
+                // so a boolean loaded check would preserve the respawn loop forever.
+                await LaunchAgentManager.set(
+                    enabled: launchAtLoginPreference.enabled,
+                    bundlePath: Bundle.main.bundlePath)
             }
         }
     }
@@ -391,15 +386,15 @@ final class AppState {
         isConsumer: Bool
     ) -> LaunchAtLoginPreference {
         if self.launchAtLoginDisabledForThisProcess() {
-            return LaunchAtLoginPreference(enabled: false, needsBootstrapInstall: false)
+            return LaunchAtLoginPreference(enabled: false)
         }
 
         if let storedValue {
-            return LaunchAtLoginPreference(enabled: storedValue, needsBootstrapInstall: false)
+            return LaunchAtLoginPreference(enabled: storedValue)
         }
 
         let enabled = self.defaultLaunchAtLogin(isConsumer: isConsumer)
-        return LaunchAtLoginPreference(enabled: enabled, needsBootstrapInstall: enabled)
+        return LaunchAtLoginPreference(enabled: enabled)
     }
 
     static func launchAtLoginDisabledForThisProcess(

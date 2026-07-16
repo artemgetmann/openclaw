@@ -15,6 +15,20 @@ private actor GatewayRecoveryNotificationRecorder {
     }
 }
 
+private actor GatewayHealthAttemptRecorder {
+    private(set) var attempts = 0
+    private var managedJobWasObserved = false
+
+    func shouldReturnHealthy() -> Bool {
+        self.attempts += 1
+        return self.managedJobWasObserved
+    }
+
+    func recordManagedJobObservation() {
+        self.managedJobWasObserved = true
+    }
+}
+
 /// Process-manager tests share the launch-agent suite because both mutate
 /// `GatewayLaunchAgentManager`'s process-wide DEBUG hooks. One serialized suite
 /// is the scheduler boundary that prevents those hooks from overlapping.
@@ -22,6 +36,132 @@ private actor GatewayRecoveryNotificationRecorder {
 extension GatewayLaunchAgentManagerTests {
     @Test func `gateway readiness timeout allows real launchd restart budget`() {
         #expect(GatewayProcessManager.gatewayReadinessTimeout >= 20)
+        #expect(GatewayProcessManager.gatewayMaximumReadinessTimeout >= 180)
+        #expect(GatewayProcessManager.gatewayMaximumReadinessTimeout <= 300)
+    }
+
+    @Test func `launchd running parser requires state and live pid`() {
+        #expect(GatewayProcessManager.launchdPrintDescribesRunningJob("""
+        gui/501/ai.jarvis.gateway = {
+            state = running
+            pid = 4242
+        }
+        """))
+        #expect(!GatewayProcessManager.launchdPrintDescribesRunningJob("""
+        gui/501/ai.jarvis.gateway = {
+            state = waiting
+        }
+        """))
+        #expect(!GatewayProcessManager.launchdPrintDescribesRunningJob("state = running"))
+    }
+
+    @Test func `slow but running managed gateway stays starting and suppresses false incident`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+        let healthAttempts = GatewayHealthAttemptRecorder()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard await healthAttempts.shouldReturnHealthy(),
+                              let id = GatewayWebSocketTestSupport.requestID(from: message)
+                        else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
+            ],
+            defaults: [
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager(
+                    recoveryReadinessTimeout: 0,
+                    maximumReadinessTimeout: 10,
+                    recoveryNotificationSender: { _ in
+                        Issue.record("running cold start must not notify a recovery incident")
+                    },
+                    managedJobRunningProbe: {
+                        await healthAttempts.recordManagedJobObservation()
+                        return true
+                    })
+                manager.setTestingConnection(connection)
+                manager.setTestingDesiredActive(true)
+                defer {
+                    manager.setTestingConnection(nil)
+                    manager.setTestingDesiredActive(false)
+                }
+
+                let ready = await manager.testingConfirmSlowManagedGatewayWithoutHealthySideEffects()
+
+                #expect(ready)
+                #expect(manager.status == .starting)
+                #expect(manager.testingRecoveryIncident() == nil)
+                #expect(await healthAttempts.attempts >= 2)
+            }
+    }
+
+    @Test func `running but hung managed gateway eventually presents incident`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+        let recorder = GatewayRecoveryNotificationRecorder()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, _, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        throw URLError(.cannotConnectToHost)
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_CONFIG_PATH": gatewayManagerEmptyConfigPath,
+            ],
+            defaults: [
+                gatewayManagerConsumerConnectionModeKey: AppState.ConnectionMode.local.rawValue,
+            ]) {
+                let manager = GatewayProcessManager(
+                    recoveryReadinessTimeout: 0,
+                    maximumReadinessTimeout: 0.05,
+                    recoveryNotificationSender: { incident in
+                        await recorder.record(incident)
+                    },
+                    managedJobRunningProbe: { true })
+                manager.setTestingConnection(connection)
+                manager.setTestingDesiredActive(true)
+                defer {
+                    manager.setTestingConnection(nil)
+                    manager.setTestingDesiredActive(false)
+                }
+
+                let ready = await manager.testingConfirmSlowManagedGatewayWithoutHealthySideEffects()
+
+                #expect(!ready)
+                #expect(manager.testingRecoveryIncident() != nil)
+                #expect(await recorder.count() == 1)
+            }
     }
 
     @Test func `recovery tracker waits for bounded unverifiable observations`() {
