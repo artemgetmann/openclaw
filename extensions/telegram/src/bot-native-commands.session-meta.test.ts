@@ -22,6 +22,11 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 >;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
 type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
+type GetPluginCommandSpecsFn =
+  typeof import("../../../src/plugins/commands.js").getPluginCommandSpecs;
+type MatchPluginCommandFn = typeof import("../../../src/plugins/commands.js").matchPluginCommand;
+type ExecutePluginCommandFn =
+  typeof import("../../../src/plugins/commands.js").executePluginCommand;
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
   queuedFinal: false,
@@ -49,6 +54,14 @@ const replyMocks = vi.hoisted(() => ({
 }));
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn<DeliverRepliesFn>(async () => ({ delivered: true })),
+}));
+const channelActivityMocks = vi.hoisted(() => ({
+  recordChannelActivity: vi.fn(),
+}));
+const pluginCommandMocks = vi.hoisted(() => ({
+  getPluginCommandSpecs: vi.fn<GetPluginCommandSpecsFn>(() => []),
+  matchPluginCommand: vi.fn<MatchPluginCommandFn>(() => null),
+  executePluginCommand: vi.fn<ExecutePluginCommandFn>(async () => ({ text: "ok" })),
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn<
@@ -86,6 +99,9 @@ vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
 vi.mock("../../../src/channels/reply-prefix.js", () => ({
   createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
 }));
+vi.mock("../../../src/infra/channel-activity.js", () => ({
+  recordChannelActivity: channelActivityMocks.recordChannelActivity,
+}));
 vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     bind: vi.fn(),
@@ -101,9 +117,9 @@ vi.mock("../../../src/auto-reply/skill-commands.js", async (importOriginal) => {
   return { ...actual, listSkillCommandsForAgents: vi.fn(() => []) };
 });
 vi.mock("../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
+  getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
+  matchPluginCommand: pluginCommandMocks.matchPluginCommand,
+  executePluginCommand: pluginCommandMocks.executePluginCommand,
 }));
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
@@ -231,6 +247,7 @@ function registerAndResolveCommandHandlerBase(params: {
   groupAllowFrom: string[];
   useAccessGroups: boolean;
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
+  shouldSkipUpdate?: RegisterTelegramHandlerParams["shouldSkipUpdate"];
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -242,6 +259,7 @@ function registerAndResolveCommandHandlerBase(params: {
     groupAllowFrom,
     useAccessGroups,
     resolveTelegramGroupConfig,
+    shouldSkipUpdate,
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -261,6 +279,7 @@ function registerAndResolveCommandHandlerBase(params: {
       groupAllowFrom,
       useAccessGroups,
       resolveTelegramGroupConfig,
+      shouldSkipUpdate,
     }),
   });
 
@@ -358,6 +377,172 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
+    channelActivityMocks.recordChannelActivity.mockClear();
+    pluginCommandMocks.getPluginCommandSpecs.mockReset().mockReturnValue([]);
+    pluginCommandMocks.matchPluginCommand.mockReset().mockReturnValue(null);
+    pluginCommandMocks.executePluginCommand.mockReset().mockResolvedValue({ text: "ok" });
+  });
+
+  it("records inbound activity only after a native slash command is admitted", async () => {
+    const { handler, sendMessage } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+    });
+
+    await handler(buildStatusCommandContext());
+
+    expect(channelActivityMocks.recordChannelActivity).toHaveBeenCalledOnce();
+    expect(channelActivityMocks.recordChannelActivity).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      direction: "inbound",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not record inbound activity for unauthorized or skipped native commands", async () => {
+    const unauthorized = registerAndResolveCommandHandler({
+      commandName: "new",
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      useAccessGroups: true,
+    });
+    await unauthorized.handler(buildStatusTopicCommandContext());
+
+    const skipped = registerAndResolveCommandHandlerBase({
+      commandName: "status",
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: [],
+      useAccessGroups: true,
+      shouldSkipUpdate: () => true,
+    });
+    await skipped.handler(buildStatusCommandContext());
+
+    expect(channelActivityMocks.recordChannelActivity).not.toHaveBeenCalled();
+  });
+
+  it("does not record activity for an unauthenticated public plugin command", async () => {
+    const command = {
+      name: "public_plugin",
+      description: "Public plugin command",
+      pluginId: "test-plugin",
+      requireAuth: false,
+      handler: vi.fn(),
+    } as const;
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      { name: command.name, description: command.description, acceptsArgs: false },
+    ]);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({ command, args: undefined });
+    const { handler } = registerAndResolveCommandHandlerBase({
+      commandName: command.name,
+      cfg: {},
+      allowFrom: ["999"],
+      groupAllowFrom: [],
+      useAccessGroups: true,
+    });
+
+    await handler(buildStatusCommandContext());
+
+    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ isAuthorizedSender: false }),
+    );
+    expect(channelActivityMocks.recordChannelActivity).not.toHaveBeenCalled();
+  });
+
+  it("records activity for an authenticated plugin command after route resolution", async () => {
+    const command = {
+      name: "private_plugin",
+      description: "Private plugin command",
+      pluginId: "test-plugin",
+      requireAuth: true,
+      handler: vi.fn(),
+    } as const;
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      { name: command.name, description: command.description, acceptsArgs: false },
+    ]);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({ command, args: undefined });
+    const { handler } = registerAndResolveCommandHandlerBase({
+      commandName: command.name,
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: [],
+      useAccessGroups: true,
+    });
+
+    await handler(buildStatusCommandContext());
+
+    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ isAuthorizedSender: true }),
+    );
+    expect(channelActivityMocks.recordChannelActivity).toHaveBeenCalledOnce();
+    expect(channelActivityMocks.recordChannelActivity).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      direction: "inbound",
+    });
+  });
+
+  it("acknowledges /compact in its topic before dispatch and final delivery", async () => {
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
+        await dispatcherOptions.deliver({ text: "Compacted." }, { kind: "final" });
+        return dispatchReplyResult;
+      },
+    );
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "compact",
+      cfg: {},
+      allowFrom: ["200"],
+    });
+
+    await handler(buildStatusDmTopicCommandContext());
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      "⚙️ Compacting this conversation — this may take a few minutes.",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
+    expect(sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    expect(sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      deliveryMocks.deliverReplies.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({ replies: [{ text: "Compacted." }] }),
+    );
+  });
+
+  it("continues /compact dispatch when its best-effort acknowledgement fails", async () => {
+    const runtimeError = vi.fn();
+    const sendMessage = vi.fn().mockRejectedValue(new Error("network down"));
+    const commandHandlers = new Map<string, TelegramCommandHandler>();
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({
+        bot: {
+          api: {
+            setMyCommands: vi.fn().mockResolvedValue(undefined),
+            sendMessage,
+          },
+          command: vi.fn((name: string, cb: TelegramCommandHandler) => {
+            commandHandlers.set(name, cb);
+          }),
+        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+        cfg: {},
+        runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+        allowFrom: ["200"],
+        useAccessGroups: true,
+      }),
+    });
+    const handler = commandHandlers.get("compact");
+    expect(handler).toBeTruthy();
+
+    await handler?.(buildStatusCommandContext());
+
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("sendMessage failed"));
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
@@ -708,6 +893,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(buildStatusTopicCommandContext());
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(channelActivityMocks.recordChannelActivity).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       -1001234567890,
       "Configured ACP binding is unavailable right now. Please try again.",
