@@ -26,7 +26,15 @@ export type ChannelHealthSnapshot = {
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  lastPollCompletedAt?: number | null;
+  lastPollSuccessAt?: number | null;
   lastPollOutcome?: string | null;
+  telegramRecovery?: {
+    phase: "provider-restart" | "gateway-restart-requested" | "exhausted";
+    providerRestartAttempts: number;
+    reason?: string | null;
+    updatedAt: number;
+  };
 };
 
 export type ChannelHealthEvaluationReason =
@@ -49,6 +57,7 @@ export type ChannelHealthPolicy = {
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
+  telegramPollingProofFreshnessMs?: number;
 };
 
 export type ChannelRestartReason =
@@ -67,6 +76,36 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+// Telegram's polling watchdog uses a 90s stall boundary. Recovery proof gets
+// one additional boundary of tolerance without accepting a 30-minute-old poll.
+export const DEFAULT_TELEGRAM_POLLING_PROOF_FRESHNESS_MS = 180_000;
+
+/**
+ * A generic connected/listening flag cannot prove Telegram long-poll health.
+ * Recovery is cleared only by a successful getUpdates completion after the
+ * incident began and within the dedicated polling-proof freshness window.
+ */
+export function hasRecentTelegramPollingProof(
+  snapshot: ChannelHealthSnapshot,
+  policy: Pick<ChannelHealthPolicy, "now" | "telegramPollingProofFreshnessMs">,
+): boolean {
+  // lastPollOutcome is intentionally not part of recovery proof. A healthy
+  // long-poller begins the next request immediately, changing that diagnostic
+  // to `in-flight` while the previous successful completion remains valid.
+  const successAt = snapshot.lastPollSuccessAt;
+  if (typeof successAt !== "number" || !Number.isFinite(successAt)) {
+    return false;
+  }
+  if (snapshot.telegramRecovery && successAt <= snapshot.telegramRecovery.updatedAt) {
+    return false;
+  }
+  const age = policy.now - successAt;
+  const freshnessMs =
+    typeof policy.telegramPollingProofFreshnessMs === "number"
+      ? policy.telegramPollingProofFreshnessMs
+      : DEFAULT_TELEGRAM_POLLING_PROOF_FRESHNESS_MS;
+  return age >= 0 && age <= freshnessMs;
+}
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -111,6 +150,22 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stuck" };
     }
   }
+
+  const hasExplicitTelegramPollingFailure =
+    policy.channelId === "telegram" &&
+    snapshot.mode === "polling" &&
+    (snapshot.lastPollOutcome === "stalled" ||
+      snapshot.lastPollOutcome === "unhealthy" ||
+      Boolean(snapshot.transportActivity?.watchdog?.escalation));
+  if (hasExplicitTelegramPollingFailure) {
+    // Polling sessions may internally rebuild after a stall and refresh
+    // lastStartAt. Once the poller itself reports an authoritative failure,
+    // that lifecycle churn is not genuine provider startup and must not renew
+    // connect grace forever. Keep `started` and `in-flight` outside this set so
+    // a newly launched provider still receives the normal startup window.
+    return { healthy: false, reason: "stuck" };
+  }
+
   if (snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
@@ -120,12 +175,10 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (
-    policy.channelId === "telegram" &&
-    snapshot.mode === "polling" &&
-    (snapshot.lastPollOutcome === "unhealthy" || snapshot.transportActivity?.watchdog?.escalation)
-  ) {
-    return { healthy: false, reason: "stuck" };
+  if (policy.channelId === "telegram" && snapshot.mode === "polling" && snapshot.telegramRecovery) {
+    return hasRecentTelegramPollingProof(snapshot, policy)
+      ? { healthy: true, reason: "healthy" }
+      : { healthy: false, reason: "stuck" };
   }
   // Skip stale-socket check for Telegram (long-polling mode) and any channel
   // explicitly operating in webhook mode. In these cases, there is no persistent

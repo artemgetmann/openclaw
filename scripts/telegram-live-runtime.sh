@@ -413,6 +413,7 @@ NODE
   PROFILE_ID="$(printf '%s\n' "$profile_lines" | sed -n '1p')"
   RUNTIME_PORT="$(printf '%s\n' "$profile_lines" | sed -n '2p')"
   RUNTIME_STATE_DIR="$(printf '%s\n' "$profile_lines" | sed -n '3p')"
+  RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
   RUNTIME_LOG_PATH="/tmp/openclaw-telegram-live-${PROFILE_ID}.log"
 
   if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ]]; then
@@ -485,8 +486,21 @@ resolve_runtime_owner() {
   runtime_cmd="$(ps -o command= -p "$RUNTIME_PID" 2>/dev/null || true)"
   RUNTIME_WORKTREE="$(lsof -a -p "$RUNTIME_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
 
-  if [[ -n "$RUNTIME_WORKTREE" && "$RUNTIME_WORKTREE" == "$WORKTREE" ]] &&
-    [[ "$runtime_cmd" == *" gateway run"* || "$runtime_cmd" == *"openclaw-gateway"* ]]; then
+  local has_runtime_profile="no"
+  # The gateway changes cwd to its configured workspace after startup. Its
+  # non-secret, worktree-derived profile remains in argv for the process life,
+  # so it is durable ownership proof without reading tokens or process env.
+  if [[ -n "$PROFILE_ID" ]] &&
+    { [[ " $runtime_cmd " == *" --profile ${PROFILE_ID} "* ]] ||
+      [[ " $runtime_cmd " == *" --profile=${PROFILE_ID} "* ]]; }; then
+    has_runtime_profile="yes"
+  fi
+
+  if [[ "$runtime_cmd" == *" gateway run"* || "$runtime_cmd" == *"openclaw-gateway"* ]] &&
+    { [[ -n "$RUNTIME_WORKTREE" && "$RUNTIME_WORKTREE" == "$WORKTREE" ]] ||
+      [[ "$has_runtime_profile" == "yes" ]]; }; then
+    # Profile evidence proves the expected owner even when cwd is now workspace.
+    RUNTIME_WORKTREE="$WORKTREE"
     RUNTIME_OWNERSHIP="ok"
   fi
 }
@@ -1370,6 +1384,7 @@ const repoRoot = process.env.REPO_ROOT;
 const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const runtimePort = process.env.RUNTIME_PORT;
+const profileId = process.env.PROFILE_ID;
 const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
 const helperPath = process.env.HELPER_MODULE;
 const acpValidation = process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION ?? "";
@@ -1378,7 +1393,7 @@ const enableCron = process.env.OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON === "1";
 const disableExternalCliAuthSync =
   process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "0";
 
-if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath) {
+if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath || !profileId) {
   throw new Error("Missing detached runtime launch parameters.");
 }
 
@@ -1390,6 +1405,8 @@ const child = spawn(
   process.execPath,
   [
     "scripts/run-node.mjs",
+    "--profile",
+    profileId,
     "gateway",
     "run",
     "--bind",

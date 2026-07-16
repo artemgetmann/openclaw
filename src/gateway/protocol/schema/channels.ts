@@ -119,7 +119,23 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     pollingInFlight: Type.Optional(Type.Boolean()),
     lastPollStartedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastPollCompletedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastPollSuccessAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
     lastPollOutcome: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    telegramRecovery: Type.Optional(
+      Type.Object(
+        {
+          phase: Type.Union([
+            Type.Literal("provider-restart"),
+            Type.Literal("gateway-restart-requested"),
+            Type.Literal("exhausted"),
+          ]),
+          providerRestartAttempts: Type.Integer({ minimum: 0 }),
+          reason: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          updatedAt: Type.Integer({ minimum: 0 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
     mode: Type.Optional(Type.String()),
     dmPolicy: Type.Optional(Type.String()),

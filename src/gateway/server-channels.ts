@@ -126,6 +126,12 @@ export type ChannelManager = {
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
+  /** Gateway-owned status overlay; it never starts, stops, or replaces a provider task. */
+  patchChannelStatus: (
+    channelId: ChannelId,
+    accountId: string,
+    patch: Partial<ChannelAccountSnapshot>,
+  ) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
@@ -224,8 +230,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
     const next = { ...current, ...patch, accountId };
+    // `undefined` is an intentional clear for the optional recovery contract.
+    // Delete it so absence keeps its precise "no incident" meaning in snapshots.
+    if (Object.hasOwn(patch, "telegramRecovery") && patch.telegramRecovery === undefined) {
+      delete next.telegramRecovery;
+    }
     store.runtimes.set(accountId, next);
     return next;
+  };
+
+  const patchChannelStatus = (
+    channelId: ChannelId,
+    accountId: string,
+    patch: Partial<ChannelAccountSnapshot>,
+  ): void => {
+    setRuntime(channelId, accountId, { ...patch, accountId });
   };
 
   const getChannelRuntime = (): PluginRuntime["channel"] | undefined => {
@@ -544,6 +563,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannel,
     stopChannel,
     markChannelLoggedOut,
+    patchChannelStatus,
     isManuallyStopped: isManuallyStopped_,
     resetRestartAttempts: resetRestartAttempts_,
     isHealthMonitorEnabled,

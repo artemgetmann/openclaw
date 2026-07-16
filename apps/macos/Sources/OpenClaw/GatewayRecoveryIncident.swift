@@ -1,18 +1,131 @@
 import SwiftUI
 
-/// Consumer-safe presentation for the one gateway recovery incident exposed by
-/// the app. Keep process, service, launchd, and port details in diagnostics; the
+/// Consumer-safe presentation for the recovery incident exposed by the app.
+/// Keep process, service, launchd, provider, poll, and port details in diagnostics; the
 /// user only needs to understand the impact and the single recovery action.
 struct GatewayRecoveryIncident: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case gatewayOffline
+        case telegramOffline
+    }
+
+    let kind: Kind
     let title: String
     let message: String
     let actionTitle: String
 
     static func offline(appName: String) -> Self {
         Self(
+            kind: .gatewayOffline,
             title: "\(appName) needs a restart",
             message: "\(appName) could not reconnect. Restart it to restore AI access.",
             actionTitle: "Restart \(appName)")
+    }
+
+    static func telegramOffline(appName: String) -> Self {
+        Self(
+            kind: .telegramOffline,
+            title: "Telegram is offline",
+            message: "\(appName) could not reconnect to Telegram automatically.",
+            actionTitle: "Restart \(appName)")
+    }
+}
+
+/// Consumer monitoring observes the gateway-owned recovery contract, not
+/// Telegram's generic `running` flag. These values deliberately mirror only the
+/// evidence needed to decide whether manual recovery is justified.
+struct TelegramRecoveryObservation: Equatable, Sendable {
+    enum Phase: String, Codable, Equatable, Sendable {
+        case providerRestart = "provider-restart"
+        case gatewayRestartRequested = "gateway-restart-requested"
+        case exhausted
+    }
+
+    let phase: Phase?
+    let providerRestartAttempts: Int?
+    let updatedAt: Double?
+    let lastPollSuccessAt: Double?
+    let lastPollOutcome: String?
+
+    init(
+        phase: Phase? = nil,
+        providerRestartAttempts: Int? = nil,
+        updatedAt: Double? = nil,
+        lastPollSuccessAt: Double? = nil,
+        lastPollOutcome: String? = nil)
+    {
+        self.phase = phase
+        self.providerRestartAttempts = providerRestartAttempts
+        self.updatedAt = updatedAt
+        self.lastPollSuccessAt = lastPollSuccessAt
+        self.lastPollOutcome = lastPollOutcome
+    }
+}
+
+/// Holds the incident timestamp across snapshots because the gateway removes
+/// `telegramRecovery` once transport recovery is proven. Absence alone is not
+/// enough to clear the card: the app still requires a newer, recent successful
+/// getUpdates completion as direct proof that Telegram long-polling works again.
+struct TelegramRecoveryIncidentTracker {
+    enum Transition: Equatable {
+        case unchanged
+        case present(shouldNotify: Bool)
+        case clear
+    }
+
+    static let pollingProofFreshnessMs: Double = 180_000
+
+    private(set) var incidentUpdatedAt: Double?
+    private var notificationSentForCurrentIncident = false
+
+    var isIncidentActive: Bool {
+        self.incidentUpdatedAt != nil
+    }
+
+    mutating func observe(_ observation: TelegramRecoveryObservation, nowMs: Double) -> Transition {
+        let observedExhaustedAt = observation.phase == .exhausted
+            ? observation.updatedAt.flatMap { $0.isFinite ? $0 : nil }
+            : nil
+        let recoveryBoundary = [self.incidentUpdatedAt, observedExhaustedAt]
+            .compactMap(\.self)
+            .max()
+
+        if let recoveryBoundary,
+           let successAt = observation.lastPollSuccessAt,
+           successAt > recoveryBoundary
+        {
+            // `lastPollOutcome` may already be `in-flight` for the next long
+            // poll. The dedicated success timestamp is deliberately durable.
+            let age = nowMs - successAt
+            if age >= 0, age <= Self.pollingProofFreshnessMs {
+                self.incidentUpdatedAt = nil
+                self.notificationSentForCurrentIncident = false
+                return .clear
+            }
+        }
+
+        // Provider and gateway restart phases are still automatic recovery.
+        // Only the gateway's terminal exhaustion state authorizes user-facing UI.
+        guard let observedExhaustedAt else { return .unchanged }
+
+        if let existingIncidentUpdatedAt = self.incidentUpdatedAt {
+            if observedExhaustedAt > existingIncidentUpdatedAt {
+                // A newer terminal recovery timestamp is stronger than the retained
+                // local boundary. Keep the incident visible and require proof newer
+                // than the latest gateway-owned exhaustion state.
+                self.incidentUpdatedAt = observedExhaustedAt
+            }
+        } else {
+            self.incidentUpdatedAt = observedExhaustedAt
+        }
+        let shouldNotify = !self.notificationSentForCurrentIncident
+        self.notificationSentForCurrentIncident = true
+        return .present(shouldNotify: shouldNotify)
+    }
+
+    mutating func reset() {
+        self.incidentUpdatedAt = nil
+        self.notificationSentForCurrentIncident = false
     }
 }
 

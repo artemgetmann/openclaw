@@ -1,7 +1,7 @@
 import type { BaseProbeResult } from "../../../src/channels/plugins/types.js";
 import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
 import { fetchWithTimeout } from "../../../src/utils/fetch-timeout.js";
-import { resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -25,10 +25,13 @@ export type TelegramProbeOptions = {
   accountId?: string;
 };
 
-const probeFetcherCache = new Map<string, typeof fetch>();
+const probeFetcherCache = new Map<string, TelegramTransport>();
 const MAX_PROBE_FETCHER_CACHE_SIZE = 64;
 
 export function resetTelegramProbeFetcherCacheForTests(): void {
+  for (const transport of probeFetcherCache.values()) {
+    void transport.close?.();
+  }
   probeFetcherCache.clear();
 }
 
@@ -59,35 +62,43 @@ function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions
   return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}`;
 }
 
-function setCachedProbeFetcher(cacheKey: string, fetcher: typeof fetch): typeof fetch {
-  probeFetcherCache.set(cacheKey, fetcher);
+function setCachedProbeFetcher(cacheKey: string, transport: TelegramTransport): TelegramTransport {
+  probeFetcherCache.set(cacheKey, transport);
   if (probeFetcherCache.size > MAX_PROBE_FETCHER_CACHE_SIZE) {
     const oldestKey = probeFetcherCache.keys().next().value;
     if (oldestKey !== undefined) {
+      const evicted = probeFetcherCache.get(oldestKey);
       probeFetcherCache.delete(oldestKey);
+      void evicted?.close?.();
     }
   }
-  return fetcher;
+  return transport;
 }
 
-function resolveProbeFetcher(token: string, options?: TelegramProbeOptions): typeof fetch {
+function resolveProbeFetcher(
+  token: string,
+  options?: TelegramProbeOptions,
+): { transport: TelegramTransport; retainedInCache: boolean } {
   const cacheEnabled = shouldUseProbeFetcherCache();
   const cacheKey = cacheEnabled ? buildProbeFetcherCacheKey(token, options) : null;
   if (cacheKey) {
     const cachedFetcher = probeFetcherCache.get(cacheKey);
     if (cachedFetcher) {
-      return cachedFetcher;
+      return { transport: cachedFetcher, retainedInCache: true };
     }
   }
 
   const proxyUrl = options?.proxyUrl?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const resolved = resolveTelegramFetch(proxyFetch, { network: options?.network });
+  const resolved = resolveTelegramTransport(proxyFetch, {
+    network: options?.network,
+    context: { accountId: options?.accountId },
+  });
 
   if (cacheKey) {
-    return setCachedProbeFetcher(cacheKey, resolved);
+    return { transport: setCachedProbeFetcher(cacheKey, resolved), retainedInCache: true };
   }
-  return resolved;
+  return { transport: resolved, retainedInCache: false };
 }
 
 export async function probeTelegram(
@@ -99,7 +110,8 @@ export async function probeTelegram(
   const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
-  const fetcher = resolveProbeFetcher(token, options);
+  const { transport, retainedInCache } = resolveProbeFetcher(token, options);
+  const fetcher = transport.fetch;
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
   const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
@@ -131,6 +143,10 @@ export async function probeTelegram(
         break;
       } catch (err) {
         fetchError = err;
+        // A timed-out probe's request signal is already aborted, so the fetch layer must
+        // not retry it in place. Promote shared learned state for the probe's next bounded
+        // retry and for later bot generations using the same account transport policy.
+        transport.forceFallback?.("probe timeout/network error", err);
         if (i < 2) {
           const remainingAfterAttemptMs = resolveRemainingBudgetMs();
           if (remainingAfterAttemptMs <= 0) {
@@ -217,5 +233,11 @@ export async function probeTelegram(
       error: err instanceof Error ? err.message : String(err),
       elapsedMs: Date.now() - started,
     };
+  } finally {
+    // Production probes retain a bounded account/policy cache. Test/one-shot probes are
+    // deliberately uncached, so they must release their resolver-owned sockets here.
+    if (!retainedInCache) {
+      await transport.close?.();
+    }
   }
 }

@@ -2,6 +2,7 @@ import { danger } from "../../../src/globals.js";
 import { formatErrorMessage } from "../../../src/infra/errors.js";
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { formatTelegramTransportErrorForLogging } from "./fetch.js";
 
 export type TelegramApiLogger = (message: string) => void;
 
@@ -36,7 +37,10 @@ export async function withTelegramApiErrorLogging<T>({
     return await fn();
   } catch (err) {
     if (!shouldLog || shouldLog(err)) {
-      const errText = formatErrorMessage(err);
+      // Transport errors retain raw causes for code-level diagnosis, but logs expose only
+      // ordered phases plus repository-redacted messages. Never stringify attempt objects:
+      // underlying fetch errors can contain Bot API URLs with the token in the path.
+      const errText = formatTelegramTransportErrorForLogging(err) ?? formatErrorMessage(err);
       const log = resolveTelegramApiLogger(runtime, logger);
       log(danger(`telegram ${operation} failed: ${errText}`));
     }

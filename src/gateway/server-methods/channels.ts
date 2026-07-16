@@ -40,6 +40,17 @@ type ChannelLogoutPayload = {
   [key: string]: unknown;
 };
 
+/** Preserve only gateway-owned status that adapters cannot author themselves. */
+export function applyGatewayOwnedChannelStatus(
+  snapshot: ChannelAccountSnapshot,
+  runtimeSnapshot: ChannelAccountSnapshot | undefined,
+): ChannelAccountSnapshot {
+  if (runtimeSnapshot?.telegramRecovery !== undefined) {
+    snapshot.telegramRecovery = runtimeSnapshot.telegramRecovery;
+  }
+  return snapshot;
+}
+
 type TelegramSetupReplayPayload = {
   updateId: number;
   messageId: number;
@@ -677,6 +688,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
             if (configuredError && !snapshot.lastError) {
               snapshot.lastError = configuredError;
             }
+            // Recovery is owned by the gateway lifecycle monitor, not the
+            // Telegram adapter's stable account metadata. Preserve that one
+            // runtime overlay so channels.status can publish the incident.
+            applyGatewayOwnedChannelStatus(snapshot, runtimeSnapshot);
             const activity = getChannelActivity({
               channel: channelId as never,
               accountId,

@@ -13,7 +13,6 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
     const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
     writeFileSync(sourcePath, scriptSource, "utf8");
-
     const stdout = execFileSync(
       BASH_BIN,
       [
@@ -36,7 +35,6 @@ describe("telegram-live-runtime.sh", () => {
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
     const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
     writeFileSync(sourcePath, scriptSource, "utf8");
-
     const stdout = execFileSync(
       BASH_BIN,
       [
@@ -57,6 +55,55 @@ describe("telegram-live-runtime.sh", () => {
     expect(stdout).toContain("config_diff_allowed_only=true");
     expect(stdout).toContain("browser_sidecar_enabled=true");
     expect(stdout).not.toContain("token_claim_path=");
+  });
+
+  it("accepts the exact tester profile marker after gateway cwd changes", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-owner-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+    expect(scriptSource).toMatch(/"scripts\/run-node\.mjs",\s+"--profile",\s+profileId,/u);
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)} && lsof() { if [[ "$*" == *"-tiTCP:24567"* ]]; then printf '31337\\n'; else printf 'p31337\\nfcwd\\nn/tmp/jarvis-workspace\\n'; fi; } && ps() { printf '/opt/homebrew/bin/node openclaw.mjs --profile tg-live-a1b2c3d4e5 gateway run --bind loopback --port 24567 --force --allow-unconfigured\\n'; } && WORKTREE=/tmp/repo PROFILE_ID=tg-live-a1b2c3d4e5 RUNTIME_PORT=24567 resolve_runtime_owner && printf 'ownership=%s\\nworktree=%s\\n' "$RUNTIME_OWNERSHIP" "$RUNTIME_WORKTREE"`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toContain("ownership=ok");
+    expect(stdout).toContain("worktree=/tmp/repo");
+  });
+
+  it("rejects a longer profile with the expected profile as a prefix", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-other-owner-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)} && lsof() { if [[ "$*" == *"-tiTCP:24567"* ]]; then printf '31337\\n'; else printf 'p31337\\nfcwd\\nn/tmp/jarvis-workspace\\n'; fi; } && ps() { printf '/opt/homebrew/bin/node openclaw.mjs --profile tg-live-a1b2c3d4e5-stale gateway run --bind loopback --port 24567 --force --allow-unconfigured\\n'; } && WORKTREE=/tmp/repo PROFILE_ID=tg-live-a1b2c3d4e5 RUNTIME_PORT=24567 resolve_runtime_owner && printf 'ownership=%s\\nworktree=%s\\n' "$RUNTIME_OWNERSHIP" "$RUNTIME_WORKTREE"`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toContain("ownership=fail");
+    expect(stdout).toContain("worktree=/tmp/jarvis-workspace");
   });
 
   it("stages benchmark uploads under the browser upload allowlist directory", () => {

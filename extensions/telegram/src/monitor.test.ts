@@ -255,6 +255,10 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
+  // Production polling now awaits owned dispatcher cleanup after grammY's
+  // synchronous stop. These monitor tests use transport-free fake bots, so
+  // their cleanup contract is already complete.
+  waitForTelegramBotTransportClose: vi.fn(async () => undefined),
   createTelegramBot: (opts: Record<string, unknown>) => {
     createTelegramBotCalls.push(opts);
     const nextError = createTelegramBotErrors.shift();
@@ -437,7 +441,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
-  it("retries recoverable deleteWebhook failures before polling", async () => {
+  it("continues into polling after a recoverable deleteWebhook failure", async () => {
     const abort = new AbortController();
     const cleanupError = makeRecoverableFetchError();
     api.deleteWebhook.mockReset();
@@ -446,8 +450,10 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
-    expectRecoverableRetryState(1);
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(computeBackoff).not.toHaveBeenCalled();
+    expect(sleepWithAbort).not.toHaveBeenCalled();
   });
 
   it("retries setup-time recoverable errors before starting polling", async () => {

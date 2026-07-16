@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawProtocol
 
 @MainActor
 @Observable
@@ -7,6 +8,7 @@ final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
     typealias RecoveryNotificationSender = @MainActor @Sendable (GatewayRecoveryIncident) async -> Void
     typealias ManagedJobRunningProbe = @Sendable () async -> Bool?
+    typealias ChannelsStatusProvider = @MainActor @Sendable () async throws -> ChannelsStatusSnapshot
     /// This is the initial RPC budget, not an outage deadline. Cold startup can spend
     /// minutes in secrets/config preflight before binding its port. After this budget,
     /// a launchd job with a live PID keeps the UI in Starting while health polling continues.
@@ -63,10 +65,12 @@ final class GatewayProcessManager {
     /// The generation prevents that stale loop from clearing the replacement task handle.
     private var launchAgentReconciliationGeneration: UInt = 0
     private var recoveryIncidentTracker = GatewayRecoveryIncidentTracker()
+    private var telegramRecoveryIncidentTracker = TelegramRecoveryIncidentTracker()
     private let recoveryReadinessTimeout: TimeInterval
     private let maximumReadinessTimeout: TimeInterval
     private let recoveryNotificationSender: RecoveryNotificationSender
     private let managedJobRunningProbe: ManagedJobRunningProbe
+    private let channelsStatusProvider: ChannelsStatusProvider
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -79,7 +83,8 @@ final class GatewayProcessManager {
         recoveryReadinessTimeout: TimeInterval = GatewayProcessManager.gatewayReadinessTimeout,
         maximumReadinessTimeout: TimeInterval = GatewayProcessManager.gatewayMaximumReadinessTimeout,
         recoveryNotificationSender: RecoveryNotificationSender? = nil,
-        managedJobRunningProbe: ManagedJobRunningProbe? = nil)
+        managedJobRunningProbe: ManagedJobRunningProbe? = nil,
+        channelsStatusProvider: ChannelsStatusProvider? = nil)
     {
         self.recoveryReadinessTimeout = recoveryReadinessTimeout
         self.maximumReadinessTimeout = maximumReadinessTimeout
@@ -95,6 +100,16 @@ final class GatewayProcessManager {
         let managedJobLabel = gatewayLaunchdLabel
         self.managedJobRunningProbe = managedJobRunningProbe ?? {
             await GatewayProcessManager.readManagedGatewayJobRunning(label: managedJobLabel)
+        }
+        self.channelsStatusProvider = channelsStatusProvider ?? {
+            let params: [String: AnyCodable] = [
+                "probe": AnyCodable(false),
+                "timeoutMs": AnyCodable(2000),
+            ]
+            return try await GatewayConnection.shared.requestDecoded(
+                method: .channelsStatus,
+                params: params,
+                timeoutMs: 3000)
         }
     }
 
@@ -358,6 +373,12 @@ final class GatewayProcessManager {
               self.launchAgentReconciliationGeneration == generation,
               !Task.isCancelled
         else { return false }
+
+        // Channel recovery is gateway-owned evidence and must be observed even
+        // when launchd is already healthy or attach-only mode forbids service
+        // mutation. Keeping this bounded check in the manager's 60-second loop
+        // makes incident monitoring independent from whichever settings view is open.
+        await self.reconcileTelegramRecoveryStatus()
         // Attach-only is an explicit instruction not to mutate launchd. Keep the
         // loop alive so removing the marker later resumes healing without relaunch.
         guard !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() else { return true }
@@ -378,7 +399,7 @@ final class GatewayProcessManager {
         // A loaded service is normally a no-op. If an incident is already visible,
         // one live probe lets a launchd-owned recovery clear it without user action.
         if firstLoadedState == true {
-            if self.recoveryIncident != nil {
+            if self.recoveryIncidentTracker.isIncidentActive {
                 await self.clearRecoveryIncidentIfSingleHealthProbeSucceeds()
             }
             return true
@@ -757,7 +778,7 @@ final class GatewayProcessManager {
     /// Unknown launchd status is not an outage. Only the combination of repeated
     /// observer uncertainty and a bounded live-health failure activates recovery.
     private func verifyUnverifiableGatewayState() async {
-        if self.recoveryIncident != nil {
+        if self.recoveryIncidentTracker.isIncidentActive {
             await self.clearRecoveryIncidentIfSingleHealthProbeSucceeds()
             return
         }
@@ -805,7 +826,7 @@ final class GatewayProcessManager {
 
         let incident = GatewayRecoveryIncident.offline(appName: AppFlavor.current.appName)
         let shouldNotify = self.recoveryIncidentTracker.recordUnavailable()
-        self.recoveryIncident = incident
+        self.updateVisibleRecoveryIncident()
         guard shouldNotify else { return }
 
         self.logger.warning("gateway recovery incident presented")
@@ -814,12 +835,64 @@ final class GatewayProcessManager {
 
     private func clearRecoveryIncidentAfterHealthyRPC() {
         self.recoveryIncidentTracker.recordHealthy()
-        self.recoveryIncident = nil
+        self.updateVisibleRecoveryIncident()
     }
 
     private func clearRecoveryIncidentAfterIntentionalStop() {
         self.recoveryIncidentTracker.reset()
+        self.telegramRecoveryIncidentTracker.reset()
         self.recoveryIncident = nil
+    }
+
+    /// A listening gateway proves only that the control plane is reachable.
+    /// Telegram incidents use stronger transport evidence from `channels.status`:
+    /// terminal exhaustion presents UI, and only a newer recent completed poll
+    /// clears it. Generic gateway health never participates in that decision.
+    private func reconcileTelegramRecoveryStatus() async {
+        guard AppFlavor.current.isConsumer,
+              self.desiredActive,
+              !CommandResolver.connectionModeIsRemote()
+        else { return }
+
+        do {
+            let snapshot = try await self.channelsStatusProvider()
+            await self.recordTelegramRecoveryObservation(
+                snapshot.telegramRecoveryObservation(),
+                nowMs: Date().timeIntervalSince1970 * 1000)
+        } catch {
+            // Failure to retrieve evidence is not evidence of Telegram failure or
+            // recovery. Preserve the current incident until a later bounded poll.
+            self.logger.debug("telegram recovery status unavailable: \(error.localizedDescription)")
+        }
+    }
+
+    private func recordTelegramRecoveryObservation(
+        _ observation: TelegramRecoveryObservation,
+        nowMs: Double) async
+    {
+        switch self.telegramRecoveryIncidentTracker.observe(observation, nowMs: nowMs) {
+        case .unchanged:
+            return
+        case .clear:
+            self.updateVisibleRecoveryIncident()
+            self.logger.info("telegram recovery incident cleared by recent completed poll")
+        case let .present(shouldNotify):
+            let incident = GatewayRecoveryIncident.telegramOffline(appName: AppFlavor.current.appName)
+            self.updateVisibleRecoveryIncident()
+            guard shouldNotify else { return }
+            self.logger.warning("telegram recovery incident presented after automatic recovery exhausted")
+            await self.recoveryNotificationSender(incident)
+        }
+    }
+
+    private func updateVisibleRecoveryIncident() {
+        if self.telegramRecoveryIncidentTracker.isIncidentActive {
+            self.recoveryIncident = .telegramOffline(appName: AppFlavor.current.appName)
+        } else if self.recoveryIncidentTracker.isIncidentActive {
+            self.recoveryIncident = .offline(appName: AppFlavor.current.appName)
+        } else {
+            self.recoveryIncident = nil
+        }
     }
 
     func clearLog() {
@@ -943,6 +1016,13 @@ extension GatewayProcessManager {
 
     func testingRecordHealthyRPC() {
         self.clearRecoveryIncidentAfterHealthyRPC()
+    }
+
+    func testingRecordTelegramRecoveryObservation(
+        _ observation: TelegramRecoveryObservation,
+        nowMs: Double) async
+    {
+        await self.recordTelegramRecoveryObservation(observation, nowMs: nowMs)
     }
 
     func setTestingStatus(_ status: Status) {
