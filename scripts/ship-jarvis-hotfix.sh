@@ -5,6 +5,8 @@ SCRIPT_NAME="ship-jarvis-hotfix"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/lib/jarvis-release-lock.sh
 source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
+# shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
+source "${ROOT_DIR}/scripts/lib/jarvis-release-disk-preflight.sh"
 CANONICAL_MAIN_REPO="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO_RAW="${OPENCLAW_MAIN_REPO:-${CANONICAL_MAIN_REPO}}"
 MAIN_REPO="${MAIN_REPO_RAW}"
@@ -379,6 +381,22 @@ package_hotfix() {
     return 0
   fi
   (cd "${MAIN_REPO}" && "${command[@]}")
+}
+
+require_hotfix_disk_preflight() {
+  local required_kib="${JARVIS_RELEASE_DISK_REQUIRED_KIB:-$(jarvis_release_disk_default_required_kib)}"
+
+  # The hotfix package writes its final app under dist/ and performs its heavy
+  # CLI/runtime staging under TMPDIR. The repo checkout, dependency install,
+  # and dist output share the output target's filesystem in this lane.
+  jarvis_release_disk_preflight_targets "${required_kib}" \
+    hotfix-output "${JARVIS_APP_PATH}" \
+    package-staging "${TMPDIR:-/tmp}"
+}
+
+preflight_and_package_hotfix() {
+  require_hotfix_disk_preflight || return $?
+  package_hotfix "$@"
 }
 
 verify_built_hotfix() {
@@ -871,7 +889,7 @@ main() {
   [[ "${host_arch}" == "arm64" || "${host_arch}" == "x86_64" ]] || die "unsupported host architecture: ${host_arch}"
 
   log "selected APP_VERSION=${app_version} from installed Jarvis and APP_BUILD=${app_build} from installed-manifest+1 versus normal package build"
-  package_hotfix "${app_build}" "${app_version}" "${host_arch}"
+  preflight_and_package_hotfix "${app_build}" "${app_version}" "${host_arch}"
   if (( DRY_RUN == 1 )); then
     log "dry-run: verify ${JARVIS_APP_PATH} commit=${expected_commit} CFBundleShortVersionString=${app_version} CFBundleVersion=${app_build} runtime_package_version=${app_version}"
   else
@@ -889,4 +907,6 @@ main() {
   TRANSACTION_ARMED=0
 }
 
-main "$@"
+if [[ "${OPENCLAW_SHIP_JARVIS_HOTFIX_LIB_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi
