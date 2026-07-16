@@ -384,6 +384,61 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
+  it("reloads session bookkeeping when the armed durable runner actually starts", async () => {
+    await withStateDirEnv("openclaw-active-followup-refresh-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const staleEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        compactionCount: 1,
+      };
+      await seedSessionStore({ storePath, sessionKey: "main", entry: staleEntry });
+      const onBlockReply = vi.fn();
+      let scheduledRunner: ((queued: FollowupRun) => Promise<void>) | undefined;
+      vi.mocked(scheduleFollowupDrain).mockImplementationOnce((_key, runner) => {
+        scheduledRunner = runner;
+      });
+      const { run, followupRun } = createMinimalRun({
+        opts: { isHeartbeat: false, onBlockReply },
+        isActive: true,
+        shouldFollowup: true,
+        resolvedQueueMode: "collect",
+        resolvedVerboseLevel: "on",
+        sessionEntry: staleEntry,
+        sessionStore: { main: staleEntry },
+        sessionKey: "main",
+        storePath,
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+      expect(scheduledRunner).toBeTypeOf("function");
+
+      // Simulate the formerly active turn committing newer bookkeeping while
+      // this durable followup waits behind it in the serialized session lane.
+      await seedSessionStore({
+        storePath,
+        sessionKey: "main",
+        entry: { ...staleEntry, updatedAt: 2, compactionCount: 5 },
+      });
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      });
+
+      await scheduledRunner?.(followupRun);
+
+      // A request-time snapshot would announce count 2. Count 6 proves the
+      // runner read the store again at execution and built on the active turn.
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("count 6") }),
+        undefined,
+      );
+    });
+  });
+
   it("does not create a durable task for early enqueued runs", async () => {
     const { run } = createMinimalRun({
       opts: { isHeartbeat: false },

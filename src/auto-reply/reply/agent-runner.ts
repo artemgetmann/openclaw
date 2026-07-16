@@ -8,6 +8,7 @@ import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  loadSessionStore,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
@@ -276,13 +277,16 @@ export async function runReplyAgent(params: {
       });
     }
   };
-  const createRunFollowupTurn = () =>
+  const createRunFollowupTurn = (sessionState?: {
+    entry?: SessionEntry;
+    store?: Record<string, SessionEntry>;
+  }) =>
     createFollowupRunner({
       opts: runOpts,
       typing,
       typingMode,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
+      sessionEntry: sessionState?.entry ?? activeSessionEntry,
+      sessionStore: sessionState?.store ?? activeSessionStore,
       sessionKey,
       storePath,
       defaultModel,
@@ -292,6 +296,18 @@ export async function runReplyAgent(params: {
       // the queue cannot acknowledge its disk record as successfully processed.
       failureMode: "throw-durable",
     });
+  const runDurableFollowupTurn = async (queued: FollowupRun) => {
+    // This callback may sit behind another turn for minutes. Reload at actual
+    // execution time so compaction and usage bookkeeping cannot be based on
+    // the busy inbound request's stale session snapshot.
+    const refreshedSessionStore = storePath ? loadSessionStore(storePath) : activeSessionStore;
+    const refreshedSessionEntry =
+      (sessionKey ? refreshedSessionStore?.[sessionKey] : undefined) ?? activeSessionEntry;
+    await createRunFollowupTurn({
+      entry: refreshedSessionEntry,
+      store: refreshedSessionStore,
+    })(queued);
+  };
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
@@ -323,7 +339,7 @@ export async function runReplyAgent(params: {
     // not cache a callback, so arm this queue with a fresh callback now. The
     // embedded session lane still serializes model work if the prior run truly
     // remains active; scheduling here does not weaken that ordering boundary.
-    scheduleFollowupDrain(queueKey, createRunFollowupTurn());
+    scheduleFollowupDrain(queueKey, runDurableFollowupTurn);
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
