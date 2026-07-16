@@ -47,6 +47,7 @@ exit 0'
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$bin_dir/codesign"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_XCRUN_BIN="$bin_dir/success"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN="$bin_dir/success"
+  export OPENCLAW_RELEASE_ENV_FILE=0
 }
 
 setup_release_intent() {
@@ -380,6 +381,8 @@ test_wrapper_dry_run() {
   local p2_asset_out="$TMP_DIR/wrapper-p2-local-assets.out"
   local p2_poll_root="$TMP_DIR/wrapper-p2-poll-dmg"
   local p2_poll_out="$TMP_DIR/wrapper-p2-poll-dmg.out"
+  local pending_dmg_root="$TMP_DIR/wrapper-pending-dmg"
+  local pending_dmg_out="$TMP_DIR/wrapper-pending-dmg.out"
   local accepted_app_root="$TMP_DIR/wrapper-accepted-app"
   local accepted_app_out="$TMP_DIR/wrapper-accepted-app.out"
   local accepted_dmg_root="$TMP_DIR/wrapper-accepted-dmg"
@@ -458,6 +461,18 @@ test_wrapper_dry_run() {
   fi
   pass "wrapper p2 resumes dmg polling after local assets"
 
+  seed_wrapper_checkpoints "$pending_dmg_root" notarized submitted
+  /usr/bin/sed 's/^NOTARY_STATUS=submitted$/NOTARY_STATUS=In\\ Progress/' \
+    "$pending_dmg_root/dist/Jarvis.dmg.notary.env" \
+    >"$pending_dmg_root/dist/Jarvis.dmg.notary.env.pending"
+  mv -f \
+    "$pending_dmg_root/dist/Jarvis.dmg.notary.env.pending" \
+    "$pending_dmg_root/dist/Jarvis.dmg.notary.env"
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$pending_dmg_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$pending_dmg_out"
+  grep -q 'selected_phase=poll-dmg-notarization' "$pending_dmg_out" \
+    || fail "In Progress receipt selected DMG resubmission instead of same-ID polling"
+  pass "wrapper keeps In Progress DMG submission on the poll path"
   seed_wrapper_checkpoints "$accepted_dmg_root" notarized accepted
   OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$accepted_dmg_root" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run >"$accepted_dmg_out"
@@ -578,6 +593,7 @@ test_wrapper_dry_run() {
   OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$verify_timing" \
   OPENCLAW_MAIN_HOME_CLONE="$release_home" \
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/verify-tag-required.lock" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --verify-public-assets \
       --release-intent "$TEST_RELEASE_INTENT_ID" \
@@ -861,6 +877,7 @@ test_package_sparkle_publish_gate_does_not_require_dmg() {
   APP_NAME="$app_name" \
   OPENCLAW_MAIN_HOME_CLONE="$release_home" \
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/sparkle-publish-gate.lock" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase publish-sparkle-assets-only \
@@ -922,6 +939,7 @@ test_package_sparkle_publish_only_ignores_skip_notarize() {
   SKIP_NOTARIZE=1 \
   OPENCLAW_MAIN_HOME_CLONE="$release_home" \
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/sparkle-skip-notarize.lock" \
   OPENCLAW_JARVIS_RELEASE_MANIFEST="$manifest" \
     bash "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
       --phase publish-sparkle-assets-only \

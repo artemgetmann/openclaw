@@ -139,7 +139,22 @@ openclaw_jarvis_release_checkpoint_receipt_matches() {
   receipt_artifact="$(openclaw_jarvis_release_checkpoint_value "$receipt_path" NOTARY_ARTIFACT)"
   receipt_staple="$(openclaw_jarvis_release_checkpoint_value "$receipt_path" NOTARY_STAPLE_APP_PATH)"
 
-  [[ "$receipt_status" == "$expected_status" ]] || return 1
+  case "$expected_status" in
+    submitted)
+      # `notarytool info` replaces our initial `submitted` marker with Apple's
+      # pending status. Both values name the same durable submission, so keep
+      # the submitted checkpoint resumable only while the receipt remains on
+      # that non-terminal allowlist. Terminal outcomes must never inherit a
+      # poll authorization.
+      case "$receipt_status" in
+        submitted|"In Progress"|"In\\ Progress") ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *)
+      [[ "$receipt_status" == "$expected_status" ]] || return 1
+      ;;
+  esac
   [[ -n "$expected_submission_id" && "$receipt_submission" == "$expected_submission_id" ]] || return 1
   if [[ "$artifact_kind" == "dmg" ]]; then
     [[ "$receipt_artifact" == "$artifact_path" ]] || return 1

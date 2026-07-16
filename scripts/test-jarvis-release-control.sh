@@ -68,6 +68,7 @@ fi
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$bin_dir/codesign"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_XCRUN_BIN="$bin_dir/xcrun"
   export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN="$bin_dir/spctl"
+  export OPENCLAW_RELEASE_ENV_FILE=0
   export STUB_GIT_ROOT="$ROOT_DIR"
 }
 
@@ -481,6 +482,41 @@ test_checkpoint_invalid_and_valid_resume() {
   pass "invalid checkpoints fail and valid artifact-bound notarized resume passes"
 }
 
+test_in_progress_receipt_preserves_submitted_checkpoint() {
+  local root="$TMP_DIR/in-progress-submission"
+  local app="$root/Jarvis.app"
+  local dmg="$root/Jarvis.dmg"
+  local receipt="$root/Jarvis.dmg.notary.env"
+  local dmg_absolute
+
+  mkdir -p "$root"
+  make_fake_app "$app"
+  printf 'signed submitted dmg bytes\n' >"$dmg"
+  dmg_absolute="$(openclaw_jarvis_release_checkpoint_absolute_path "$dmg")"
+  write_notary_receipt "$receipt" "$dmg_absolute" "" submitted dmg-pending-id
+  openclaw_jarvis_release_checkpoint_write \
+    "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted submitted dmg-pending-id "$app" >/dev/null
+
+  # The canonical helper writes receipt values with printf %q, so Apple's
+  # two-word status is persisted with a literal backslash before the space.
+  write_notary_receipt "$receipt" "$dmg_absolute" "" "In\\ Progress" dmg-pending-id
+  openclaw_jarvis_release_checkpoint_validate \
+    "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted "$receipt" "$app" \
+    || fail "In Progress receipt invalidated the submitted DMG checkpoint"
+
+  write_notary_receipt "$receipt" "$dmg_absolute" "" "In\\ Progress" wrong-pending-id
+  if openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted "$receipt" "$app"; then
+    fail "In Progress receipt with a different submission ID inherited the checkpoint"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" == "notary-receipt" ]] \
+    || fail "pending submission mismatch reported the wrong failure"
+
+  write_notary_receipt "$receipt" "$dmg_absolute" "" Rejected dmg-pending-id
+  if openclaw_jarvis_release_checkpoint_validate "$ROOT_DIR" "$dmg" dmg dmg-notary-submitted "$receipt" "$app"; then
+    fail "terminal rejected receipt inherited a submitted poll checkpoint"
+  fi
+  pass "In Progress preserves same-ID polling while mismatched and terminal receipts fail closed"
+}
 test_expired_intent_prints_one_recovery_command() {
   local intent_path="$TMP_DIR/package.intent"
   local intent_id="$TMP_DIR/intent-id"
@@ -1491,6 +1527,7 @@ test_intent_tracked_state_binding
 test_operator_authorization_interface
 test_authorization_persistence_failure_is_fatal
 test_checkpoint_invalid_and_valid_resume
+test_in_progress_receipt_preserves_submitted_checkpoint
 test_final_submit_and_upload_guards_reject_replacement
 test_retry_upload_guards_reject_replacement_before_second_gh
 test_expired_intent_prints_one_recovery_command
