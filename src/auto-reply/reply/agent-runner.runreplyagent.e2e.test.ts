@@ -384,6 +384,48 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
+  it("defers the recovery drain until the direct turn releases finalization ownership", async () => {
+    let finishDirectRun: (() => void) | undefined;
+    const directRunFinished = new Promise<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, never>;
+    }>((resolve) => {
+      finishDirectRun = () => resolve({ payloads: [{ text: "direct done" }], meta: {} });
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => await directRunFinished);
+    const direct = createMinimalRun();
+
+    const directResultPromise = direct.run();
+    await vi.waitFor(() => {
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    });
+    const busyFollowup = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await expect(busyFollowup.run()).resolves.toBeUndefined();
+
+    // Durable acceptance happened, but queued model work must not start while
+    // the direct turn still owns usage persistence and final reply delivery.
+    expect(vi.mocked(enqueueFollowupRunDurable)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishDirectRun?.();
+    await expect(directResultPromise).resolves.toEqual(
+      expect.objectContaining({ text: "direct done" }),
+    );
+
+    // Direct finalization schedules normally; ownership release also schedules
+    // the stored recovery runner. The real queue's single-drain guard makes the
+    // duplicate harmless while guaranteeing the callback cannot be lost.
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(2);
+    const scheduledRunners = vi.mocked(scheduleFollowupDrain).mock.calls.map((call) => call[1]);
+    expect(scheduledRunners[1]).not.toBe(scheduledRunners[0]);
+  });
+
   it("reloads session bookkeeping when the armed durable runner actually starts", async () => {
     await withStateDirEnv("openclaw-active-followup-refresh-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "sessions", "sessions.json");

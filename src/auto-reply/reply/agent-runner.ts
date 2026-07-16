@@ -24,6 +24,7 @@ import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logTelegramProgressDebug } from "../../infra/telegram-progress-debug.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
@@ -99,7 +100,59 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
-export async function runReplyAgent(params: {
+type FollowupFinalizationOwnership = {
+  owners: number;
+  pendingRunner?: (run: FollowupRun) => Promise<void>;
+};
+
+const FOLLOWUP_FINALIZATION_OWNERS = resolveGlobalMap<string, FollowupFinalizationOwnership>(
+  Symbol.for("openclaw.auto-reply.followup-finalization-owners"),
+);
+
+function acquireFollowupFinalizationOwnership(queueKey: string): () => void {
+  const state = FOLLOWUP_FINALIZATION_OWNERS.get(queueKey) ?? { owners: 0 };
+  state.owners += 1;
+  FOLLOWUP_FINALIZATION_OWNERS.set(queueKey, state);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    state.owners = Math.max(0, state.owners - 1);
+    if (state.owners > 0) {
+      return;
+    }
+    FOLLOWUP_FINALIZATION_OWNERS.delete(queueKey);
+    if (state.pendingRunner) {
+      // Normal finalization usually schedules first. A second call is safe:
+      // the drain owns its own single-run guard. This release call closes error
+      // and enqueue-after-empty-finalize races with the recovery runner.
+      scheduleFollowupDrain(queueKey, state.pendingRunner);
+    }
+  };
+}
+
+function scheduleOrDeferFollowupDrain(
+  queueKey: string,
+  runner: (run: FollowupRun) => Promise<void>,
+): void {
+  const state = FOLLOWUP_FINALIZATION_OWNERS.get(queueKey);
+  if (!state || state.owners === 0) {
+    scheduleFollowupDrain(queueKey, runner);
+    return;
+  }
+  // The direct turn still owns persistence and reply delivery after its model
+  // lane releases. Store the recovery runner without starting queued work; the
+  // owner's finalizer will drain normally, and release provides a safe fallback.
+  state.pendingRunner = runner;
+}
+
+type RunReplyAgentFinalizationLifecycle = {
+  releaseOwnership?: () => void;
+};
+
+type RunReplyAgentParams = {
   commandBody: string;
   followupRun: FollowupRun;
   queueKey: string;
@@ -129,7 +182,23 @@ export async function runReplyAgent(params: {
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
-}): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+};
+
+export async function runReplyAgent(
+  params: RunReplyAgentParams,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const lifecycle: RunReplyAgentFinalizationLifecycle = {};
+  try {
+    return await runReplyAgentWithFinalizationOwnership(params, lifecycle);
+  } finally {
+    lifecycle.releaseOwnership?.();
+  }
+}
+
+async function runReplyAgentWithFinalizationOwnership(
+  params: RunReplyAgentParams,
+  lifecycle: RunReplyAgentFinalizationLifecycle,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
     followupRun,
@@ -334,16 +403,20 @@ export async function runReplyAgent(params: {
     // Await the atomic disk record before returning to channel middleware. For
     // Telegram this is what makes advancing the update offset crash-safe.
     await enqueueFollowupRunDurable(queueKey, followupRun, resolvedQueue);
-    // The run that made this session look active may have finalized before this
-    // durable enqueue landed. Its empty-queue drain attempt intentionally did
-    // not cache a callback, so arm this queue with a fresh callback now. The
-    // embedded session lane still serializes model work if the prior run truly
-    // remains active; scheduling here does not weaken that ordering boundary.
-    scheduleFollowupDrain(queueKey, runDurableFollowupTurn);
+    // Offer the queue a fresh callback only after persistence. If the direct
+    // turn still owns finalization, keep the callback pending so queued model
+    // work cannot overtake its bookkeeping or reply delivery. With no owner,
+    // the stale active classification outlived finalization, so drain now.
+    scheduleOrDeferFollowupDrain(queueKey, runDurableFollowupTurn);
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
   }
+
+  // From here through final payload persistence and delivery, this direct turn
+  // owns queue finalization even after the embedded model lane becomes idle.
+  // The exported wrapper releases ownership on every return and exception.
+  lifecycle.releaseOwnership = acquireFollowupFinalizationOwnership(queueKey);
 
   const timeoutContinuationConfig = resolveReplyTimeoutContinuationConfig(cfg);
   durableTask = startDurableReplyTask({
