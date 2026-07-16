@@ -14,6 +14,7 @@ import {
 } from "./durable-task-state.js";
 import {
   enqueueFollowupRun,
+  enqueueFollowupRunDurable,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
@@ -104,7 +105,7 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
-  vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReset();
   vi.mocked(scheduleFollowupDrain).mockClear();
   resetDurableReplyTasksForTest();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -316,6 +317,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
@@ -347,6 +349,223 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("arms a fresh drain only after an active non-heartbeat run is durably enqueued", async () => {
+    let finishDurableEnqueue: (() => void) | undefined;
+    const durableEnqueueFinished = new Promise<boolean>((resolve) => {
+      finishDurableEnqueue = () => resolve(true);
+    });
+    vi.mocked(enqueueFollowupRunDurable).mockImplementationOnce(
+      async () => await durableEnqueueFinished,
+    );
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const resultPromise = run();
+    await vi.waitFor(() => {
+      expect(vi.mocked(enqueueFollowupRunDurable)).toHaveBeenCalledTimes(1);
+    });
+    // Transport middleware must remain blocked, and the drain must remain
+    // unarmed, until the atomic durable record is safely on disk.
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishDurableEnqueue?.();
+    await expect(resultPromise).resolves.toBeUndefined();
+
+    // This call supplies the callback that a queue with no prior successful
+    // drain lacks; merely kicking the durable queue cannot manufacture it.
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledWith("main", expect.any(Function));
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("defers the recovery drain until the direct turn releases finalization ownership", async () => {
+    await withStateDirEnv("openclaw-owned-followup-refresh-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const staleEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        compactionCount: 1,
+      };
+      await seedSessionStore({ storePath, sessionKey: "main", entry: staleEntry });
+      const onBlockReply = vi.fn();
+      let finishDirectRun: (() => void) | undefined;
+      const directRunFinished = new Promise<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, never>;
+      }>((resolve) => {
+        finishDirectRun = () => resolve({ payloads: [{ text: "direct done" }], meta: {} });
+      });
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => await directRunFinished);
+      const direct = createMinimalRun({
+        opts: { onBlockReply },
+        resolvedVerboseLevel: "on",
+        sessionEntry: staleEntry,
+        sessionStore: { main: staleEntry },
+        sessionKey: "main",
+        storePath,
+      });
+
+      const directResultPromise = direct.run();
+      await vi.waitFor(() => {
+        expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      });
+      const busyFollowup = createMinimalRun({
+        opts: { isHeartbeat: false },
+        isActive: true,
+        shouldFollowup: true,
+        resolvedQueueMode: "collect",
+        resolvedVerboseLevel: "on",
+        sessionEntry: staleEntry,
+        sessionStore: { main: staleEntry },
+        sessionKey: "main",
+        storePath,
+      });
+
+      await expect(busyFollowup.run()).resolves.toBeUndefined();
+
+      // Durable acceptance happened, but queued model work must not start while
+      // the direct turn still owns usage persistence and final reply delivery.
+      expect(vi.mocked(enqueueFollowupRunDurable)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+      finishDirectRun?.();
+      await expect(directResultPromise).resolves.toEqual(
+        expect.objectContaining({ text: "direct done" }),
+      );
+
+      // Normal finalization is ownership-gated too, so only release starts the
+      // drain. The winning callback must therefore be fresh-state-safe.
+      expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+      const firstScheduledRunner = vi.mocked(scheduleFollowupDrain).mock.calls[0]?.[1];
+      expect(firstScheduledRunner).toBeTypeOf("function");
+      await seedSessionStore({
+        storePath,
+        sessionKey: "main",
+        entry: { ...staleEntry, updatedAt: 2, compactionCount: 5 },
+      });
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [{ text: "followup done" }], meta: {} };
+      });
+
+      await firstScheduledRunner?.(busyFollowup.followupRun);
+
+      // Count 6 proves the first callback reloaded after the direct turn rather
+      // than using its request-time compactionCount of 1.
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("count 6") }),
+        undefined,
+      );
+    });
+  });
+
+  it("waits for the last of two direct finalization owners before scheduling", async () => {
+    let finishFirst: (() => void) | undefined;
+    let finishSecond: (() => void) | undefined;
+    const firstFinished = new Promise<{ payloads: Array<{ text: string }>; meta: object }>(
+      (resolve) => {
+        finishFirst = () => resolve({ payloads: [{ text: "first done" }], meta: {} });
+      },
+    );
+    const secondFinished = new Promise<{ payloads: Array<{ text: string }>; meta: object }>(
+      (resolve) => {
+        finishSecond = () => resolve({ payloads: [{ text: "second done" }], meta: {} });
+      },
+    );
+    state.runEmbeddedPiAgentMock
+      .mockImplementationOnce(async () => await firstFinished)
+      .mockImplementationOnce(async () => await secondFinished);
+
+    const firstResult = createMinimalRun().run();
+    const secondResult = createMinimalRun().run();
+    await vi.waitFor(() => {
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    });
+    const busyFollowup = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+    await expect(busyFollowup.run()).resolves.toBeUndefined();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishFirst?.();
+    await expect(firstResult).resolves.toEqual(expect.objectContaining({ text: "first done" }));
+
+    // The first direct turn finalized, but the second still owns persistence
+    // and reply delivery. Its existence must keep all queued work stopped.
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishSecond?.();
+    await expect(secondResult).resolves.toEqual(expect.objectContaining({ text: "second done" }));
+
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledWith("main", expect.any(Function));
+  });
+
+  it("reloads session bookkeeping when the armed durable runner actually starts", async () => {
+    await withStateDirEnv("openclaw-active-followup-refresh-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const staleEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        compactionCount: 1,
+      };
+      await seedSessionStore({ storePath, sessionKey: "main", entry: staleEntry });
+      const onBlockReply = vi.fn();
+      let scheduledRunner: ((queued: FollowupRun) => Promise<void>) | undefined;
+      vi.mocked(scheduleFollowupDrain).mockImplementationOnce((_key, runner) => {
+        scheduledRunner = runner;
+      });
+      const { run, followupRun } = createMinimalRun({
+        opts: { isHeartbeat: false, onBlockReply },
+        isActive: true,
+        shouldFollowup: true,
+        resolvedQueueMode: "collect",
+        resolvedVerboseLevel: "on",
+        sessionEntry: staleEntry,
+        sessionStore: { main: staleEntry },
+        sessionKey: "main",
+        storePath,
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+      expect(scheduledRunner).toBeTypeOf("function");
+
+      // Simulate the formerly active turn committing newer bookkeeping while
+      // this durable followup waits behind it in the serialized session lane.
+      await seedSessionStore({
+        storePath,
+        sessionKey: "main",
+        entry: { ...staleEntry, updatedAt: 2, compactionCount: 5 },
+      });
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      });
+
+      await scheduledRunner?.(followupRun);
+
+      // A request-time snapshot would announce count 2. Count 6 proves the
+      // runner read the store again at execution and built on the active turn.
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("count 6") }),
+        undefined,
+      );
+    });
   });
 
   it("does not create a durable task for early enqueued runs", async () => {
