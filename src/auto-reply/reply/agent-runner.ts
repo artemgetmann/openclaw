@@ -615,9 +615,10 @@ async function runReplyAgentWithFinalizationOwnership(
     isHeartbeat,
   });
 
-  // Construct after memory flush so direct turns retain the refreshed session
-  // bookkeeping while the early enqueue branch can still arm its own drain.
-  const runFollowupTurn = createRunFollowupTurn();
+  // Queue execution may begin only after this direct turn finishes additional
+  // bookkeeping. Reload again when the callback actually runs; otherwise the
+  // normal finalizer can win drain ownership with a pre-finalization snapshot.
+  const runFollowupTurn = runDurableFollowupTurn;
 
   const initialHardReservePayload = buildHardReserveOverflowPayload(followupRun.prompt);
   if (initialHardReservePayload) {
