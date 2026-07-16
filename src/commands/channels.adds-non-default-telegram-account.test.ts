@@ -489,6 +489,53 @@ describe("channels command", () => {
     expect(joined).toMatch(/bot:@openclaw_bot/);
   });
 
+  it("labels a successful Telegram probe as Bot API reachability, not listener health", () => {
+    const joined = formatChannelStatusJoined({
+      telegram: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          probe: { ok: true },
+        },
+      ],
+    });
+
+    expect(joined).toContain("Bot API reachable");
+    expect(joined).not.toContain("works");
+  });
+
+  it("retains existing successful-probe wording for non-Telegram providers", () => {
+    const joined = formatChannelStatusJoined({
+      discord: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          probe: { ok: true },
+        },
+      ],
+    });
+
+    expect(joined).toContain("works");
+  });
+
+  it("retains failed-probe wording for Telegram", () => {
+    const joined = formatChannelStatusJoined({
+      telegram: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          probe: { ok: false },
+        },
+      ],
+    });
+
+    expect(joined).toContain("probe failed");
+    expect(joined).not.toContain("Bot API reachable");
+  });
+
   it("surfaces Telegram group membership audit issues in channels status output", () => {
     const joined = formatChannelStatusJoined({
       telegram: [

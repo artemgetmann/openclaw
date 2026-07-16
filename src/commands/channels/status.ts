@@ -162,7 +162,9 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
-        bits.push(probe.ok ? "works" : "probe failed");
+        bits.push(
+          probe.ok ? (provider === "telegram" ? "Bot API reachable" : "works") : "probe failed",
+        );
       }
       const audit = account.audit as { ok?: boolean } | undefined;
       if (audit && typeof audit.ok === "boolean") {
