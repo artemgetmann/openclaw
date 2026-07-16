@@ -67,6 +67,10 @@
   - `docs/agent-guides/docs-and-content.md`
 - Default local/browser/agent validation:
   - `docs/agent-guides/browser-agent-e2e.md`
+- Monitor continuation recovery and regression testing:
+  - `docs/agent-guides/monitor-testing.md`
+- Future browser monitoring, Instagram observation, or managed observer work:
+  - `docs/consumer/archive/jarvis-browser-monitoring-deferred-20260716.md`
 - Skill update ownership and mirror drift:
   - `docs/agent-guides/skill-updates.md`
 - Telegram-specific live checks and worktree bot setup:
