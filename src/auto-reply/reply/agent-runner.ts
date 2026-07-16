@@ -39,7 +39,6 @@ import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
-  finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
@@ -146,6 +145,18 @@ function scheduleOrDeferFollowupDrain(
   // lane releases. Store the recovery runner without starting queued work; the
   // owner's finalizer will drain normally, and release provides a safe fallback.
   state.pendingRunner = runner;
+}
+
+function finalizeWithFollowup<T>(
+  value: T,
+  queueKey: string,
+  runner: (run: FollowupRun) => Promise<void>,
+): T {
+  // Every direct completion must respect all finalization owners. Calling the
+  // raw scheduler here lets the first of multiple direct turns start queued
+  // work while another still persists usage or delivers its final reply.
+  scheduleOrDeferFollowupDrain(queueKey, runner);
+  return value;
 }
 
 type RunReplyAgentFinalizationLifecycle = {

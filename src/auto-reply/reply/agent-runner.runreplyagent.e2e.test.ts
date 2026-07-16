@@ -439,9 +439,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
         expect.objectContaining({ text: "direct done" }),
       );
 
-      // Direct finalization schedules first; release also offers the pending
-      // recovery runner. The first callback must therefore be fresh-state-safe.
-      expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(2);
+      // Normal finalization is ownership-gated too, so only release starts the
+      // drain. The winning callback must therefore be fresh-state-safe.
+      expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
       const firstScheduledRunner = vi.mocked(scheduleFollowupDrain).mock.calls[0]?.[1];
       expect(firstScheduledRunner).toBeTypeOf("function");
       await seedSessionStore({
@@ -466,6 +466,51 @@ describe("runReplyAgent heartbeat followup guard", () => {
         undefined,
       );
     });
+  });
+
+  it("waits for the last of two direct finalization owners before scheduling", async () => {
+    let finishFirst: (() => void) | undefined;
+    let finishSecond: (() => void) | undefined;
+    const firstFinished = new Promise<{ payloads: Array<{ text: string }>; meta: object }>(
+      (resolve) => {
+        finishFirst = () => resolve({ payloads: [{ text: "first done" }], meta: {} });
+      },
+    );
+    const secondFinished = new Promise<{ payloads: Array<{ text: string }>; meta: object }>(
+      (resolve) => {
+        finishSecond = () => resolve({ payloads: [{ text: "second done" }], meta: {} });
+      },
+    );
+    state.runEmbeddedPiAgentMock
+      .mockImplementationOnce(async () => await firstFinished)
+      .mockImplementationOnce(async () => await secondFinished);
+
+    const firstResult = createMinimalRun().run();
+    const secondResult = createMinimalRun().run();
+    await vi.waitFor(() => {
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    });
+    const busyFollowup = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+    await expect(busyFollowup.run()).resolves.toBeUndefined();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishFirst?.();
+    await expect(firstResult).resolves.toEqual(expect.objectContaining({ text: "first done" }));
+
+    // The first direct turn finalized, but the second still owns persistence
+    // and reply delivery. Its existence must keep all queued work stopped.
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishSecond?.();
+    await expect(secondResult).resolves.toEqual(expect.objectContaining({ text: "second done" }));
+
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledWith("main", expect.any(Function));
   });
 
   it("reloads session bookkeeping when the armed durable runner actually starts", async () => {
