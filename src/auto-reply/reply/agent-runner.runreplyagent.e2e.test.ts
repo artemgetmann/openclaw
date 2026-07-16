@@ -1446,6 +1446,78 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("lets an over-reserve heartbeat reach the agent runner", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "heartbeat-codex-gpt55-session";
+      const sessionKey = "agent:main:telegram:group:-1003783709877:topic:17730";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "openai-codex": { command: "codex" },
+            },
+            compaction: {
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        totalTokens: 240_985,
+        totalTokensFresh: true,
+        contextTokens: 258_400,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "heartbeat transcript", "utf-8");
+
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "HEARTBEAT_CONTINUED" }],
+        meta: {},
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        runOverrides: {
+          agentId: "main",
+          agentDir: stateDir,
+          sessionId,
+          sessionFile: transcriptPath,
+          messageProvider: "telegram",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          config: cfg,
+          persistedPromptTokens: 240_985,
+        },
+      });
+      const res = await run();
+
+      // Heartbeats skip the outer memory flush by design. They must still enter
+      // the agent runner, which has its own preemptive overflow recovery path.
+      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      const payloads = Array.isArray(res) ? res : [res];
+      expect(payloads).toContainEqual(expect.objectContaining({ text: "HEARTBEAT_CONTINUED" }));
+      expect(payloads).not.toContainEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("automatic compaction could not recover enough room"),
+        }),
+      );
+    });
+  });
+
   it("surfaces hard-reserve overflow without resetting when memory flush cannot recover", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "b17264e8-4cdf-45bc-9e95-d3ae455f50e9";

@@ -4,7 +4,9 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSessionGoal, updateSessionStore } from "../config/sessions.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { loadMonitorStore, resolveMonitorStorePath } from "../monitor/store.js";
 
 type FakeCronRunResult = {
   status: "ok" | "error";
@@ -23,10 +25,12 @@ const {
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  runCronIsolatedAgentTurnMock: vi.fn<() => Promise<FakeCronRunResult>>(async () => ({
-    status: "ok",
-    summary: "ok",
-  })),
+  runCronIsolatedAgentTurnMock: vi.fn<(params: unknown) => Promise<FakeCronRunResult>>(
+    async () => ({
+      status: "ok",
+      summary: "ok",
+    }),
+  ),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -62,6 +66,7 @@ vi.mock("../cron/isolated-agent.js", () => ({
 }));
 
 import { buildGatewayCronService, formatCronFailureMessage } from "./server-cron.js";
+import { monitorHandlers } from "./server-methods/monitor.js";
 
 function createCronConfig(name: string): OpenClawConfig {
   const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
@@ -294,6 +299,267 @@ describe("buildGatewayCronService", () => {
         }),
       );
     } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("preserves a goal-bound draft-only WhatsApp monitor through matched completion", async () => {
+    const cfg = createCronConfig("server-cron-monitor-reply-regression");
+    cfg.session = {
+      ...cfg.session,
+      store: path.join(path.dirname(cfg.cron!.store!), "sessions.json"),
+    };
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const originSessionKey = "agent:main:telegram:group:-1001234567890:topic:99";
+    const canonicalOriginDelivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:99",
+      accountId: "default",
+    } as const;
+    const watchedTarget = { target: "+15551234567", accountId: "personal" };
+    const cadence = { kind: "every", everyMs: 300_000 } as const;
+    const expiryAt = "2099-07-16T12:00:00.000Z";
+    const instructions =
+      "When the matching WhatsApp reply arrives, quote it and draft a concise confirmation for approval. Do not send it.";
+    const enqueueRunSpy = vi.spyOn(state.cron, "enqueueRun");
+
+    try {
+      await updateSessionStore(cfg.session.store!, (store) => {
+        store[originSessionKey] = { sessionId: "origin-session", updatedAt: 1 };
+      });
+      const goal = await createSessionGoal({
+        sessionKey: originSessionKey,
+        storePath: cfg.session.store!,
+        objective: "Get the WhatsApp reply handled without sending before approval.",
+        autonomy: {
+          level: "act_within_scope",
+          allowedActions: ["inspect the matching reply", "draft a response for approval"],
+          approvalRequired: ["send the WhatsApp response"],
+        },
+      });
+
+      const createRespond = vi.fn();
+      await monitorHandlers["monitor.create"]({
+        params: {
+          instructions,
+          agentId: "main",
+          originSessionKey,
+          // Creation must derive and persist the topic from the durable origin
+          // session even when the transport supplies only the numeric chat.
+          originDelivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-1001234567890",
+            accountId: "default",
+          },
+          sourceType: "whatsapp",
+          sourceTarget: watchedTarget,
+          cadence,
+          trigger: {
+            kind: "local_listener",
+            match: {
+              sourceType: "whatsapp",
+              sourceTarget: watchedTarget,
+              matchKeys: ["target", "accountId"],
+              eventTypes: ["message.created"],
+            },
+          },
+          expiryAt,
+          stopCondition: "A matching reply has been quoted and a draft is ready for approval.",
+          actionPolicy: "notify_draft",
+        },
+        respond: createRespond as never,
+        context: { cronStorePath: state.storePath, cron: state.cron } as never,
+        client: null,
+        req: { type: "req", id: "req-monitor-regression-create", method: "monitor.create" },
+        isWebchatConnect: () => false,
+      });
+
+      expect(createRespond.mock.calls[0]?.[0]).toBe(true);
+      const created = createRespond.mock.calls[0]?.[1] as
+        | { monitorId: string; monitorSessionKey: string; cronJobId: string }
+        | undefined;
+      expect(created).toBeDefined();
+      enqueueRunSpy.mockClear();
+
+      const reloaded = await loadMonitorStore(
+        resolveMonitorStorePath({ cronStorePath: state.storePath }),
+      );
+      expect(reloaded.monitors).toHaveLength(1);
+      expect(reloaded.monitors[0]).toMatchObject({
+        monitorId: created?.monitorId,
+        monitorSessionKey: created?.monitorSessionKey,
+        originSessionKey,
+        originDelivery: canonicalOriginDelivery,
+        instructions,
+        sourceType: "whatsapp",
+        sourceTarget: watchedTarget,
+        watchDelivery: {
+          mode: "announce",
+          channel: "whatsapp",
+          to: watchedTarget.target,
+          accountId: watchedTarget.accountId,
+        },
+        cadence,
+        expiryAt,
+        actionPolicy: "notify_draft",
+        goal: {
+          id: goal.id,
+          objective: goal.objective,
+          autonomy: goal.autonomy,
+        },
+        status: "active",
+      });
+      expect(state.cron.getJob(created!.cronJobId)).toMatchObject({
+        sessionTarget: `session:${created?.monitorSessionKey}`,
+        delivery: canonicalOriginDelivery,
+      });
+
+      const nonmatchRespond = vi.fn();
+      await monitorHandlers["monitor.routeEvent"]({
+        params: {
+          triggerKind: "local_listener",
+          sourceType: "whatsapp",
+          sourceTarget: { target: "+15550000000", accountId: "personal" },
+          eventType: "message.created",
+          idempotencyKey: "whatsapp:nonmatch:1",
+          receivedAtMs: 1,
+        },
+        respond: nonmatchRespond as never,
+        context: { cronStorePath: state.storePath, cron: state.cron } as never,
+        client: null,
+        req: {
+          type: "req",
+          id: "req-monitor-regression-nonmatch",
+          method: "monitor.routeEvent",
+        },
+        isWebchatConnect: () => false,
+      });
+
+      expect(nonmatchRespond.mock.calls[0]?.[1]).toEqual({ matched: 0, wakes: [] });
+      expect(enqueueRunSpy).not.toHaveBeenCalled();
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      expect(
+        (await loadMonitorStore(resolveMonitorStorePath({ cronStorePath: state.storePath })))
+          .monitors[0]?.status,
+      ).toBe("active");
+
+      const completionRespond = vi.fn();
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+        // The runner is the mocked model/transport boundary. Its completion
+        // uses the real gateway update path so terminal persistence and cron
+        // shutdown remain part of this regression rather than test fixtures.
+        await monitorHandlers["monitor.update"]({
+          params: {
+            monitorId: created!.monitorId,
+            patch: {
+              notificationEvent: "completion",
+              lastCheckpoint: {
+                evidence: "matching WhatsApp reply observed",
+                draft: "Thanks for confirming. I will proceed as agreed.",
+              },
+            },
+          },
+          respond: completionRespond as never,
+          context: { cronStorePath: state.storePath, cron: state.cron } as never,
+          client: null,
+          req: {
+            type: "req",
+            id: "req-monitor-regression-complete",
+            method: "monitor.update",
+          },
+          isWebchatConnect: () => false,
+        });
+        return { status: "ok" as const, summary: "draft routed for approval" };
+      });
+
+      const matchRespond = vi.fn();
+      await monitorHandlers["monitor.routeEvent"]({
+        params: {
+          triggerKind: "local_listener",
+          sourceType: "whatsapp",
+          sourceTarget: watchedTarget,
+          eventType: "message.created",
+          idempotencyKey: "whatsapp:match:2",
+          receivedAtMs: 2,
+        },
+        respond: matchRespond as never,
+        context: { cronStorePath: state.storePath, cron: state.cron } as never,
+        client: null,
+        req: {
+          type: "req",
+          id: "req-monitor-regression-match",
+          method: "monitor.routeEvent",
+        },
+        isWebchatConnect: () => false,
+      });
+
+      expect(enqueueRunSpy).toHaveBeenCalledOnce();
+      expect(enqueueRunSpy).toHaveBeenCalledWith(created?.cronJobId, "force");
+      expect(matchRespond.mock.calls[0]?.[1]).toMatchObject({
+        matched: 1,
+        wakes: [
+          {
+            cronJobId: created?.cronJobId,
+            monitorSessionKey: created?.monitorSessionKey,
+            originSessionKey,
+            originDelivery: canonicalOriginDelivery,
+          },
+        ],
+      });
+
+      await vi.waitFor(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce());
+      const wake = runCronIsolatedAgentTurnMock.mock.calls[0]?.[0] as
+        | {
+            sessionKey?: string;
+            deliveryContract?: string;
+            deliveryPromptMode?: string;
+            message?: string;
+            messageToolTarget?: unknown;
+            job?: unknown;
+          }
+        | undefined;
+      expect(wake).toMatchObject({
+        sessionKey: created?.monitorSessionKey,
+        deliveryContract: "cron-owned",
+        deliveryPromptMode: "summary",
+        job: {
+          sessionTarget: `session:${created?.monitorSessionKey}`,
+          delivery: canonicalOriginDelivery,
+        },
+      });
+      expect(wake).not.toHaveProperty("messageToolTarget");
+      expect(wake?.message).toContain("Authoritative original user task contract:");
+      expect(wake?.message).toContain(instructions);
+      expect(wake?.message).toContain(`goalId: ${goal.id}`);
+      expect(wake?.message).toContain(`goalObjective: ${goal.objective}`);
+      expect(wake?.message).toContain("must include the actual draft text");
+      expect(wake?.message).toContain(`expiryAt: ${expiryAt}`);
+
+      await vi.waitFor(async () => {
+        const completed = await loadMonitorStore(
+          resolveMonitorStorePath({ cronStorePath: state.storePath }),
+        );
+        expect(completed.monitors[0]).toMatchObject({
+          status: "completed",
+          lastWakeStatus: "completed",
+          lastCheckpoint: {
+            evidence: "matching WhatsApp reply observed",
+            draft: "Thanks for confirming. I will proceed as agreed.",
+          },
+        });
+        expect(state.cron.getJob(created!.cronJobId)?.enabled).toBe(false);
+      });
+      expect(completionRespond.mock.calls[0]?.[0]).toBe(true);
+    } finally {
+      enqueueRunSpy.mockRestore();
       state.cron.stop();
     }
   });

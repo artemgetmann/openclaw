@@ -320,6 +320,18 @@ export function shouldUseNativeMacScreencaptureFallback(
   );
 }
 
+export function shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure(
+  opts: ScreenRecordCliOpts,
+  mode: ScreenRecordBuildMode,
+  platform: NodeJS.Platform = process.platform,
+  context: NativeScreencaptureFallbackContext = {},
+): boolean {
+  // This classifier is called only after node resolution succeeds and the
+  // invoke/payload/write pipeline fails. The shared eligibility guard keeps
+  // remote gateways and target-aware or explicitly selected nodes authoritative.
+  return canUseNativeMacScreencaptureFallback(opts, mode, platform, context);
+}
+
 function fileFormatFromPath(filePath: string): string {
   const ext = path.extname(filePath).replace(/^\./, "").toLowerCase();
   return ext || "mov";
@@ -446,22 +458,37 @@ export async function recordScreenFromNode(
   const timeoutMs = opts.invokeTimeout
     ? Number.parseInt(String(opts.invokeTimeout), 10)
     : undefined;
-  const raw = await callGatewayCli(
-    "node.invoke",
-    opts,
-    buildNodeInvokeParams({
-      nodeId,
-      command: "screen.record",
-      params,
-      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
-    }),
-    { transportTimeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined },
-  );
-  const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-  const payload = parseScreenRecordPayload(res.payload);
-  const filePath = opts.out ?? screenRecordTempPath({ ext: payload.format || "mp4" });
-  const written = await writeScreenRecordToFile(filePath, payload.base64);
-  return { path: written.path, payload, source: "node", inspected: false };
+  let nodeOutputPath: string | undefined;
+  try {
+    const raw = await callGatewayCli(
+      "node.invoke",
+      opts,
+      buildNodeInvokeParams({
+        nodeId,
+        command: "screen.record",
+        params,
+        timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+      }),
+      { transportTimeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined },
+    );
+    const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
+    const payload = parseScreenRecordPayload(res.payload);
+    const filePath = opts.out ?? screenRecordTempPath({ ext: payload.format || "mp4" });
+    nodeOutputPath = filePath;
+    const written = await writeScreenRecordToFile(filePath, payload.base64);
+    return { path: written.path, payload, source: "node", inspected: false };
+  } catch (err) {
+    // A failed write can leave a truncated artifact at the requested path.
+    // Remove it before returning any error or starting native capture so it can
+    // never be mistaken for a successful recording.
+    if (nodeOutputPath) {
+      await fs.unlink(nodeOutputPath).catch(() => {});
+    }
+    if (!shouldUseNativeMacScreencaptureFallbackAfterNodeCaptureFailure(opts, mode)) {
+      throw err;
+    }
+    return await recordNativeMacScreencapture(opts, mode);
+  }
 }
 
 export async function runScreenRecordCommand(

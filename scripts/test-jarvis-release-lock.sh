@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
+source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -406,6 +407,8 @@ test_package_integration_contention() {
   set -e
   [[ "$status" -ne 0 ]] || fail "mutating package phase bypassed contention"
   grep -q "another Jarvis release owner is active" "$mutate_err" || fail "mutating package phase did not fail at the lock"
+  [[ "$(grep -c '^recovery_command=' "$mutate_err")" == "1" ]] \
+    || fail "package lock contention did not print exactly one recovery command"
   kill -0 "$holder_pid" 2>/dev/null || fail "package contention harmed the owner"
 
   set +e
@@ -431,13 +434,16 @@ test_parent_delegation_and_wrapper_contention() {
   local delegated_out="$TMP_DIR/delegated.out"
   local contender_out="$TMP_DIR/wrapper-contender.out"
   local contender_err="$TMP_DIR/wrapper-contender.err"
+  local contender_combined="$TMP_DIR/wrapper-contender.combined"
   local dry_run_out="$TMP_DIR/wrapper-dry-run.out"
   local delegated_wrapper_out="$TMP_DIR/wrapper-delegated.out"
   local delegated_wrapper_err="$TMP_DIR/wrapper-delegated.err"
-  local release_home release_name holder_pid status
+  local release_home release_name holder_pid status intent_id
 
   release_home="$(cd "$ROOT_DIR/../.." && pwd)"
   release_name="$(basename "$ROOT_DIR")"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$TMP_DIR/wrapper.intent"
+  intent_id="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 3600)"
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" bash -c '
     set -euo pipefail
     source "$1/scripts/lib/jarvis-release-lock.sh"
@@ -459,12 +465,18 @@ test_parent_delegation_and_wrapper_contention() {
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --phase full \
+      --release-intent "$intent_id" \
       >"$contender_out" 2>"$contender_err"
   status=$?
   set -e
   [[ "$status" -ne 0 ]] || fail "second public wrapper bypassed the owner"
   grep -q "another Jarvis release owner is active" "$contender_err" || fail "second wrapper did not fail at the lock"
   ! grep -q "selected_phase=" "$contender_out" || fail "second wrapper selected a stale phase before locking"
+  { /bin/cat "$contender_out"; /bin/cat "$contender_err"; } >"$contender_combined"
+  [[ "$(grep -c '^recovery_command=' "$contender_combined")" == "1" ]] \
+    || fail "wrapper lock contention did not print exactly one recovery command"
+  grep -Fq "recovery_command=bash scripts/jarvis-public-release.sh --phase full --release-intent $intent_id " "$contender_combined" \
+    || fail "wrapper lock contention did not print the replayable wrapper command"
   kill -0 "$holder_pid" 2>/dev/null || fail "wrapper contention harmed the live owner"
 
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
@@ -482,6 +494,7 @@ test_parent_delegation_and_wrapper_contention() {
   OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TMP_DIR/wrapper-delegated-timing.tsv" \
     bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
       --phase create-local-release-assets-only \
+      --release-intent "$intent_id" \
       --github-release-tag v-current \
       >"$delegated_wrapper_out" 2>"$delegated_wrapper_err"
   status=$?
@@ -500,6 +513,7 @@ test_release_entrypoint_wiring() {
   [[ "$package_script" == *'openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "package-phase:$PACKAGE_PHASE"'* ]] || fail "package path does not acquire the lock"
   [[ "$wrapper_script" == *'openclaw_jarvis_release_lock_acquire "$ROOT_DIR" "public-release-orchestration"'* ]] || fail "public wrapper does not own phase selection"
   [[ "$wrapper_script" == *'CMD=(bash "$PACKAGE_SCRIPT" --phase "$SELECTED_PHASE")'* ]] || fail "public wrapper no longer delegates through package"
+  [[ "$wrapper_script" == *'CMD+=(--release-intent "$RELEASE_INTENT_ID")'* ]] || fail "public wrapper no longer transfers release intent to package"
   pass "release entrypoints use atomic parent-to-child ownership transfer"
 }
 

@@ -114,7 +114,8 @@ wrapper from the blessed release lane:
 cd /Users/user/Programming_Projects/openclaw
 bash scripts/jarvis-release-worktree.sh
 cd /Users/user/Programming_Projects/openclaw/.worktrees/jarvis-release-current
-SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh
+SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh \
+  --release-intent "<id-from-authorize>"
 ```
 
 The older `scripts/package-consumer-mac-dist.sh` command is still supported as a
@@ -199,26 +200,20 @@ deduplicated. A low-space or unresolved target is a hard stop before packaging:
 bash scripts/preflight-jarvis-release-disk.sh
 ```
 
-Release-wrapper integration is intentionally deferred from this PR. The future
-wrapper must source `scripts/lib/jarvis-release-disk-preflight.sh` and call the
-multi-target contract before its first packaging mutation, passing the actual
-final output and heavy-staging paths selected for that run:
+`package-openclaw-mac-dist.sh` invokes the same multi-target gate automatically
+for phases that build an app, notary upload, DMG, ZIP, or appcast. It runs after
+the lock, intent, checkpoint, prewarm, and clean-tree gates, then revalidates
+intent both immediately before and after checking capacity. The post-probe
+validation closes intent-replacement races before the first packaging mutation.
+Pure poll, publish, and verify phases do not create heavy local artifacts and
+skip this capacity gate.
 
-```bash
-jarvis_release_disk_preflight_targets "$required_kib" \
-  release-output "$actual_dist_path" \
-  release-staging "$actual_release_run_root"
-```
-
-If a wrapper adds another output or staging volume, append another label/path
-pair. Do not replace this with a repo-root-only check: that recreates the
-cross-volume blind spot.
-
-The standalone default checks the build-artifact `runs/` parent without
-creating a unique release run. The package wrapper normally creates its
-`jarvis-release` child there. If `OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT` selects an
-alternate exact path, the caller must pass that path with `--staging-path` or as
-the `release-staging` pair above.
+Both automatic targets are reported verbatim: `release-output` is the repo's
+actual `dist/` directory, while `release-staging` is either the exact explicit
+`OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT` or the build-artifact `runs/` parent where
+the package creates its unique run. The capacity check resolves these paths
+read-only and does not create staging first. Do not replace this with a
+repo-root-only check: that recreates the cross-volume blind spot.
 
 If old failed staging is consuming space, report it first, then apply the same
 conservative policy explicitly:
@@ -366,7 +361,9 @@ Do not run the full distribution lane when the question is "does this Jarvis app
 build verify locally?" Prove the signed app bundle first:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --local-proof
+bash scripts/package-openclaw-mac-dist.sh \
+  --local-proof \
+  --release-intent "<id-from-authorize>"
 ```
 
 This builds `dist/Jarvis.app`, runs `verify-consumer-mac-app.sh` against the
@@ -386,12 +383,36 @@ the phase by hand:
 
 ```bash
 bash scripts/jarvis-public-release.sh --dry-run
-bash scripts/jarvis-public-release.sh
+bash scripts/jarvis-public-release.sh --authorize
+# Run the exact next_command printed by --authorize.
 ```
 
-The wrapper inspects existing `dist/` artifacts, receipts, and the release
-manifest, chooses the next safe package phase, and delegates to
-`scripts/package-openclaw-mac-dist.sh`. With
+`--dry-run` is strictly read-only: it does not acquire the release lock or
+create an authorization. `--authorize` requires clean tracked state, then
+creates one expiring release intent bound to the current commit and a stable
+fingerprint of the index and tracked working tree, then prints the only command
+allowed to execute it. The
+default lease is two hours, sized above the observed end-to-end release time;
+use `--intent-ttl-seconds <1-14400>` only when the operator deliberately needs a
+different window. Expiry is a backstop, while creating a newer intent remains
+the primary cancellation mechanism because it immediately replaces the older
+one. Tracked staged changes, unstaged changes, and deletions are rejected during
+authorization. Any later tracked-state drift, expiry, or replacement fails at
+the existing validation boundaries before build, artifact deletion, notary
+submission, or upload.
+
+The wrapper inspects existing `dist/` artifacts and strict artifact
+checkpoints, chooses the next safe package phase, and delegates to
+`scripts/package-openclaw-mac-dist.sh`. The release manifest remains a readable
+operator summary, but neither `Accepted` text nor file existence authorizes
+reuse. Every app, DMG, ZIP, and appcast checkpoint binds the exact app path,
+version/build, embedded Git commit, and signed-code CDHash in addition to the
+release commit, intended phase, exact artifact path and checksum, live signature
+verification, notary receipt and submission ID, and live staple/Gatekeeper
+validation where applicable. If any field or artifact fails validation, the
+wrapper falls back to the earliest safe rebuild/resubmit phase.
+
+With
 `--parallel-safe-local-assets`, the wrapper may create local `Jarvis.zip` and
 `jarvis-appcast.xml` after app notarization is accepted and a DMG notary
 submission exists, while DMG polling remains a separate resumable step. This is
@@ -402,6 +423,7 @@ the Sparkle appcast signs an immutable tagged `Jarvis.zip` URL:
 
 ```bash
 bash scripts/jarvis-public-release.sh \
+  --release-intent "<id-from-authorize>" \
   --parallel-safe-local-assets \
   --latest-release-tag
 ```
@@ -420,6 +442,7 @@ as a fresh-install/sendable release:
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
+  --release-intent "<id-from-authorize>" \
   --urgent-sparkle \
   --publish-release-assets \
   --latest-release-tag
@@ -441,6 +464,7 @@ accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
+  --release-intent "<id-from-authorize>" \
   --publish-release-assets \
   --latest-release-tag
 ```
@@ -461,6 +485,7 @@ slow route is intentional and known-good, rerun with:
 ```bash
 ALLOW_SLOW_RELEASE_UPLOAD=1 bash scripts/package-openclaw-mac-dist.sh \
   --phase publish-assets-only \
+  --release-intent "<id-from-authorize>" \
   --publish-release-assets \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
@@ -482,6 +507,7 @@ succeeded and `dist/Jarvis.app` is still present:
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase post-app-build \
+  --release-intent "<id-from-authorize>" \
   --publish-release-assets \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
@@ -497,8 +523,21 @@ For faster failure recovery, prefer the narrow phases once a durable artifact or
 notary receipt exists. The script records release state in
 `dist/jarvis-release-manifest.env`, app notarization in
 `dist/Jarvis.app.notary.env`, and DMG notarization in
-`dist/Jarvis.dmg.notary.env`. The manifest is operator metadata only; do not
-store credentials there.
+`dist/Jarvis.dmg.notary.env`. Artifact checkpoints are written beside the app,
+DMG, ZIP, and appcast as `*.release-checkpoint.env`. The manifest is operator
+metadata only; do not store credentials there and do not hand-edit checkpoints.
+
+Failure recovery has one machine-readable contract: a failing release command
+prints exactly one `recovery_command=...` line. Run that command exactly. If the
+intent expired or was replaced, the only recovery command is:
+
+```bash
+bash scripts/jarvis-public-release.sh --authorize
+```
+
+Then run the newly printed `next_command`. Do not reuse an older intent ID, do
+not infer a phase from artifact existence, and do not bypass checkpoint gates
+with manifest edits.
 
 Wrapper runs write `dist/jarvis-public-release-summary.env`; timed package
 substeps append to `dist/jarvis-release-timing.tsv`. GitHub release view,
@@ -509,7 +548,9 @@ wrong tag, and non-latest tag failures remain fast failures.
 Build/package the app once and stop before notarization:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --phase build-app-only
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase build-app-only \
+  --release-intent "<id-from-authorize>"
 ```
 
 For repeat local proof, prefer `--local-proof` over `--phase build-app-only`.
@@ -520,33 +561,44 @@ smoke proof, and cached bundled runtime reuse from a clean tracked commit.
 Submit app notarization only from the existing app bundle:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --phase submit-app-notarization
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase submit-app-notarization \
+  --release-intent "<id-from-authorize>"
 ```
 
 Resume app notary polling from the saved submission:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --phase poll-app-notarization
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase poll-app-notarization \
+  --release-intent "<id-from-authorize>"
 ```
 
 Submit DMG notarization only after the app poll phase records
 `JARVIS_APP_NOTARY_STATUS=Accepted`:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --phase submit-dmg-notarization
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase submit-dmg-notarization \
+  --release-intent "<id-from-authorize>"
 ```
 
 Resume DMG notary polling from the saved submission:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --phase poll-dmg-notarization
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase poll-dmg-notarization \
+  --release-intent "<id-from-authorize>"
 ```
 
 Create only local Sparkle release assets from the existing notarized
 `dist/Jarvis.app`:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --phase create-local-release-assets-only
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase create-local-release-assets-only \
+  --release-intent "<id-from-authorize>" \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
 This phase creates `dist/Jarvis.zip` and `dist/jarvis-appcast.xml` only. It
@@ -564,6 +616,7 @@ accepted app and DMG notarization:
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase publish-assets-only \
+  --release-intent "<id-from-authorize>" \
   --publish-release-assets \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
@@ -573,6 +626,7 @@ Verify only against the public GitHub release URLs without uploading:
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase verify-public-assets-only \
+  --release-intent "<id-from-authorize>" \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
@@ -582,6 +636,7 @@ Publish an urgent Sparkle-only update from existing `dist/Jarvis.zip` and
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase publish-sparkle-assets-only \
+  --release-intent "<id-from-authorize>" \
   --publish-release-assets \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
@@ -592,6 +647,7 @@ DMG:
 ```bash
 bash scripts/package-openclaw-mac-dist.sh \
   --phase verify-sparkle-assets-only \
+  --release-intent "<id-from-authorize>" \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
@@ -601,7 +657,9 @@ artifacts under `dist/`, but forces notarization, dSYM, publish, and public URL
 verification off:
 
 ```bash
-bash scripts/package-openclaw-mac-dist.sh --trusted-ring-fast
+bash scripts/package-openclaw-mac-dist.sh \
+  --trusted-ring-fast \
+  --release-intent "<id-from-authorize>"
 ```
 
 The trusted-ring lane also uses the local fast packaging path: it skips the
