@@ -60,6 +60,8 @@ export type TelegramBotOptions = {
   config?: OpenClawConfig;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
+  /** Polling-cycle identity for safe transport lifecycle diagnostics only. */
+  transportGeneration?: number;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
@@ -79,6 +81,12 @@ type GlobalFetchInput = Parameters<typeof globalThis.fetch>[0];
 type GlobalFetchInit = Parameters<typeof globalThis.fetch>[1];
 
 const TELEGRAM_GET_UPDATES_FETCH_TIMEOUT_MS = 45_000;
+const telegramBotTransportClosePromises = new WeakMap<object, Promise<void>>();
+
+/** Await dispatcher cleanup after calling grammY's synchronous bot.stop(). */
+export function waitForTelegramBotTransportClose(bot: object): Promise<void> {
+  return telegramBotTransportClosePromises.get(bot) ?? Promise.resolve();
+}
 
 function readRequestUrl(input: TelegramFetchInput): string | null {
   if (typeof input === "string") {
@@ -140,6 +148,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const telegramTransport = resolveTelegramTransport(opts.proxyFetch, {
     network: telegramCfg.network,
+    context: {
+      accountId: account.accountId,
+      generation: opts.transportGeneration,
+    },
   });
   const shouldProvideFetch = Boolean(telegramTransport.fetch);
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
@@ -547,8 +559,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   const originalStop = bot.stop.bind(bot);
+  let transportCloseStarted = false;
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
+    // Bot.stop() is synchronous in grammY while dispatcher destruction is async. The
+    // transport owns an idempotent close guard, so runner/watchdog double-stop paths can
+    // safely converge here without destroying a dispatcher twice.
+    if (!transportCloseStarted) {
+      transportCloseStarted = true;
+      const closePromise = telegramTransport.close?.() ?? Promise.resolve();
+      telegramBotTransportClosePromises.set(bot, closePromise);
+      // Keep fire-and-forget stop compatible with grammY while preventing an unhandled
+      // rejection. Polling owners can await the original promise through the helper above.
+      void closePromise.catch((err: unknown) => {
+        runtime.error?.(danger(`telegram transport close failed: ${formatUncaughtError(err)}`));
+      });
+    }
     return originalStop(...args);
   }) as typeof bot.stop;
 

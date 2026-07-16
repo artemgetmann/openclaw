@@ -289,6 +289,180 @@ extension GatewayLaunchAgentManagerTests {
             }
     }
 
+    @Test func `telegram recovery activates only after automatic recovery is exhausted`() async {
+        let recorder = GatewayRecoveryNotificationRecorder()
+        let manager = GatewayProcessManager(recoveryNotificationSender: { incident in
+            await recorder.record(incident)
+        })
+        manager.setTestingDesiredActive(true)
+        defer { manager.setTestingDesiredActive(false) }
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(phase: .providerRestart, providerRestartAttempts: 1, updatedAt: 1000),
+            nowMs: 2000)
+        #expect(manager.testingRecoveryIncident() == nil)
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(phase: .gatewayRestartRequested, providerRestartAttempts: 2, updatedAt: 2000),
+            nowMs: 3000)
+        #expect(manager.testingRecoveryIncident() == nil)
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(phase: .exhausted, providerRestartAttempts: 2, updatedAt: 3000),
+            nowMs: 4000)
+        #expect(manager.testingRecoveryIncident()?.kind == .telegramOffline)
+        #expect(await recorder.count() == 1)
+    }
+
+    @Test func `healthy gateway does not clear exhausted telegram recovery`() async {
+        let manager = GatewayProcessManager(recoveryNotificationSender: { _ in })
+        manager.setTestingDesiredActive(true)
+        defer { manager.setTestingDesiredActive(false) }
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(phase: .exhausted, providerRestartAttempts: 2, updatedAt: 1000),
+            nowMs: 2000)
+        manager.testingRecordHealthyRPC()
+
+        #expect(manager.testingRecoveryIncident()?.kind == .telegramOffline)
+    }
+
+    @Test func `successful telegram poll clears recovery while next poll is in flight`() async {
+        let manager = GatewayProcessManager(recoveryNotificationSender: { _ in })
+        manager.setTestingDesiredActive(true)
+        defer { manager.setTestingDesiredActive(false) }
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(phase: .exhausted, providerRestartAttempts: 2, updatedAt: 1000),
+            nowMs: 2000)
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(lastPollSuccessAt: 2000, lastPollOutcome: "in-flight"),
+            nowMs: 3000)
+
+        #expect(manager.testingRecoveryIncident() == nil)
+    }
+
+    @Test func `stale or pre incident telegram poll cannot clear recovery`() async {
+        let manager = GatewayProcessManager(recoveryNotificationSender: { _ in })
+        manager.setTestingDesiredActive(true)
+        defer { manager.setTestingDesiredActive(false) }
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(phase: .exhausted, providerRestartAttempts: 2, updatedAt: 200_000),
+            nowMs: 201_000)
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(lastPollSuccessAt: 200_000, lastPollOutcome: "error"),
+            nowMs: 201_000)
+        #expect(manager.testingRecoveryIncident()?.kind == .telegramOffline)
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(lastPollSuccessAt: 201_000, lastPollOutcome: "in-flight"),
+            nowMs: 381_001)
+        #expect(manager.testingRecoveryIncident()?.kind == .telegramOffline)
+
+        await manager.testingRecordTelegramRecoveryObservation(
+            .init(lastPollOutcome: "error"),
+            nowMs: 202_000)
+        #expect(manager.testingRecoveryIncident()?.kind == .telegramOffline)
+    }
+
+    @Test func `telegram recovery notification deduplicates until polling proof`() async {
+        let recorder = GatewayRecoveryNotificationRecorder()
+        let manager = GatewayProcessManager(recoveryNotificationSender: { incident in
+            await recorder.record(incident)
+        })
+        manager.setTestingDesiredActive(true)
+        defer { manager.setTestingDesiredActive(false) }
+
+        let exhausted = TelegramRecoveryObservation(
+            phase: .exhausted,
+            providerRestartAttempts: 2,
+            updatedAt: 1000)
+        await manager.testingRecordTelegramRecoveryObservation(exhausted, nowMs: 2000)
+        await manager.testingRecordTelegramRecoveryObservation(exhausted, nowMs: 3000)
+
+        #expect(await recorder.count() == 1)
+    }
+
+    @Test func `channels status decodes sticky telegram polling success proof`() throws {
+        let snapshot = try JSONDecoder().decode(
+            ChannelsStatusSnapshot.self,
+            from: Data("""
+            {
+              "ts": 5000,
+              "channelOrder": ["telegram"],
+              "channelLabels": {"telegram": "Telegram"},
+              "channels": {},
+              "channelAccounts": {
+                "telegram": [{
+                  "accountId": "default",
+                  "lastPollCompletedAt": 4001,
+                  "lastPollSuccessAt": 4000,
+                  "lastPollOutcome": "in-flight",
+                  "telegramRecovery": {
+                    "phase": "exhausted",
+                    "providerRestartAttempts": 2,
+                    "updatedAt": 3000
+                  }
+                }]
+              },
+              "channelDefaultAccountId": {"telegram": "default"}
+            }
+            """.utf8))
+
+        #expect(snapshot.telegramRecoveryObservation() == .init(
+            phase: .exhausted,
+            providerRestartAttempts: 2,
+            updatedAt: 3000,
+            lastPollSuccessAt: 4000,
+            lastPollOutcome: "in-flight"))
+    }
+
+    @Test func `launch agent reconciliation always observes channels status`() async throws {
+        let snapshot = try JSONDecoder().decode(
+            ChannelsStatusSnapshot.self,
+            from: Data("""
+            {
+              "ts": 4000,
+              "channelOrder": ["telegram"],
+              "channelLabels": {"telegram": "Telegram"},
+              "channels": {},
+              "channelAccounts": {
+                "telegram": [{
+                  "accountId": "default",
+                  "lastPollOutcome": "unhealthy",
+                  "telegramRecovery": {
+                    "phase": "exhausted",
+                    "providerRestartAttempts": 2,
+                    "updatedAt": 3000
+                  }
+                }]
+              },
+              "channelDefaultAccountId": {"telegram": "default"}
+            }
+            """.utf8))
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: nil,
+        ]) {
+            GatewayLaunchAgentManager._setTestingHooks(
+                launchAgentWriteDisabled: { false },
+                readDaemonLoaded: { true })
+            let manager = GatewayProcessManager(
+                recoveryNotificationSender: { _ in },
+                channelsStatusProvider: { snapshot })
+            manager.setTestingDesiredActive(true)
+            defer {
+                GatewayLaunchAgentManager._clearTestingHooks()
+                manager.setTestingDesiredActive(false)
+            }
+
+            await manager.testingReconcileLaunchAgentRegistrationNow()
+
+            #expect(manager.testingRecoveryIncident()?.kind == .telegramOffline)
+        }
+    }
+
     @Test func `reconciliation repairs missing launchd registration while desired active`() async {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)

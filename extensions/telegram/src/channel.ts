@@ -805,6 +805,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         pollingInFlight: runtime?.pollingInFlight,
         lastPollStartedAt: runtime?.lastPollStartedAt ?? null,
         lastPollCompletedAt: runtime?.lastPollCompletedAt ?? null,
+        lastPollSuccessAt: runtime?.lastPollSuccessAt ?? null,
         lastPollOutcome: runtime?.lastPollOutcome ?? null,
         lastTransportActivityAt: runtime?.lastTransportActivityAt ?? null,
         transportActivity: runtime?.transportActivity,

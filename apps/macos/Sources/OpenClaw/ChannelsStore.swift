@@ -144,6 +144,13 @@ struct ChannelsStatusSnapshot: Codable {
     }
 
     struct ChannelAccountSnapshot: Codable {
+        struct TelegramRecovery: Codable {
+            let phase: TelegramRecoveryObservation.Phase
+            let providerRestartAttempts: Int
+            let reason: String?
+            let updatedAt: Double
+        }
+
         let accountId: String
         let name: String?
         let enabled: Bool?
@@ -158,6 +165,10 @@ struct ChannelsStatusSnapshot: Codable {
         let lastStopAt: Double?
         let lastInboundAt: Double?
         let lastOutboundAt: Double?
+        let lastPollCompletedAt: Double?
+        let lastPollSuccessAt: Double?
+        let lastPollOutcome: String?
+        let telegramRecovery: TelegramRecovery?
         let lastProbeAt: Double?
         let mode: String?
         let dmPolicy: String?
@@ -200,6 +211,21 @@ struct ChannelsStatusSnapshot: Codable {
         } catch {
             return nil
         }
+    }
+
+    /// Use the gateway-selected account so monitoring follows the same Telegram
+    /// identity as message routing. Falling back to `default` preserves older
+    /// snapshots that omitted `channelDefaultAccountId`.
+    func telegramRecoveryObservation() -> TelegramRecoveryObservation {
+        let accountId = self.channelDefaultAccountId["telegram"] ?? "default"
+        let account = self.channelAccounts["telegram"]?.first(where: { $0.accountId == accountId })
+            ?? self.channelAccounts["telegram"]?.first
+        return TelegramRecoveryObservation(
+            phase: account?.telegramRecovery?.phase,
+            providerRestartAttempts: account?.telegramRecovery?.providerRestartAttempts,
+            updatedAt: account?.telegramRecovery?.updatedAt,
+            lastPollSuccessAt: account?.lastPollSuccessAt,
+            lastPollOutcome: account?.lastPollOutcome)
     }
 }
 

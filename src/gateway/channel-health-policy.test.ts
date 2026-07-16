@@ -51,6 +51,53 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
+  it("does not let a refreshed start time mask an explicit Telegram polling stall", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastStartAt: 99_000,
+        lastPollSuccessAt: null,
+        lastPollOutcome: "stalled",
+        transportActivity: {
+          mode: "polling",
+        },
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("preserves connect grace for a Telegram poller that is genuinely starting", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastStartAt: 99_000,
+        lastPollSuccessAt: null,
+        lastPollOutcome: "in-flight",
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
+  });
+
   it("treats active runs as busy even when disconnected", () => {
     const now = 100_000;
     const evaluation = evaluateChannelHealth(
@@ -170,6 +217,93 @@ describe("evaluateChannelHealth", () => {
           watchdog: {
             escalation: "Telegram polling unhealthy: repeated polling stalls",
           },
+        },
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("keeps recent successful polling proof while the next request is in flight", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        // The next long poll starts immediately after the successful request.
+        // Recovery must follow the sticky proof, not this latest-state field.
+        lastPollOutcome: "in-flight",
+        lastPollCompletedAt: 99_000,
+        lastPollSuccessAt: 99_000,
+        telegramRecovery: {
+          phase: "provider-restart",
+          providerRestartAttempts: 1,
+          updatedAt: 90_000,
+        },
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not treat connected Telegram polling as recovered when completed polling proof is stale", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastPollOutcome: "in-flight",
+        lastPollCompletedAt: 99_000,
+        lastPollSuccessAt: 100_000 - 180_001,
+        telegramRecovery: {
+          phase: "provider-restart",
+          providerRestartAttempts: 1,
+          updatedAt: 90_000,
+        },
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it.each([
+    ["missing after an error", undefined],
+    ["at the incident boundary", 90_000],
+    ["before the incident", 89_999],
+  ])("does not recover Telegram when success proof is %s", (_case, lastPollSuccessAt) => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastPollOutcome: "error",
+        lastPollCompletedAt: 99_000,
+        lastPollSuccessAt,
+        telegramRecovery: {
+          phase: "provider-restart",
+          providerRestartAttempts: 1,
+          updatedAt: 90_000,
         },
       },
       {

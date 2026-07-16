@@ -328,6 +328,7 @@ export const telegramCommandDeps = {
   async resolveRuntimeOwnership(
     runtimePort: number,
     worktreePath: string,
+    runtimeProfileId: string,
   ): Promise<TelegramRuntimeOwnership> {
     const pidOutput = await execCommandAllowFailure([
       "lsof",
@@ -387,7 +388,18 @@ export const telegramCommandDeps = {
         failureReason: "runtime_listener_not_gateway",
       };
     }
-    if (!runtimeWorktree || path.resolve(runtimeWorktree) !== path.resolve(worktreePath)) {
+    const cwdMatchesWorktree = Boolean(
+      runtimeWorktree && path.resolve(runtimeWorktree) === path.resolve(worktreePath),
+    );
+    // The gateway changes cwd to its configured workspace after startup. Its
+    // non-secret, worktree-derived profile is therefore also carried in argv;
+    // unlike a config descriptor, argv remains available for the process life.
+    const escapedProfileId = runtimeProfileId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const hasExpectedProfile = Boolean(
+      command &&
+      new RegExp(`(?:^|\\s)--profile(?:=|\\s+)${escapedProfileId}(?=\\s|$)`, "u").test(command),
+    );
+    if (!cwdMatchesWorktree && !hasExpectedProfile) {
       return {
         pid,
         worktree: runtimeWorktree ?? null,
@@ -398,7 +410,9 @@ export const telegramCommandDeps = {
     }
     return {
       pid,
-      worktree: runtimeWorktree,
+      // Profile evidence is derived from this worktree, so report the verified
+      // owner instead of the gateway's later workspace cwd.
+      worktree: path.resolve(worktreePath),
       command,
       ownershipOk: true,
       failureReason: null,
@@ -841,6 +855,7 @@ async function buildTelegramDoctorReport(params: {
   const runtimeOwnership = await telegramCommandDeps.resolveRuntimeOwnership(
     profile.runtimePort,
     repo.worktree,
+    profile.profileId,
   );
   const gateway = await telegramCommandDeps.probeGateway(profile.runtimePort);
   const runtimeCommit = await telegramCommandDeps.resolveRuntimeCommit(runtimeOwnership.worktree);

@@ -4,7 +4,7 @@ import { computeBackoff, sleepWithAbort } from "../../../src/infra/backoff.js";
 import { formatErrorMessage } from "../../../src/infra/errors.js";
 import { formatDurationPrecise } from "../../../src/infra/format-time/format-duration.ts";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { createTelegramBot } from "./bot.js";
+import { createTelegramBot, waitForTelegramBotTransportClose } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
@@ -26,6 +26,42 @@ const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 const POLL_STALL_ESCALATION_LIMIT = 2;
 const POLL_STOP_TIMEOUT_ESCALATION_LIMIT = 3;
+
+export type TelegramPollingWatchdogClassification = {
+  kind: "healthy" | "polling-stall" | "event-loop-delay";
+  pollIdleMs: number;
+  timerGapMs: number;
+  timerDelayMs: number;
+  timerMateriallyLate: boolean;
+};
+
+/**
+ * Separate a genuinely idle poller from a watchdog callback that itself ran late.
+ * A starved event loop can make both numbers large, but blaming that entire gap on
+ * Telegram would hide the gateway-side failure boundary that delayed the timer.
+ */
+export function classifyTelegramPollingWatchdogTick(params: {
+  nowMs: number;
+  lastTickAtMs: number;
+  lastGetUpdatesAtMs: number;
+  watchdogIntervalMs: number;
+  stallThresholdMs: number;
+}): TelegramPollingWatchdogClassification {
+  const pollIdleMs = Math.max(0, params.nowMs - params.lastGetUpdatesAtMs);
+  const timerGapMs = Math.max(0, params.nowMs - params.lastTickAtMs);
+  const timerDelayMs = Math.max(0, timerGapMs - params.watchdogIntervalMs);
+  const materiallyLate = timerDelayMs > params.watchdogIntervalMs;
+  const pollIsStale = pollIdleMs > params.stallThresholdMs;
+  return {
+    // A delayed timer is diagnostic evidence, not by itself a failed poller.
+    // Sleep/resume can delay the callback after getUpdates already succeeded.
+    kind: !pollIsStale ? "healthy" : materiallyLate ? "event-loop-delay" : "polling-stall",
+    pollIdleMs,
+    timerGapMs,
+    timerDelayMs,
+    timerMateriallyLate: materiallyLate,
+  };
+}
 
 const waitForGracefulStop = async (
   stop: () => Promise<void>,
@@ -91,11 +127,15 @@ export class TelegramPollingSession {
   #pollInFlight = 0;
   #lastPollStartedAt: number | null = null;
   #lastPollCompletedAt: number | null = null;
+  #lastPollSuccessAt: number | null = null;
   #lastPollOutcome: TelegramPollingOutcome | null = null;
   #lastPollError: string | null = null;
   #lastPollDurationMs: number | null = null;
   #lastStallAt: number | null = null;
   #lastStopTimeoutAt: number | null = null;
+  #lastTimerGapAt: number | null = null;
+  #lastTimerGapMs: number | null = null;
+  #lastTimerDelayMs: number | null = null;
   #watchdogEscalation: string | null = null;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {}
@@ -131,6 +171,9 @@ export class TelegramPollingSession {
       watchdog: {
         lastStallAt: this.#lastStallAt,
         lastStopTimeoutAt: this.#lastStopTimeoutAt,
+        lastTimerGapAt: this.#lastTimerGapAt,
+        lastTimerGapMs: this.#lastTimerGapMs,
+        timerDelayMs: this.#lastTimerDelayMs,
         escalation: this.#watchdogEscalation,
       },
     };
@@ -150,6 +193,7 @@ export class TelegramPollingSession {
       pollingInFlight: this.#pollInFlight > 0,
       lastPollStartedAt: this.#lastPollStartedAt,
       lastPollCompletedAt: this.#lastPollCompletedAt,
+      lastPollSuccessAt: this.#lastPollSuccessAt,
       lastPollOutcome: this.#lastPollOutcome,
       lastTransportActivityAt: this.#lastPollCompletedAt ?? this.#lastPollStartedAt,
       ...next,
@@ -232,6 +276,7 @@ export class TelegramPollingSession {
         config: this.opts.config,
         accountId: this.opts.accountId,
         fetchAbortSignal: fetchAbortController.signal,
+        transportGeneration: this.#transportGeneration,
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,
@@ -259,6 +304,20 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
+      if (
+        !this.opts.abortSignal?.aborted &&
+        isRecoverableTelegramNetworkError(err, { context: "unknown" })
+      ) {
+        // deleteWebhook is an idempotent setup cleanup. A recoverable timeout is
+        // not proof that a webhook remains configured, while getUpdates is the
+        // operation whose success actually proves inbound polling health. Keep
+        // the flag false so a later fresh cycle retries cleanup without blocking
+        // this cycle from reaching the stronger liveness boundary.
+        this.opts.log(
+          `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can prove health: ${formatErrorMessage(err)}`,
+        );
+        return "ready";
+      }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram webhook cleanup failed",
@@ -269,6 +328,7 @@ export class TelegramPollingSession {
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     let lastGetUpdatesAt = Date.now();
+    let lastWatchdogTickAt = lastGetUpdatesAt;
     this.#lastPollOutcome = "started";
     this.#publishPollingStatus({
       connected: true,
@@ -307,6 +367,7 @@ export class TelegramPollingSession {
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
     let stopPromise: Promise<void> | undefined;
+    let botStopPromise: Promise<void> | undefined;
     let stalledRestart = false;
     let stopTimedOut = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -324,11 +385,15 @@ export class TelegramPollingSession {
       return stopPromise;
     };
     const stopBot = () => {
-      return Promise.resolve(bot.stop())
-        .then(() => undefined)
+      botStopPromise ??= Promise.resolve()
+        .then(() => bot.stop())
         .catch(() => {
           // Bot may already be stopped by runner stop/abort paths.
-        });
+        })
+        // Bot.stop() must remain synchronous for grammY, but polling cleanup owns the
+        // resolver sockets and therefore waits for their async destruction to finish.
+        .then(() => waitForTelegramBotTransportClose(bot));
+      return botStopPromise;
     };
     const stopOnAbort = () => {
       if (this.opts.abortSignal?.aborted) {
@@ -343,13 +408,36 @@ export class TelegramPollingSession {
       if (stalledRestart) {
         return;
       }
-      const elapsed = Date.now() - lastGetUpdatesAt;
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      const now = Date.now();
+      const watchdogState = classifyTelegramPollingWatchdogTick({
+        nowMs: now,
+        lastTickAtMs: lastWatchdogTickAt,
+        lastGetUpdatesAtMs: lastGetUpdatesAt,
+        watchdogIntervalMs: POLL_WATCHDOG_INTERVAL_MS,
+        stallThresholdMs: POLL_STALL_THRESHOLD_MS,
+      });
+      lastWatchdogTickAt = now;
+      if (watchdogState.timerMateriallyLate) {
+        this.#lastTimerGapAt = now;
+        this.#lastTimerGapMs = watchdogState.timerGapMs;
+        this.#lastTimerDelayMs = watchdogState.timerDelayMs;
+        // Publish the starvation evidence without changing polling health. A
+        // callback that ran late cannot distinguish a stuck getUpdates request
+        // from a healthy request whose completion was delayed by the same event
+        // loop pause. Only a later, timely watchdog tick can prove inactivity.
+        this.#publishPollingStatus();
+        this.opts.log(
+          `[telegram] Polling watchdog callback ran ${formatDurationPrecise(watchdogState.timerDelayMs)} late (timer gap ${formatDurationPrecise(watchdogState.timerGapMs)}, poll idle ${formatDurationPrecise(watchdogState.pollIdleMs)}); gateway event-loop starvation may be involved.`,
+        );
+      }
+      if (watchdogState.kind === "polling-stall" && runner.isRunning()) {
         stalledRestart = true;
         this.#consecutiveStalls += 1;
         this.#lastPollOutcome = "stalled";
-        this.#lastPollError = `Polling stall detected (${this.#pollInFlight > 0 ? "getUpdates in-flight" : "no completed getUpdates"} for ${formatDurationPrecise(elapsed)})`;
-        this.#lastStallAt = Date.now();
+        const boundary =
+          this.#pollInFlight > 0 ? "getUpdates in-flight" : "no completed getUpdates";
+        this.#lastPollError = `Polling stall detected (${boundary} for ${formatDurationPrecise(watchdogState.pollIdleMs)})`;
+        this.#lastStallAt = now;
         this.#watchdogEscalation =
           this.#consecutiveStalls >= POLL_STALL_ESCALATION_LIMIT
             ? `telegram polling stalled ${this.#consecutiveStalls} consecutive time(s)`
@@ -359,7 +447,7 @@ export class TelegramPollingSession {
           lastError: this.#watchdogEscalation ?? this.#lastPollError,
         });
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(watchdogState.pollIdleMs)}); forcing restart.`,
         );
         void stopRunner();
         void stopBot();
@@ -496,6 +584,10 @@ export class TelegramPollingSession {
     this.#lastPollError = outcome === "completed" ? null : formatErrorMessage(err);
     this.#lastPollDurationMs = Math.max(0, completedAt - startedAt);
     if (outcome === "completed") {
+      // This is the durable recovery proof. Do not clear it when the next long
+      // poll starts or a later request fails: those events describe current
+      // diagnostics, not whether getUpdates succeeded after an incident.
+      this.#lastPollSuccessAt = completedAt;
       // A completed getUpdates request is transport liveness even when Telegram
       // returns zero user messages. Reset watchdog counters so quiet chats stay
       // healthy without changing auth, allowlist, group, topic, or command flow.
@@ -504,6 +596,9 @@ export class TelegramPollingSession {
       this.#stopTimeoutBursts = 0;
       this.#lastStallAt = null;
       this.#lastStopTimeoutAt = null;
+      this.#lastTimerGapAt = null;
+      this.#lastTimerGapMs = null;
+      this.#lastTimerDelayMs = null;
       this.#watchdogEscalation = null;
     }
     this.#publishPollingStatus({

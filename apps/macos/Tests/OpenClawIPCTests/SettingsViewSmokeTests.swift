@@ -124,6 +124,22 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `telegram recovery card uses plain copy and one shared restart action`() {
+        let incident = GatewayRecoveryIncident.telegramOffline(appName: "Jarvis")
+
+        #expect(incident.title == "Telegram is offline")
+        #expect(incident.message == "Jarvis could not reconnect to Telegram automatically.")
+        #expect(incident.actionTitle == "Restart Jarvis")
+        #expect(!incident.message.localizedCaseInsensitiveContains("gateway"))
+        #expect(!incident.message.localizedCaseInsensitiveContains("provider"))
+        #expect(!incident.message.localizedCaseInsensitiveContains("poll"))
+
+        let sharedCard = GatewayRecoveryIncidentCard(incident: incident, restart: {})
+        _ = sharedCard.body
+        _ = GeneralSettings(state: AppState(preview: true)).body
+        _ = AIAccessSettings().body
+    }
+
     @Test func `gateway recovery notification exposes exactly one restart action`() throws {
         let category = NotificationManager.gatewayRecoveryCategory(appName: "Jarvis")
         let action = try #require(category.actions.first)

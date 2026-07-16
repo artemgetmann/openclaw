@@ -229,6 +229,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       pollingInFlight: false,
       lastPollStartedAt: null,
       lastPollCompletedAt: null,
+      lastPollSuccessAt: null,
       lastPollOutcome: null,
       lastTransportActivityAt: null,
       transportActivity: {

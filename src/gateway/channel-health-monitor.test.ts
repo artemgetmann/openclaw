@@ -3,6 +3,26 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
+import type {
+  TelegramRecoveryIncident,
+  TelegramRecoveryStateStore,
+} from "./telegram-recovery-state.js";
+
+function createMemoryRecoveryStore(): TelegramRecoveryStateStore {
+  const incidents = new Map<string, TelegramRecoveryIncident>();
+  return {
+    load: vi.fn(async () => ({
+      incidents: new Map(incidents),
+      hasUnattributedCorruption: false,
+    })),
+    set: vi.fn(async (accountId, incident) => {
+      incidents.set(accountId, { ...incident });
+    }),
+    clear: vi.fn(async (accountId) => {
+      incidents.delete(accountId);
+    }),
+  };
+}
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
@@ -11,6 +31,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     markChannelLoggedOut: vi.fn(),
+    patchChannelStatus: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
@@ -43,8 +64,17 @@ function createSnapshotManager(
   accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>>,
   overrides?: Partial<ChannelManager>,
 ): ChannelManager {
+  const patchChannelStatus = vi.fn(
+    (channelId: ChannelId, accountId: string, patch: Partial<ChannelAccountSnapshot>) => {
+      const account = accounts[channelId]?.[accountId];
+      if (account) {
+        Object.assign(account, patch);
+      }
+    },
+  );
   return createMockChannelManager({
     getRuntimeSnapshot: vi.fn(() => snapshotWith(accounts)),
+    patchChannelStatus,
     ...overrides,
   });
 }
@@ -57,6 +87,7 @@ function startDefaultMonitor(
     channelManager: manager,
     checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
     startupGraceMs: 0,
+    telegramRecoveryStore: createMemoryRecoveryStore(),
     ...overrides,
   });
 }
@@ -607,8 +638,42 @@ describe("channel-health-monitor", () => {
       await expectRestartedChannel(manager, "telegram");
     });
 
+    it("restarts a stalled Telegram poller despite refreshed grace without duplicate starts", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            // The internal polling cycle refreshes this lifecycle marker. It
+            // must not turn an already-observed stall back into startup state.
+            lastStartAt: now - 1_000,
+            lastPollSuccessAt: null,
+            lastPollOutcome: "stalled",
+            transportActivity: {
+              mode: "polling",
+              restartAttempts: 1,
+            },
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager);
+
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS * 2);
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
     it("requests a gateway restart instead of starting a duplicate channel when stop hangs", async () => {
       const now = Date.now();
+      // Legacy callbacks returned void. They remain accepted while new callers
+      // can return `{ok:false}` to make rejection observable.
       const requestGatewayRestart = vi.fn();
       const manager = createSnapshotManager(
         {
@@ -653,6 +718,12 @@ describe("channel-health-monitor", () => {
       );
       expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
       expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({
+          phase: "gateway-restart-requested",
+          reason: "telegram:default health-monitor stop timed out",
+        }),
+      });
 
       vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
         snapshotWith({
@@ -672,6 +743,459 @@ describe("channel-health-monitor", () => {
       await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
       expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
       expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("escalates repeatedly unhealthy Telegram polling to one bounded gateway restart", async () => {
+      const now = Date.now();
+      const requestGatewayRestart = vi.fn(() => ({ ok: true }));
+      const telegramRecoveryStore = createMemoryRecoveryStore();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+          },
+        },
+      });
+      const monitor = startDefaultMonitor(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+        telegramRecoveryStore,
+      });
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({
+          phase: "provider-restart",
+          providerRestartAttempts: 1,
+        }),
+      });
+      expect(vi.mocked(telegramRecoveryStore.set).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+        vi.mocked(manager.stopChannel).mock.invocationCallOrder[0] ?? 0,
+      );
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      const gatewayStateWrite = vi
+        .mocked(telegramRecoveryStore.set)
+        .mock.invocationCallOrder.at(-1);
+      expect(gatewayStateWrite ?? 0).toBeLessThan(
+        requestGatewayRestart.mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS * 3);
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("marks Telegram recovery exhausted when a gateway restart request is rejected", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+            telegramRecovery: {
+              phase: "provider-restart",
+              providerRestartAttempts: 1,
+              updatedAt: now - 10_000,
+            },
+          },
+        },
+      });
+      const requestGatewayRestart = vi.fn(() => ({ ok: false }));
+      const monitor = await startAndRunCheck(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+      });
+
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({
+          phase: "exhausted",
+          providerRestartAttempts: 1,
+        }),
+      });
+      monitor.stop();
+    });
+
+    it("marks an accepted gateway restart exhausted when the old process survives verification", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+            telegramRecovery: {
+              phase: "provider-restart",
+              providerRestartAttempts: 1,
+              updatedAt: now - 10_000,
+            },
+          },
+        },
+      });
+      const requestGatewayRestart = vi.fn(() => ({ ok: true }));
+      const monitor = await startAndRunCheck(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+        gatewayRestartVerificationTimeoutMs: 50,
+      });
+
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({ phase: "gateway-restart-requested" }),
+      });
+
+      await vi.advanceTimersByTimeAsync(51);
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({
+          phase: "exhausted",
+          reason: expect.stringContaining("could not be verified"),
+        }),
+      });
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("resumes persisted gateway restart verification after a monitor hot reload", async () => {
+      const now = Date.now();
+      const accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>> = {
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+            telegramRecovery: {
+              phase: "provider-restart" as const,
+              providerRestartAttempts: 1,
+              updatedAt: now - 10_000,
+            },
+          },
+        },
+      };
+      const requestGatewayRestart = vi.fn(() => ({ ok: true }));
+      const manager = createSnapshotManager(accounts);
+      const oldMonitor = startDefaultMonitor(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+        gatewayRestartVerificationTimeoutMs: 10_000,
+      });
+
+      // The original instance accepts one restart request, then a config reload
+      // stops it and clears only its in-memory verification timer.
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      oldMonitor.stop();
+
+      const replacementMonitor = startDefaultMonitor(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+        gatewayRestartVerificationTimeoutMs: 10_000,
+      });
+
+      // The replacement sees the durable incident but must not ask to restart
+      // again. It reuses the original deadline rather than waiting forever.
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(accounts.telegram.default.telegramRecovery).toMatchObject({
+        phase: "exhausted",
+        reason: expect.stringContaining("could not be verified"),
+      });
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      replacementMonitor.stop();
+    });
+
+    it("restores gateway restart authority into a replacement ChannelManager without a duplicate request", async () => {
+      const now = Date.now();
+      const telegramRecoveryStore = createMemoryRecoveryStore();
+      const requestGatewayRestart = vi.fn(() => ({ ok: true }));
+      const originalAccounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>> = {
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+            telegramRecovery: {
+              phase: "provider-restart",
+              providerRestartAttempts: 1,
+              updatedAt: now - 10_000,
+            },
+          },
+        },
+      };
+      const original = startDefaultMonitor(createSnapshotManager(originalAccounts), {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+        gatewayRestartVerificationTimeoutMs: 10_000,
+        telegramRecoveryStore,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      original.stop();
+
+      // SIGUSR1 server recreation constructs a new manager with no runtime
+      // overlay. The durable store is the only bridge across that lifecycle.
+      const replacementAccounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>> = {
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: Date.now() - 300_000,
+            lastPollOutcome: "unhealthy",
+          },
+        },
+      };
+      const replacement = startDefaultMonitor(createSnapshotManager(replacementAccounts), {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart,
+        gatewayRestartVerificationTimeoutMs: 10_000,
+        telegramRecoveryStore,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      expect(replacementAccounts.telegram.default.telegramRecovery).toMatchObject({
+        phase: "gateway-restart-requested",
+        providerRestartAttempts: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(replacementAccounts.telegram.default.telegramRecovery).toMatchObject({
+        phase: "exhausted",
+        providerRestartAttempts: 1,
+      });
+      expect(requestGatewayRestart).toHaveBeenCalledTimes(1);
+      replacement.stop();
+    });
+
+    it("clears restored durable authority only after post-incident polling proof", async () => {
+      const now = Date.now();
+      const telegramRecoveryStore = createMemoryRecoveryStore();
+      await telegramRecoveryStore.set("default", {
+        phase: "exhausted",
+        providerRestartAttempts: 2,
+        updatedAt: now - 1_000,
+      });
+      const accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>> = {
+        telegram: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastPollOutcome: "in-flight",
+            lastPollSuccessAt: now,
+          },
+        },
+      };
+
+      const monitor = await startAndRunCheck(createSnapshotManager(accounts), {
+        telegramRecoveryStore,
+      });
+
+      expect(accounts.telegram.default.telegramRecovery).toBeUndefined();
+      expect((await telegramRecoveryStore.load()).incidents.size).toBe(0);
+      monitor.stop();
+    });
+
+    it("clears accepted gateway restart recovery when fresh polling proof arrives during verification", async () => {
+      const now = Date.now();
+      const accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>> = {
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+            telegramRecovery: {
+              phase: "provider-restart" as const,
+              providerRestartAttempts: 1,
+              updatedAt: now - 10_000,
+            },
+          },
+        },
+      };
+      const manager = createSnapshotManager(accounts);
+      const monitor = await startAndRunCheck(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+        requestGatewayRestart: vi.fn(() => ({ ok: true })),
+        gatewayRestartVerificationTimeoutMs: 50,
+      });
+
+      // This timestamp is after the durable restart request and within the
+      // freshness window, so it is stronger evidence than PID survival.
+      accounts.telegram.default.lastPollSuccessAt = Date.now();
+      await vi.advanceTimersByTimeAsync(51);
+
+      expect(accounts.telegram.default.telegramRecovery).toBeUndefined();
+      expect(manager.patchChannelStatus).not.toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({ phase: "exhausted" }),
+      });
+      monitor.stop();
+    });
+
+    it("marks Telegram recovery exhausted when gateway restart is unavailable", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+            telegramRecovery: {
+              phase: "provider-restart",
+              providerRestartAttempts: 1,
+              updatedAt: now - 10_000,
+            },
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager, {
+        cooldownCycles: 0,
+        maxTelegramProviderRestarts: 1,
+      });
+
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({ phase: "exhausted" }),
+      });
+      monitor.stop();
+    });
+
+    it("marks Telegram recovery exhausted when the provider restart rate limit is spent", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "unhealthy",
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager, { maxRestartsPerHour: 0 });
+
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: expect.objectContaining({
+          phase: "exhausted",
+          providerRestartAttempts: 0,
+        }),
+      });
+      monitor.stop();
+    });
+
+    it("clears Telegram recovery only after a recent completed getUpdates poll", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastPollOutcome: "in-flight",
+            lastPollCompletedAt: now - 1_000,
+            lastPollSuccessAt: now - 1_000,
+            telegramRecovery: {
+              phase: "provider-restart",
+              providerRestartAttempts: 1,
+              updatedAt: now - 5_000,
+            },
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager);
+
+      expect(manager.patchChannelStatus).toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: undefined,
+      });
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("does not clear recovery from connected state without recent completed polling proof", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastPollOutcome: "completed",
+            lastPollCompletedAt: now - 180_001,
+            lastPollSuccessAt: now - 180_001,
+            telegramRecovery: {
+              phase: "provider-restart",
+              providerRestartAttempts: 1,
+              updatedAt: now - 5_000,
+            },
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager, { maxTelegramProviderRestarts: 2 });
+
+      expect(manager.patchChannelStatus).not.toHaveBeenCalledWith("telegram", "default", {
+        telegramRecovery: undefined,
+      });
+      expect(manager.stopChannel).toHaveBeenCalledWith("telegram", "default");
       monitor.stop();
     });
 

@@ -139,6 +139,9 @@ export type ChannelAccountSnapshot = {
     watchdog?: {
       lastStallAt?: number | null;
       lastStopTimeoutAt?: number | null;
+      lastTimerGapAt?: number | null;
+      lastTimerGapMs?: number | null;
+      timerDelayMs?: number | null;
       escalation?: string | null;
     };
   };
@@ -155,7 +158,23 @@ export type ChannelAccountSnapshot = {
   pollingInFlight?: boolean;
   lastPollStartedAt?: number | null;
   lastPollCompletedAt?: number | null;
+  /**
+   * Most recent successful getUpdates completion. Unlike lastPollOutcome, this
+   * proof is sticky across the next in-flight request and later failed polls.
+   */
+  lastPollSuccessAt?: number | null;
   lastPollOutcome?: string | null;
+  /**
+   * Gateway-owned, bounded recovery state for Telegram polling incidents.
+   * Absence means there is no sustained recovery incident; only `exhausted`
+   * authorizes a consumer surface to present a manual-intervention incident.
+   */
+  telegramRecovery?: {
+    phase: "provider-restart" | "gateway-restart-requested" | "exhausted";
+    providerRestartAttempts: number;
+    reason?: string | null;
+    updatedAt: number;
+  };
   dmPolicy?: string;
   allowFrom?: string[];
   tokenSource?: string;

@@ -144,6 +144,64 @@ describe("telegram commands", () => {
     );
   });
 
+  it("accepts the exact tester profile marker after gateway cwd changes", async () => {
+    telegramCommandDeps.exec = vi.fn(async (args: string[]) => {
+      const joined = args.join(" ");
+      if (joined.includes("-tiTCP:24567")) {
+        return { stdout: "31337\n", stderr: "" };
+      }
+      if (joined.includes("-d cwd")) {
+        return { stdout: "p31337\nfcwd\nn/tmp/jarvis-workspace\n", stderr: "" };
+      }
+      if (args[0] === "ps") {
+        return {
+          stdout:
+            "/opt/homebrew/bin/node openclaw.mjs --profile tg-live-a1b2c3d4e5 gateway run --bind loopback --port 24567 --force --allow-unconfigured\n",
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    }) as typeof telegramCommandDeps.exec;
+
+    await expect(
+      originalDeps.resolveRuntimeOwnership(24567, "/tmp/repo", "tg-live-a1b2c3d4e5"),
+    ).resolves.toMatchObject({
+      pid: 31337,
+      worktree: "/tmp/repo",
+      ownershipOk: true,
+      failureReason: null,
+    });
+  });
+
+  it("rejects a longer profile with the expected profile as a prefix", async () => {
+    telegramCommandDeps.exec = vi.fn(async (args: string[]) => {
+      const joined = args.join(" ");
+      if (joined.includes("-tiTCP:24567")) {
+        return { stdout: "31337\n", stderr: "" };
+      }
+      if (joined.includes("-d cwd")) {
+        return { stdout: "p31337\nfcwd\nn/tmp/jarvis-workspace\n", stderr: "" };
+      }
+      if (args[0] === "ps") {
+        return {
+          stdout:
+            "/opt/homebrew/bin/node openclaw.mjs --profile tg-live-a1b2c3d4e5-stale gateway run --bind loopback --port 24567 --force --allow-unconfigured\n",
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    }) as typeof telegramCommandDeps.exec;
+
+    await expect(
+      originalDeps.resolveRuntimeOwnership(24567, "/tmp/repo", "tg-live-a1b2c3d4e5"),
+    ).resolves.toMatchObject({
+      pid: 31337,
+      worktree: "/tmp/jarvis-workspace",
+      ownershipOk: false,
+      failureReason: "runtime_worktree_mismatch",
+    });
+  });
+
   it("fails doctor with exact reasons and passes env/session overrides to precheck", async () => {
     const runTelegramUserPrecheck = vi
       .fn()

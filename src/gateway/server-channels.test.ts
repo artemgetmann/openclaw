@@ -188,6 +188,35 @@ describe("server-channels auto restart", () => {
     expect(account?.configured).toBe(true);
   });
 
+  it("patches and clears gateway-owned Telegram recovery status without lifecycle changes", () => {
+    installTestRegistry(createTestPlugin({ id: "telegram" }));
+    const manager = createManager({ channelIds: ["telegram"] });
+
+    manager.patchChannelStatus("telegram", DEFAULT_ACCOUNT_ID, {
+      telegramRecovery: {
+        phase: "provider-restart",
+        providerRestartAttempts: 1,
+        reason: "polling stalled",
+        updatedAt: 100,
+      },
+    });
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.telegram?.[DEFAULT_ACCOUNT_ID]?.telegramRecovery,
+    ).toEqual({
+      phase: "provider-restart",
+      providerRestartAttempts: 1,
+      reason: "polling stalled",
+      updatedAt: 100,
+    });
+
+    manager.patchChannelStatus("telegram", DEFAULT_ACCOUNT_ID, {
+      telegramRecovery: undefined,
+    });
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.telegram?.[DEFAULT_ACCOUNT_ID],
+    ).not.toHaveProperty("telegramRecovery");
+  });
+
   it("passes channelRuntime through channel gateway context when provided", async () => {
     const channelRuntime = { marker: "channel-runtime" } as unknown as PluginRuntime["channel"];
     const startAccount = vi.fn(async (ctx) => {
