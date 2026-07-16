@@ -11,11 +11,35 @@ read_when:
 
 The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed.
 
+## Autonomous PR Merge Policy
+
+For a normal, scoped implementation, the default outcome is a merged PR. The
+agent owns the full path: investigate the issue, implement the fix, handle
+actionable review findings, satisfy required CI, and merge the PR. Use the
+current branch rules and repository helpers; do not bypass required checks,
+merge a draft, use an admin override, or treat queued or pending checks as
+passed.
+
+Stop before merge when any of these are true:
+
+- Intended behavior or the root cause is still uncertain.
+- A required test or relevant CI check fails.
+- A material review finding remains unresolved.
+- The patch grows beyond the agreed scope.
+- Security, migrations, irreversible data changes, cursor durability, or
+  message-loss semantics are materially affected without strong end-to-end
+  proof.
+
+Deployment, restart, and release are separate permission boundaries. A merged
+PR does not authorize any of them; perform those actions only when explicitly
+requested and prove the live runtime separately. Rollback means reverting the
+change, and a revert cannot necessarily undo external or already-live effects.
+
 ## PR Merge Policy
 
-GitHub owns waiting for CI and performing auto-merge. Agents own diagnosis,
-review-bot handling, failed-CI fixes, and runtime shipping only after the merge
-when the user explicitly asks for runtime shipping.
+GitHub provides the CI and merge mechanisms. Agents own diagnosis, review-bot
+handling, failed-CI fixes, and the merge decision; runtime shipping remains a
+separate explicit permission after the merge.
 
 This boundary matters: an agent saying "CI is queued" or "CI is pending" is not
 proof. A PR is merge-ready only when the relevant checks have completed

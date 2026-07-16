@@ -150,7 +150,8 @@ describe("consumer Sparkle release gates", () => {
       'if [[ "$PACKAGE_PHASE" == "full" || "$PACKAGE_PHASE" == "local-proof" || "$PACKAGE_PHASE" == "build-app-only" || "$PACKAGE_PHASE" == "trusted-ring-fast" ]]',
     );
 
-    expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --local-proof");
+    expect(readme).toContain("--local-proof \\");
+    expect(readme).toContain('--release-intent "<id-from-authorize>"');
     expect(readme).toContain("does not create `Jarvis.dmg`, `Jarvis.zip`, or");
     expect(readme).toContain("`jarvis-appcast.xml`");
     expect(readme).toContain("does not notarize, publish GitHub assets");
@@ -181,16 +182,21 @@ describe("consumer Sparkle release gates", () => {
     expect(script).toContain("openclaw_build_run_root");
     expect(script).toContain("require_clean_git_for_release_build");
 
-    expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --phase build-app-only");
-    expect(readme).toContain(
-      "bash scripts/package-openclaw-mac-dist.sh --phase poll-app-notarization",
-    );
-    expect(readme).toContain(
-      "bash scripts/package-openclaw-mac-dist.sh --phase poll-dmg-notarization",
-    );
+    expect(readme).toContain("--phase build-app-only \\");
+    expect(readme).toContain("--phase poll-app-notarization \\");
+    expect(readme).toContain("--phase poll-dmg-notarization \\");
     expect(readme).toContain("--phase publish-assets-only");
     expect(readme).toContain("--phase verify-public-assets-only");
-    expect(readme).toContain("bash scripts/package-openclaw-mac-dist.sh --trusted-ring-fast");
+    expect(readme).toContain("--trusted-ring-fast \\");
+  });
+
+  it("requires an explicit latest release tag for local Sparkle asset creation", () => {
+    const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
+    const command = readme.match(
+      /bash scripts\/package-openclaw-mac-dist\.sh \\\n\s+--phase create-local-release-assets-only[\s\S]*?```/,
+    )?.[0];
+
+    expect(command).toContain('--github-release-tag "<latest-tag-from-gh-release-view>"');
   });
 
   it("keeps trusted-ring packaging out of notarization and public release work", () => {
@@ -214,6 +220,21 @@ describe("consumer Sparkle release gates", () => {
       'OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE="$OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE"',
     );
     expect(script).toContain("full|local-proof|build-app-only|post-app-build|trusted-ring-fast");
+  });
+
+  it("keeps executable public-release wrapper examples authorized", () => {
+    const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
+    const commands = readme.match(
+      /^bash scripts\/jarvis-public-release\.sh[^\n]*(?:\n\s+--[^\n]+)*/gm,
+    );
+
+    expect(commands?.length).toBeGreaterThan(0);
+    for (const command of commands ?? []) {
+      if (command.includes("--authorize") || command.includes("--dry-run")) {
+        continue;
+      }
+      expect(command).toContain('--release-intent "<id-from-authorize>"');
+    }
   });
 
   it("keeps trusted-ring runtime cache keys stable across equivalent rebuilds", () => {

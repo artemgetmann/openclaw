@@ -213,6 +213,47 @@ warn_notary_submit_routes() {
   done < <(notary_submit_route_hosts)
 }
 
+require_final_release_intent_before_submit() {
+  local intent_root="${OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT:-}"
+  local intent_id="${OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID:-}"
+
+  # Package callers provide both values so the final guard runs after route
+  # discovery and immediately before Apple's irreversible submission. Direct
+  # standalone notarization remains supported only when neither value is set.
+  if [[ -z "$intent_root" && -z "$intent_id" ]]; then
+    return 0
+  fi
+  if [[ -z "$intent_root" || -z "$intent_id" ]]; then
+    echo "Error: incomplete final release-intent guard configuration." >&2
+    return 1
+  fi
+
+  source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
+  openclaw_require_jarvis_release_intent \
+    "$intent_root" "$intent_id" "Apple notarization submission"
+}
+
+require_final_release_intent_before_poll_mutation() {
+  local intent_root="${OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT:-}"
+  local intent_id="${OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID:-}"
+
+  # A package poll can take long enough for the operator to replace its
+  # authorization. Direct polling remains useful for one-off recovery, but a
+  # package-provided guard must be complete and must still authorize each
+  # receipt/staple mutation after Apple's slow status query returns.
+  if [[ -z "$intent_root" && -z "$intent_id" ]]; then
+    return 0
+  fi
+  if [[ -z "$intent_root" || -z "$intent_id" ]]; then
+    echo "Error: incomplete final poll release-intent guard configuration." >&2
+    return 1
+  fi
+
+  source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
+  openclaw_require_jarvis_release_intent \
+    "$intent_root" "$intent_id" "Apple notarization poll mutation"
+}
+
 notary_submit_heartbeat_interval() {
   local interval="${NOTARYTOOL_SUBMIT_HEARTBEAT_SECS:-30}"
   case "$interval" in
@@ -253,6 +294,7 @@ run_notary_submit() {
   echo "notary_artifact=$ARTIFACT"
   echo "notary_artifact_size_bytes=$(notary_artifact_size_bytes "$ARTIFACT")"
   warn_notary_submit_routes
+  require_final_release_intent_before_submit || return $?
   notary_submit_heartbeat "$started_epoch" "$$" &
   heartbeat_pid=$!
 
@@ -302,6 +344,9 @@ staple_outputs() {
         exit 1
       fi
       echo "📌 Stapling artifact: $ARTIFACT"
+      # A completed `notarytool info` does not authorize a later filesystem
+      # mutation if the release intent was replaced while polling.
+      require_final_release_intent_before_poll_mutation || return $?
       xcrun stapler staple "$ARTIFACT"
       xcrun stapler validate "$ARTIFACT"
       ;;
@@ -312,6 +357,9 @@ staple_outputs() {
   if [[ -n "$STAPLE_APP_PATH" ]]; then
     if [[ -d "$STAPLE_APP_PATH" ]]; then
       echo "📌 Stapling app: $STAPLE_APP_PATH"
+      # Guard this independently from the DMG/pkg staple above: either target
+      # may be the first irreversible mutation in a poll invocation.
+      require_final_release_intent_before_poll_mutation || return $?
       xcrun stapler staple "$STAPLE_APP_PATH"
       xcrun stapler validate "$STAPLE_APP_PATH"
     else
@@ -354,6 +402,9 @@ if [[ "$MODE" == "poll" ]]; then
   fi
 
   echo "notary_status=$status"
+  # `notarytool info` is intentionally slow. Recheck only after it completes
+  # and immediately before rewriting durable poll state.
+  require_final_release_intent_before_poll_mutation || exit $?
   write_receipt "$SUBMISSION_ID" "$status"
   case "$status" in
     Accepted)
@@ -422,6 +473,12 @@ fi
 submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
 status="$(printf '%s\n' "$submit_json" | notary_status)"
 if [[ -n "$submission_id" ]]; then
+  # A blocking `notarytool submit --wait` can outlive its operator intent just
+  # like an explicit poll. Only publish final Accepted receipt state while the
+  # package-provided poll guard still owns this release. The nonzero-submit
+  # branch above remains the deliberate exception that preserves a durable ID
+  # as `submitted` recovery proof so the same bytes are never resubmitted.
+  require_final_release_intent_before_poll_mutation || exit $?
   write_receipt "$submission_id" "${status:-Accepted}"
 fi
 staple_outputs

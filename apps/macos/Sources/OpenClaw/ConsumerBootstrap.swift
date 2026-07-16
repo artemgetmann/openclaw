@@ -5,6 +5,7 @@ enum ConsumerBootstrap {
     // A short Telegram-only debounce turns that burst into one agent turn while
     // leaving other channels unchanged and preserving an explicit user opt-out.
     private static let telegramInboundDebounceMs = 1000
+    private static let defaultBrowserProfile = "signed-in"
 
     static func bootstrapIfNeeded() {
         guard AppFlavor.current.isConsumer else { return }
@@ -61,6 +62,13 @@ enum ConsumerBootstrap {
             path: ["agents", "defaults", "workspace"],
             value: ConsumerRuntime.workspaceURL.path) || changed
         changed = self.setDefaultValue(in: &root, path: ["tools", "exec", "host"], value: "gateway") || changed
+        // Jarvis defaults to its cloned signed-in Chrome lane. The generic
+        // OpenClaw engine defaults to the isolated browser when this key is
+        // absent, which contradicts Jarvis's browser tool contract.
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["browser", "defaultProfile"],
+            value: self.defaultBrowserProfile) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["messages", "inbound", "byChannel", "telegram"],

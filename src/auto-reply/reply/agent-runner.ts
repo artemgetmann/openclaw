@@ -427,6 +427,12 @@ export async function runReplyAgent(params: {
       cleanupTranscripts: true,
     });
   const buildHardReserveOverflowPayload = (prompt: string): ReplyPayload | undefined => {
+    // Heartbeats intentionally skip the pre-run memory flush. Their agent
+    // runner owns overflow recovery, so this outer guard would otherwise
+    // mistake the skipped flush for a failed one and surface a false overflow.
+    if (isHeartbeat) {
+      return undefined;
+    }
     const persistedPromptTokens = followupRun.run.persistedPromptTokens;
     if (
       typeof persistedPromptTokens !== "number" ||

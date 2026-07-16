@@ -3,6 +3,27 @@ import Testing
 
 @Suite(.serialized)
 struct ConsumerBootstrapTests {
+    @Test func `consumer defaults to signed in browser without overwriting explicit profile`() {
+        var missingRoot: [String: Any] = [:]
+
+        let filled = ConsumerBootstrap.applyMissingConfigDefaults(to: &missingRoot)
+
+        #expect(filled)
+        let browser = missingRoot["browser"] as? [String: Any]
+        #expect(browser?["defaultProfile"] as? String == "signed-in")
+
+        var customRoot: [String: Any] = [
+            "browser": [
+                "defaultProfile": "company-browser",
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &customRoot)
+
+        let customBrowser = customRoot["browser"] as? [String: Any]
+        #expect(customBrowser?["defaultProfile"] as? String == "company-browser")
+    }
+
     @Test func `consumer defaults enable Telegram inbound debounce without overwriting explicit opt out`() {
         var missingRoot: [String: Any] = [
             "messages": [

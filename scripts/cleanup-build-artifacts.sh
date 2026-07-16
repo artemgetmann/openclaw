@@ -27,6 +27,7 @@ OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_OLDER_THAN_DAYS:-7}"
 DEPS_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_DEPS_OLDER_THAN_DAYS:-21}"
 BUILD_RUNS_OLDER_THAN_HOURS="${OPENCLAW_CLEANUP_BUILD_RUNS_OLDER_THAN_HOURS:-24}"
 BUILD_TEMP_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_BUILD_TEMP_OLDER_THAN_DAYS:-3}"
+RELEASE_STAGING_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RELEASE_STAGING_OLDER_THAN_DAYS:-3}"
 RUNTIME_CACHE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_CACHE_OLDER_THAN_DAYS:-14}"
 RUNTIME_INSTANCE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN_DAYS:-7}"
 RUNTIME_LOGS_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS:-3}"
@@ -67,6 +68,8 @@ Options:
 
 Build-cache retention:
   runs/* older than 24h, tmp/temp/smoke entries older than 3d.
+  Failed Jarvis release/Sparkle runs use a 3d floor and keep the newest run.
+  .openclaw-active and .openclaw-protected markers always prevent deletion.
   runtime-cache is reported by default. With --include-runtime-cache, old entries
   older than 14d are pruned while keeping the newest entry per parent group.
 
@@ -128,6 +131,14 @@ path_size_kib_or_zero() {
   printf '%s\n' "${size_kib:-0}"
 }
 
+tree_removal_protection_reason() {
+  openclaw_build_tree_removal_protection_reason "$1"
+}
+
+path_has_retention_marker() {
+  openclaw_build_path_has_retention_marker "$1"
+}
+
 disk_available_kib() {
   local target_path="$1"
   local existing_path="$target_path"
@@ -147,12 +158,23 @@ print_record() {
   local target_path="$6"
   local reason="$7"
   local risk="${8:-}"
+  local size_json="$size_kib"
+  local size_display=""
+
+  # Unknown is materially different from an empty 0K directory. Preserve that
+  # distinction in both human and JSON output when permissions block du.
+  if [[ "$size_kib" =~ ^[0-9]+$ ]]; then
+    size_display="$(human_kib "$size_kib")"
+  else
+    size_json="null"
+    size_display="unknown"
+  fi
 
   if [[ "$JSON" == "1" ]]; then
     printf '{"action":"%s","kind":"%s","size_kib":%s,"age_days":%s,"scope":"%s","path":"%s","reason":"%s","risk":"%s"}\n' \
       "$(json_escape "$action")" \
       "$(json_escape "$kind")" \
-      "${size_kib:-0}" \
+      "$size_json" \
       "${age_days:-0}" \
       "$(json_escape "$scope")" \
       "$(json_escape "$target_path")" \
@@ -160,7 +182,7 @@ print_record() {
       "$(json_escape "$risk")"
   else
     printf '%-8s %-22s %8s %4sd %-14s %s\n' \
-      "$action" "$kind" "$(human_kib "${size_kib:-0}")" "${age_days:-0}" "$scope" "$target_path"
+      "$action" "$kind" "$size_display" "${age_days:-0}" "$scope" "$target_path"
     if [[ -n "$reason" ]]; then
       printf '  reason: %s\n' "$reason"
     fi
@@ -203,12 +225,44 @@ delete_or_report_candidate() {
   local age_days="$4"
   local size_kib="$5"
 
+  local protection_reason=""
+  local validated_size_kib=""
+
+  if path_has_retention_marker "$target_path"; then
+    print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "protected-marker" "explicit-retention"
+    return 0
+  fi
+  # Validate the full directory tree before rm can touch an accessible sibling.
+  # This also validates a regular file's parent removal access without requiring
+  # the file itself to be executable.
+  if protection_reason="$(tree_removal_protection_reason "$target_path")"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "$protection_reason" "operator-remediation-required"
+    return 0
+  fi
+
+  # A successful fresh du is the final read-only proof that traversal reaches
+  # the complete candidate. Never treat a failed size probe as zero or proceed
+  # to a potentially partial recursive deletion.
+  if ! validated_size_kib="$(path_size_kib "$target_path")"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" \
+      "pre-delete-size-validation-failed; $(openclaw_build_path_metadata "$target_path"); operator action: inspect inaccessible descendants before retrying" \
+      "operator-remediation-required"
+    return 0
+  fi
+  size_kib="$validated_size_kib"
+
   record_candidate_total "$size_kib"
 
   if [[ "$APPLY" == "1" ]]; then
-    rm -rf "$target_path"
-    DELETED_COUNT=$((DELETED_COUNT + 1))
-    print_record "deleted" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "" "rebuildable-generated"
+    # rm can still lose a race with a permission or filesystem change after the
+    # precheck. Keep the overall cleanup pass alive and report the exact path;
+    # never compensate with chmod, sudo, or a broader deletion.
+    if rm -rf "$target_path"; then
+      DELETED_COUNT=$((DELETED_COUNT + 1))
+      print_record "deleted" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "" "rebuildable-generated"
+    else
+      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "remove-failed; inspect this exact path and its ownership before retrying" "operator-remediation-required"
+    fi
   else
     print_record "would_rm" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "" "rebuildable-generated"
   fi
@@ -269,6 +323,33 @@ worktree_is_dirty() {
   [[ -n "$(git -C "$worktree" status --short --untracked-files=no 2>/dev/null || true)" ]]
 }
 
+dist_has_release_recovery_state() {
+  local dist_dir="$1"
+  local protected_path
+
+  # Worktree cleanup may remove ordinary generated dist/ output, but Jarvis
+  # release artifacts and receipts are resumable operator state. A final app,
+  # upload artifact, appcast, notary receipt, build receipt, or manifest keeps
+  # the entire dist directory out of automatic cleanup.
+  for protected_path in \
+    "$dist_dir"/Jarvis.app \
+    "$dist_dir"/Jarvis*.dmg \
+    "$dist_dir"/Jarvis*.zip \
+    "$dist_dir"/*appcast*.xml \
+    "$dist_dir"/*.app.release.env \
+    "$dist_dir"/*.app.notary.env \
+    "$dist_dir"/*.dmg.notary.env \
+    "$dist_dir"/*release-manifest.env \
+    "$dist_dir"/*public-release-summary.env \
+    "$dist_dir"/*release-timing.tsv; do
+    if [[ -e "$protected_path" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 consider_worktree_candidate() {
   local worktree="$1"
   local target_path="$2"
@@ -287,6 +368,10 @@ consider_worktree_candidate() {
   fi
   if [[ "$INCLUDE_CURRENT" != "1" && "$(cd "$worktree" && pwd -P)" == "$CURRENT_ROOT" ]]; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "current-checkout"
+    return 0
+  fi
+  if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
+    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "release-artifact-or-receipt"
     return 0
   fi
   if worktree_is_dirty "$worktree"; then
@@ -354,25 +439,73 @@ scan_build_cache_runs() {
   local age_hours
   local age_days
   local size_kib
+  local kind
+  local newest_release_run=""
+  local newest_release_mtime=0
+  local candidate_mtime
+  local candidate_name
+
+  # Release runs can contain expensive notarization inputs useful for a narrow
+  # retry. Find the newest one first so cleanup always retains a recovery point,
+  # even when every run is older than the normal generic cache threshold.
+  while IFS= read -r -d '' run_dir; do
+    candidate_name="$(basename "$run_dir")"
+    case "$candidate_name" in
+      *-jarvis-release-*|jarvis-release-*|*-sparkle-*|sparkle-*|*-appcast-*|appcast-*)
+        candidate_mtime="$(path_mtime_epoch "$run_dir")"
+        if ((candidate_mtime > newest_release_mtime)); then
+          newest_release_mtime="$candidate_mtime"
+          newest_release_run="$run_dir"
+        fi
+        ;;
+    esac
+  done < <(find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 
   [[ -d "$BUILD_ARTIFACT_ROOT/runs" ]] || return 0
   while IFS= read -r -d '' run_dir; do
     age_hours="$(path_age_hours "$run_dir")"
     age_days="$(path_age_days "$run_dir")"
-    size_kib="$(path_size_kib_or_zero "$run_dir")"
-    if (( age_hours < BUILD_RUNS_OLDER_THAN_HOURS )); then
-      print_record "skip" "build-cache-runs" "$size_kib" "$age_days" "build-cache" "$run_dir" "too-new" "rebuildable-generated"
+    kind="build-cache-runs"
+
+    candidate_name="$(basename "$run_dir")"
+    case "$candidate_name" in
+      *-jarvis-release-*|jarvis-release-*|*-sparkle-*|sparkle-*|*-appcast-*|appcast-*)
+        kind="release-staging"
+        ;;
+    esac
+
+    # du returning no trustworthy size is a protection signal, not 0K. This is
+    # the root-owned mode-700 failure that previously made dry-runs misleading.
+    if ! size_kib="$(path_size_kib "$run_dir")"; then
+      print_record "skip" "$kind" "unknown" "$age_days" "build-cache" "$run_dir" "size-unreadable; $(openclaw_build_path_metadata "$run_dir"); operator action: ask the owner to inspect this exact stale cache path" "operator-remediation-required"
+      continue
+    fi
+    if path_has_retention_marker "$run_dir"; then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "protected-marker" "explicit-retention"
+      continue
+    fi
+    if [[ "$kind" == "release-staging" ]]; then
+      if ((age_days < RELEASE_STAGING_OLDER_THAN_DAYS)); then
+        print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "too-new" "resumable-release-staging"
+        continue
+      fi
+      if [[ "$run_dir" == "$newest_release_run" ]]; then
+        print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "protected" "newest-release-staging"
+        continue
+      fi
+    elif ((age_hours < BUILD_RUNS_OLDER_THAN_HOURS)); then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "too-new" "rebuildable-generated"
       continue
     fi
     if path_has_process_ref "$run_dir"; then
-      print_record "skip" "build-cache-runs" "$size_kib" "$age_days" "build-cache" "$run_dir" "active-process" "rebuildable-generated"
+      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "active-process" "rebuildable-generated"
       continue
     fi
     if path_has_open_files "$run_dir"; then
-      print_record "skip" "build-cache-runs" "$size_kib" "$age_days" "build-cache" "$run_dir" "open-files" "rebuildable-generated"
+      print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "build-cache-runs" "build-cache" "$run_dir" "$age_days" "$size_kib"
+    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "$size_kib"
   done < <(find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 }
 
@@ -608,6 +741,7 @@ done
 [[ "$DEPS_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "--deps-older-than-days must be a non-negative integer"
 [[ "$BUILD_RUNS_OLDER_THAN_HOURS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_BUILD_RUNS_OLDER_THAN_HOURS must be a non-negative integer"
 [[ "$BUILD_TEMP_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_BUILD_TEMP_OLDER_THAN_DAYS must be a non-negative integer"
+[[ "$RELEASE_STAGING_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_RELEASE_STAGING_OLDER_THAN_DAYS must be a non-negative integer"
 [[ "$RUNTIME_CACHE_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_RUNTIME_CACHE_OLDER_THAN_DAYS must be a non-negative integer"
 [[ "$RUNTIME_INSTANCE_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN_DAYS must be a non-negative integer"
 [[ "$RUNTIME_LOGS_OLDER_THAN_DAYS" =~ ^[0-9]+$ ]] || die "OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS must be a non-negative integer"
