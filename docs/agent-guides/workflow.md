@@ -11,6 +11,10 @@
 - Do not recreate `consumer` for new work.
 - If the user says "consumer branch", clarify whether they mean the legacy fallback before doing work there.
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
+- Normal scoped implementation defaults to a merged PR. Follow the autonomous
+  merge policy in [docs/ci](/ci): the agent owns investigation, implementation,
+  actionable review handling, required CI, and merge. Deployment, restart, and
+  release still require explicit permission.
 
 ## Two-clone default
 
@@ -92,7 +96,8 @@
 8. Mark the PR ready when validation is complete.
 9. Give a next-step handoff before stopping, especially if the PR is still
    draft, waiting for review, waiting for CI, or not deployed to runtime yet.
-10. Merge if the task and policy allow it.
+10. Merge if the task and [the autonomous PR merge policy](/ci) allow it;
+    otherwise stop and report the blocker.
 11. If the merged change needs live runtime behavior, choose the lane explicitly:
     keep daily Jarvis on the managed package/app-support runtime; use sacred
     `main` for the shared developer service or an approved break-glass hotfix
