@@ -89,6 +89,7 @@ extension GatewayLaunchAgentManagerTests {
             ]) {
                 let manager = GatewayProcessManager(
                     recoveryReadinessTimeout: 0,
+                    maximumReadinessTimeout: 10,
                     recoveryNotificationSender: { _ in
                         Issue.record("running cold start must not notify a recovery incident")
                     },
