@@ -49,13 +49,36 @@ struct LaunchAgentManagerTests {
             legacyJobLoaded: true) == .replaceLoadedLegacyJob)
 
         let migrationLabel = "ai.jarvis.mac.login-migration.test"
-        let migrationCommand = LaunchAgentManager.legacyReplacementCommand(migrationLabel: migrationLabel)
+        let pendingPath = "/tmp/ai.jarvis.mac.plist.migration-pending"
+        let migrationCommand = LaunchAgentManager.legacyReplacementCommand(
+            migrationLabel: migrationLabel,
+            migrationPendingPath: pendingPath)
         #expect(migrationCommand.executable == "/bin/launchctl")
         #expect(migrationCommand.arguments.prefix(4) == ["submit", "-l", migrationLabel, "--"])
         #expect(migrationLabel != launchdLabel)
         #expect(migrationCommand.arguments.joined(separator: " ").contains("bootout"))
         #expect(migrationCommand.arguments.joined(separator: " ").contains("bootstrap"))
         #expect(!migrationCommand.arguments.joined(separator: " ").contains("kickstart"))
+        #expect(migrationCommand.arguments.contains(pendingPath))
+        #expect(migrationCommand.arguments.joined(separator: " ").contains("rm -f"))
+    }
+
+    @Test func `partial migration marker retries enable and unloads disable`() {
+        #expect(LaunchAgentManager.registrationUpdatePlan(
+            enabled: true,
+            kind: .current,
+            legacyJobLoaded: false,
+            migrationPending: true) == .replaceLoadedLegacyJob)
+        #expect(LaunchAgentManager.registrationUpdatePlan(
+            enabled: false,
+            kind: .current,
+            legacyJobLoaded: true,
+            migrationPending: true) == .unloadLegacyJobAndRemove)
+        #expect(LaunchAgentManager.registrationUpdatePlan(
+            enabled: true,
+            kind: .current,
+            legacyJobLoaded: true,
+            migrationPending: false) == .none)
     }
 
     @Test func `launch agent environment defaults image backend to sips`() async {

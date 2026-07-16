@@ -23,39 +23,59 @@ enum LaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(launchdLabel).plist")
     }
 
+    /// A safe plist on disk does not prove launchd stopped using the previously
+    /// cached KeepAlive job. This marker survives that split-brain window and is
+    /// removed only after the replacement plist bootstraps successfully.
+    private static var migrationPendingURL: URL {
+        self.plistURL.appendingPathExtension("migration-pending")
+    }
+
     static func set(enabled: Bool, bundlePath: String) async {
         let kind = self.registrationKind(bundlePath: bundlePath)
+        let migrationPending = FileManager().fileExists(atPath: self.migrationPendingURL.path)
         // Only legacy jobs need an immediate launchd query. A current one-shot job
-        // is harmless after `/usr/bin/open` exits, and bootstrapping a missing/current
-        // registration while this app is open would violate the no-duplicate contract.
-        let legacyJobLoaded = kind == .legacy ? await self.isJobLoaded() : false
+        // is harmless after `/usr/bin/open` exits. A pending migration is the one
+        // exception: disk may be current while launchd still caches the old job.
+        let legacyJobLoaded = kind == .legacy || migrationPending ? await self.isJobLoaded() : false
         let plan = self.registrationUpdatePlan(
             enabled: enabled,
             kind: kind,
-            legacyJobLoaded: legacyJobLoaded)
+            legacyJobLoaded: legacyJobLoaded,
+            migrationPending: migrationPending)
 
         switch plan {
         case .none:
             return
         case .writeOnly:
-            self.writePlist(bundlePath: bundlePath)
+            _ = self.writePlist(bundlePath: bundlePath)
         case .replaceLoadedLegacyJob:
             // Write the safe replacement first, then submit migration under a
             // separate transient launchd label. The legacy job may own this exact
             // app process, so its bootout must not also own/terminate the helper that
             // bootstraps the replacement. `open` then relaunches or reuses Jarvis
             // without foreground activation.
-            self.writePlist(bundlePath: bundlePath)
+            // Never overwrite the only durable legacy evidence unless the pending
+            // marker is already durable. If either write fails, leave/recover the
+            // legacy plist classification instead of creating an untracked split.
+            guard self.writeMigrationPendingMarker() else { return }
+            // A previous partial attempt may already have written the safe plist.
+            // Reuse it instead of making recovery depend on another successful write.
+            guard kind == .current || self.writePlist(bundlePath: bundlePath) else {
+                try? FileManager().removeItem(at: self.migrationPendingURL)
+                return
+            }
             self.scheduleLoadedLegacyJobReplacement()
         case .removeOnly:
             // Current jobs are one-shot and have no KeepAlive policy, so deleting
             // the durable plist is sufficient and deliberately leaves this app open.
             try? FileManager().removeItem(at: self.plistURL)
+            try? FileManager().removeItem(at: self.migrationPendingURL)
         case .unloadLegacyJobAndRemove:
             // Deleting a loaded legacy plist does not change launchd's cached
             // KeepAlive policy. Remove durable state first so it stays disabled even
             // if bootout terminates a legacy launchd-owned current app process.
             try? FileManager().removeItem(at: self.plistURL)
+            try? FileManager().removeItem(at: self.migrationPendingURL)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
         }
     }
@@ -148,9 +168,14 @@ enum LaunchAgentManager {
     static func registrationUpdatePlan(
         enabled: Bool,
         kind: RegistrationKind,
-        legacyJobLoaded: Bool) -> RegistrationUpdatePlan
+        legacyJobLoaded: Bool,
+        migrationPending: Bool = false) -> RegistrationUpdatePlan
     {
         if enabled {
+            // The marker outranks the safe-looking disk plist: launchd may still
+            // cache the legacy KeepAlive job, or bootout may have succeeded while
+            // replacement bootstrap failed. Retry the idempotent migration helper.
+            if migrationPending { return .replaceLoadedLegacyJob }
             switch kind {
             case .missing:
                 return .writeOnly
@@ -161,6 +186,7 @@ enum LaunchAgentManager {
             }
         }
 
+        if migrationPending, legacyJobLoaded { return .unloadLegacyJobAndRemove }
         switch kind {
         case .missing:
             return .none
@@ -171,9 +197,27 @@ enum LaunchAgentManager {
         }
     }
 
-    private static func writePlist(bundlePath: String) {
+    @discardableResult
+    private static func writePlist(bundlePath: String) -> Bool {
         let plist = self.renderPlist(bundlePath: bundlePath)
-        try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+        do {
+            try plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func writeMigrationPendingMarker() -> Bool {
+        if FileManager().fileExists(atPath: self.migrationPendingURL.path) {
+            return true
+        }
+        do {
+            try "pending\n".write(to: self.migrationPendingURL, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private static func isJobLoaded() async -> Bool {
@@ -181,11 +225,13 @@ enum LaunchAgentManager {
     }
 
     static func legacyReplacementCommand(
-        migrationLabel: String? = nil) -> (executable: String, arguments: [String])
+        migrationLabel: String? = nil,
+        migrationPendingPath: String? = nil) -> (executable: String, arguments: [String])
     {
         let serviceTarget = "gui/\(getuid())/\(launchdLabel)"
         let guiDomain = "gui/\(getuid())"
         let resolvedMigrationLabel = migrationLabel ?? "\(launchdLabel).login-migration.\(UUID().uuidString)"
+        let resolvedMigrationPendingPath = migrationPendingPath ?? self.migrationPendingURL.path
         return (
             executable: "/bin/launchctl",
             arguments: [
@@ -196,12 +242,15 @@ enum LaunchAgentManager {
                 "/bin/sh",
                 "-c",
                 // Positional parameters keep the label and plist path out of shell
-                // interpolation. Bootstrap runs only after a successful bootout.
-                "/bin/launchctl bootout \"$1\" && /bin/launchctl bootstrap \"$2\" \"$3\"",
+                // interpolation. A previous attempt may already have booted out the
+                // legacy job, so absence is safe; clear the marker only after bootstrap.
+                "/bin/launchctl bootout \"$1\" >/dev/null 2>&1 || true; " +
+                    "/bin/launchctl bootstrap \"$2\" \"$3\" && /bin/rm -f \"$4\"",
                 "--",
                 serviceTarget,
                 guiDomain,
                 self.plistURL.path,
+                resolvedMigrationPendingPath,
             ])
     }
 
