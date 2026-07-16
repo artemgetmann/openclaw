@@ -14,6 +14,7 @@ import {
 } from "./durable-task-state.js";
 import {
   enqueueFollowupRun,
+  enqueueFollowupRunDurable,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
@@ -104,7 +105,7 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
-  vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReset();
   vi.mocked(scheduleFollowupDrain).mockClear();
   resetDurableReplyTasksForTest();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -316,6 +317,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
@@ -346,6 +348,39 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("arms a fresh drain only after an active non-heartbeat run is durably enqueued", async () => {
+    let finishDurableEnqueue: (() => void) | undefined;
+    const durableEnqueueFinished = new Promise<boolean>((resolve) => {
+      finishDurableEnqueue = () => resolve(true);
+    });
+    vi.mocked(enqueueFollowupRunDurable).mockImplementationOnce(
+      async () => await durableEnqueueFinished,
+    );
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const resultPromise = run();
+    await vi.waitFor(() => {
+      expect(vi.mocked(enqueueFollowupRunDurable)).toHaveBeenCalledTimes(1);
+    });
+    // Transport middleware must remain blocked, and the drain must remain
+    // unarmed, until the atomic durable record is safely on disk.
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    finishDurableEnqueue?.();
+    await expect(resultPromise).resolves.toBeUndefined();
+
+    // This call supplies the callback that a queue with no prior successful
+    // drain lacks; merely kicking the durable queue cannot manufacture it.
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledWith("main", expect.any(Function));
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 

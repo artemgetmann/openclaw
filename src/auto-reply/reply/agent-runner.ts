@@ -76,7 +76,12 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRunDurable, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRunDurable,
+  scheduleFollowupDrain,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
@@ -271,6 +276,22 @@ export async function runReplyAgent(params: {
       });
     }
   };
+  const createRunFollowupTurn = () =>
+    createFollowupRunner({
+      opts: runOpts,
+      typing,
+      typingMode,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+      defaultModel,
+      agentCfgContextTokens,
+      // The same callback drains RAM-only and persisted items. Preserve legacy
+      // best-effort behavior for the former, but reject failed durable work so
+      // the queue cannot acknowledge its disk record as successfully processed.
+      failureMode: "throw-durable",
+    });
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
@@ -297,6 +318,12 @@ export async function runReplyAgent(params: {
     // Await the atomic disk record before returning to channel middleware. For
     // Telegram this is what makes advancing the update offset crash-safe.
     await enqueueFollowupRunDurable(queueKey, followupRun, resolvedQueue);
+    // The run that made this session look active may have finalized before this
+    // durable enqueue landed. Its empty-queue drain attempt intentionally did
+    // not cache a callback, so arm this queue with a fresh callback now. The
+    // embedded session lane still serializes model work if the prior run truly
+    // remains active; scheduling here does not weaken that ordering boundary.
+    scheduleFollowupDrain(queueKey, createRunFollowupTurn());
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
@@ -499,21 +526,9 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
-  const runFollowupTurn = createFollowupRunner({
-    opts: runOpts,
-    typing,
-    typingMode,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens,
-    // The same callback drains RAM-only and persisted items. Preserve legacy
-    // best-effort behavior for the former, but reject failed durable work so
-    // the queue cannot acknowledge its disk record as successfully processed.
-    failureMode: "throw-durable",
-  });
+  // Construct after memory flush so direct turns retain the refreshed session
+  // bookkeeping while the early enqueue branch can still arm its own drain.
+  const runFollowupTurn = createRunFollowupTurn();
 
   const initialHardReservePayload = buildHardReserveOverflowPayload(followupRun.prompt);
   if (initialHardReservePayload) {
