@@ -65,7 +65,7 @@ export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | und
 
   // Expand dependencies in memory only. User config remains an expression of
   // explicit choices while every generic loader/evaluator sees a usable graph.
-  return expandSkillDependencies(allowlist);
+  return expandSkillDependencies(allowlist, config);
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {

@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+
 const MESSAGE_DRAFTING_REFERENCING_SKILLS = new Set([
   "wacli",
   "telegram-user",
@@ -10,12 +12,19 @@ const MESSAGE_DRAFTING_REFERENCING_SKILLS = new Set([
   "cross-channel-triage",
 ]);
 
-export function expandSkillDependencies(skillNames: string[]): string[] {
+export function expandSkillDependencies(skillNames: string[], config?: OpenClawConfig): string[] {
+  // A disabled adapter cannot activate an otherwise hidden policy skill. Keep
+  // scanning because another selected adapter may still be enabled.
+  const hasEnabledReference = skillNames.some(
+    (skillName) =>
+      MESSAGE_DRAFTING_REFERENCING_SKILLS.has(skillName) &&
+      config?.skills?.entries?.[skillName]?.enabled !== false,
+  );
   if (
     skillNames.length === 0 ||
     skillNames.includes("__none__") ||
     skillNames.includes("message-drafting") ||
-    !skillNames.some((skillName) => MESSAGE_DRAFTING_REFERENCING_SKILLS.has(skillName))
+    !hasEnabledReference
   ) {
     return skillNames;
   }

@@ -91,7 +91,7 @@ function filterSkillEntries(
   let filtered = entries.filter((entry) => includeEntry({ entry, config, eligibility }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
-    const normalized = resolveSkillFilter(skillFilter) ?? [];
+    const normalized = resolveSkillFilter(skillFilter, config) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
     filtered =
@@ -191,7 +191,7 @@ function rankSkillsForPrompt(
   // already win in the merge map before this ranking runs.
   const selectedSkillNames = new Set([
     ...(resolveBundledAllowlist(config) ?? []),
-    ...(resolveSkillFilter(skillFilter) ?? []),
+    ...(resolveSkillFilter(skillFilter, config) ?? []),
   ]);
   return entries
     .map((entry, index) => ({ entry, index }))

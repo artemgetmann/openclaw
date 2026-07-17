@@ -87,6 +87,64 @@ describe("message-drafting bundled allowlist dependency", () => {
     expect(config.skills?.allowBundled).toEqual(["wacli"]);
   });
 
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "does not expose the dependency when %s selects only a disabled owner",
+    async (selectionBoundary) => {
+      const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+        "wacli",
+        "message-drafting",
+      ]);
+      const config: OpenClawConfig = {
+        skills: {
+          entries: { wacli: { enabled: false } },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: ["wacli"] } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? ["wacli"] : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>wacli</name>");
+      expect(prompt).not.toContain("<name>message-drafting</name>");
+      if (selectionBoundary === "allowBundled") {
+        expect(resolveBundledAllowlist(config)).toEqual(["wacli"]);
+      }
+    },
+  );
+
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "keeps the dependency active through %s when another selected owner is enabled",
+    async (selectionBoundary) => {
+      const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+        "wacli",
+        "slack",
+        "message-drafting",
+      ]);
+      const selection = ["wacli", "slack"];
+      const config: OpenClawConfig = {
+        skills: {
+          entries: { wacli: { enabled: false } },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: selection } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? selection : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>wacli</name>");
+      expect(prompt).toContain("<name>slack</name>");
+      expect(prompt).toContain("<name>message-drafting</name>");
+    },
+  );
+
   it("closes scoped prompt and snapshot filters without mutating the requested filter", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",

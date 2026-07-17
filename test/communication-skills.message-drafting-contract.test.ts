@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  buildWorkspaceSkillCommandSpecs,
+  loadWorkspaceSkillEntries,
+} from "../src/agents/skills.js";
 
 const canonicalSkill = readFileSync(
   path.join(process.cwd(), "skills", "message-drafting", "SKILL.md"),
@@ -122,6 +126,23 @@ describe("message-drafting cross-language contract", () => {
       "explicit user preference says they are fluent and want target-only output",
     );
     expect(canonicalSkill).toContain("raw translation rather than a sendable recipient-facing");
+  });
+
+  it("loads automatically without exposing a user command", () => {
+    const workspaceDir = path.join(process.cwd(), ".message-drafting-contract-workspace");
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      bundledSkillsDir: path.join(process.cwd(), "skills"),
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const entry = entries.find((candidate) => candidate.skill.name === "message-drafting");
+
+    expect(canonicalSkill).toContain("user-invocable: false");
+    expect(entry?.invocation?.userInvocable).toBe(false);
+    expect(
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        entries: entry ? [entry] : [],
+      }),
+    ).not.toContainEqual(expect.objectContaining({ skillName: "message-drafting" }));
   });
 });
 
