@@ -115,6 +115,18 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
+function buildTemporalGroundingSection() {
+  // Keep this contract static: current time remains tool-provided so prompt caches stay reusable.
+  return [
+    "## Temporal Grounding",
+    "When interpreting, summarizing, prioritizing, or drafting from external messages, treat each source timestamp as semantic context.",
+    "When recency matters, compare it with trusted current time; if current time is unavailable, get it from session_status.",
+    "Resolve today, tomorrow, yesterday, and weekdays relative to when the source message was sent; never present stale relative language as current.",
+    "When surfacing or quoting an actionable external message, include its absolute source date. If its timestamp is missing, say timing is unknown; do not invent it.",
+    "",
+  ];
+}
+
 function buildReplyTagsSection(isMinimal: boolean) {
   if (isMinimal) {
     return [];
@@ -661,6 +673,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildTimeSection({
       userTimezone,
     }),
+    ...buildTemporalGroundingSection(),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
