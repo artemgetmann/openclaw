@@ -1,10 +1,19 @@
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { expandSkillDependencies } from "./dependencies.js";
 
 export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
   if (skillFilter === undefined) {
     return undefined;
   }
   return normalizeStringEntries(skillFilter);
+}
+
+export function resolveSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
+  const normalized = normalizeSkillFilter(skillFilter);
+  if (normalized === undefined) {
+    return undefined;
+  }
+  return normalized.includes("__none__") ? ["__none__"] : expandSkillDependencies(normalized);
 }
 
 export function normalizeSkillFilterForComparison(

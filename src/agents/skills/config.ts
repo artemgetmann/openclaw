@@ -10,6 +10,7 @@ import {
 } from "../../shared/config-eval.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { expandSkillDependencies } from "./dependencies.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
@@ -51,17 +52,6 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
-const MESSAGE_DRAFTING_REFERENCING_SKILLS = new Set([
-  "wacli",
-  "telegram-user",
-  "gog",
-  "himalaya",
-  "imsg",
-  "bluebubbles",
-  "slack",
-  "discord",
-  "cross-channel-triage",
-]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(entry.skill.source);
@@ -69,18 +59,13 @@ function isBundledSkill(entry: SkillEntry): boolean {
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
   const allowlist = normalizeAllowlist(config?.skills?.allowBundled);
-  if (
-    !allowlist ||
-    allowlist.includes("__none__") ||
-    allowlist.includes("message-drafting") ||
-    !allowlist.some((skillName) => MESSAGE_DRAFTING_REFERENCING_SKILLS.has(skillName))
-  ) {
+  if (!allowlist) {
     return allowlist;
   }
 
   // Expand dependencies in memory only. User config remains an expression of
   // explicit choices while every generic loader/evaluator sees a usable graph.
-  return [...allowlist, "message-drafting"];
+  return expandSkillDependencies(allowlist);
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {

@@ -9,7 +9,7 @@ import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
-import { normalizeSkillFilter } from "./filter.js";
+import { normalizeSkillFilter, resolveSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
   resolveOpenClawMetadata,
@@ -91,7 +91,7 @@ function filterSkillEntries(
   let filtered = entries.filter((entry) => includeEntry({ entry, config, eligibility }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
-    const normalized = normalizeSkillFilter(skillFilter) ?? [];
+    const normalized = resolveSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
     filtered =

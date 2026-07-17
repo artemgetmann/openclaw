@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillsPrompt } from "./skills.js";
+import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
 import {
   evaluateSkillEntry,
   resolveBundledAllowlist,
@@ -85,6 +85,86 @@ describe("message-drafting bundled allowlist dependency", () => {
     expect(prompt).toContain("<name>wacli</name>");
     expect(prompt).toContain("<name>message-drafting</name>");
     expect(config.skills?.allowBundled).toEqual(["wacli"]);
+  });
+
+  it("closes scoped prompt and snapshot filters without mutating the requested filter", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+      "wacli",
+      "message-drafting",
+      "custom-skill",
+    ]);
+    const skillFilter = ["wacli"];
+    const options = {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      skillFilter,
+    };
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, options);
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, options);
+    const repeatedPrompt = buildWorkspaceSkillsPrompt(workspaceDir, options);
+
+    expect(prompt).toContain("<name>wacli</name>");
+    expect(prompt).toContain("<name>message-drafting</name>");
+    expect(prompt).not.toContain("<name>custom-skill</name>");
+    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
+      "message-drafting",
+      "wacli",
+    ]);
+    expect(snapshot.skillFilter).toEqual(["wacli"]);
+    expect(repeatedPrompt).toBe(prompt);
+    expect(skillFilter).toEqual(["wacli"]);
+  });
+
+  it("keeps an explicitly disabled dependency hidden from scoped filters", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+      "wacli",
+      "message-drafting",
+    ]);
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      skillFilter: ["wacli"],
+      config: {
+        skills: {
+          entries: { "message-drafting": { enabled: false } },
+        },
+      },
+    });
+
+    expect(prompt).toContain("<name>wacli</name>");
+    expect(prompt).not.toContain("<name>message-drafting</name>");
+  });
+
+  it("keeps unrelated, __none__, and empty scoped filters restrictive", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+      "wacli",
+      "message-drafting",
+      "custom-skill",
+    ]);
+    const baseOptions = {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    };
+
+    const unrelatedPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      ...baseOptions,
+      skillFilter: ["custom-skill"],
+    });
+    const nonePrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      ...baseOptions,
+      skillFilter: ["__none__", "wacli"],
+    });
+    const emptyPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      ...baseOptions,
+      skillFilter: [],
+    });
+
+    expect(unrelatedPrompt).toContain("<name>custom-skill</name>");
+    expect(unrelatedPrompt).not.toContain("<name>message-drafting</name>");
+    expect(nonePrompt).toBe("");
+    expect(emptyPrompt).toBe("");
   });
 
   it("keeps repeated resolver and evaluator calls in memory without broadening config", () => {
