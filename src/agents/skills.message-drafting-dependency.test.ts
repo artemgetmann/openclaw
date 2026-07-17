@@ -26,7 +26,7 @@ const referencingOwners = [
 
 const tempDirs: string[] = [];
 
-function makeBundledEntry(name: string): SkillEntry {
+function makeBundledEntry(name: string, skillKey?: string): SkillEntry {
   return {
     skill: {
       name,
@@ -37,6 +37,7 @@ function makeBundledEntry(name: string): SkillEntry {
       disableModelInvocation: false,
     },
     frontmatter: {},
+    ...(skillKey ? { metadata: { skillKey } } : {}),
   };
 }
 
@@ -86,6 +87,126 @@ describe("message-drafting bundled allowlist dependency", () => {
     expect(prompt).toContain("<name>message-drafting</name>");
     expect(config.skills?.allowBundled).toEqual(["wacli"]);
   });
+
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "does not expose the dependency when %s selects only a disabled owner",
+    async (selectionBoundary) => {
+      const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+        "wacli",
+        "message-drafting",
+      ]);
+      const config: OpenClawConfig = {
+        skills: {
+          entries: { wacli: { enabled: false } },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: ["wacli"] } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? ["wacli"] : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>wacli</name>");
+      expect(prompt).not.toContain("<name>message-drafting</name>");
+      if (selectionBoundary === "allowBundled") {
+        expect(resolveBundledAllowlist(config)).toEqual(["wacli"]);
+      }
+    },
+  );
+
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "keeps the dependency active through %s when another selected owner is enabled",
+    async (selectionBoundary) => {
+      const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+        "wacli",
+        "slack",
+        "message-drafting",
+      ]);
+      const selection = ["wacli", "slack"];
+      const config: OpenClawConfig = {
+        skills: {
+          entries: { wacli: { enabled: false } },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: selection } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? selection : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>wacli</name>");
+      expect(prompt).toContain("<name>slack</name>");
+      expect(prompt).toContain("<name>message-drafting</name>");
+    },
+  );
+
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "uses an enabled effective skillKey override through %s",
+    (selectionBoundary) => {
+      const entries = [
+        makeBundledEntry("wacli", "whatsapp-profile"),
+        makeBundledEntry("message-drafting"),
+      ];
+      const config: OpenClawConfig = {
+        skills: {
+          entries: {
+            wacli: { enabled: false },
+            "whatsapp-profile": { enabled: true },
+          },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: ["wacli"] } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt("/unused", {
+        entries,
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? ["wacli"] : undefined,
+      });
+
+      expect(prompt).toContain("<name>wacli</name>");
+      expect(prompt).toContain("<name>message-drafting</name>");
+      if (selectionBoundary === "allowBundled") {
+        expect(resolveBundledAllowlist(config, entries)).toEqual(["wacli", "message-drafting"]);
+      }
+    },
+  );
+
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "honors a disabled effective skillKey override through %s",
+    (selectionBoundary) => {
+      const entries = [
+        makeBundledEntry("wacli", "whatsapp-profile"),
+        makeBundledEntry("message-drafting"),
+      ];
+      const config: OpenClawConfig = {
+        skills: {
+          entries: {
+            wacli: { enabled: true },
+            "whatsapp-profile": { enabled: false },
+          },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: ["wacli"] } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt("/unused", {
+        entries,
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? ["wacli"] : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>wacli</name>");
+      expect(prompt).not.toContain("<name>message-drafting</name>");
+      if (selectionBoundary === "allowBundled") {
+        expect(resolveBundledAllowlist(config, entries)).toEqual(["wacli"]);
+      }
+    },
+  );
 
   it("closes scoped prompt and snapshot filters without mutating the requested filter", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([

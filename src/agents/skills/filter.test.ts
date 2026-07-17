@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   matchesSkillFilter,
   normalizeSkillFilter,
@@ -40,6 +41,23 @@ describe("skills/filter", () => {
       expect(filter).toEqual([owner]);
     },
   );
+
+  it("skips disabled-only owners but closes over another enabled owner", () => {
+    const config: OpenClawConfig = {
+      skills: { entries: { wacli: { enabled: false } } },
+    };
+    const disabledOnly = ["wacli"];
+    const withEnabledOwner = ["wacli", "slack"];
+
+    expect(resolveSkillFilter(disabledOnly, config)).toEqual(["wacli"]);
+    expect(resolveSkillFilter(withEnabledOwner, config)).toEqual([
+      "wacli",
+      "slack",
+      "message-drafting",
+    ]);
+    expect(normalizeSkillFilter(disabledOnly)).toEqual(["wacli"]);
+    expect(normalizeSkillFilter(withEnabledOwner)).toEqual(["wacli", "slack"]);
+  });
 
   it("keeps empty, __none__, and unrelated effective filters restrictive", () => {
     expect(resolveSkillFilter([])).toEqual([]);

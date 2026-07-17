@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { expandSkillDependencies } from "./dependencies.js";
+import type { SkillEntry } from "./types.js";
 
 export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
   if (skillFilter === undefined) {
@@ -8,12 +10,18 @@ export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): stri
   return normalizeStringEntries(skillFilter);
 }
 
-export function resolveSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
+export function resolveSkillFilter(
+  skillFilter?: ReadonlyArray<unknown>,
+  config?: OpenClawConfig,
+  entries?: SkillEntry[],
+): string[] | undefined {
   const normalized = normalizeSkillFilter(skillFilter);
   if (normalized === undefined) {
     return undefined;
   }
-  return normalized.includes("__none__") ? ["__none__"] : expandSkillDependencies(normalized);
+  return normalized.includes("__none__")
+    ? ["__none__"]
+    : expandSkillDependencies(normalized, config, entries);
 }
 
 export function normalizeSkillFilterForComparison(

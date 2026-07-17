@@ -316,6 +316,7 @@ function resolveToolVersionStatuses(spec: SkillInstallSpec): SkillToolVersionSta
 
 function buildSkillStatus(
   entry: SkillEntry,
+  entries: SkillEntry[],
   config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
@@ -324,7 +325,7 @@ function buildSkillStatus(
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
-  const allowBundled = resolveBundledAllowlist(config);
+  const allowBundled = resolveBundledAllowlist(config, entries);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
@@ -489,7 +490,7 @@ export function buildWorkspaceSkillStatus(
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext),
+      buildSkillStatus(entry, skillEntries, opts?.config, prefs, opts?.eligibility, bundledContext),
     ),
   };
 }
