@@ -6,6 +6,8 @@ metadata: { "openclaw": { "emoji": "📬", "displayName": "Cross-Channel Triage"
 
 # Cross-Channel Triage
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 Use this for messy inbox or communication triage across one channel or many:
 email, Telegram, WhatsApp, Signal, iMessage, Slack, browser portals, or files.
 The same protocol applies to a single inbox when there are multiple threads to

@@ -6,6 +6,8 @@ metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.sl
 
 # Slack Actions
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 ## Overview
 
 Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for OpenClaw.

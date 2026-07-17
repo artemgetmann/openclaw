@@ -50,6 +50,8 @@ metadata:
 
 # wacli
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 Use `wacli` only when the user explicitly asks you to message someone else on WhatsApp, when they ask to sync/search WhatsApp history, or when you are running a scoped WhatsApp monitor/reply-check on their behalf.
 Do NOT use `wacli` for normal user chats; OpenClaw routes WhatsApp conversations automatically.
 If the user is chatting with you on WhatsApp, you should not reach for this tool unless they ask you to contact a third party.

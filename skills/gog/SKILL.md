@@ -28,6 +28,8 @@ metadata:
 
 # Google Workspace (gog)
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 Use `gog` for Google Workspace work: Gmail, Google Calendar, Drive, Docs,
 Sheets, and Contacts.
 This is the Google-account skill, not the generic mailbox skill.

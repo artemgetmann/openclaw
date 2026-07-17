@@ -14,6 +14,8 @@ metadata:
 
 # Telegram User
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 Use `telegram-user` only for Telegram-as-me flows on this machine: the user's
 own Telegram account, not a bot token and not BotFather setup.
 
