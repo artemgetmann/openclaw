@@ -414,6 +414,12 @@ compatible and prints the direct wrapper command. Future flags such as
 `--publish-release-assets`, `--verify-public-assets`, `--urgent-sparkle`,
 `--parallel-safe-local-assets`, `--size-report`, and a supported `--phase` are
 inert during authorization and are shell-quoted into both printed commands.
+When future flags are present, the intent stores a SHA-256 fingerprint of that
+exact wrapper action. Changing verify to publish, changing a tag or phase, or
+otherwise reshaping the printed command fails before lock acquisition or
+release-state mutation. A bound intent also fails when passed directly to the
+package script without the matching wrapper context; the wrapper remains the
+single authority that selects and delegates the package phase.
 Conflicting publish/verify or latest/explicit-tag intent fails before an intent
 is created or replaced. The
 default lease is two hours, sized above the observed end-to-end release time;
@@ -445,6 +451,17 @@ that transport with:
 ```bash
 bash scripts/jarvis-public-release-session.sh clear
 ```
+
+The persistent child does not copy release credentials or ambient release
+overrides into tmux arguments. It clears supported and stale notary, Sparkle,
+smoke, package, state-path, and `OPENCLAW_RELEASE_ENV_FILE` values inherited
+from either the launcher or tmux server. The package lane then reloads the
+deterministic canonical
+`~/Library/Application Support/OpenClaw/release.env`. Put persistent release
+credentials and settings there; a custom ambient release-env path is
+intentionally ignored by this transport. Status and log stay pinned to the
+original pane even if another pane becomes active, and `clear` refuses to kill
+the session while any pane in it is still running.
 
 tmux session state and scrollback are transport evidence only. They do not
 authorize, resume, or classify a release. The wrapper's intent, repository

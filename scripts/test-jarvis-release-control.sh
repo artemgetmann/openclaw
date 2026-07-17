@@ -299,6 +299,8 @@ test_operator_authorization_preserves_inert_future_flags() {
   local intent_before="$TMP_DIR/operator-future.intent.before"
   local fake_bin="$TMP_DIR/operator-future-bin"
   local gh_sentinel="$TMP_DIR/operator-future-gh.called"
+  local misuse_state="$TMP_DIR/operator-future-misuse-state"
+  local misuse_summary="$TMP_DIR/operator-future-misuse-summary.env"
   local status
 
   mkdir -p "$fake_bin"
@@ -334,6 +336,48 @@ exit 99'
     'persistent_command=bash scripts/jarvis-public-release-session.sh start -- --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
     "$out" \
     || fail "future authorization did not print the matching durable transport command"
+  [[ -n "$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT)" ]] \
+    || fail "future authorization did not bind its execution-shaping action"
+
+  # A wrapper-bound intent is not a second package authority. Direct package
+  # validation has no wrapper action context and must fail closed; only the
+  # matching wrapper can propagate the recomputed digest to package boundaries.
+  unset OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+  if openclaw_jarvis_release_intent_validate "$ROOT_DIR" operator-future-run; then
+    fail "direct package-style validation bypassed a wrapper action binding"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "action" ]] \
+    || fail "missing wrapper action context reported the wrong intent failure"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+  OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT="$(
+    openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+  )"
+  openclaw_jarvis_release_intent_validate "$ROOT_DIR" operator-future-run \
+    || fail "matching wrapper action context did not validate its bound intent"
+  unset OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+
+  # Reusing a verify authorization for publication must fail before locks,
+  # reports, state inspection, GitHub lookup, or delegated package mutation.
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$misuse_state" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$misuse_summary" \
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent operator-future-run \
+      --publish-release-assets \
+      --github-release-tag v-misuse \
+      --phase publish-assets-only \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "verify intent reused for publish returned $status instead of 2"
+  grep -q 'intent action does not match' "$err" \
+    || fail "verify-to-publish misuse did not report the action binding"
+  [[ ! -e "$misuse_state" && ! -e "$misuse_summary" ]] \
+    || fail "verify-to-publish misuse mutated release state before rejection"
+  [[ ! -e "$gh_sentinel" ]] \
+    || fail "verify-to-publish misuse reached GitHub before rejection"
 
   export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=operator-publish-run
   OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \

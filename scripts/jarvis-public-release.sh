@@ -121,6 +121,35 @@ quote_cmd_exact() {
   printf '\n'
 }
 
+release_action_fingerprint() {
+  # Bind only execution-shaping choices. Authorization mechanics, intent ID,
+  # and dry-run are deliberately excluded. Fixed field order and separators
+  # make the digest independent of the spelling/order of equivalent argv.
+  if [[ "$PUBLISH_RELEASE_ASSETS" == "0" \
+    && "$VERIFY_PUBLIC_ASSETS" == "0" \
+    && "$FORCED_PHASE" == "auto" \
+    && -z "$GITHUB_RELEASE_TAG" \
+    && "$LATEST_RELEASE_TAG" == "0" \
+    && "$PARALLEL_SAFE_LOCAL_ASSETS" == "0" \
+    && "$URGENT_SPARKLE_ONLY" == "0" \
+    && "$RUN_SIZE_REPORT" == "0" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  {
+    printf 'jarvis-public-release-action-v1\0'
+    printf 'publish=%s\0' "$PUBLISH_RELEASE_ASSETS"
+    printf 'verify=%s\0' "$VERIFY_PUBLIC_ASSETS"
+    printf 'phase=%s\0' "$FORCED_PHASE"
+    printf 'tag=%s\0' "$GITHUB_RELEASE_TAG"
+    printf 'latest=%s\0' "$LATEST_RELEASE_TAG"
+    printf 'parallel=%s\0' "$PARALLEL_SAFE_LOCAL_ASSETS"
+    printf 'urgent=%s\0' "$URGENT_SPARKLE_ONLY"
+    printf 'size=%s\0' "$RUN_SIZE_REPORT"
+  } | /usr/bin/shasum -a 256 | /usr/bin/awk '{ print $1 }'
+}
+
 original_wrapper_command() {
   quote_cmd bash scripts/jarvis-public-release.sh "${ORIGINAL_WRAPPER_ARGS[@]}"
 }
@@ -248,7 +277,7 @@ fail_before_execute() {
   echo "  summary=$SUMMARY_REPORT" >&2
   echo "  timing_report=$TIMING_REPORT" >&2
   case "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" in
-    missing|expired|replaced|commit|identity|schema|tracked-state-drift|tracked-state-unavailable)
+    missing|expired|replaced|commit|identity|schema|action|action-schema|tracked-state-drift|tracked-state-unavailable)
       WRAPPER_RECOVERY_EMITTED=1
       echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
       ;;
@@ -473,7 +502,8 @@ if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
     exit 1
   fi
   openclaw_require_jarvis_release_worktree "$ROOT_DIR"
-  if ! RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS")"; then
+  RELEASE_ACTION_FINGERPRINT="$(release_action_fingerprint)"
+  if ! RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS" "$RELEASE_ACTION_FINGERPRINT")"; then
     echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
     exit 2
   fi
@@ -504,6 +534,22 @@ fi
 if [[ "$RELEASE_INTENT_TTL_EXPLICIT" == "1" ]]; then
   echo "ERROR: --intent-ttl-seconds is valid only with standalone --authorize." >&2
   exit 1
+fi
+
+# Recompute action binding from parsed values before any lock, report, release
+# state, GitHub, or package activity. Bound intents cannot be repurposed by
+# changing verify into publish (or any other execution-shaping flag). Exporting
+# the digest lets the unchanged package/notary intent gates enforce the same
+# lease; direct package use of a bound wrapper intent has no digest and fails.
+RELEASE_ACTION_FINGERPRINT="$(release_action_fingerprint)"
+export OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT="$RELEASE_ACTION_FINGERPRINT"
+if [[ "$DRY_RUN" != "1" ]] \
+  && ! openclaw_jarvis_release_intent_validate "$ROOT_DIR" "$RELEASE_INTENT_ID"; then
+  if [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "action" ]]; then
+    echo "ERROR: release intent action does not match this wrapper command; refusing before release mutation." >&2
+    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+    exit 2
+  fi
 fi
 
 if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
