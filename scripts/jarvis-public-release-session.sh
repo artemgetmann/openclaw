@@ -5,7 +5,22 @@ set -euo pipefail
 # This helper deliberately owns no release state: intents, locks, checkpoints,
 # phase selection, and recovery remain inside jarvis-public-release.sh.
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+if [[ "$SCRIPT_DIR" == "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="."
+fi
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Durable release execution uses a fixed macOS tool search path. The two
+# Homebrew prefixes cover native Apple Silicon and Intel/Rosetta installs;
+# system directories cover the macOS release, signing, and shell tools. Never
+# append the launcher's PATH because tmux persists that environment after the
+# launching terminal has gone away.
+TRUSTED_RELEASE_PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
+# The launcher performs its gates and tmux operations with the same fixed path
+# that the persistent pane receives. This also prevents ambient command
+# shadowing before the release wrapper starts.
+export PATH="$TRUSTED_RELEASE_PATH"
+
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 
 SESSION_NAME="${OPENCLAW_JARVIS_RELEASE_SESSION_NAME:-jarvis-public-release}"
@@ -155,17 +170,116 @@ quote_cmd_exact() {
   printf '\n'
 }
 
+trusted_account_home() {
+  local account_name account_uid
+  local metadata metadata_home metadata_name metadata_uid
+  local directory_uid
+
+  # HOME is launcher-controlled input. Resolve the current login account from
+  # the kernel identity and trusted macOS account metadata instead.
+  account_uid="$(/usr/bin/id -u)" || {
+    echo "ERROR: could not determine the current macOS account ID." >&2
+    return 1
+  }
+  account_name="$(/usr/bin/id -un)" || {
+    echo "ERROR: could not determine the current macOS account name." >&2
+    return 1
+  }
+  case "$account_name" in
+    ''|*[!A-Za-z0-9._-]*)
+      echo "ERROR: current macOS account name is not safe for account lookup." >&2
+      return 1
+      ;;
+  esac
+  [[ "$(/usr/bin/id -u "$account_name" 2>/dev/null)" == "$account_uid" ]] || {
+    echo "ERROR: current macOS account name and ID are inconsistent." >&2
+    return 1
+  }
+
+  metadata="$(/usr/bin/dscacheutil -q user -a uid "$account_uid" 2>/dev/null)" || {
+    echo "ERROR: could not read the current macOS account home from account metadata." >&2
+    return 1
+  }
+  metadata_home="$(printf '%s\n' "$metadata" | /usr/bin/awk \
+    '/^dir: / { sub(/^dir: /, ""); print; found++ } END { if (found != 1) exit 1 }')" || {
+    echo "ERROR: current macOS account has invalid home-directory metadata." >&2
+    return 1
+  }
+  metadata_uid="$(printf '%s\n' "$metadata" | /usr/bin/awk \
+    '/^uid: / { print $2; found++ } END { if (found != 1) exit 1 }')" || {
+    echo "ERROR: current macOS account has invalid ID metadata." >&2
+    return 1
+  }
+  metadata_name="$(printf '%s\n' "$metadata" | /usr/bin/awk \
+    '/^name: / { print $2; found++ } END { if (found != 1) exit 1 }')" || {
+    echo "ERROR: current macOS account has invalid name metadata." >&2
+    return 1
+  }
+  [[ "$metadata_name" == "$account_name" ]] || {
+    echo "ERROR: macOS account metadata does not match the current account name." >&2
+    return 1
+  }
+  [[ "$metadata_uid" == "$account_uid" ]] || {
+    echo "ERROR: macOS account metadata does not match the current account ID." >&2
+    return 1
+  }
+  case "$metadata_home" in
+    /*) ;;
+    *)
+      echo "ERROR: current macOS account home is not an absolute path." >&2
+      return 1
+      ;;
+  esac
+  [[ -d "$metadata_home" ]] || {
+    echo "ERROR: current macOS account home directory does not exist." >&2
+    return 1
+  }
+  directory_uid="$(/usr/bin/stat -f '%u' "$metadata_home" 2>/dev/null)" || {
+    echo "ERROR: could not validate current macOS account home ownership." >&2
+    return 1
+  }
+  [[ "$directory_uid" == "$account_uid" ]] || {
+    echo "ERROR: current macOS account does not own its metadata-defined home." >&2
+    return 1
+  }
+
+  printf '%s\n' "$metadata_home"
+}
+
 require_tmux() {
+  local resolved_git
+  local resolved_tmux
+
   case "$SESSION_NAME" in
     ''|*[!A-Za-z0-9_-]*)
       echo "ERROR: Jarvis release session name must use only letters, numbers, underscores, or hyphens." >&2
       exit 1
       ;;
   esac
-  if ! command -v "$TMUX_BIN" >/dev/null 2>&1; then
+  resolved_tmux="$(PATH="$TRUSTED_RELEASE_PATH" command -v "$TMUX_BIN" 2>/dev/null)" || {
     echo "ERROR: tmux is required for the durable Jarvis release session." >&2
     exit 1
-  fi
+  }
+  case "$resolved_tmux" in
+    /*) ;;
+    *)
+      echo "ERROR: tmux did not resolve to an absolute executable path." >&2
+      exit 1
+      ;;
+  esac
+  [[ -x "$resolved_tmux" && -x /usr/bin/env && -x /bin/bash ]] || {
+    echo "ERROR: durable Jarvis release entrypoint dependencies are unavailable." >&2
+    exit 1
+  }
+  resolved_git="$(PATH="$TRUSTED_RELEASE_PATH" command -v git 2>/dev/null)" || {
+    echo "ERROR: git is unavailable on the fixed Jarvis release tool path." >&2
+    exit 1
+  }
+  [[ "$resolved_git" == /* && -x "$resolved_git" ]] || {
+    echo "ERROR: git did not resolve to a trusted executable path." >&2
+    exit 1
+  }
+  TMUX_BIN="$resolved_tmux"
 }
 
 session_exists() {
@@ -210,6 +324,8 @@ EOF
 }
 
 start_session() {
+  local trusted_home
+
   if [[ "${1:-}" != "--" ]]; then
     echo "ERROR: start requires -- followed by jarvis-public-release wrapper arguments." >&2
     usage >&2
@@ -220,6 +336,11 @@ start_session() {
     echo "ERROR: start requires at least one jarvis-public-release wrapper argument." >&2
     exit 1
   fi
+
+  # Pin HOME before any worktree gate. Shared gate helpers may derive paths
+  # from HOME, so even pre-tmux checks must not observe the launcher's value.
+  trusted_home="$(trusted_account_home)" || exit 1
+  export HOME="$trusted_home"
 
   # Keep the release lane gate ahead of tmux creation. The tmux child still
   # enters the same fixed checkout and the wrapper repeats every authoritative
@@ -238,7 +359,14 @@ start_session() {
   for env_name in "${RELEASE_ENV_VARS[@]}"; do
     command_argv+=(-u "$env_name")
   done
-  command_argv+=(/bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" "$@")
+  # Explicit assignments make the release wrapper, release.env lookup, and
+  # every descendant use the same trusted account home and fixed tool path.
+  # They also defend against future tmux environment behavior changes.
+  command_argv+=(
+    "HOME=$trusted_home"
+    "PATH=$TRUSTED_RELEASE_PATH"
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" "$@"
+  )
   command_text="$(
     quote_cmd_exact "${command_argv[@]}"
   )"
@@ -255,6 +383,8 @@ start_session() {
     -e BASH_ENV= \
     -e ENV= \
     -e ZDOTDIR=/var/empty \
+    -e "HOME=$trusted_home" \
+    -e "PATH=$TRUSTED_RELEASE_PATH" \
     -s "$SESSION_NAME" \
     -c "$ROOT_DIR"
   pane_id="$("$TMUX_BIN" display-message -p -t "$SESSION_NAME" '#{pane_id}')" || {

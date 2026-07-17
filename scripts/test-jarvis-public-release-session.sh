@@ -90,7 +90,7 @@ chmod +x "$FAKE_TMUX"
 
 run_helper() {
   OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
-  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(/usr/bin/basename "$ROOT_DIR")" \
   OPENCLAW_JARVIS_RELEASE_TMUX_BIN="$FAKE_TMUX" \
   OPENCLAW_JARVIS_RELEASE_SESSION_NAME="jarvis-public-release-test" \
   FAKE_TMUX_STATE="$FAKE_STATE" \
@@ -111,6 +111,9 @@ test_start_and_duplicate_guard() {
   local err="$TMP_DIR/start.err"
   local status
   local env_name
+  local trusted_home
+  local trusted_home_assignment
+  local trusted_path="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
   local control_env_vars=(
     BASH_ENV
     ENV
@@ -171,6 +174,15 @@ test_start_and_duplicate_guard() {
     export "$env_name=ambient-release-control-value"
   done
 
+  trusted_home="$(/usr/bin/dscacheutil -q user -a uid "$(/usr/bin/id -u)" \
+    | /usr/bin/awk '/^dir: / { sub(/^dir: /, ""); print }')"
+  printf -v trusted_home_assignment '%q' "HOME=$trusted_home"
+
+  # Stale terminal values must not become either the initial pane environment
+  # or the respawned release child environment. The trusted HOME comes from
+  # macOS account metadata, while PATH is the helper's fixed release-tool path.
+  HOME='/tmp/ambient-stale-home-marker' \
+  PATH='/tmp/ambient-stale-path-marker' \
   NOTARYTOOL_KEY='ambient-notary-secret-value' \
   SPARKLE_PRIVATE_KEY_FILE='ambient-sparkle-secret-value' \
   OPENCLAW_RELEASE_ENV_FILE='ambient-release-env-secret-value' \
@@ -185,8 +197,20 @@ test_start_and_duplicate_guard() {
     || fail "start implied tmux was release authority"
   grep -Fq "$ROOT_DIR/scripts/jarvis-public-release.sh" "$FAKE_COMMAND" \
     || fail "start did not pin execution to the canonical wrapper"
-  grep -Fq 'new-session -d -E -e BASH_ENV= -e ENV= -e ZDOTDIR=/var/empty' "$FAKE_NEW_SESSION" \
+  grep -Fq "new-session -d -E -e BASH_ENV= -e ENV= -e ZDOTDIR=/var/empty -e HOME=$trusted_home -e PATH=$trusted_path" "$FAKE_NEW_SESSION" \
     || fail "initial tmux pane did not neutralize shell startup hooks at creation"
+  grep -Fq "$trusted_home_assignment" "$FAKE_COMMAND" \
+    || fail "respawn child did not use the account-metadata home"
+  grep -Fq "PATH=$trusted_path" "$FAKE_COMMAND" \
+    || fail "respawn child did not use the fixed macOS release-tool path"
+  ! grep -Fq 'ambient-stale-home-marker' "$FAKE_NEW_SESSION" \
+    || fail "initial tmux pane inherited stale ambient HOME"
+  ! grep -Fq 'ambient-stale-path-marker' "$FAKE_NEW_SESSION" \
+    || fail "initial tmux pane inherited stale ambient PATH"
+  ! grep -Fq 'ambient-stale-home-marker' "$FAKE_COMMAND" \
+    || fail "respawn child inherited stale ambient HOME"
+  ! grep -Fq 'ambient-stale-path-marker' "$FAKE_COMMAND" \
+    || fail "respawn child inherited stale ambient PATH"
   grep -Fq -- '-u OPENCLAW_RELEASE_ENV_LOADED' "$FAKE_COMMAND" \
     || fail "start did not clear the release-env loaded marker"
   grep -Fq -- '-u OPENCLAW_RELEASE_ENV_FILE' "$FAKE_COMMAND" \

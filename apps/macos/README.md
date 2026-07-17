@@ -473,7 +473,10 @@ initial pane can read them. The wrapper then loads the deterministic
 canonical `~/Library/Application Support/OpenClaw/release.env`, and its package
 child inherits that exact snapshot. Put persistent release
 credentials and settings there; a custom ambient release-env path is
-intentionally ignored by this transport. Status and log stay pinned to the
+intentionally ignored by this transport. Here `~` comes from the validated
+macOS account record, not the launching shell's `HOME`; release tools use a
+fixed system plus Apple Silicon/Intel Homebrew `PATH`, never tmux's saved
+`PATH`. Status and log stay pinned to the
 original pane even if another pane becomes active, and `clear` refuses to kill
 the session while any pane in it is still running.
 
