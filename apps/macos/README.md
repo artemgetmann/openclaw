@@ -248,7 +248,16 @@ export NOTARYTOOL_KEY_ID="<App Store Connect API key id>"
 export NOTARYTOOL_ISSUER="<App Store Connect issuer id>"
 ```
 
-Notary profile setup uses Apple's keychain profile storage:
+The App Store Connect API-key triplet above is the canonical notarization lane.
+`NOTARYTOOL_PROFILE` is an optional, secondary Keychain fallback. The preflight
+checks it independently: `present-not-working` is a warning when the primary
+ASC lane is ready, not a release blocker and not evidence that notarization
+will use the stale profile. The notarization helper prefers the complete ASC
+triplet whenever both lanes are configured.
+
+Only create or repair a fallback profile when an operator separately decides
+that redundancy is worth maintaining. That machine-local action uses Apple's
+Keychain profile storage and is not part of repository setup:
 
 ```bash
 xcrun notarytool store-credentials "<keychain notary profile>" \
@@ -291,9 +300,12 @@ or "make a sendable Jarvis package", this is the canonical lane.
 Use one path:
 
 1. Enter the persistent release lane.
-2. Prove the app locally.
-3. Let the public release wrapper choose the next safe prepare/resume phase.
-4. Publish only with an explicit publish flag and latest GitHub release tag.
+2. Run the read-only dry-run.
+3. Authorize the exact future command, including its execution-shaping flags.
+4. Run the printed `persistent_command` in the durable tmux transport.
+5. Inspect status or scrollback without treating tmux as release authority.
+6. Recover only through the wrapper's printed `recovery_command`.
+7. Publish only with an explicit publish flag and latest GitHub release tag.
 
 Start with the persistent Jarvis release worktree launcher:
 
@@ -379,19 +391,47 @@ launchd, or change the shared gateway runtime. Use this when the question is
 #### Prepare or Resume Artifacts
 
 For normal operator recovery, use the public release wrapper instead of choosing
-the phase by hand:
+the phase by hand. Put every known future execution flag on `--authorize`; the
+authorization validates those flags without resolving GitHub state or
+inspecting/mutating release artifacts, then echoes them into one exact direct
+`next_command` and one exact durable `persistent_command`:
 
 ```bash
 bash scripts/jarvis-public-release.sh --dry-run
-bash scripts/jarvis-public-release.sh --authorize
-# Run the exact next_command printed by --authorize.
+bash scripts/jarvis-public-release.sh \
+  --authorize \
+  --parallel-safe-local-assets \
+  --latest-release-tag
+# Run the exact persistent_command printed by --authorize.
 ```
 
 `--dry-run` is strictly read-only: it does not acquire the release lock or
 create an authorization. `--authorize` requires clean tracked state, then
 creates one expiring release intent bound to the current commit and a stable
-fingerprint of the index and tracked working tree, then prints the only command
-allowed to execute it. The
+fingerprint of the index and tracked working tree. Plain `--authorize` remains
+compatible and prints the direct wrapper command. Future flags such as
+`--latest-release-tag`, `--github-release-tag <tag>`,
+`--publish-release-assets`, `--verify-public-assets`, `--urgent-sparkle`,
+`--parallel-safe-local-assets`, `--size-report`, and a supported `--phase` are
+inert during authorization and are shell-quoted into both printed commands.
+When future flags are present, the intent stores a SHA-256 fingerprint of that
+exact wrapper action, including the effective GitHub destination repository.
+Changing verify to publish, changing a tag, phase, or repository, or otherwise
+reshaping the printed command fails before lock acquisition or release-state
+mutation. The wrapper loads one release configuration snapshot and the package
+child inherits it, so a later package `release.env` load cannot redirect the
+authorized destination. A bound intent also fails when passed directly to the
+package script without the matching wrapper context; the wrapper remains the
+single authority that selects and delegates the package phase. Delegated
+package failures therefore recover through the original wrapper action, never
+through a direct package command. If recovery must remove a forced phase or
+replace `--latest-release-tag` with a resolved tag, it prints `--authorize`
+because that adjusted action requires a fresh lease.
+Likewise, when a bound action reaches ready local assets without public action,
+its `next_publish_command` is fresh `--authorize`; adding publish flags cannot
+reuse the narrower intent.
+Conflicting publish/verify or latest/explicit-tag intent fails before an intent
+is created or replaced. The
 default lease is two hours, sized above the observed end-to-end release time;
 use `--intent-ttl-seconds <1-14400>` only when the operator deliberately needs a
 different window. Expiry is a backstop, while creating a newer intent remains
@@ -400,6 +440,49 @@ one. Tracked staged changes, unstaged changes, and deletions are rejected during
 authorization. Any later tracked-state drift, expiry, or replacement fails at
 the existing validation boundaries before build, artifact deletion, notary
 submission, or upload.
+
+The durable helper accepts structured public-wrapper arguments only; it never
+accepts an arbitrary command:
+
+```bash
+bash scripts/jarvis-public-release-session.sh status
+bash scripts/jarvis-public-release-session.sh attach
+bash scripts/jarvis-public-release-session.sh log
+```
+
+`start` is already present in the printed `persistent_command`. It creates the
+deterministic `jarvis-public-release` tmux session from the blessed release
+worktree, preserves the wrapper's exit status and scrollback, and refuses a
+duplicate session. `status` reports running, finished-success,
+finished-failure, or missing. `log` is the non-interactive recovery view; use
+`attach` for live observation. After inspecting a finished session, clear only
+that transport with:
+
+```bash
+bash scripts/jarvis-public-release-session.sh clear
+```
+
+The persistent child does not copy release credentials or ambient release
+overrides into tmux arguments. It clears supported and stale notary, Sparkle,
+smoke, package, state-path, and `OPENCLAW_RELEASE_ENV_FILE` values inherited
+from either the launcher or tmux server. It also clears release intent, lock,
+checkpoint, worktree, disk, ownership-transfer, and other validation test
+overrides before the child starts. Shell startup redirects (`BASH_ENV`, `ENV`,
+and `ZDOTDIR`) are neutralized when the tmux session is created, before its
+initial pane can read them. The wrapper then loads the deterministic
+canonical `~/Library/Application Support/OpenClaw/release.env`, and its package
+child inherits that exact snapshot. Put persistent release
+credentials and settings there; a custom ambient release-env path is
+intentionally ignored by this transport. Here `~` comes from the validated
+macOS account record, not the launching shell's `HOME`; release tools use a
+fixed system plus Apple Silicon/Intel Homebrew `PATH`, never tmux's saved
+`PATH`. Status and log stay pinned to the
+original pane even if another pane becomes active, and `clear` refuses to kill
+the session while any pane in it is still running.
+
+tmux session state and scrollback are transport evidence only. They do not
+authorize, resume, or classify a release. The wrapper's intent, repository
+lock, strict checkpoints, and printed `recovery_command` remain authoritative.
 
 The wrapper inspects existing `dist/` artifacts and strict artifact
 checkpoints, chooses the next safe package phase, and delegates to
@@ -423,9 +506,10 @@ the Sparkle appcast signs an immutable tagged `Jarvis.zip` URL:
 
 ```bash
 bash scripts/jarvis-public-release.sh \
-  --release-intent "<id-from-authorize>" \
+  --authorize \
   --parallel-safe-local-assets \
   --latest-release-tag
+# Run the exact persistent_command printed by --authorize.
 ```
 
 #### Publish Gates
@@ -442,10 +526,11 @@ as a fresh-install/sendable release:
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
-  --release-intent "<id-from-authorize>" \
+  --authorize \
   --urgent-sparkle \
   --publish-release-assets \
   --latest-release-tag
+# Run the exact persistent_command printed by --authorize.
 ```
 
 Required successful urgent-update ending:
@@ -464,9 +549,10 @@ accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/jarvis-public-release.sh \
-  --release-intent "<id-from-authorize>" \
+  --authorize \
   --publish-release-assets \
   --latest-release-tag
+# Run the exact persistent_command printed by --authorize.
 ```
 
 Use `--github-release-tag <tag>` only when you intentionally want to pin the
@@ -537,7 +623,8 @@ bash scripts/jarvis-public-release.sh --authorize
 
 Then run the newly printed `next_command`. Do not reuse an older intent ID, do
 not infer a phase from artifact existence, and do not bypass checkpoint gates
-with manifest edits.
+with manifest edits. For long-running release work, authorize the intended
+future flags again and run the newly printed `persistent_command`.
 
 Wrapper runs write `dist/jarvis-public-release-summary.env`; timed package
 substeps append to `dist/jarvis-release-timing.tsv`. GitHub release view,

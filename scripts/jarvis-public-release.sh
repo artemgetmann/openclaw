@@ -6,6 +6,14 @@ set -euo pipefail
 # then delegates execution to scripts/package-openclaw-mac-dist.sh.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Public-wrapper and delegated-package decisions must observe one release
+# configuration snapshot. Ignore a stale "already loaded" marker, establish the
+# canonical default repository before sourcing, then let the selected
+# release.env override it once. The package child inherits this loaded snapshot
+# and cannot silently switch destinations after authorization.
+unset OPENCLAW_RELEASE_ENV_LOADED
+GITHUB_RELEASE_REPO="artemgetmann/openclaw"
+source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
@@ -23,6 +31,7 @@ FORCED_PHASE="auto"
 GITHUB_RELEASE_TAG=""
 LATEST_RELEASE_TAG=0
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
+export GITHUB_RELEASE_REPO
 TIMING_REPORT="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-public-release-summary.env}"
 RUN_SIZE_REPORT=0
@@ -46,8 +55,10 @@ Options:
   --authorize
       Create the latest expiring release intent for the current commit and bind
       it to clean tracked state, then print the one exact command that may
-      execute it. Authorization does not build, sign, notarize, upload, or
-      inspect release artifacts.
+      execute it plus the exact persistent tmux transport command. Validated
+      future execution flags may accompany authorization; they remain inert
+      until that printed command runs. Authorization does not build, sign,
+      notarize, upload, query GitHub, or inspect release artifacts.
   --release-intent <id>
       Required for every non-dry-run release execution. Only the latest
       unexpired intent created by --authorize is accepted.
@@ -102,6 +113,51 @@ quote_cmd() {
     printf '%q ' "$arg"
   done
   printf '\n'
+}
+
+quote_cmd_exact() {
+  local separator=""
+  local arg
+
+  # Authorization output is an operator-facing executable contract. Build it
+  # from parsed argv rather than interpolated shell text so tags and other
+  # values remain one literal argument even when they contain shell syntax.
+  for arg in "$@"; do
+    printf '%s' "$separator"
+    printf '%q' "$arg"
+    separator=" "
+  done
+  printf '\n'
+}
+
+release_action_fingerprint() {
+  # Bind only execution-shaping choices. Authorization mechanics, intent ID,
+  # and dry-run are deliberately excluded. Fixed field order and separators
+  # make the digest independent of the spelling/order of equivalent argv.
+  if [[ "$PUBLISH_RELEASE_ASSETS" == "0" \
+    && "$VERIFY_PUBLIC_ASSETS" == "0" \
+    && "$FORCED_PHASE" == "auto" \
+    && -z "$GITHUB_RELEASE_TAG" \
+    && "$LATEST_RELEASE_TAG" == "0" \
+    && "$PARALLEL_SAFE_LOCAL_ASSETS" == "0" \
+    && "$URGENT_SPARKLE_ONLY" == "0" \
+    && "$RUN_SIZE_REPORT" == "0" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  {
+    printf 'jarvis-public-release-action-v1\0'
+    printf 'publish=%s\0' "$PUBLISH_RELEASE_ASSETS"
+    printf 'verify=%s\0' "$VERIFY_PUBLIC_ASSETS"
+    printf 'phase=%s\0' "$FORCED_PHASE"
+    printf 'tag=%s\0' "$GITHUB_RELEASE_TAG"
+    printf 'latest=%s\0' "$LATEST_RELEASE_TAG"
+    printf 'github-repo=%s\0' "$GITHUB_RELEASE_REPO"
+    printf 'parallel=%s\0' "$PARALLEL_SAFE_LOCAL_ASSETS"
+    printf 'urgent=%s\0' "$URGENT_SPARKLE_ONLY"
+    printf 'size=%s\0' "$RUN_SIZE_REPORT"
+  } | /usr/bin/shasum -a 256 | /usr/bin/awk '{ print $1 }'
 }
 
 original_wrapper_command() {
@@ -231,7 +287,7 @@ fail_before_execute() {
   echo "  summary=$SUMMARY_REPORT" >&2
   echo "  timing_report=$TIMING_REPORT" >&2
   case "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" in
-    missing|expired|replaced|commit|identity|schema|tracked-state-drift|tracked-state-unavailable)
+    missing|expired|replaced|commit|identity|schema|action|action-schema|tracked-state-drift|tracked-state-unavailable)
       WRAPPER_RECOVERY_EMITTED=1
       echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
       ;;
@@ -410,27 +466,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
-  if [[ "$DRY_RUN" == "1" || "$PUBLISH_RELEASE_ASSETS" == "1" || "$VERIFY_PUBLIC_ASSETS" == "1" || "$FORCED_PHASE" != "auto" || "$LATEST_RELEASE_TAG" == "1" || -n "$GITHUB_RELEASE_TAG" || "$RUN_SIZE_REPORT" == "1" || "$PARALLEL_SAFE_LOCAL_ASSETS" == "1" || "$URGENT_SPARKLE_ONLY" == "1" || -n "$RELEASE_INTENT_ID" ]]; then
-    echo "ERROR: --authorize is a standalone operator action; do not combine it with release execution flags." >&2
-    exit 1
-  fi
-  openclaw_require_jarvis_release_worktree "$ROOT_DIR"
-  if ! RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS")"; then
-    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
-    exit 2
-  fi
-  echo "jarvis_release_intent=authorized"
-  echo "jarvis_release_intent_id=$RELEASE_INTENT_ID"
-  echo "next_command=bash scripts/jarvis-public-release.sh --release-intent $RELEASE_INTENT_ID"
-  exit 0
-fi
-
-if [[ "$RELEASE_INTENT_TTL_EXPLICIT" == "1" ]]; then
-  echo "ERROR: --intent-ttl-seconds is valid only with standalone --authorize." >&2
-  exit 1
-fi
-
 if [[ "$PUBLISH_RELEASE_ASSETS" == "1" && "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
   echo "ERROR: choose --publish-release-assets or --verify-public-assets, not both." >&2
   exit 1
@@ -442,10 +477,6 @@ if [[ "$LATEST_RELEASE_TAG" == "1" && -n "$GITHUB_RELEASE_TAG" ]]; then
   exit 1
 fi
 
-if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
-  GITHUB_RELEASE_TAG="$(resolve_latest_github_release_tag)"
-fi
-
 case "$FORCED_PHASE" in
   auto|full|post-app-build|submit-app-notarization|poll-app-notarization|submit-dmg-notarization|poll-dmg-notarization|create-local-release-assets-only|publish-assets-only|verify-public-assets-only|publish-sparkle-assets-only|verify-sparkle-assets-only)
     ;;
@@ -454,6 +485,90 @@ case "$FORCED_PHASE" in
     exit 1
     ;;
 esac
+
+case "$FORCED_PHASE" in
+  publish-assets-only|publish-sparkle-assets-only)
+    if [[ "$PUBLISH_RELEASE_ASSETS" != "1" || "$VERIFY_PUBLIC_ASSETS" == "1" ]]; then
+      echo "ERROR: --phase $FORCED_PHASE requires --publish-release-assets and cannot be combined with --verify-public-assets." >&2
+      exit 1
+    fi
+    ;;
+  verify-public-assets-only|verify-sparkle-assets-only)
+    if [[ "$PUBLISH_RELEASE_ASSETS" == "1" ]]; then
+      echo "ERROR: --phase $FORCED_PHASE cannot be combined with --publish-release-assets." >&2
+      exit 1
+    fi
+    ;;
+esac
+
+if [[ "$AUTHORIZE_RELEASE" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" || -n "$RELEASE_INTENT_ID" ]]; then
+    echo "ERROR: --authorize cannot be combined with --dry-run or --release-intent." >&2
+    exit 1
+  fi
+  if [[ ( "$PUBLISH_RELEASE_ASSETS" == "1" || "$VERIFY_PUBLIC_ASSETS" == "1" || "$FORCED_PHASE" == "create-local-release-assets-only" || "$FORCED_PHASE" == "publish-assets-only" || "$FORCED_PHASE" == "verify-public-assets-only" || "$FORCED_PHASE" == "publish-sparkle-assets-only" || "$FORCED_PHASE" == "verify-sparkle-assets-only" ) && "$LATEST_RELEASE_TAG" != "1" && -z "$GITHUB_RELEASE_TAG" ]]; then
+    echo "ERROR: the authorized future command requires --latest-release-tag or --github-release-tag <tag>." >&2
+    echo "Authorization was not created because next_command would be incomplete." >&2
+    exit 1
+  fi
+  openclaw_require_jarvis_release_worktree "$ROOT_DIR"
+  RELEASE_ACTION_FINGERPRINT="$(release_action_fingerprint)"
+  if ! RELEASE_INTENT_ID="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" "$RELEASE_INTENT_TTL_SECONDS" "$RELEASE_ACTION_FINGERPRINT")"; then
+    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+    exit 2
+  fi
+  echo "jarvis_release_intent=authorized"
+  echo "jarvis_release_intent_id=$RELEASE_INTENT_ID"
+
+  # Future execution flags are inert during authorization. Preserve only the
+  # already-parsed allowlist in a canonical argv order; notably,
+  # --latest-release-tag stays unresolved until the authorized command runs.
+  AUTHORIZED_ARGS=(--release-intent "$RELEASE_INTENT_ID")
+  [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTHORIZED_ARGS+=(--publish-release-assets)
+  [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTHORIZED_ARGS+=(--verify-public-assets)
+  [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTHORIZED_ARGS+=(--github-release-tag "$GITHUB_RELEASE_TAG")
+  [[ "$LATEST_RELEASE_TAG" != "1" ]] || AUTHORIZED_ARGS+=(--latest-release-tag)
+  [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTHORIZED_ARGS+=(--parallel-safe-local-assets)
+  [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTHORIZED_ARGS+=(--urgent-sparkle)
+  [[ "$FORCED_PHASE" == "auto" ]] || AUTHORIZED_ARGS+=(--phase "$FORCED_PHASE")
+  [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTHORIZED_ARGS+=(--size-report)
+
+  printf 'next_command='
+  quote_cmd_exact bash scripts/jarvis-public-release.sh "${AUTHORIZED_ARGS[@]}"
+  printf 'persistent_command='
+  quote_cmd_exact \
+    bash scripts/jarvis-public-release-session.sh start -- "${AUTHORIZED_ARGS[@]}"
+  exit 0
+fi
+
+if [[ "$RELEASE_INTENT_TTL_EXPLICIT" == "1" ]]; then
+  echo "ERROR: --intent-ttl-seconds is valid only with standalone --authorize." >&2
+  exit 1
+fi
+
+# Recompute action binding from parsed values before any lock, report, release
+# state, GitHub, or package activity. Bound intents cannot be repurposed by
+# changing verify into publish (or any other execution-shaping flag). Exporting
+# the digest lets the unchanged package/notary intent gates enforce the same
+# lease; direct package use of a bound wrapper intent has no digest and fails.
+RELEASE_ACTION_FINGERPRINT="$(release_action_fingerprint)"
+export OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT="$RELEASE_ACTION_FINGERPRINT"
+RELEASE_INTENT_ACTION_BOUND=0
+if [[ "$DRY_RUN" != "1" ]]; then
+  if openclaw_jarvis_release_intent_validate "$ROOT_DIR" "$RELEASE_INTENT_ID"; then
+    if [[ -n "$OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT" ]]; then
+      RELEASE_INTENT_ACTION_BOUND=1
+    fi
+  elif [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "action" ]]; then
+    echo "ERROR: release intent action does not match this wrapper command; refusing before release mutation." >&2
+    echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
+    exit 2
+  fi
+fi
+
+if [[ "$LATEST_RELEASE_TAG" == "1" ]]; then
+  GITHUB_RELEASE_TAG="$(resolve_latest_github_release_tag)"
+fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
   # Own the state snapshot and delegated package execution as one operation.
@@ -496,7 +611,11 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   echo "Jarvis public release local assets are ready, but no public action was requested."
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  if [[ -n "$RELEASE_INTENT_ID" ]]; then
+  if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+    # Adding publish/tag flags is a different bound action. Reusing this intent
+    # would print a command guaranteed to fail its fingerprint check.
+    echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
+  elif [[ -n "$RELEASE_INTENT_ID" ]]; then
     printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
   else
     # A dry-run has no executable authorization to preserve. Point the operator
@@ -512,7 +631,9 @@ if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
   echo "  selected_phase=$SELECTED_PHASE"
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  if [[ -n "$RELEASE_INTENT_ID" ]]; then
+  if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+    echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
+  elif [[ -n "$RELEASE_INTENT_ID" ]]; then
     printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --urgent-sparkle --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
   else
     echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
@@ -547,18 +668,32 @@ case "$SELECTED_PHASE" in
 esac
 
 COMMAND_TEXT="$(quote_cmd "${CMD[@]}")"
-RECOVERY_COMMAND="$COMMAND_TEXT"
+if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+  # A bound intent is executable only through the wrapper action that
+  # recomputes its fingerprint. A direct package command would fail in a fresh
+  # shell because wrapper-to-package action context is intentionally absent.
+  RECOVERY_COMMAND="$(original_wrapper_command)"
+else
+  RECOVERY_COMMAND="$COMMAND_TEXT"
+fi
 if [[ "$FORCED_PHASE" != "auto" ]]; then
-  # A rejected forced resume cannot repair its own checkpoint. Return to the
-  # automatic selector while preserving the operator's publish/verify intent.
-  AUTO_RECOVERY_CMD=(bash scripts/jarvis-public-release.sh --release-intent "$RELEASE_INTENT_ID")
-  [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--parallel-safe-local-assets)
-  [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTO_RECOVERY_CMD+=(--urgent-sparkle)
-  [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--publish-release-assets)
-  [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--verify-public-assets)
-  [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTO_RECOVERY_CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
-  [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTO_RECOVERY_CMD+=(--size-report)
-  RECOVERY_COMMAND="$(quote_cmd "${AUTO_RECOVERY_CMD[@]}")"
+  if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+    # Automatic recovery removes the forced phase and can replace
+    # --latest-release-tag with its resolved tag. Both changes are a new
+    # operator action, so the existing bound lease must not authorize them.
+    RECOVERY_COMMAND="bash scripts/jarvis-public-release.sh --authorize"
+  else
+    # Legacy/plain intents are intentionally unbound. Keep their established
+    # automatic-selector recovery while preserving publish/verify intent.
+    AUTO_RECOVERY_CMD=(bash scripts/jarvis-public-release.sh --release-intent "$RELEASE_INTENT_ID")
+    [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--parallel-safe-local-assets)
+    [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTO_RECOVERY_CMD+=(--urgent-sparkle)
+    [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--publish-release-assets)
+    [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--verify-public-assets)
+    [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTO_RECOVERY_CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
+    [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTO_RECOVERY_CMD+=(--size-report)
+    RECOVERY_COMMAND="$(quote_cmd "${AUTO_RECOVERY_CMD[@]}")"
+  fi
 fi
 
 if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then

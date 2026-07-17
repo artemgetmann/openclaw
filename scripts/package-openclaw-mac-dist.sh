@@ -9,7 +9,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
+# The public wrapper computes this digest from parsed action flags. Preserve it
+# across release.env loading so the credential/settings file cannot
+# accidentally replace wrapper-to-package authorization context.
+INHERITED_RELEASE_ACTION_FINGERPRINT="${OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT:-}"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
+export OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT="$INHERITED_RELEASE_ACTION_FINGERPRINT"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
@@ -52,7 +57,7 @@ release_package_exit() {
   openclaw_jarvis_release_lock_release
   if [[ "$status" -ne 0 && "${OPENCLAW_JARVIS_RELEASE_RECOVERY_OWNER:-package}" != "wrapper" ]]; then
     case "${OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE:-}" in
-      missing|expired|replaced|commit|identity|schema|tracked-state-drift|tracked-state-unavailable)
+      missing|expired|replaced|commit|identity|schema|action|action-schema|tracked-state-drift|tracked-state-unavailable)
         echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
         ;;
       *)

@@ -292,6 +292,176 @@ test_operator_authorization_interface() {
   pass "operator authorization prints the exact expiring-intent execution command"
 }
 
+test_operator_authorization_preserves_inert_future_flags() {
+  local out="$TMP_DIR/authorize-future.out"
+  local err="$TMP_DIR/authorize-future.err"
+  local intent_path="$TMP_DIR/operator-future.intent"
+  local intent_before="$TMP_DIR/operator-future.intent.before"
+  local fake_bin="$TMP_DIR/operator-future-bin"
+  local gh_sentinel="$TMP_DIR/operator-future-gh.called"
+  local misuse_state="$TMP_DIR/operator-future-misuse-state"
+  local misuse_summary="$TMP_DIR/operator-future-misuse-summary.env"
+  local authorized_env="$TMP_DIR/operator-future-authorized.env"
+  local mismatched_env="$TMP_DIR/operator-future-mismatched.env"
+  local repo_mismatch_state="$TMP_DIR/operator-future-repo-mismatch-state"
+  local repo_mismatch_summary="$TMP_DIR/operator-future-repo-mismatch-summary.env"
+  local status
+
+  mkdir -p "$fake_bin"
+  apply_stub "$fake_bin/gh" '#!/usr/bin/env bash
+: >"${AUTHORIZATION_GH_SENTINEL:?}"
+exit 99'
+  apply_stub "$authorized_env" 'export GITHUB_RELEASE_REPO=authorized-owner/authorized-repo'
+  apply_stub "$mismatched_env" 'export GITHUB_RELEASE_REPO=other-owner/other-repo'
+  export AUTHORIZATION_GH_SENTINEL="$gh_sentinel"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=1550
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=operator-future-run
+
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_RELEASE_ENV_FILE="$authorized_env" \
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --intent-ttl-seconds 60 \
+      --verify-public-assets \
+      --latest-release-tag \
+      --parallel-safe-local-assets \
+      --urgent-sparkle \
+      --phase verify-sparkle-assets-only \
+      --size-report \
+      >"$out"
+
+  [[ ! -e "$gh_sentinel" ]] \
+    || fail "authorization resolved --latest-release-tag instead of preserving it inertly"
+  grep -Fqx \
+    'next_command=bash scripts/jarvis-public-release.sh --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
+    "$out" \
+    || fail "future authorization did not print the complete executable wrapper command"
+  grep -Fqx \
+    'persistent_command=bash scripts/jarvis-public-release-session.sh start -- --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
+    "$out" \
+    || fail "future authorization did not print the matching durable transport command"
+  [[ -n "$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT)" ]] \
+    || fail "future authorization did not bind its execution-shaping action"
+
+  # The printed argv is identical, but the effective canonical destination has
+  # changed since authorization. Reject before GitHub lookup, lock, reports, or
+  # release-state mutation rather than letting package release.env redirect it.
+  set +e
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_RELEASE_ENV_FILE="$mismatched_env" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$repo_mismatch_state" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$repo_mismatch_summary" \
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent operator-future-run \
+      --verify-public-assets \
+      --latest-release-tag \
+      --parallel-safe-local-assets \
+      --urgent-sparkle \
+      --phase verify-sparkle-assets-only \
+      --size-report \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "repository mismatch returned $status instead of 2"
+  grep -q 'intent action does not match' "$err" \
+    || fail "repository mismatch did not report the action binding"
+  [[ ! -e "$repo_mismatch_state" && ! -e "$repo_mismatch_summary" ]] \
+    || fail "repository mismatch mutated release state before rejection"
+  [[ ! -e "$gh_sentinel" ]] \
+    || fail "repository mismatch reached GitHub before rejection"
+
+  # A wrapper-bound intent is not a second package authority. Direct package
+  # validation has no wrapper action context and must fail closed; only the
+  # matching wrapper can propagate the recomputed digest to package boundaries.
+  unset OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+  if openclaw_jarvis_release_intent_validate "$ROOT_DIR" operator-future-run; then
+    fail "direct package-style validation bypassed a wrapper action binding"
+  fi
+  [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "action" ]] \
+    || fail "missing wrapper action context reported the wrong intent failure"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+  OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT="$(
+    openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+  )"
+  openclaw_jarvis_release_intent_validate "$ROOT_DIR" operator-future-run \
+    || fail "matching wrapper action context did not validate its bound intent"
+  unset OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+
+  # Reusing a verify authorization for publication must fail before locks,
+  # reports, state inspection, GitHub lookup, or delegated package mutation.
+  set +e
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$misuse_state" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$misuse_summary" \
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent operator-future-run \
+      --publish-release-assets \
+      --github-release-tag v-misuse \
+      --phase publish-assets-only \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "verify intent reused for publish returned $status instead of 2"
+  grep -q 'intent action does not match' "$err" \
+    || fail "verify-to-publish misuse did not report the action binding"
+  [[ ! -e "$misuse_state" && ! -e "$misuse_summary" ]] \
+    || fail "verify-to-publish misuse mutated release state before rejection"
+  [[ ! -e "$gh_sentinel" ]] \
+    || fail "verify-to-publish misuse reached GitHub before rejection"
+
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=operator-publish-run
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --intent-ttl-seconds 60 \
+      --publish-release-assets \
+      --github-release-tag v-current \
+      --phase publish-assets-only \
+      >"$out"
+  grep -Fqx \
+    'next_command=bash scripts/jarvis-public-release.sh --release-intent operator-publish-run --publish-release-assets --github-release-tag v-current --phase publish-assets-only' \
+    "$out" \
+    || fail "publish authorization did not preserve its explicit tag and publication intent"
+
+  cp "$intent_path" "$intent_before"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=must-not-replace
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --publish-release-assets \
+      --verify-public-assets \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "authorization accepted conflicting publish and verify flags"
+  cmp -s "$intent_before" "$intent_path" \
+    || fail "publish/verify conflict replaced the durable release intent"
+
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --latest-release-tag \
+      --github-release-tag v-conflict \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "authorization accepted conflicting tag selectors"
+  cmp -s "$intent_before" "$intent_path" \
+    || fail "tag-selector conflict replaced the durable release intent"
+  pass "authorization preserves validated future flags and rejects conflicts before intent creation"
+}
+
 test_authorization_persistence_failure_is_fatal() {
   local blocked_parent="$TMP_DIR/intent-parent-blocker"
   local out="$TMP_DIR/authorize-persistence.out"
@@ -1525,6 +1695,7 @@ test_intent_path_stability
 test_intent_default_and_maximum_ttl
 test_intent_tracked_state_binding
 test_operator_authorization_interface
+test_operator_authorization_preserves_inert_future_flags
 test_authorization_persistence_failure_is_fatal
 test_checkpoint_invalid_and_valid_resume
 test_in_progress_receipt_preserves_submitted_checkpoint

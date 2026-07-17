@@ -6,6 +6,7 @@
 # process current again.
 
 OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
+OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT=""
 
 openclaw_jarvis_release_intent_value() {
   local metadata_path="$1"
@@ -123,10 +124,29 @@ openclaw_jarvis_release_intent_clean_tracked_fingerprint() {
 openclaw_jarvis_release_intent_authorize() {
   local root="$1"
   local ttl_seconds="${2:-7200}"
+  local action_fingerprint="${3:-}"
   local intent_path intent_parent intent_tmp intent_id repo_identity commit confirmed_commit now expires
   local tracked_fingerprint clean_tracked_fingerprint
 
   OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
+  OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT=""
+
+  # An empty action fingerprint preserves the original general-purpose intent
+  # contract used by direct package invocations. A non-empty fingerprint binds
+  # the lease to one already-validated public-wrapper action without storing
+  # tags or other operator-provided values in plaintext.
+  case "$action_fingerprint" in
+    *[!0-9a-f]*)
+      OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="action-schema"
+      echo "ERROR: release action fingerprint must be lowercase SHA-256." >&2
+      return 1
+      ;;
+  esac
+  if [[ -n "$action_fingerprint" && "${#action_fingerprint}" -ne 64 ]]; then
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="action-schema"
+    echo "ERROR: release action fingerprint must be lowercase SHA-256." >&2
+    return 1
+  fi
 
   case "$ttl_seconds" in
     ''|*[!0-9]*)
@@ -182,6 +202,7 @@ openclaw_jarvis_release_intent_authorize() {
     printf 'JARVIS_RELEASE_INTENT_REPO_IDENTITY=%s\n' "$repo_identity"
     printf 'JARVIS_RELEASE_INTENT_GIT_COMMIT=%s\n' "$commit"
     printf 'JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT=%s\n' "$tracked_fingerprint"
+    printf 'JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT=%s\n' "$action_fingerprint"
     printf 'JARVIS_RELEASE_INTENT_AUTHORIZED_AT_EPOCH=%s\n' "$now"
     printf 'JARVIS_RELEASE_INTENT_EXPIRES_AT_EPOCH=%s\n' "$expires"
   } >"$intent_tmp"; then
@@ -205,9 +226,11 @@ openclaw_jarvis_release_intent_validate() {
   local expected_intent_id="$2"
   local intent_path version actual_intent_id actual_identity expected_identity
   local actual_commit expected_commit actual_tracked_fingerprint expected_tracked_fingerprint
+  local actual_action_fingerprint expected_action_fingerprint
   local authorized_at expires now
 
   OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
+  OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT=""
   if [[ -z "$expected_intent_id" ]]; then
     OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="missing"
     return 1
@@ -227,6 +250,7 @@ openclaw_jarvis_release_intent_validate() {
   actual_identity="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_REPO_IDENTITY)"
   actual_commit="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_GIT_COMMIT)"
   actual_tracked_fingerprint="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_TRACKED_FINGERPRINT)"
+  actual_action_fingerprint="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT)"
   authorized_at="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_AUTHORIZED_AT_EPOCH)"
   expires="$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_EXPIRES_AT_EPOCH)"
 
@@ -271,6 +295,29 @@ openclaw_jarvis_release_intent_validate() {
     OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="schema"
     return 1
   fi
+
+  # Version-2 intents created before action binding omit this field and remain
+  # equivalent to an empty, general-purpose binding. Bound intents require the
+  # wrapper to propagate its recomputed fingerprint into delegated package and
+  # notary boundaries. A direct package call without that context therefore
+  # fails closed instead of silently widening a verify lease into publication.
+  case "$actual_action_fingerprint" in
+    *[!0-9a-f]*)
+      OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="schema"
+      return 1
+      ;;
+  esac
+  if [[ -n "$actual_action_fingerprint" ]]; then
+    if [[ "${#actual_action_fingerprint}" -ne 64 ]]; then
+      OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="schema"
+      return 1
+    fi
+    expected_action_fingerprint="${OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT:-}"
+    if [[ "$actual_action_fingerprint" != "$expected_action_fingerprint" ]]; then
+      OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="action"
+      return 1
+    fi
+  fi
   expected_tracked_fingerprint="$(openclaw_jarvis_release_intent_tracked_fingerprint "$root")" || {
     OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="tracked-state-unavailable"
     return 1
@@ -292,6 +339,7 @@ openclaw_jarvis_release_intent_validate() {
     return 1
   fi
 
+  OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT="$actual_action_fingerprint"
   return 0
 }
 
