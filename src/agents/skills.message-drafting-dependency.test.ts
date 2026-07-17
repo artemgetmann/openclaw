@@ -129,9 +129,9 @@ describe("message-drafting bundled dependency", () => {
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
       bundledSkillsDir,
       managedSkillsDir: path.join(workspaceDir, ".managed"),
+      skillFilter: ["telegram-user", "workspace-overflow"],
       config: {
         skills: {
-          allowBundled: ["telegram-user"],
           limits: {
             maxSkillsInPrompt: 2,
             maxSkillsPromptChars: 2_000,

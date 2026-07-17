@@ -136,21 +136,32 @@ function resolvePromptSourcePriority(source?: string): number {
   }
 }
 
-function isConfigSelectedSkillForPrompt(entry: SkillEntry, config?: OpenClawConfig): boolean {
+function isSelectedSkillForPrompt(
+  entry: SkillEntry,
+  config?: OpenClawConfig,
+  skillFilter?: string[],
+): boolean {
   const skillKey = resolveSkillKey(entry.skill, entry);
   const allowBundled = resolveBundledAllowlist(config) ?? [];
+  const filterSelection = normalizeSkillFilter(skillFilter) ?? [];
   return (
     allowBundled.includes(entry.skill.name) ||
     allowBundled.includes(skillKey) ||
+    filterSelection.includes(entry.skill.name) ||
+    filterSelection.includes(skillKey) ||
     Boolean(config?.skills?.entries?.[skillKey] ?? config?.skills?.entries?.[entry.skill.name])
   );
 }
 
-function resolvePromptEntryPriority(entry: SkillEntry, config?: OpenClawConfig): number {
-  // A configured skill is a deliberate runtime capability. In consumer
-  // workspaces, the workspace skill folder can contain broad personal inventory,
-  // so config-selected skills must stay visible before that overflow is trimmed.
-  if (isConfigSelectedSkillForPrompt(entry, config)) {
+function resolvePromptEntryPriority(
+  entry: SkillEntry,
+  config?: OpenClawConfig,
+  skillFilter?: string[],
+): number {
+  // Config and per-agent filters are deliberate runtime selections. In
+  // consumer workspaces, broad personal inventory must not displace those
+  // selections or their expanded dependencies during prompt truncation.
+  if (isSelectedSkillForPrompt(entry, config, skillFilter)) {
     return 0;
   }
 
@@ -173,8 +184,12 @@ function resolvePromptEntryPriority(entry: SkillEntry, config?: OpenClawConfig):
   return 4 + resolvePromptSourcePriority(entry.skill.source);
 }
 
-function rankSkillsForPrompt(entries: SkillEntry[], config?: OpenClawConfig): Skill[] {
-  // Prompt limits trim from the front. Config-selected capabilities must
+function rankSkillsForPrompt(
+  entries: SkillEntry[],
+  config?: OpenClawConfig,
+  skillFilter?: string[],
+): Skill[] {
+  // Prompt limits trim from the front. Runtime-selected capabilities must
   // survive truncation; otherwise natural-language routing cannot choose skills
   // the model never sees. Duplicate-name workspace overrides already win in the
   // merge map before this ranking runs.
@@ -182,7 +197,8 @@ function rankSkillsForPrompt(entries: SkillEntry[], config?: OpenClawConfig): Sk
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => {
       const sourceDelta =
-        resolvePromptEntryPriority(a.entry, config) - resolvePromptEntryPriority(b.entry, config);
+        resolvePromptEntryPriority(a.entry, config, skillFilter) -
+        resolvePromptEntryPriority(b.entry, config, skillFilter);
       if (sourceDelta !== 0) {
         return sourceDelta;
       }
@@ -738,7 +754,7 @@ function resolveWorkspaceSkillPromptState(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config);
+  const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config, opts?.skillFilter);
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
