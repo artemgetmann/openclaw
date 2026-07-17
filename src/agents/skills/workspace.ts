@@ -88,10 +88,10 @@ function filterSkillEntries(
   const includeEntry = opts?.includeMissingSetupForModel
     ? shouldExposeSkillToModel
     : shouldIncludeSkill;
-  let filtered = entries.filter((entry) => includeEntry({ entry, config, eligibility }));
+  let filtered = entries.filter((entry) => includeEntry({ entry, entries, config, eligibility }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
-    const normalized = resolveSkillFilter(skillFilter, config) ?? [];
+    const normalized = resolveSkillFilter(skillFilter, config, entries) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
     filtered =
@@ -184,14 +184,16 @@ function rankSkillsForPrompt(
   entries: SkillEntry[],
   config?: OpenClawConfig,
   skillFilter?: string[],
+  inventory: SkillEntry[] = entries,
 ): Skill[] {
   // Prompt limits trim from the front. Explicit and dependency-expanded
   // selections must survive truncation or natural-language routing cannot
   // choose skills the model never sees. Duplicate-name workspace overrides
-  // already win in the merge map before this ranking runs.
+  // already win in the merge map before this ranking runs. Keep the full
+  // inventory for skillKey resolution after disabled entries leave `entries`.
   const selectedSkillNames = new Set([
-    ...(resolveBundledAllowlist(config) ?? []),
-    ...(resolveSkillFilter(skillFilter, config) ?? []),
+    ...(resolveBundledAllowlist(config, inventory) ?? []),
+    ...(resolveSkillFilter(skillFilter, config, inventory) ?? []),
   ]);
   return entries
     .map((entry, index) => ({ entry, index }))
@@ -754,7 +756,12 @@ function resolveWorkspaceSkillPromptState(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config, opts?.skillFilter);
+  const resolvedSkills = rankSkillsForPrompt(
+    promptEntries,
+    opts?.config,
+    opts?.skillFilter,
+    skillEntries,
+  );
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
