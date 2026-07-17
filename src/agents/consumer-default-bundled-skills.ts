@@ -42,6 +42,18 @@ export const LEGACY_CONSUMER_BUNDLED_SKILL_RENAMES: Readonly<Record<string, stri
   "jarvis-gui-control": "jarvis-computer-use",
 };
 
+const MESSAGE_DRAFTING_REFERENCING_SKILLS = new Set([
+  "wacli",
+  "telegram-user",
+  "gog",
+  "himalaya",
+  "imsg",
+  "bluebubbles",
+  "slack",
+  "discord",
+  "cross-channel-triage",
+]);
+
 export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): string[] {
   const existingAllowlist = config.skills?.allowBundled;
   if (existingAllowlist?.includes("__none__")) {
@@ -84,6 +96,32 @@ export function repairConsumerDefaultBundledSkillAllowlist(config: OpenClawConfi
   const looksLikeGeneratedConsumerDefault =
     hasEnoughDefaultSkillsToLookGenerated &&
     normalizedAllowlist.every((skillName) => defaultSkills.has(skillName));
+
+  // Referencing channel skills delegate message composition to the canonical
+  // owner. Keep that owner reachable even for supported narrow allowlists.
+  const needsMessageDrafting =
+    !looksLikeGeneratedConsumerDefault &&
+    normalizedAllowlist.some((skillName) => MESSAGE_DRAFTING_REFERENCING_SKILLS.has(skillName)) &&
+    !current.has("message-drafting") &&
+    !isBundledSkillExplicitlyDisabled(workingConfig, "message-drafting");
+  if (needsMessageDrafting) {
+    return {
+      config: {
+        ...workingConfig,
+        skills: {
+          ...workingConfig.skills,
+          allowBundled: [...normalizedAllowlist, "message-drafting"],
+        },
+      },
+      changes: [
+        ...entryMigration.changes,
+        ...(renameChanged
+          ? ["skills.allowBundled renamed jarvis-gui-control->jarvis-computer-use"]
+          : []),
+        "skills.allowBundled += message-drafting",
+      ],
+    };
+  }
 
   if (!looksLikeGeneratedConsumerDefault) {
     if (!renameChanged && entryMigration.changes.length === 0) {

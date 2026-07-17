@@ -38,6 +38,18 @@ const jarvisComputerUseEntry: SkillEntry = {
   frontmatter: {},
 };
 
+const messageDraftingOwners = [
+  "wacli",
+  "telegram-user",
+  "gog",
+  "himalaya",
+  "imsg",
+  "bluebubbles",
+  "slack",
+  "discord",
+  "cross-channel-triage",
+] as const;
+
 function apply(nextConfig: OpenClawConfig, opts: Partial<OnboardOptions> = {}) {
   return applyNonInteractiveSkillsConfig({
     nextConfig,
@@ -276,6 +288,71 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
     expect(repaired.changes).toEqual([]);
     expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill", "checkpoint"]);
+  });
+
+  it.each(messageDraftingOwners)(
+    "adds message-drafting when a custom allowlist includes %s",
+    (owner) => {
+      const repaired = repairConsumerDefaultBundledSkillAllowlist({
+        skills: { allowBundled: [owner] },
+      });
+
+      expect(repaired.changes).toEqual(["skills.allowBundled += message-drafting"]);
+      expect(repaired.config.skills?.allowBundled).toEqual([owner, "message-drafting"]);
+    },
+  );
+
+  it("preserves an explicit message-drafting opt-out for channel-only allowlists", () => {
+    const config: OpenClawConfig = {
+      skills: {
+        allowBundled: ["wacli"],
+        entries: { "message-drafting": { enabled: false } },
+      },
+    };
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist(config);
+
+    expect(repaired).toEqual({ config, changes: [] });
+  });
+
+  it("leaves unrelated custom allowlists unchanged by drafting dependency repair", () => {
+    const config: OpenClawConfig = {
+      skills: { allowBundled: ["custom-skill"] },
+    };
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist(config);
+
+    expect(repaired).toEqual({ config, changes: [] });
+  });
+
+  it("makes a channel-only drafting dependency model-facing after repair", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-drafting-skills-"));
+    const bundledDir = path.join(workspaceDir, ".bundled");
+
+    await writeSkill({
+      dir: path.join(bundledDir, "wacli"),
+      name: "wacli",
+      description: "Send WhatsApp messages.",
+      body: "# wacli\n",
+    });
+    await writeSkill({
+      dir: path.join(bundledDir, "message-drafting"),
+      name: "message-drafting",
+      description: "Compose approval-ready recipient-facing messages.",
+      body: "# Message Drafting\n",
+    });
+
+    const repaired = repairConsumerDefaultBundledSkillAllowlist({
+      skills: { allowBundled: ["wacli"] },
+    });
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir: bundledDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: repaired.config,
+    });
+
+    expect(prompt).toContain("<name>wacli</name>");
+    expect(prompt).toContain("<name>message-drafting</name>");
   });
 
   it("exposes default operator skills to fresh consumer prompts without a model call", async () => {
