@@ -1,6 +1,7 @@
 ---
 name: "message-drafting"
 description: "Draft, revise, shorten, translate, and prepare approval-ready recipient-facing messages while preserving the user's meaning and voice. Use for replies, outreach, email, chat, or any sendable message, especially when the recipient language differs from the language the user reviews."
+user-invocable: false
 ---
 
 # Message Drafting

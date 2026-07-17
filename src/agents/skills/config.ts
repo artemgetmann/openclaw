@@ -69,12 +69,14 @@ function isBundledSkill(entry: SkillEntry): boolean {
 
 export function expandBundledSkillDependencies(
   selection: string[] | undefined,
+  config?: OpenClawConfig,
 ): string[] | undefined {
-  if (
-    !selection ||
-    selection.includes("message-drafting") ||
-    !selection.some((skillName) => MESSAGE_DRAFTING_DEPENDENT_BUNDLED_SKILLS.has(skillName))
-  ) {
+  const hasEnabledDependent = selection?.some(
+    (skillName) =>
+      MESSAGE_DRAFTING_DEPENDENT_BUNDLED_SKILLS.has(skillName) &&
+      resolveSkillConfig(config, skillName)?.enabled !== false,
+  );
+  if (!selection || selection.includes("message-drafting") || !hasEnabledDependent) {
     return selection;
   }
   // Expand normalized runtime selections only. Persisted allowlists and
@@ -84,7 +86,7 @@ export function expandBundledSkillDependencies(
 }
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
-  return expandBundledSkillDependencies(normalizeAllowlist(config?.skills?.allowBundled));
+  return expandBundledSkillDependencies(normalizeAllowlist(config?.skills?.allowBundled), config);
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {

@@ -18,8 +18,8 @@ describe("skills/filter", () => {
     expect(normalizeSkillFilter(undefined)).toBeUndefined();
   });
 
-  it("adds message-drafting only for dependent communication skills", () => {
-    expect(normalizeSkillFilter(["telegram-user"])).toEqual(["telegram-user", "message-drafting"]);
+  it("keeps runtime dependency expansion out of raw filter normalization", () => {
+    expect(normalizeSkillFilter(["telegram-user"])).toEqual(["telegram-user"]);
     expect(normalizeSkillFilter(["peekaboo"])).toEqual(["peekaboo"]);
   });
 
@@ -33,6 +33,9 @@ describe("skills/filter", () => {
   it("matches equivalent filters after normalization", () => {
     expect(matchesSkillFilter(["weather", "meme-factory"], [" meme-factory ", "weather"])).toBe(
       true,
+    );
+    expect(matchesSkillFilter(["telegram-user"], ["telegram-user", "message-drafting"])).toBe(
+      false,
     );
     expect(matchesSkillFilter(undefined, undefined)).toBe(true);
     expect(matchesSkillFilter([], undefined)).toBe(false);

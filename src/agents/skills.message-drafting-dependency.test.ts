@@ -86,6 +86,61 @@ describe("message-drafting bundled dependency", () => {
     expect(prompt).not.toContain("<name>message-drafting</name>");
   });
 
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "does not expand a disabled adapter selected through %s",
+    async (selectionBoundary) => {
+      const { workspaceDir, bundledSkillsDir } = await createBundledSkills([
+        "telegram-user",
+        "message-drafting",
+      ]);
+      const config: OpenClawConfig = {
+        skills: {
+          entries: { "telegram-user": { enabled: false } },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: ["telegram-user"] } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? ["telegram-user"] : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>telegram-user</name>");
+      expect(prompt).not.toContain("<name>message-drafting</name>");
+    },
+  );
+
+  it.each(["allowBundled", "skillFilter"] as const)(
+    "keeps the dependency active through %s when another selected adapter is enabled",
+    async (selectionBoundary) => {
+      const { workspaceDir, bundledSkillsDir } = await createBundledSkills([
+        "telegram-user",
+        "slack",
+        "message-drafting",
+      ]);
+      const selection = ["telegram-user", "slack"];
+      const config: OpenClawConfig = {
+        skills: {
+          entries: { "telegram-user": { enabled: false } },
+          ...(selectionBoundary === "allowBundled" ? { allowBundled: selection } : {}),
+        },
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config,
+        skillFilter: selectionBoundary === "skillFilter" ? selection : undefined,
+      });
+
+      expect(prompt).not.toContain("<name>telegram-user</name>");
+      expect(prompt).toContain("<name>slack</name>");
+      expect(prompt).toContain("<name>message-drafting</name>");
+    },
+  );
+
   it("preserves empty and unrelated per-agent skill filters", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledSkills([
       "telegram-user",

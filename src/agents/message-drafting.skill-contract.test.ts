@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CONSUMER_DEFAULT_BUNDLED_SKILLS } from "./consumer-default-bundled-skills.js";
+import { buildWorkspaceSkillCommandSpecs, loadWorkspaceSkillEntries } from "./skills.js";
 
 const repoRoot = process.cwd();
 const skillPath = path.join(repoRoot, "skills", "message-drafting", "SKILL.md");
@@ -87,5 +88,22 @@ describe("message-drafting integration contract", () => {
     expect(CONSUMER_DEFAULT_BUNDLED_SKILLS.indexOf("message-drafting")).toBe(
       CONSUMER_DEFAULT_BUNDLED_SKILLS.indexOf("cross-channel-triage") + 1,
     );
+  });
+
+  it("loads automatically without exposing a user command", () => {
+    const workspaceDir = path.join(repoRoot, ".message-drafting-contract-workspace");
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      bundledSkillsDir: path.join(repoRoot, "skills"),
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const entry = entries.find((candidate) => candidate.skill.name === "message-drafting");
+
+    expect(skill).toContain("user-invocable: false");
+    expect(entry?.invocation?.userInvocable).toBe(false);
+    expect(
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        entries: entry ? [entry] : [],
+      }),
+    ).not.toContainEqual(expect.objectContaining({ skillName: "message-drafting" }));
   });
 });

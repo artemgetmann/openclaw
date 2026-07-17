@@ -8,7 +8,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { resolveBundledAllowlist, shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
+import {
+  expandBundledSkillDependencies,
+  resolveBundledAllowlist,
+  shouldExposeSkillToModel,
+  shouldIncludeSkill,
+} from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
@@ -91,7 +96,7 @@ function filterSkillEntries(
   let filtered = entries.filter((entry) => includeEntry({ entry, config, eligibility }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
-    const normalized = normalizeSkillFilter(skillFilter) ?? [];
+    const normalized = resolveRuntimeSkillFilter(skillFilter, config) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
     filtered =
@@ -103,6 +108,13 @@ function filterSkillEntries(
     );
   }
   return filtered;
+}
+
+function resolveRuntimeSkillFilter(
+  skillFilter?: string[],
+  config?: OpenClawConfig,
+): string[] | undefined {
+  return expandBundledSkillDependencies(normalizeSkillFilter(skillFilter), config);
 }
 
 const SKILL_COMMAND_MAX_LENGTH = 32;
@@ -143,7 +155,7 @@ function isSelectedSkillForPrompt(
 ): boolean {
   const skillKey = resolveSkillKey(entry.skill, entry);
   const allowBundled = resolveBundledAllowlist(config) ?? [];
-  const filterSelection = normalizeSkillFilter(skillFilter) ?? [];
+  const filterSelection = resolveRuntimeSkillFilter(skillFilter, config) ?? [];
   return (
     allowBundled.includes(entry.skill.name) ||
     allowBundled.includes(skillKey) ||

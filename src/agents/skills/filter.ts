@@ -1,11 +1,10 @@
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { expandBundledSkillDependencies } from "./config.js";
 
 export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
   if (skillFilter === undefined) {
     return undefined;
   }
-  return expandBundledSkillDependencies(normalizeStringEntries(skillFilter));
+  return normalizeStringEntries(skillFilter);
 }
 
 export function normalizeSkillFilterForComparison(
