@@ -116,6 +116,65 @@ describe("message-drafting bundled allowlist dependency", () => {
     expect(skillFilter).toEqual(["wacli"]);
   });
 
+  it("keeps the owner and dependency ahead of 149 workspace skills when prompts truncate", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+      "wacli",
+      "message-drafting",
+    ]);
+    const workspaceSkillNames = Array.from(
+      { length: 149 },
+      (_, index) => `workspace-${String(index).padStart(3, "0")}`,
+    );
+    await Promise.all(
+      workspaceSkillNames.map((name) =>
+        writeSkill({
+          dir: path.join(workspaceDir, "skills", name),
+          name,
+          description: `Workspace ${name}`,
+        }),
+      ),
+    );
+    const config: OpenClawConfig = {
+      skills: {
+        allowBundled: ["wacli"],
+        limits: {
+          maxSkillsInPrompt: 150,
+          maxSkillsPromptChars: 100_000,
+        },
+      },
+    };
+
+    const allowlistSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config,
+    });
+    const skillFilter = [...workspaceSkillNames, "wacli"];
+    const filterSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 150,
+            maxSkillsPromptChars: 100_000,
+          },
+        },
+      },
+      skillFilter,
+    });
+
+    for (const snapshot of [allowlistSnapshot, filterSnapshot]) {
+      expect(snapshot.prompt).toContain("<name>wacli</name>");
+      expect(snapshot.prompt).toContain("<name>message-drafting</name>");
+      expect(snapshot.prompt).toContain("Skills truncated");
+      expect(snapshot.prompt).not.toContain("<name>workspace-148</name>");
+    }
+    expect(config.skills?.allowBundled).toEqual(["wacli"]);
+    expect(filterSnapshot.skillFilter).toEqual(skillFilter);
+    expect(skillFilter).not.toContain("message-drafting");
+  });
+
   it("keeps an explicitly disabled dependency hidden from scoped filters", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",

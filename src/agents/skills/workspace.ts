@@ -8,7 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
+import { resolveBundledAllowlist, shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter, resolveSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
@@ -136,21 +136,28 @@ function resolvePromptSourcePriority(source?: string): number {
   }
 }
 
-function isConfigSelectedSkillForPrompt(entry: SkillEntry, config?: OpenClawConfig): boolean {
+function isSelectedSkillForPrompt(
+  entry: SkillEntry,
+  config?: OpenClawConfig,
+  selectedSkillNames?: ReadonlySet<string>,
+): boolean {
   const skillKey = resolveSkillKey(entry.skill, entry);
-  const allowBundled = config?.skills?.allowBundled ?? [];
   return (
-    allowBundled.includes(entry.skill.name) ||
-    allowBundled.includes(skillKey) ||
+    selectedSkillNames?.has(entry.skill.name) ||
+    selectedSkillNames?.has(skillKey) ||
     Boolean(config?.skills?.entries?.[skillKey] ?? config?.skills?.entries?.[entry.skill.name])
   );
 }
 
-function resolvePromptEntryPriority(entry: SkillEntry, config?: OpenClawConfig): number {
-  // A configured skill is a deliberate runtime capability. In consumer
-  // workspaces, the workspace skill folder can contain broad personal inventory,
-  // so config-selected skills must stay visible before that overflow is trimmed.
-  if (isConfigSelectedSkillForPrompt(entry, config)) {
+function resolvePromptEntryPriority(
+  entry: SkillEntry,
+  config?: OpenClawConfig,
+  selectedSkillNames?: ReadonlySet<string>,
+): number {
+  // A configured or agent-filtered skill is a deliberate runtime capability.
+  // In consumer workspaces, the workspace skill folder can contain broad
+  // personal inventory, so selected skills must survive overflow trimming.
+  if (isSelectedSkillForPrompt(entry, config, selectedSkillNames)) {
     return 0;
   }
 
@@ -173,16 +180,25 @@ function resolvePromptEntryPriority(entry: SkillEntry, config?: OpenClawConfig):
   return 4 + resolvePromptSourcePriority(entry.skill.source);
 }
 
-function rankSkillsForPrompt(entries: SkillEntry[], config?: OpenClawConfig): Skill[] {
-  // Prompt limits trim from the front. Config-selected capabilities must
-  // survive truncation; otherwise natural-language routing cannot choose skills
-  // the model never sees. Duplicate-name workspace overrides already win in the
-  // merge map before this ranking runs.
+function rankSkillsForPrompt(
+  entries: SkillEntry[],
+  config?: OpenClawConfig,
+  skillFilter?: string[],
+): Skill[] {
+  // Prompt limits trim from the front. Explicit and dependency-expanded
+  // selections must survive truncation or natural-language routing cannot
+  // choose skills the model never sees. Duplicate-name workspace overrides
+  // already win in the merge map before this ranking runs.
+  const selectedSkillNames = new Set([
+    ...(resolveBundledAllowlist(config) ?? []),
+    ...(resolveSkillFilter(skillFilter) ?? []),
+  ]);
   return entries
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => {
       const sourceDelta =
-        resolvePromptEntryPriority(a.entry, config) - resolvePromptEntryPriority(b.entry, config);
+        resolvePromptEntryPriority(a.entry, config, selectedSkillNames) -
+        resolvePromptEntryPriority(b.entry, config, selectedSkillNames);
       if (sourceDelta !== 0) {
         return sourceDelta;
       }
@@ -738,7 +754,7 @@ function resolveWorkspaceSkillPromptState(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config);
+  const resolvedSkills = rankSkillsForPrompt(promptEntries, opts?.config, opts?.skillFilter);
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
