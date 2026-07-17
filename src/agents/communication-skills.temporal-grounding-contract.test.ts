@@ -23,6 +23,8 @@ describe("communication skills temporal grounding contracts", () => {
       expect(skill).toMatch(/source\s+timestamp/);
       expect(skill).toContain("today, tomorrow, yesterday, and weekdays");
       expect(skill).toContain("trusted current time");
+      expect(skill).toContain("sender timezone when known, otherwise user timezone");
+      expect(skill).toMatch(/flag material\s+ambiguity\s+instead of guessing/);
       expect(skill).toContain("absolute source date");
       expect(skill).toContain("timing is unknown");
       expect(skill).toContain("recovery or reschedule draft");

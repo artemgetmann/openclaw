@@ -113,6 +113,8 @@ Time-aware replies
 - Resolve today, tomorrow, yesterday, and weekdays against the source message
   time, then compare with trusted current time. Show the absolute source date;
   if it is absent, say timing is unknown rather than inventing it.
+- Use sender timezone when known, otherwise user timezone; flag material
+  ambiguity instead of guessing.
 - If the resolved intent has passed, prefer a recovery or reschedule draft over
   replying as though the original timing is still current.
 
