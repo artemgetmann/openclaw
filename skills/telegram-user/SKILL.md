@@ -41,6 +41,11 @@ This skill is the Telegram analogue of the WhatsApp CLI surface: a narrow,
 deterministic command layer on top of the existing in-repo MTProto backend. It
 is not macOS UI automation and not a second Telegram runtime.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's Telegram context,
+freshness, approval, and send rules.
+
 Bot Channel vs Telegram-as-Me
 
 - If the user says "message me", "update me", "tell me in Telegram", or asks

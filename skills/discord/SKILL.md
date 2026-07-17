@@ -9,6 +9,11 @@ allowed-tools: ["message"]
 
 Use the `message` tool. No provider-specific `discord` tool exposed to the agent.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's Discord context,
+approval, and send rules.
+
 ## Musts
 
 - Always: `channel: "discord"`.

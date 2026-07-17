@@ -7,6 +7,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "goal-mode",
   "monitor-router",
   "cross-channel-triage",
+  "message-drafting",
   "apple-notes",
   "apple-reminders",
   "media-editor",

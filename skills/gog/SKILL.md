@@ -32,6 +32,11 @@ Use `gog` for Google Workspace work: Gmail, Google Calendar, Drive, Docs,
 Sheets, and Contacts.
 This is the Google-account skill, not the generic mailbox skill.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's Google
+source-freshness, identity, approval, and send rules.
+
 Use it when the user means things like:
 
 - "search Gmail" or "reply in my Gmail"

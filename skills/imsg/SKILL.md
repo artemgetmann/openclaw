@@ -27,6 +27,11 @@ metadata:
 
 Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's Messages context,
+approval, and send rules.
+
 ## When to Use
 
 ✅ **USE this skill when:**

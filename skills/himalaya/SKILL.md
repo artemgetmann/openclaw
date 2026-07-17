@@ -30,6 +30,11 @@ metadata:
 
 Himalaya is a CLI email client that lets you manage emails from the terminal using IMAP, SMTP, Notmuch, or Sendmail backends.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's email
+source-freshness, identity, approval, and send rules.
+
 ## References
 
 - `references/configuration.md` (config file setup + IMAP/SMTP authentication)

@@ -10,6 +10,11 @@ metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.sl
 
 Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for OpenClaw.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's Slack context,
+approval, and send rules.
+
 ## Inputs to collect
 
 - `channelId` and `messageId` (Slack message timestamp, e.g. `1712023032.1234`).

@@ -54,6 +54,11 @@ Use `wacli` only when the user explicitly asks you to message someone else on Wh
 Do NOT use `wacli` for normal user chats; OpenClaw routes WhatsApp conversations automatically.
 If the user is chatting with you on WhatsApp, you should not reach for this tool unless they ask you to contact a third party.
 
+For recipient-facing composition—drafting, tone, cross-language presentation,
+revisions, or approval-ready output—read and follow the bundled
+`message-drafting` skill by canonical name. Keep this skill's WhatsApp context,
+freshness, approval, and send rules.
+
 Automation Rule
 
 - For WhatsApp reply detection, scoped monitors, or "did this person reply yet?" checks, use:
