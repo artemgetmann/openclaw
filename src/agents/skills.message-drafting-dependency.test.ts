@@ -58,6 +58,7 @@ describe("message-drafting bundled dependency", () => {
         bundledSkillsDir,
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config,
+        skillFilter: [dependentSkill],
       });
 
       expect(prompt).toContain(`<name>${dependentSkill}</name>`);
@@ -83,5 +84,65 @@ describe("message-drafting bundled dependency", () => {
     expect(prompt).toContain("<name>peekaboo</name>");
     expect(prompt).not.toContain("<name>telegram-user</name>");
     expect(prompt).not.toContain("<name>message-drafting</name>");
+  });
+
+  it("preserves empty and unrelated per-agent skill filters", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledSkills([
+      "telegram-user",
+      "message-drafting",
+      "peekaboo",
+    ]);
+    const config: OpenClawConfig = {
+      skills: { allowBundled: ["telegram-user", "peekaboo"] },
+    };
+
+    const emptyPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config,
+      skillFilter: [],
+    });
+    const unrelatedPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config,
+      skillFilter: ["peekaboo"],
+    });
+
+    expect(emptyPrompt).toBe("");
+    expect(unrelatedPrompt).toContain("<name>peekaboo</name>");
+    expect(unrelatedPrompt).not.toContain("<name>telegram-user</name>");
+    expect(unrelatedPrompt).not.toContain("<name>message-drafting</name>");
+  });
+
+  it("keeps message-drafting ahead of unrelated prompt overflow", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledSkills([
+      "telegram-user",
+      "message-drafting",
+    ]);
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "workspace-overflow"),
+      name: "workspace-overflow",
+      description: "Unrelated workspace skill",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: {
+        skills: {
+          allowBundled: ["telegram-user"],
+          limits: {
+            maxSkillsInPrompt: 2,
+            maxSkillsPromptChars: 2_000,
+          },
+        },
+      },
+    });
+
+    expect(prompt).toContain("<name>telegram-user</name>");
+    expect(prompt).toContain("<name>message-drafting</name>");
+    expect(prompt).not.toContain("<name>workspace-overflow</name>");
+    expect(prompt).toContain("Skills truncated: included 2 of 3");
   });
 });

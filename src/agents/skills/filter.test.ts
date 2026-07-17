@@ -18,6 +18,11 @@ describe("skills/filter", () => {
     expect(normalizeSkillFilter(undefined)).toBeUndefined();
   });
 
+  it("adds message-drafting only for dependent communication skills", () => {
+    expect(normalizeSkillFilter(["telegram-user"])).toEqual(["telegram-user", "message-drafting"]);
+    expect(normalizeSkillFilter(["peekaboo"])).toEqual(["peekaboo"]);
+  });
+
   it("normalizes for comparison with dedupe + ordering", () => {
     expect(normalizeSkillFilterForComparison(["weather", "meme-factory", "weather"])).toEqual([
       "meme-factory",

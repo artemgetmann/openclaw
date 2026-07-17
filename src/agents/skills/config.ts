@@ -67,19 +67,24 @@ function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(entry.skill.source);
 }
 
-export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
-  const allowlist = normalizeAllowlist(config?.skills?.allowBundled);
+export function expandBundledSkillDependencies(
+  selection: string[] | undefined,
+): string[] | undefined {
   if (
-    !allowlist ||
-    allowlist.includes("message-drafting") ||
-    !allowlist.some((skillName) => MESSAGE_DRAFTING_DEPENDENT_BUNDLED_SKILLS.has(skillName))
+    !selection ||
+    selection.includes("message-drafting") ||
+    !selection.some((skillName) => MESSAGE_DRAFTING_DEPENDENT_BUNDLED_SKILLS.has(skillName))
   ) {
-    return allowlist;
+    return selection;
   }
-  // Expand the runtime view only. Persisted user configuration remains an
-  // explicit selection, while a selected adapter can still load its authored
-  // composition dependency from any bundled-skill projection.
-  return [...allowlist, "message-drafting"];
+  // Expand normalized runtime selections only. Persisted allowlists and
+  // caller-owned per-agent filters remain explicit, while a selected adapter
+  // can still load its authored dependency from any bundled-skill projection.
+  return [...selection, "message-drafting"];
+}
+
+export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
+  return expandBundledSkillDependencies(normalizeAllowlist(config?.skills?.allowBundled));
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
