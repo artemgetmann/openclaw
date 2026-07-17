@@ -105,6 +105,17 @@ Automation Rule
   relevant thread movement, inbound or outbound, changes or duplicates the
   reply, stop and update the draft or ask the user before sending. This is the
   same basic safety step a human would take before replying in Telegram.
+
+Time-aware replies
+
+- `read --format compact` exposes a Telegram `date`; preserve that source
+  timestamp when triaging or quoting an actionable message.
+- Resolve today, tomorrow, yesterday, and weekdays against the source message
+  time, then compare with trusted current time. Show the absolute source date;
+  if it is absent, say timing is unknown rather than inventing it.
+- If the resolved intent has passed, prefer a recovery or reschedule draft over
+  replying as though the original timing is still current.
+
 - If `read` shows `media_kind` for a voice/audio message, download the payload
   with `telegram-user download`, then use the generic `media transcribe`
   command. Do not inspect Telethon internals or write a one-off downloader.

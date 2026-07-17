@@ -87,6 +87,17 @@ Automation Rule
   thread movement, inbound or outbound, changes or duplicates the reply, stop
   and update the reply or ask the user before sending. This is mandatory even if
   the user already approved an older draft.
+
+Time-aware WhatsApp context
+
+- Preserve wacli timestamps as the source timestamp when triaging or quoting an
+  actionable WhatsApp message.
+- Resolve today, tomorrow, yesterday, and weekdays against the source message
+  time, then compare with trusted current time. Show the absolute source date;
+  if it is absent, say timing is unknown rather than inventing it.
+- If the resolved intent has passed, offer a recovery or reschedule draft rather
+  than replying as though the original timing is still current.
+
 - Treat raw `wacli doctor` as fallback/debug-only.
   Under a live OpenClaw-owned lock it can report `CONNECTED false` even when
   `wacli sync --follow` is healthy, so do not use it as the primary readiness

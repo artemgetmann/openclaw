@@ -65,6 +65,17 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - Before any approved email send, refresh the same thread/person again. Stop if
   newer relevant thread movement, inbound or outbound, changes or duplicates the
   reply, even when the draft and approval happen in the same short flow.
+
+## Time-aware email replies
+
+- Preserve the email Date header as the source timestamp when triaging or
+  quoting an actionable message.
+- Resolve today, tomorrow, yesterday, and weekdays against the source message
+  time, then compare with trusted current time. Show the absolute source date;
+  if it is absent, say timing is unknown rather than inventing it.
+- If the resolved intent has passed, offer a recovery or reschedule draft rather
+  than replying as though the original timing is still current.
+
 - If Gmail auth fails and Himalaya is not safely configured for the same
   mailbox, report the blocker and ask whether the user wants to reconnect
   Google.

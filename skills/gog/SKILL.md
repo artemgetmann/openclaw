@@ -108,6 +108,17 @@ Email fallback policy
 - Before any approved Gmail send, refresh the same thread/person again. Stop if
   newer relevant thread movement, inbound or outbound, changes or duplicates the
   reply, even when the draft and approval happen in the same short flow.
+
+### Time-aware Gmail replies
+
+- Preserve Gmail message timestamps as the source timestamp when triaging or
+  quoting an actionable email.
+- Resolve today, tomorrow, yesterday, and weekdays against the source message
+  time, then compare with trusted current time. Show the absolute source date;
+  if it is absent, say timing is unknown rather than inventing it.
+- If the resolved intent has passed, offer a recovery or reschedule draft rather
+  than replying as though the original timing is still current.
+
 - If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
   report the blocker clearly and ask whether the user wants to reconnect Google.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
