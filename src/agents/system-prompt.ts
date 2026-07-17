@@ -124,6 +124,7 @@ function buildTemporalGroundingSection(params: { canUseSessionStatus: boolean })
       ? "When recency matters, compare it with trusted current time; if current time is unavailable, get it from session_status."
       : "When recency matters and trusted current time is unavailable, state that recency cannot be verified; do not guess.",
     "Resolve today, tomorrow, yesterday, and weekdays relative to when the source message was sent; never present stale relative language as current.",
+    "Use the sender's timezone when known; otherwise use the user's timezone. If the timezone would materially change the date or deadline, flag material ambiguity instead of guessing.",
     "When surfacing or quoting an actionable external message, include its absolute source date. If its timestamp is missing, say timing is unknown; do not invent it.",
     "",
   ];
@@ -617,7 +618,7 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-    userTimezone
+    userTimezone && canUseSessionStatus
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
