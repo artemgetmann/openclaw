@@ -292,6 +292,96 @@ test_operator_authorization_interface() {
   pass "operator authorization prints the exact expiring-intent execution command"
 }
 
+test_operator_authorization_preserves_inert_future_flags() {
+  local out="$TMP_DIR/authorize-future.out"
+  local err="$TMP_DIR/authorize-future.err"
+  local intent_path="$TMP_DIR/operator-future.intent"
+  local intent_before="$TMP_DIR/operator-future.intent.before"
+  local fake_bin="$TMP_DIR/operator-future-bin"
+  local gh_sentinel="$TMP_DIR/operator-future-gh.called"
+  local status
+
+  mkdir -p "$fake_bin"
+  apply_stub "$fake_bin/gh" '#!/usr/bin/env bash
+: >"${AUTHORIZATION_GH_SENTINEL:?}"
+exit 99'
+  export AUTHORIZATION_GH_SENTINEL="$gh_sentinel"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=1550
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=operator-future-run
+
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --intent-ttl-seconds 60 \
+      --verify-public-assets \
+      --latest-release-tag \
+      --parallel-safe-local-assets \
+      --urgent-sparkle \
+      --phase verify-sparkle-assets-only \
+      --size-report \
+      >"$out"
+
+  [[ ! -e "$gh_sentinel" ]] \
+    || fail "authorization resolved --latest-release-tag instead of preserving it inertly"
+  grep -Fqx \
+    'next_command=bash scripts/jarvis-public-release.sh --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
+    "$out" \
+    || fail "future authorization did not print the complete executable wrapper command"
+  grep -Fqx \
+    'persistent_command=bash scripts/jarvis-public-release-session.sh start -- --release-intent operator-future-run --verify-public-assets --latest-release-tag --parallel-safe-local-assets --urgent-sparkle --phase verify-sparkle-assets-only --size-report' \
+    "$out" \
+    || fail "future authorization did not print the matching durable transport command"
+
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=operator-publish-run
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --intent-ttl-seconds 60 \
+      --publish-release-assets \
+      --github-release-tag v-current \
+      --phase publish-assets-only \
+      >"$out"
+  grep -Fqx \
+    'next_command=bash scripts/jarvis-public-release.sh --release-intent operator-publish-run --publish-release-assets --github-release-tag v-current --phase publish-assets-only' \
+    "$out" \
+    || fail "publish authorization did not preserve its explicit tag and publication intent"
+
+  cp "$intent_path" "$intent_before"
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=must-not-replace
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --publish-release-assets \
+      --verify-public-assets \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "authorization accepted conflicting publish and verify flags"
+  cmp -s "$intent_before" "$intent_path" \
+    || fail "publish/verify conflict replaced the durable release intent"
+
+  set +e
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --latest-release-tag \
+      --github-release-tag v-conflict \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "authorization accepted conflicting tag selectors"
+  cmp -s "$intent_before" "$intent_path" \
+    || fail "tag-selector conflict replaced the durable release intent"
+  pass "authorization preserves validated future flags and rejects conflicts before intent creation"
+}
+
 test_authorization_persistence_failure_is_fatal() {
   local blocked_parent="$TMP_DIR/intent-parent-blocker"
   local out="$TMP_DIR/authorize-persistence.out"
@@ -1525,6 +1615,7 @@ test_intent_path_stability
 test_intent_default_and_maximum_ttl
 test_intent_tracked_state_binding
 test_operator_authorization_interface
+test_operator_authorization_preserves_inert_future_flags
 test_authorization_persistence_failure_is_fatal
 test_checkpoint_invalid_and_valid_resume
 test_in_progress_receipt_preserves_submitted_checkpoint
