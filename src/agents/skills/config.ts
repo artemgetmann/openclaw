@@ -51,13 +51,36 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
+const MESSAGE_DRAFTING_REFERENCING_SKILLS = new Set([
+  "wacli",
+  "telegram-user",
+  "gog",
+  "himalaya",
+  "imsg",
+  "bluebubbles",
+  "slack",
+  "discord",
+  "cross-channel-triage",
+]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(entry.skill.source);
 }
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
-  return normalizeAllowlist(config?.skills?.allowBundled);
+  const allowlist = normalizeAllowlist(config?.skills?.allowBundled);
+  if (
+    !allowlist ||
+    allowlist.includes("__none__") ||
+    allowlist.includes("message-drafting") ||
+    !allowlist.some((skillName) => MESSAGE_DRAFTING_REFERENCING_SKILLS.has(skillName))
+  ) {
+    return allowlist;
+  }
+
+  // Expand dependencies in memory only. User config remains an expression of
+  // explicit choices while every generic loader/evaluator sees a usable graph.
+  return [...allowlist, "message-drafting"];
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
@@ -66,6 +89,9 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
   }
   if (!isBundledSkill(entry)) {
     return true;
+  }
+  if (allowlist.includes("__none__")) {
+    return false;
   }
   const key = resolveSkillKey(entry.skill, entry);
   return allowlist.includes(key) || allowlist.includes(entry.skill.name);
@@ -132,7 +158,7 @@ export function evaluateSkillEntry(params: {
   const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
+  const allowBundled = resolveBundledAllowlist(config);
   const disabled = skillConfig?.enabled === false;
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
 
@@ -177,7 +203,7 @@ export function shouldIncludeSkill(params: {
   const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
+  const allowBundled = resolveBundledAllowlist(config);
 
   if (skillConfig?.enabled === false) {
     return false;

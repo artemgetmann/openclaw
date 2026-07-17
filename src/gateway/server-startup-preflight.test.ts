@@ -355,6 +355,45 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(result.config.skills?.allowBundled).toContain("telegram-chat-management");
   });
 
+  it("keeps narrow consumer allowlists unchanged across repeated startup repair", async () => {
+    const home = makeTempDir();
+    const jarvisConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "openclaw.json",
+    );
+    const config: OpenClawConfig = {
+      skills: { allowBundled: ["wacli", "discord"] },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(createSnapshot({ path: jarvisConfigPath, config }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+    const syncBundledSkillsToSharedPersonalRootFn = vi.fn().mockResolvedValue({
+      targetDir: path.join(home, ".agents", "skills"),
+      entries: [],
+    });
+    const params = {
+      readSnapshot,
+      writeConfig,
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+      env: { HOME: home, OPENCLAW_PROFILE: "consumer" } as NodeJS.ProcessEnv,
+      syncBundledSkillsToSharedPersonalRootFn,
+    };
+
+    const first = await runGatewayStartupConfigPreflight(params);
+    const second = await runGatewayStartupConfigPreflight(params);
+
+    expect(writeConfig).not.toHaveBeenCalled();
+    expect(first.config.skills?.allowBundled).toEqual(["wacli", "discord"]);
+    expect(second.config.skills?.allowBundled).toEqual(["wacli", "discord"]);
+    expect(config.skills?.allowBundled).toEqual(["wacli", "discord"]);
+  });
+
   it("migrates a legacy Jarvis Computer Use opt-out without an allowlist", async () => {
     const home = makeTempDir();
     const jarvisConfigPath = path.join(
