@@ -8,7 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
+import { resolveBundledAllowlist, shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
@@ -138,7 +138,7 @@ function resolvePromptSourcePriority(source?: string): number {
 
 function isConfigSelectedSkillForPrompt(entry: SkillEntry, config?: OpenClawConfig): boolean {
   const skillKey = resolveSkillKey(entry.skill, entry);
-  const allowBundled = config?.skills?.allowBundled ?? [];
+  const allowBundled = resolveBundledAllowlist(config) ?? [];
   return (
     allowBundled.includes(entry.skill.name) ||
     allowBundled.includes(skillKey) ||

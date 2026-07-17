@@ -51,13 +51,35 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
+const MESSAGE_DRAFTING_DEPENDENT_BUNDLED_SKILLS = new Set([
+  "cross-channel-triage",
+  "wacli",
+  "telegram-user",
+  "gog",
+  "himalaya",
+  "imsg",
+  "bluebubbles",
+  "slack",
+  "discord",
+]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(entry.skill.source);
 }
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
-  return normalizeAllowlist(config?.skills?.allowBundled);
+  const allowlist = normalizeAllowlist(config?.skills?.allowBundled);
+  if (
+    !allowlist ||
+    allowlist.includes("message-drafting") ||
+    !allowlist.some((skillName) => MESSAGE_DRAFTING_DEPENDENT_BUNDLED_SKILLS.has(skillName))
+  ) {
+    return allowlist;
+  }
+  // Expand the runtime view only. Persisted user configuration remains an
+  // explicit selection, while a selected adapter can still load its authored
+  // composition dependency from any bundled-skill projection.
+  return [...allowlist, "message-drafting"];
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
@@ -132,7 +154,7 @@ export function evaluateSkillEntry(params: {
   const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
+  const allowBundled = resolveBundledAllowlist(config);
   const disabled = skillConfig?.enabled === false;
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
 
@@ -177,7 +199,7 @@ export function shouldIncludeSkill(params: {
   const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
+  const allowBundled = resolveBundledAllowlist(config);
 
   if (skillConfig?.enabled === false) {
     return false;
