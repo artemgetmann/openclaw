@@ -22,6 +22,18 @@ Use the `message` tool. No provider-specific `discord` tool exposed to the agent
 - Mention users as `<@USER_ID>`.
 - Prefer Discord components v2 (`components`) for rich UI; use legacy `embeds` only when you must.
 
+## Time-aware conversational context
+
+- Preserve a Discord source timestamp from read/search context when triaging or
+  quoting an actionable message. Do not invent one from a message id alone.
+- Resolve today, tomorrow, yesterday, and weekdays against the source message
+  time, then compare with trusted current time. Show the absolute source date;
+  if it is absent, say timing is unknown rather than inventing it.
+- Use sender timezone when known, otherwise user timezone; flag material
+  ambiguity instead of guessing.
+- If the resolved intent has passed, offer a recovery or reschedule draft rather
+  than replying as though the original timing is still current.
+
 ## Targets
 
 - Send-like actions: `to: "channel:<id>"` or `to: "user:<id>"`.

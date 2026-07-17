@@ -19,6 +19,18 @@ BlueBubbles is OpenClaw’s recommended iMessage integration. Use the `message` 
 
 If the user is vague ("text my mom"), ask for the recipient handle or chat guid and the exact message content.
 
+## Time-aware message context
+
+- Preserve BlueBubbles message timestamps from supplied read/context results as
+  the source timestamp when triaging or quoting an actionable message.
+- Resolve today, tomorrow, yesterday, and weekdays against the source message
+  time, then compare with trusted current time. Show the absolute source date;
+  if it is absent, say timing is unknown rather than inventing it.
+- Use sender timezone when known, otherwise user timezone; flag material
+  ambiguity instead of guessing.
+- If the resolved intent has passed, offer a recovery or reschedule draft rather
+  than replying as though the original timing is still current.
+
 ## Actions
 
 ### Send a message
