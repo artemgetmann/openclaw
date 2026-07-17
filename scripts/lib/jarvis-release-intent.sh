@@ -6,6 +6,7 @@
 # process current again.
 
 OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
+OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT=""
 
 openclaw_jarvis_release_intent_value() {
   local metadata_path="$1"
@@ -128,6 +129,7 @@ openclaw_jarvis_release_intent_authorize() {
   local tracked_fingerprint clean_tracked_fingerprint
 
   OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
+  OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT=""
 
   # An empty action fingerprint preserves the original general-purpose intent
   # contract used by direct package invocations. A non-empty fingerprint binds
@@ -228,6 +230,7 @@ openclaw_jarvis_release_intent_validate() {
   local authorized_at expires now
 
   OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE=""
+  OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT=""
   if [[ -z "$expected_intent_id" ]]; then
     OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE="missing"
     return 1
@@ -336,6 +339,7 @@ openclaw_jarvis_release_intent_validate() {
     return 1
   fi
 
+  OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT="$actual_action_fingerprint"
   return 0
 }
 

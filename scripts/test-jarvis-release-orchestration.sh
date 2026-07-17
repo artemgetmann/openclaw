@@ -998,6 +998,117 @@ test_forced_invalid_checkpoint_recovers_automatically() {
   pass "forced invalid checkpoint recovers through automatic phase selection"
 }
 
+test_bound_package_failure_recovers_through_wrapper() {
+  local authorize_out="$TMP_DIR/bound-package-authorize.out"
+  local out="$TMP_DIR/bound-package.out"
+  local err="$TMP_DIR/bound-package.err"
+  local combined="$TMP_DIR/bound-package.combined"
+  local disk_probe="$TMP_DIR/bound-package-disk-probe"
+  local release_home release_name status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
+  write_release_control_stub "$disk_probe" '#!/usr/bin/env bash
+printf "bound-package-fs\t/Volumes/bound-package\t0\t%s\n" "$1"'
+
+  # --size-report makes this a bound action without forcing phase selection.
+  # The deterministic disk failure occurs inside the delegated package before
+  # build/sign/notary work and exercises the wrapper's post-child recovery.
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=bound-package-recovery
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --size-report \
+      >"$authorize_out"
+
+  set +e
+  APP_NAME="JarvisBoundPackageFailure-$$" \
+  ALLOW_COLD_RELEASE_LANE=1 \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/bound-package.lock" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$TMP_DIR/bound-package-summary.env" \
+  OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TMP_DIR/bound-package-timing.tsv" \
+  OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT="$TMP_DIR/bound-package-artifacts" \
+  JARVIS_RELEASE_DISK_REQUIRED_KIB=1 \
+  JARVIS_RELEASE_DISK_PROBE_COMMAND="$disk_probe" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent bound-package-recovery \
+      --size-report \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+
+  [[ "$status" -ne 0 ]] || fail "bound delegated package failure unexpectedly succeeded"
+  { /bin/cat "$out"; /bin/cat "$err"; } >"$combined"
+  [[ "$(grep -c '^recovery_command=' "$combined")" == "1" ]] \
+    || fail "bound delegated package failure did not emit exactly one recovery command"
+  grep -Fq \
+    'recovery_command=bash scripts/jarvis-public-release.sh --release-intent bound-package-recovery --size-report' \
+    "$combined" \
+    || fail "bound delegated package failure did not return through its executable wrapper action"
+  ! grep -q '^recovery_command=bash .*package-openclaw-mac-dist.sh' "$combined" \
+    || fail "bound delegated package failure printed a fresh-shell-invalid direct package command"
+  pass "bound delegated package failure recovers through its fingerprinted wrapper action"
+}
+
+test_bound_forced_recovery_requires_fresh_authorization() {
+  local authorize_out="$TMP_DIR/bound-forced-authorize.out"
+  local out="$TMP_DIR/bound-forced.out"
+  local err="$TMP_DIR/bound-forced.err"
+  local combined="$TMP_DIR/bound-forced.combined"
+  local fake_bin="$TMP_DIR/bound-forced-bin"
+  local release_home release_name status
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
+  mkdir -p "$fake_bin"
+  write_release_control_stub "$fake_bin/gh" '#!/usr/bin/env bash
+printf "%s\n" "{\"tagName\":\"v-bound-current\"}"'
+
+  # Authorize the exact forced verify action without resolving GitHub. The
+  # later execution resolves --latest-release-tag, then intentionally fails its
+  # missing checkpoint. Automatic recovery would both remove --phase and turn
+  # latest into an explicit tag, so it must receive a new lease.
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=bound-forced-recovery
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --verify-public-assets \
+      --latest-release-tag \
+      --phase verify-public-assets-only \
+      >"$authorize_out"
+
+  set +e
+  PATH="$fake_bin:$PATH" \
+  APP_NAME="JarvisMissingBoundCheckpoint-$$" \
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/bound-forced.lock" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$TMP_DIR/bound-forced-summary.env" \
+  OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TMP_DIR/bound-forced-timing.tsv" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent bound-forced-recovery \
+      --verify-public-assets \
+      --latest-release-tag \
+      --phase verify-public-assets-only \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+
+  [[ "$status" -ne 0 ]] || fail "bound forced checkpoint failure unexpectedly succeeded"
+  { /bin/cat "$out"; /bin/cat "$err"; } >"$combined"
+  [[ "$(grep -c '^recovery_command=' "$combined")" == "1" ]] \
+    || fail "bound forced failure did not emit exactly one recovery command"
+  grep -Fxq 'recovery_command=bash scripts/jarvis-public-release.sh --authorize' "$combined" \
+    || fail "bound forced recovery reused a fingerprint after changing phase/tag action"
+  ! grep -q '^recovery_command=.*--release-intent bound-forced-recovery' "$combined" \
+    || fail "bound forced recovery printed a non-executable stale-intent command"
+  pass "bound forced recovery requires fresh authorization before changing phase or tag action"
+}
+
 setup_checkpoint_stubs
 setup_release_intent
 test_phase_selection
@@ -1007,3 +1118,5 @@ test_package_sparkle_publish_gate_does_not_require_dmg
 test_package_sparkle_publish_only_ignores_skip_notarize
 test_package_script_rejects_noncanonical_release_worktree
 test_forced_invalid_checkpoint_recovers_automatically
+test_bound_package_failure_recovers_through_wrapper
+test_bound_forced_recovery_requires_fresh_authorization

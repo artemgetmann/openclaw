@@ -98,6 +98,48 @@ test_start_and_duplicate_guard() {
   local out="$TMP_DIR/start.out"
   local err="$TMP_DIR/start.err"
   local status
+  local env_name
+  local control_env_vars=(
+    OPENCLAW_MAIN_HOME_CLONE
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_PLISTBUDDY
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN
+    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_XCRUN_BIN
+    OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT
+    OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE
+    OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE
+    OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH
+    OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE
+    OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT
+    OPENCLAW_JARVIS_RELEASE_LOCK_CLAIMED_DIR
+    OPENCLAW_JARVIS_RELEASE_LOCK_HELD
+    OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PATH
+    OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_PID
+    OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_START
+    OPENCLAW_JARVIS_RELEASE_LOCK_PARENT_TOKEN
+    OPENCLAW_JARVIS_RELEASE_LOCK_PATH
+    OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE
+    OPENCLAW_JARVIS_RELEASE_LOCK_TOKEN
+    OPENCLAW_JARVIS_RELEASE_LOCK_TRANSFER_PATH
+    OPENCLAW_JARVIS_RELEASE_MANIFEST
+    OPENCLAW_JARVIS_RELEASE_RECOVERY_OWNER
+    OPENCLAW_JARVIS_RELEASE_SESSION_NAME
+    OPENCLAW_JARVIS_RELEASE_STATE_ROOT
+    OPENCLAW_JARVIS_RELEASE_TIMING_REPORT
+    OPENCLAW_JARVIS_RELEASE_TMUX_BIN
+    OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME
+    JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE
+    JARVIS_RELEASE_DISK_PROBE_COMMAND
+    JARVIS_RELEASE_DISK_REQUIRED_KIB
+  )
+
+  # One shared marker proves values never enter tmux metadata; the assertions
+  # below deliberately inspect only variable names.
+  for env_name in "${control_env_vars[@]}"; do
+    export "$env_name=ambient-release-control-value"
+  done
 
   NOTARYTOOL_KEY='ambient-notary-secret-value' \
   SPARKLE_PRIVATE_KEY_FILE='ambient-sparkle-secret-value' \
@@ -125,6 +167,12 @@ test_start_and_duplicate_guard() {
     || fail "start did not scrub ambient artifact-root overrides"
   grep -Fq -- '-u CODESIGN_TIMESTAMP' "$FAKE_COMMAND" \
     || fail "start did not scrub ambient signing-mode overrides"
+  for env_name in "${control_env_vars[@]}"; do
+    grep -Fq -- "-u $env_name" "$FAKE_COMMAND" \
+      || fail "start did not scrub ambient release control variable name: $env_name"
+  done
+  ! grep -Fq 'ambient-release-control-value' "$FAKE_COMMAND" \
+    || fail "tmux command copied an ambient release control value"
   ! grep -Fq 'ambient-notary-secret-value' "$FAKE_COMMAND" \
     || fail "tmux command copied an ambient notary secret value"
   ! grep -Fq 'ambient-sparkle-secret-value' "$FAKE_COMMAND" \

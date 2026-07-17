@@ -419,7 +419,11 @@ exact wrapper action. Changing verify to publish, changing a tag or phase, or
 otherwise reshaping the printed command fails before lock acquisition or
 release-state mutation. A bound intent also fails when passed directly to the
 package script without the matching wrapper context; the wrapper remains the
-single authority that selects and delegates the package phase.
+single authority that selects and delegates the package phase. Delegated
+package failures therefore recover through the original wrapper action, never
+through a direct package command. If recovery must remove a forced phase or
+replace `--latest-release-tag` with a resolved tag, it prints `--authorize`
+because that adjusted action requires a fresh lease.
 Conflicting publish/verify or latest/explicit-tag intent fails before an intent
 is created or replaced. The
 default lease is two hours, sized above the observed end-to-end release time;
@@ -455,7 +459,9 @@ bash scripts/jarvis-public-release-session.sh clear
 The persistent child does not copy release credentials or ambient release
 overrides into tmux arguments. It clears supported and stale notary, Sparkle,
 smoke, package, state-path, and `OPENCLAW_RELEASE_ENV_FILE` values inherited
-from either the launcher or tmux server. The package lane then reloads the
+from either the launcher or tmux server. It also clears release intent, lock,
+checkpoint, worktree, disk, ownership-transfer, and other validation test
+overrides before the child starts. The package lane then reloads the
 deterministic canonical
 `~/Library/Application Support/OpenClaw/release.env`. Put persistent release
 credentials and settings there; a custom ambient release-env path is

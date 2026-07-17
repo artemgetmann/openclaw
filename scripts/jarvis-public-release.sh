@@ -543,9 +543,13 @@ fi
 # lease; direct package use of a bound wrapper intent has no digest and fails.
 RELEASE_ACTION_FINGERPRINT="$(release_action_fingerprint)"
 export OPENCLAW_JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT="$RELEASE_ACTION_FINGERPRINT"
-if [[ "$DRY_RUN" != "1" ]] \
-  && ! openclaw_jarvis_release_intent_validate "$ROOT_DIR" "$RELEASE_INTENT_ID"; then
-  if [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "action" ]]; then
+RELEASE_INTENT_ACTION_BOUND=0
+if [[ "$DRY_RUN" != "1" ]]; then
+  if openclaw_jarvis_release_intent_validate "$ROOT_DIR" "$RELEASE_INTENT_ID"; then
+    if [[ -n "$OPENCLAW_JARVIS_RELEASE_INTENT_VALIDATED_ACTION_FINGERPRINT" ]]; then
+      RELEASE_INTENT_ACTION_BOUND=1
+    fi
+  elif [[ "$OPENCLAW_JARVIS_RELEASE_INTENT_FAILURE" == "action" ]]; then
     echo "ERROR: release intent action does not match this wrapper command; refusing before release mutation." >&2
     echo "recovery_command=bash scripts/jarvis-public-release.sh --authorize" >&2
     exit 2
@@ -648,18 +652,32 @@ case "$SELECTED_PHASE" in
 esac
 
 COMMAND_TEXT="$(quote_cmd "${CMD[@]}")"
-RECOVERY_COMMAND="$COMMAND_TEXT"
+if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+  # A bound intent is executable only through the wrapper action that
+  # recomputes its fingerprint. A direct package command would fail in a fresh
+  # shell because wrapper-to-package action context is intentionally absent.
+  RECOVERY_COMMAND="$(original_wrapper_command)"
+else
+  RECOVERY_COMMAND="$COMMAND_TEXT"
+fi
 if [[ "$FORCED_PHASE" != "auto" ]]; then
-  # A rejected forced resume cannot repair its own checkpoint. Return to the
-  # automatic selector while preserving the operator's publish/verify intent.
-  AUTO_RECOVERY_CMD=(bash scripts/jarvis-public-release.sh --release-intent "$RELEASE_INTENT_ID")
-  [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--parallel-safe-local-assets)
-  [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTO_RECOVERY_CMD+=(--urgent-sparkle)
-  [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--publish-release-assets)
-  [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--verify-public-assets)
-  [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTO_RECOVERY_CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
-  [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTO_RECOVERY_CMD+=(--size-report)
-  RECOVERY_COMMAND="$(quote_cmd "${AUTO_RECOVERY_CMD[@]}")"
+  if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+    # Automatic recovery removes the forced phase and can replace
+    # --latest-release-tag with its resolved tag. Both changes are a new
+    # operator action, so the existing bound lease must not authorize them.
+    RECOVERY_COMMAND="bash scripts/jarvis-public-release.sh --authorize"
+  else
+    # Legacy/plain intents are intentionally unbound. Keep their established
+    # automatic-selector recovery while preserving publish/verify intent.
+    AUTO_RECOVERY_CMD=(bash scripts/jarvis-public-release.sh --release-intent "$RELEASE_INTENT_ID")
+    [[ "$PARALLEL_SAFE_LOCAL_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--parallel-safe-local-assets)
+    [[ "$URGENT_SPARKLE_ONLY" != "1" ]] || AUTO_RECOVERY_CMD+=(--urgent-sparkle)
+    [[ "$PUBLISH_RELEASE_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--publish-release-assets)
+    [[ "$VERIFY_PUBLIC_ASSETS" != "1" ]] || AUTO_RECOVERY_CMD+=(--verify-public-assets)
+    [[ -z "$GITHUB_RELEASE_TAG" ]] || AUTO_RECOVERY_CMD+=(--github-release-tag "$GITHUB_RELEASE_TAG")
+    [[ "$RUN_SIZE_REPORT" != "1" ]] || AUTO_RECOVERY_CMD+=(--size-report)
+    RECOVERY_COMMAND="$(quote_cmd "${AUTO_RECOVERY_CMD[@]}")"
+  fi
 fi
 
 if [[ "$DRY_RUN" != "1" && "$SELECTED_PHASE" == "create-local-release-assets-only" && -z "$GITHUB_RELEASE_TAG" ]]; then
