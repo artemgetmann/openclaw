@@ -34,6 +34,24 @@ Default flow:
 7. Require approval before any external send, purchase, deletion, archive, label
    action, calendar change, or other risky action.
 
+## Temporal Grounding
+
+Treat every message timestamp as semantic context, not just display metadata.
+
+- Use the sender's timezone when known; otherwise use the user's timezone. If
+  the timezone would materially change the date or deadline, flag the ambiguity
+  instead of guessing.
+- Resolve relative words such as today, tomorrow, yesterday, and weekdays
+  relative to when the source message was sent, then compare that resolved time
+  with trusted current time. Do not describe a past relative-date intent as if
+  it is current.
+- Visibly attach the absolute source date to every actionable quote or item;
+  include a relative age only when it helps. If the timestamp is missing, say
+  timing is unknown rather than inventing it.
+- When a message's intended date has passed, recommend and draft a recovery or
+  reschedule response rather than replying as if the original timing still
+  holds. Explain the passed intent only when it changes the recommended action.
+
 ## Buckets
 
 Use these buckets when they help the user scan:
@@ -64,8 +82,9 @@ For each item include:
 
 - Contact/thread
 - Channel
-- Latest message date/time
+- Latest message date/time (absolute source date; include time/timezone when known)
 - Latest sender/author
+- Actionable quote/item with its absolute source date (optional relative age)
 - Bucket
 - What they want or why it matters
 - Recommended action
@@ -91,9 +110,9 @@ For each selected item:
    before drafting.
 2. Fetch enough fresh context to understand the latest ask, participants, tone,
    and whether the conversation moved forward.
-3. Include the exact latest relevant inbound text when available and useful.
-   Summaries are helpful, but they must not replace the sender's wording when
-   wording matters.
+3. Include the exact latest relevant inbound text with its absolute source date
+   when available and useful. Summaries are helpful, but they must not replace
+   the sender's wording when wording matters.
 4. If live access is unavailable, or the only live path would require costly
    browser work, state that freshness is not verified. If you provide an
    optional sketch, label it stale/tracker-based and not ready to send, then ask

@@ -644,6 +644,49 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("current date");
   });
 
+  it("requires temporal grounding when working from external messages", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      userTimezone: "Asia/Makassar",
+    });
+
+    expect(prompt).toContain("## Temporal Grounding");
+    expect(prompt).toContain("treat each source timestamp as semantic context");
+    expect(prompt).toContain("get it from session_status");
+    expect(prompt).toContain(
+      "Resolve today, tomorrow, yesterday, and weekdays relative to when the source message was sent",
+    );
+    expect(prompt).toContain(
+      "Use the sender's timezone when known; otherwise use the user's timezone.",
+    );
+    expect(prompt).toContain("flag material ambiguity instead of guessing");
+    expect(prompt).toContain("never present stale relative language as current");
+    expect(prompt).toContain("include its absolute source date");
+    expect(prompt).toContain("say timing is unknown; do not invent it");
+  });
+
+  it("keeps temporal grounding compatible with minimal subagent tool policies", () => {
+    const promptWithSessionStatus = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["session_status"],
+      userTimezone: "Asia/Makassar",
+    });
+    const promptWithoutSessionStatus = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["read"],
+      userTimezone: "Asia/Makassar",
+    });
+
+    expect(promptWithSessionStatus).toContain("## Temporal Grounding");
+    expect(promptWithSessionStatus).toContain("get it from session_status");
+    expect(promptWithSessionStatus).toContain("run session_status");
+    expect(promptWithoutSessionStatus).toContain("## Temporal Grounding");
+    expect(promptWithoutSessionStatus).toContain("recency cannot be verified; do not guess");
+    expect(promptWithoutSessionStatus).not.toContain("session_status");
+  });
+
   // The system prompt intentionally does NOT include the current date/time.
   // Only the timezone is included, to keep the prompt stable for caching.
   // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946

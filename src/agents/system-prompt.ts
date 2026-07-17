@@ -115,6 +115,21 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
+function buildTemporalGroundingSection(params: { canUseSessionStatus: boolean }) {
+  // Keep this contract static: current time remains tool-provided so prompt caches stay reusable.
+  return [
+    "## Temporal Grounding",
+    "When interpreting, summarizing, prioritizing, or drafting from external messages, treat each source timestamp as semantic context.",
+    params.canUseSessionStatus
+      ? "When recency matters, compare it with trusted current time; if current time is unavailable, get it from session_status."
+      : "When recency matters and trusted current time is unavailable, state that recency cannot be verified; do not guess.",
+    "Resolve today, tomorrow, yesterday, and weekdays relative to when the source message was sent; never present stale relative language as current.",
+    "Use the sender's timezone when known; otherwise use the user's timezone. If the timezone would materially change the date or deadline, flag material ambiguity instead of guessing.",
+    "When surfacing or quoting an actionable external message, include its absolute source date. If its timestamp is missing, say timing is unknown; do not invent it.",
+    "",
+  ];
+}
+
 function buildReplyTagsSection(isMinimal: boolean) {
   if (isMinimal) {
     return [];
@@ -379,6 +394,9 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
+  // No explicit list uses the standard Pi tool fallback; an explicit list is the policy boundary.
+  const canUseSessionStatus =
+    params.toolNames === undefined || availableTools.has("session_status");
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const externalToolSummaries = new Map<string, string>();
@@ -600,7 +618,7 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-    userTimezone
+    userTimezone && canUseSessionStatus
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
@@ -661,6 +679,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildTimeSection({
       userTimezone,
     }),
+    ...buildTemporalGroundingSection({ canUseSessionStatus }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
