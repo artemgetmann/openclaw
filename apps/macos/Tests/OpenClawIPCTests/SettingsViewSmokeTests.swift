@@ -303,8 +303,8 @@ struct SettingsViewSmokeTests {
             hasVisibleWindows: false))
     }
 
-    @Test func `consumer app delegate recovers activation only without visible surface`() {
-        #expect(AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+    @Test func `consumer app delegate never treats passive activation as surface intent`() {
+        #expect(!AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
             isConsumer: true,
             hasVisibleContentWindow: false,
             hasVisibleOnboardingWindow: false))

@@ -493,14 +493,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func shouldRecoverVisibleSurfaceOnActivation(
-        isConsumer: Bool,
-        hasVisibleContentWindow: Bool,
-        hasVisibleOnboardingWindow: Bool) -> Bool
+        isConsumer _: Bool,
+        hasVisibleContentWindow _: Bool,
+        hasVisibleOnboardingWindow _: Bool) -> Bool
     {
-        isConsumer &&
-            !Self.hasVisibleConsumerSurface(
-                hasVisibleContentWindow: hasVisibleContentWindow,
-                hasVisibleOnboardingWindow: hasVisibleOnboardingWindow)
+        // App activation is a lifecycle event, not proof of user intent.
+        // Background/login/runtime recovery can activate Jarvis, so only
+        // explicit paths such as Dock reopen or Finder launch may reveal UI.
+        false
     }
 
     static func hasVisibleConsumerSurface(hasVisibleContentWindow: Bool, hasVisibleOnboardingWindow: Bool) -> Bool {
