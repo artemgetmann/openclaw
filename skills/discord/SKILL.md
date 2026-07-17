@@ -7,6 +7,8 @@ allowed-tools: ["message"]
 
 # Discord (Via `message`)
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 Use the `message` tool. No provider-specific `discord` tool exposed to the agent.
 
 ## Musts

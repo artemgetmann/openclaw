@@ -58,6 +58,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "checkpoint",
         "goal-mode",
         "monitor-router",
+        "message-drafting",
         "media-editor",
         "video-frames",
         "jarvis-computer-use",
@@ -277,7 +278,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(repaired.config.skills?.allowBundled).toEqual(["custom-skill", "checkpoint"]);
   });
 
-  it("exposes checkpoint and monitor-router to fresh consumer skill prompts without a model call", async () => {
+  it("exposes default operator skills to fresh consumer prompts without a model call", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-consumer-skills-"));
     const bundledDir = path.join(workspaceDir, ".bundled");
 
@@ -298,6 +299,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       name: "monitor-router",
       description: "Route monitor status questions and natural-language follow-ups.",
       body: "# Monitor Router\n",
+    });
+    await writeSkill({
+      dir: path.join(bundledDir, "message-drafting"),
+      name: "message-drafting",
+      description: "Compose approval-ready recipient-facing messages.",
+      body: "# Message Drafting\n",
     });
     await writeSkill({
       dir: path.join(bundledDir, "jarvis-computer-use"),
@@ -322,6 +329,8 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(prompt).toContain("Save or resume a local chat checkpoint.");
     expect(prompt).toContain("offer or run a durable goal");
     expect(prompt).toContain("Route monitor status questions");
+    expect(prompt).toContain("<name>message-drafting</name>");
+    expect(prompt).toContain("Compose approval-ready recipient-facing messages.");
     expect(prompt).toContain("Jarvis Computer Use tasks");
     expect(prompt).toContain("Manage Telegram chats, topics, threads");
   });

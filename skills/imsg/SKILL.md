@@ -25,6 +25,8 @@ metadata:
 
 # imsg
 
+For recipient-facing message composition and cross-language review/send behavior, apply the canonical `message-drafting` skill.
+
 Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 
 ## When to Use
