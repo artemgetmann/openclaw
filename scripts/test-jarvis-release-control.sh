@@ -301,18 +301,25 @@ test_operator_authorization_preserves_inert_future_flags() {
   local gh_sentinel="$TMP_DIR/operator-future-gh.called"
   local misuse_state="$TMP_DIR/operator-future-misuse-state"
   local misuse_summary="$TMP_DIR/operator-future-misuse-summary.env"
+  local authorized_env="$TMP_DIR/operator-future-authorized.env"
+  local mismatched_env="$TMP_DIR/operator-future-mismatched.env"
+  local repo_mismatch_state="$TMP_DIR/operator-future-repo-mismatch-state"
+  local repo_mismatch_summary="$TMP_DIR/operator-future-repo-mismatch-summary.env"
   local status
 
   mkdir -p "$fake_bin"
   apply_stub "$fake_bin/gh" '#!/usr/bin/env bash
 : >"${AUTHORIZATION_GH_SENTINEL:?}"
 exit 99'
+  apply_stub "$authorized_env" 'export GITHUB_RELEASE_REPO=authorized-owner/authorized-repo'
+  apply_stub "$mismatched_env" 'export GITHUB_RELEASE_REPO=other-owner/other-repo'
   export AUTHORIZATION_GH_SENTINEL="$gh_sentinel"
   export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$intent_path"
   export OPENCLAW_JARVIS_RELEASE_INTENT_NOW_EPOCH=1550
   export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=operator-future-run
 
   PATH="$fake_bin:$PATH" \
+  OPENCLAW_RELEASE_ENV_FILE="$authorized_env" \
   OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
     /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
@@ -338,6 +345,35 @@ exit 99'
     || fail "future authorization did not print the matching durable transport command"
   [[ -n "$(openclaw_jarvis_release_intent_value "$intent_path" JARVIS_RELEASE_INTENT_ACTION_FINGERPRINT)" ]] \
     || fail "future authorization did not bind its execution-shaping action"
+
+  # The printed argv is identical, but the effective canonical destination has
+  # changed since authorization. Reject before GitHub lookup, lock, reports, or
+  # release-state mutation rather than letting package release.env redirect it.
+  set +e
+  PATH="$fake_bin:$PATH" \
+  OPENCLAW_RELEASE_ENV_FILE="$mismatched_env" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$repo_mismatch_state" \
+  OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$repo_mismatch_summary" \
+  OPENCLAW_MAIN_HOME_CLONE="$(cd "$ROOT_DIR/../.." && pwd -P)" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$(basename "$ROOT_DIR")" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent operator-future-run \
+      --verify-public-assets \
+      --latest-release-tag \
+      --parallel-safe-local-assets \
+      --urgent-sparkle \
+      --phase verify-sparkle-assets-only \
+      --size-report \
+      >"$out" 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "repository mismatch returned $status instead of 2"
+  grep -q 'intent action does not match' "$err" \
+    || fail "repository mismatch did not report the action binding"
+  [[ ! -e "$repo_mismatch_state" && ! -e "$repo_mismatch_summary" ]] \
+    || fail "repository mismatch mutated release state before rejection"
+  [[ ! -e "$gh_sentinel" ]] \
+    || fail "repository mismatch reached GitHub before rejection"
 
   # A wrapper-bound intent is not a second package authority. Direct package
   # validation has no wrapper action context and must fail closed; only the

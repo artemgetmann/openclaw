@@ -415,15 +415,21 @@ compatible and prints the direct wrapper command. Future flags such as
 `--parallel-safe-local-assets`, `--size-report`, and a supported `--phase` are
 inert during authorization and are shell-quoted into both printed commands.
 When future flags are present, the intent stores a SHA-256 fingerprint of that
-exact wrapper action. Changing verify to publish, changing a tag or phase, or
-otherwise reshaping the printed command fails before lock acquisition or
-release-state mutation. A bound intent also fails when passed directly to the
+exact wrapper action, including the effective GitHub destination repository.
+Changing verify to publish, changing a tag, phase, or repository, or otherwise
+reshaping the printed command fails before lock acquisition or release-state
+mutation. The wrapper loads one release configuration snapshot and the package
+child inherits it, so a later package `release.env` load cannot redirect the
+authorized destination. A bound intent also fails when passed directly to the
 package script without the matching wrapper context; the wrapper remains the
 single authority that selects and delegates the package phase. Delegated
 package failures therefore recover through the original wrapper action, never
 through a direct package command. If recovery must remove a forced phase or
 replace `--latest-release-tag` with a resolved tag, it prints `--authorize`
 because that adjusted action requires a fresh lease.
+Likewise, when a bound action reaches ready local assets without public action,
+its `next_publish_command` is fresh `--authorize`; adding publish flags cannot
+reuse the narrower intent.
 Conflicting publish/verify or latest/explicit-tag intent fails before an intent
 is created or replaced. The
 default lease is two hours, sized above the observed end-to-end release time;
@@ -461,9 +467,11 @@ overrides into tmux arguments. It clears supported and stale notary, Sparkle,
 smoke, package, state-path, and `OPENCLAW_RELEASE_ENV_FILE` values inherited
 from either the launcher or tmux server. It also clears release intent, lock,
 checkpoint, worktree, disk, ownership-transfer, and other validation test
-overrides before the child starts. The package lane then reloads the
-deterministic canonical
-`~/Library/Application Support/OpenClaw/release.env`. Put persistent release
+overrides before the child starts. Shell startup redirects (`BASH_ENV`, `ENV`,
+and `ZDOTDIR`) are neutralized when the tmux session is created, before its
+initial pane can read them. The wrapper then loads the deterministic
+canonical `~/Library/Application Support/OpenClaw/release.env`, and its package
+child inherits that exact snapshot. Put persistent release
 credentials and settings there; a custom ambient release-env path is
 intentionally ignored by this transport. Status and log stay pinned to the
 original pane even if another pane becomes active, and `clear` refuses to kill

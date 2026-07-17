@@ -17,6 +17,20 @@ PANE_OPTION="@openclaw_jarvis_release_pane_id"
 # Keep this list explicit: /usr/bin/env receives names only, so neither tmux's
 # command metadata nor test failures can disclose an ambient secret value.
 RELEASE_ENV_VARS=(
+  # Bash reads BASH_ENV before executing a non-interactive child script. Scrub
+  # both shell startup hooks before the persistent child starts so an ambient
+  # file cannot restore credentials or test seams after the remaining unsets.
+  BASH_ENV
+  ENV
+  ZDOTDIR
+  # GitHub CLI environment auth and host selection must come from the canonical
+  # release.env loaded by the packaging lane, never from the launcher or tmux
+  # server environment.
+  GH_TOKEN
+  GITHUB_TOKEN
+  GH_ENTERPRISE_TOKEN
+  GITHUB_ENTERPRISE_TOKEN
+  GH_HOST
   OPENCLAW_RELEASE_ENV_LOADED
   OPENCLAW_RELEASE_ENV_FILE
   OPENCLAW_MAIN_HOME_CLONE
@@ -57,6 +71,17 @@ RELEASE_ENV_VARS=(
   OPENCLAW_CONSUMER_CLEAN_GIT_RUNTIME_CACHE
   OPENCLAW_BUILD_ARTIFACT_ROOT
   OPENCLAW_RELEASE_ARTIFACT_RUN_ROOT
+  # These hooks bypass production route checks or alter final intent guards.
+  # They are valid only in synthetic tests and must never reach a durable
+  # release child through ambient tmux state.
+  OPENCLAW_NOTARY_PREFLIGHT_ROUTE_STUB
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT
+  OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT
+  OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID
+  OPENCLAW_GITHUB_UPLOAD_PREFLIGHT_ROUTE_STUB
+  OPENCLAW_GITHUB_UPLOAD_PREFLIGHT_CURL_STUB
+  OPENCLAW_GITHUB_UPLOAD_PREFLIGHT_TIMEOUT_SECS
   APP_NAME
   APP_BUNDLE_NAME
   APP_VERSION
@@ -221,7 +246,17 @@ start_session() {
   # Create an inert pane first, enable remain-on-exit, then replace it with the
   # wrapper. This avoids losing a fast-failing command before tmux can preserve
   # its exit status and scrollback.
-  "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -c "$ROOT_DIR"
+  # The first inert pane exists before session-level unsets are possible.
+  # Disable tmux update-environment and neutralize non-interactive Bash/POSIX
+  # hooks plus zsh's startup-file directory at creation, using only fixed empty
+  # or system paths. This closes the pre-respawn startup window without
+  # mutating the shared tmux server's global environment.
+  "$TMUX_BIN" new-session -d -E \
+    -e BASH_ENV= \
+    -e ENV= \
+    -e ZDOTDIR=/var/empty \
+    -s "$SESSION_NAME" \
+    -c "$ROOT_DIR"
   pane_id="$("$TMUX_BIN" display-message -p -t "$SESSION_NAME" '#{pane_id}')" || {
     "$TMUX_BIN" kill-session -t "$SESSION_NAME" >/dev/null 2>&1 || true
     echo "ERROR: could not identify the durable Jarvis release pane." >&2
@@ -243,6 +278,17 @@ start_session() {
     echo "ERROR: could not configure the durable Jarvis release pane." >&2
     exit 1
   fi
+
+  # tmux evaluates the respawn command through a new pane shell. Remove every
+  # controlled value from the session environment before that respawn shell
+  # exists. Keep the command-side unsets too as defense in depth.
+  for env_name in "${RELEASE_ENV_VARS[@]}"; do
+    if ! "$TMUX_BIN" set-environment -u -t "$SESSION_NAME" "$env_name"; then
+      "$TMUX_BIN" kill-session -t "$SESSION_NAME" >/dev/null 2>&1 || true
+      echo "ERROR: could not sanitize the durable Jarvis release environment." >&2
+      exit 1
+    fi
+  done
   if ! "$TMUX_BIN" respawn-pane -k -t "$pane_id" "$command_text"; then
     "$TMUX_BIN" kill-session -t "$SESSION_NAME" >/dev/null 2>&1 || true
     echo "ERROR: could not start the canonical Jarvis public-release wrapper." >&2

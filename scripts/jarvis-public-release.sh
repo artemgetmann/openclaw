@@ -6,6 +6,14 @@ set -euo pipefail
 # then delegates execution to scripts/package-openclaw-mac-dist.sh.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Public-wrapper and delegated-package decisions must observe one release
+# configuration snapshot. Ignore a stale "already loaded" marker, establish the
+# canonical default repository before sourcing, then let the selected
+# release.env override it once. The package child inherits this loaded snapshot
+# and cannot silently switch destinations after authorization.
+unset OPENCLAW_RELEASE_ENV_LOADED
+GITHUB_RELEASE_REPO="artemgetmann/openclaw"
+source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
@@ -23,6 +31,7 @@ FORCED_PHASE="auto"
 GITHUB_RELEASE_TAG=""
 LATEST_RELEASE_TAG=0
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
+export GITHUB_RELEASE_REPO
 TIMING_REPORT="${OPENCLAW_JARVIS_RELEASE_TIMING_REPORT:-$ROOT_DIR/dist/jarvis-release-timing.tsv}"
 SUMMARY_REPORT="${OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY:-$ROOT_DIR/dist/jarvis-public-release-summary.env}"
 RUN_SIZE_REPORT=0
@@ -144,6 +153,7 @@ release_action_fingerprint() {
     printf 'phase=%s\0' "$FORCED_PHASE"
     printf 'tag=%s\0' "$GITHUB_RELEASE_TAG"
     printf 'latest=%s\0' "$LATEST_RELEASE_TAG"
+    printf 'github-repo=%s\0' "$GITHUB_RELEASE_REPO"
     printf 'parallel=%s\0' "$PARALLEL_SAFE_LOCAL_ASSETS"
     printf 'urgent=%s\0' "$URGENT_SPARKLE_ONLY"
     printf 'size=%s\0' "$RUN_SIZE_REPORT"
@@ -601,7 +611,11 @@ if [[ "$SELECTED_PHASE" == "ready-local-assets" ]]; then
   echo "Jarvis public release local assets are ready, but no public action was requested."
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  if [[ -n "$RELEASE_INTENT_ID" ]]; then
+  if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+    # Adding publish/tag flags is a different bound action. Reusing this intent
+    # would print a command guaranteed to fail its fingerprint check.
+    echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
+  elif [[ -n "$RELEASE_INTENT_ID" ]]; then
     printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
   else
     # A dry-run has no executable authorization to preserve. Point the operator
@@ -617,7 +631,9 @@ if [[ "$SELECTED_PHASE" == "ready-sparkle-local-assets" ]]; then
   echo "  selected_phase=$SELECTED_PHASE"
   echo "  state_root=$STATE_ROOT"
   echo "  manifest=$(jarvis_release_manifest_path "$STATE_ROOT")"
-  if [[ -n "$RELEASE_INTENT_ID" ]]; then
+  if [[ "$RELEASE_INTENT_ACTION_BOUND" == "1" ]]; then
+    echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"
+  elif [[ -n "$RELEASE_INTENT_ID" ]]; then
     printf '  next_publish_command=bash scripts/jarvis-public-release.sh --release-intent %q --urgent-sparkle --publish-release-assets --latest-release-tag\n' "$RELEASE_INTENT_ID"
   else
     echo "  next_publish_command=bash scripts/jarvis-public-release.sh --authorize"

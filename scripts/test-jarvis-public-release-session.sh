@@ -23,6 +23,8 @@ FAKE_PANE_OPTION="$TMP_DIR/pane-option"
 FAKE_ACTIVE_PANE="$TMP_DIR/active-pane"
 FAKE_ALL_STATES="$TMP_DIR/all-states"
 FAKE_TARGETS="$TMP_DIR/targets"
+FAKE_ENV_UNSETS="$TMP_DIR/env-unsets"
+FAKE_NEW_SESSION="$TMP_DIR/new-session"
 
 cat >"$FAKE_TMUX" <<'EOF'
 #!/usr/bin/env bash
@@ -33,6 +35,7 @@ case "$1" in
     [[ -f "${FAKE_TMUX_STATE:?}" ]]
     ;;
   new-session)
+    printf '%s\n' "$*" >"$FAKE_TMUX_NEW_SESSION"
     printf '0:0\n' >"$FAKE_TMUX_STATE"
     printf '%%1\n' >"$FAKE_TMUX_ACTIVE_PANE"
     printf '0:%%1\n' >"$FAKE_TMUX_ALL_STATES"
@@ -41,6 +44,13 @@ case "$1" in
     if [[ "$*" == *"@openclaw_jarvis_release_pane_id"* ]]; then
       printf '%s\n' "${!#}" >"$FAKE_TMUX_PANE_OPTION"
     fi
+    ;;
+  set-environment)
+    [[ "$2" == "-u" ]] || {
+      echo "fake tmux received a value-bearing environment update: $*" >&2
+      exit 98
+    }
+    printf '%s\n' "${!#}" >>"$FAKE_TMUX_ENV_UNSETS"
     ;;
   respawn-pane)
     printf '%s\n' "${!#}" >"${FAKE_TMUX_COMMAND:?}"
@@ -91,6 +101,8 @@ run_helper() {
   FAKE_TMUX_ACTIVE_PANE="$FAKE_ACTIVE_PANE" \
   FAKE_TMUX_ALL_STATES="$FAKE_ALL_STATES" \
   FAKE_TMUX_TARGETS="$FAKE_TARGETS" \
+  FAKE_TMUX_ENV_UNSETS="$FAKE_ENV_UNSETS" \
+  FAKE_TMUX_NEW_SESSION="$FAKE_NEW_SESSION" \
     /bin/bash "$ROOT_DIR/scripts/jarvis-public-release-session.sh" "$@"
 }
 
@@ -100,6 +112,14 @@ test_start_and_duplicate_guard() {
   local status
   local env_name
   local control_env_vars=(
+    BASH_ENV
+    ENV
+    ZDOTDIR
+    GH_TOKEN
+    GITHUB_TOKEN
+    GH_ENTERPRISE_TOKEN
+    GITHUB_ENTERPRISE_TOKEN
+    GH_HOST
     OPENCLAW_MAIN_HOME_CLONE
     OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN
     OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE
@@ -133,10 +153,20 @@ test_start_and_duplicate_guard() {
     JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE
     JARVIS_RELEASE_DISK_PROBE_COMMAND
     JARVIS_RELEASE_DISK_REQUIRED_KIB
+    OPENCLAW_NOTARY_PREFLIGHT_ROUTE_STUB
+    OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ROOT
+    OPENCLAW_NOTARY_FINAL_SUBMIT_INTENT_ID
+    OPENCLAW_NOTARY_FINAL_POLL_INTENT_ROOT
+    OPENCLAW_NOTARY_FINAL_POLL_INTENT_ID
+    OPENCLAW_GITHUB_UPLOAD_PREFLIGHT_ROUTE_STUB
+    OPENCLAW_GITHUB_UPLOAD_PREFLIGHT_CURL_STUB
+    OPENCLAW_GITHUB_UPLOAD_PREFLIGHT_TIMEOUT_SECS
   )
 
-  # One shared marker proves values never enter tmux metadata; the assertions
-  # below deliberately inspect only variable names.
+  # One shared marker proves shell startup hooks, credentials, and test bypasses
+  # never enter tmux metadata. BASH_ENV points at a deliberately missing file:
+  # the launcher Bash may inspect the name, but only the captured persistent
+  # command is under test and it must unset the hook before its child starts.
   for env_name in "${control_env_vars[@]}"; do
     export "$env_name=ambient-release-control-value"
   done
@@ -155,8 +185,12 @@ test_start_and_duplicate_guard() {
     || fail "start implied tmux was release authority"
   grep -Fq "$ROOT_DIR/scripts/jarvis-public-release.sh" "$FAKE_COMMAND" \
     || fail "start did not pin execution to the canonical wrapper"
-  grep -Fq '/usr/bin/env -u OPENCLAW_RELEASE_ENV_LOADED -u OPENCLAW_RELEASE_ENV_FILE' "$FAKE_COMMAND" \
-    || fail "start did not force a canonical release-env reload"
+  grep -Fq 'new-session -d -E -e BASH_ENV= -e ENV= -e ZDOTDIR=/var/empty' "$FAKE_NEW_SESSION" \
+    || fail "initial tmux pane did not neutralize shell startup hooks at creation"
+  grep -Fq -- '-u OPENCLAW_RELEASE_ENV_LOADED' "$FAKE_COMMAND" \
+    || fail "start did not clear the release-env loaded marker"
+  grep -Fq -- '-u OPENCLAW_RELEASE_ENV_FILE' "$FAKE_COMMAND" \
+    || fail "start did not force the canonical release-env path"
   grep -Fq -- '-u NOTARYTOOL_KEY' "$FAKE_COMMAND" \
     || fail "start did not scrub ambient notary credentials"
   grep -Fq -- '-u SPARKLE_PRIVATE_KEY_FILE' "$FAKE_COMMAND" \
@@ -170,6 +204,8 @@ test_start_and_duplicate_guard() {
   for env_name in "${control_env_vars[@]}"; do
     grep -Fq -- "-u $env_name" "$FAKE_COMMAND" \
       || fail "start did not scrub ambient release control variable name: $env_name"
+    grep -Fxq "$env_name" "$FAKE_ENV_UNSETS" \
+      || fail "tmux session retained ambient release control variable: $env_name"
   done
   ! grep -Fq 'ambient-release-control-value' "$FAKE_COMMAND" \
     || fail "tmux command copied an ambient release control value"

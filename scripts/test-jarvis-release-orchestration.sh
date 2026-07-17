@@ -998,6 +998,61 @@ test_forced_invalid_checkpoint_recovers_automatically() {
   pass "forced invalid checkpoint recovers through automatic phase selection"
 }
 
+test_bound_ready_advice_requires_fresh_authorization() {
+  local ready_root="$TMP_DIR/bound-ready"
+  local sparkle_root="$TMP_DIR/bound-sparkle-ready"
+  local out="$TMP_DIR/bound-ready.out"
+  local release_home release_name
+
+  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
+  release_name="$(basename "$ROOT_DIR")"
+  seed_wrapper_checkpoints "$ready_root" notarized notarized 1
+  seed_wrapper_checkpoints "$sparkle_root" notarized none 1
+
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=bound-ready-advice
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --size-report \
+      >/dev/null
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/bound-ready.lock" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$ready_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent bound-ready-advice \
+      --size-report \
+      >"$out"
+  grep -Fxq '  next_publish_command=bash scripts/jarvis-public-release.sh --authorize' "$out" \
+    || fail "bound ready-local-assets advice reused an intent while adding publish flags"
+  ! grep -q '^  next_publish_command=.*--release-intent bound-ready-advice' "$out" \
+    || fail "bound ready-local-assets advice printed a doomed stale-intent command"
+
+  export OPENCLAW_JARVIS_RELEASE_INTENT_ID_OVERRIDE=bound-sparkle-ready-advice
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --authorize \
+      --urgent-sparkle \
+      --size-report \
+      >/dev/null
+  OPENCLAW_MAIN_HOME_CLONE="$release_home" \
+  OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
+  OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$TMP_DIR/bound-sparkle-ready.lock" \
+  OPENCLAW_JARVIS_RELEASE_STATE_ROOT="$sparkle_root" \
+    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+      --release-intent bound-sparkle-ready-advice \
+      --urgent-sparkle \
+      --size-report \
+      >"$out"
+  grep -Fxq '  next_publish_command=bash scripts/jarvis-public-release.sh --authorize' "$out" \
+    || fail "bound ready-sparkle-local-assets advice reused an intent while adding publish flags"
+  ! grep -q '^  next_publish_command=.*--release-intent bound-sparkle-ready-advice' "$out" \
+    || fail "bound ready-sparkle-local-assets advice printed a doomed stale-intent command"
+  pass "bound ready-state advice requires fresh authorization before adding public action"
+}
+
 test_bound_package_failure_recovers_through_wrapper() {
   local authorize_out="$TMP_DIR/bound-package-authorize.out"
   local out="$TMP_DIR/bound-package.out"
@@ -1118,5 +1173,6 @@ test_package_sparkle_publish_gate_does_not_require_dmg
 test_package_sparkle_publish_only_ignores_skip_notarize
 test_package_script_rejects_noncanonical_release_worktree
 test_forced_invalid_checkpoint_recovers_automatically
+test_bound_ready_advice_requires_fresh_authorization
 test_bound_package_failure_recovers_through_wrapper
 test_bound_forced_recovery_requires_fresh_authorization
