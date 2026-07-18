@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveLiveOwnerHelperTimeoutMs } from "../skills/wacli/scripts/wacli-health.ts";
+import {
+  resolveHealthProbePlan,
+  resolveLiveOwnerHelperTimeoutMs,
+} from "../skills/wacli/scripts/wacli-health.ts";
 import {
   commandLooksLikeExpectedOwner,
   ensureOwner,
@@ -80,9 +83,25 @@ describe("wacli live owner ensure", () => {
     ).toBe(false);
   });
 
+  it("accepts a legacy store-less owner only for wacli's default store", () => {
+    const legacyCommand = "/opt/homebrew/bin/wacli sync --follow --json";
+
+    expect(commandLooksLikeExpectedOwner(legacyCommand, path.join(os.homedir(), ".wacli"))).toBe(
+      true,
+    );
+    expect(commandLooksLikeExpectedOwner(legacyCommand, "/tmp/custom-wacli-store")).toBe(false);
+  });
+
   it("budgets the health wrapper for reconnect, stop, and replacement settle", () => {
     expect(resolveLiveOwnerHelperTimeoutMs(15_000, "ensure")).toBe(45_000);
     expect(resolveLiveOwnerHelperTimeoutMs(15_000, "status")).toBe(15_000);
+  });
+
+  it("keeps owner recovery timeouts probe_failed and suppresses refresh", () => {
+    expect(resolveHealthProbePlan(false, true, true)).toEqual({
+      status: "probe_failed",
+      refreshAttempted: false,
+    });
   });
 
   it("reuses a healthy matching owner without restart churn", async () => {

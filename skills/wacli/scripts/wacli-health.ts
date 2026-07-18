@@ -94,6 +94,23 @@ type HealthReport = {
   refresh?: RefreshJson;
 };
 
+export function resolveHealthProbePlan(
+  connected: boolean,
+  refreshRequested: boolean,
+  ownerTimedOut: boolean,
+): { status: HealthStatus; refreshAttempted: boolean } {
+  if (ownerTimedOut) {
+    // Refresh cannot repair or explain a timed-out owner orchestration probe.
+    // Preserve that stronger failure instead of letting a later one-shot sync
+    // overwrite it with an unrelated connected/disconnected status.
+    return { status: "probe_failed", refreshAttempted: false };
+  }
+  return {
+    status: connected ? "healthy" : "paired_not_connected_readable",
+    refreshAttempted: refreshRequested,
+  };
+}
+
 function usage() {
   console.error(`Usage:
   wacli-health.sh [--json] [--refresh] [--ensure-owner] [--store <dir>] [--timeout-ms <ms>] [--idle-exit <duration>]
@@ -478,13 +495,10 @@ async function main() {
 
   let refreshRun: CommandResult | undefined;
   let refresh: RefreshJson | undefined;
-  let status: HealthStatus = owner?.timedOut
-    ? "probe_failed"
-    : connected
-      ? "healthy"
-      : "paired_not_connected_readable";
+  const probePlan = resolveHealthProbePlan(connected, flags.refresh, owner?.timedOut === true);
+  let status = probePlan.status;
 
-  if (flags.refresh) {
+  if (probePlan.refreshAttempted) {
     // One-shot sync only: explicit once mode plus explicit idle exit. This is
     // the safe replacement for the old bare 'wacli sync --json' probe.
     refreshRun = await runCommand(
@@ -517,7 +531,7 @@ async function main() {
     lockInfo: doctor?.data?.lock_info,
     chatsReadable,
     sampleChatCount,
-    refreshAttempted: flags.refresh,
+    refreshAttempted: probePlan.refreshAttempted,
     refreshSucceeded: Boolean(refreshRun?.ok && refresh?.success === true),
     refreshTimedOut: refreshRun?.timedOut === true,
     owner,

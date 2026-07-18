@@ -260,7 +260,11 @@ export function commandLooksLikeExpectedOwner(command: string, storeDir: string)
     return false;
   }
   return (
-    args === `--store ${normalizedStoreDir} sync --follow --json` || args === "sync --follow --json"
+    args === `--store ${normalizedStoreDir} sync --follow --json` ||
+    // Older owners omitted --store and therefore always used wacli's default.
+    // Never extend that legacy trust to a custom store: doing so could signal a
+    // default-store owner recorded in the wrong custom-store PID file.
+    (path.resolve(storeDir) === path.resolve(defaultStoreDir()) && args === "sync --follow --json")
   );
 }
 
