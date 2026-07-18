@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Flags = {
   json: boolean;
@@ -59,6 +61,7 @@ type LiveOwnerStatus = {
   lockHeldByOwner?: boolean;
   lastLifecycleEvent?: "connected" | "disconnected" | "reconnecting" | "stopping" | "unknown";
   connected?: boolean;
+  timedOut?: boolean;
   message?: string;
 };
 
@@ -90,6 +93,23 @@ type HealthReport = {
   chats?: ChatsJson;
   refresh?: RefreshJson;
 };
+
+export function resolveHealthProbePlan(
+  connected: boolean,
+  refreshRequested: boolean,
+  ownerTimedOut: boolean,
+): { status: HealthStatus; refreshAttempted: boolean } {
+  if (ownerTimedOut) {
+    // Refresh cannot repair or explain a timed-out owner orchestration probe.
+    // Preserve that stronger failure instead of letting a later one-shot sync
+    // overwrite it with an unrelated connected/disconnected status.
+    return { status: "probe_failed", refreshAttempted: false };
+  }
+  return {
+    status: connected ? "healthy" : "paired_not_connected_readable",
+    refreshAttempted: refreshRequested,
+  };
+}
 
 function usage() {
   console.error(`Usage:
@@ -223,6 +243,16 @@ function containsLockError(raw: string) {
   return raw.toLowerCase().includes("store is locked");
 }
 
+export function resolveLiveOwnerHelperTimeoutMs(
+  timeoutMs: number,
+  action: "status" | "ensure",
+): number {
+  // Ensure can consume one reconnect grace, one graceful stop, and one fresh
+  // settle window. Keep status at the ordinary probe budget because it never
+  // mutates or waits for lifecycle transitions.
+  return action === "ensure" ? Math.max(timeoutMs * 2 + 15_000, 20_000) : timeoutMs;
+}
+
 async function readLiveOwnerStatus(
   flags: Flags,
   action: "status" | "ensure",
@@ -233,8 +263,26 @@ async function readLiveOwnerStatus(
     args.push("--store", flags.store);
   }
   args.push("--timeout-ms", String(Math.min(flags.timeoutMs, 2_000)));
+  if (action === "ensure") {
+    // Give the live-owner helper the caller's normal probe window to establish
+    // a replacement, while keeping its graceful stop bounded to five seconds.
+    args.push("--settle-ms", String(flags.timeoutMs));
+    args.push("--grace-ms", String(Math.min(flags.timeoutMs, 5_000)));
+  }
 
-  const result = await runCommand(helperPath, args, Math.max(flags.timeoutMs, 5_000));
+  // Recovery can include reconnect grace, a graceful stop, and a fresh settle
+  // window. The old single-probe timeout killed the helper midway through that
+  // sequence and discarded its honest final status.
+  const helperTimeoutMs = resolveLiveOwnerHelperTimeoutMs(flags.timeoutMs, action);
+  const result = await runCommand(helperPath, args, Math.max(helperTimeoutMs, 5_000));
+  if (result.timedOut) {
+    return {
+      ok: false,
+      connected: false,
+      timedOut: true,
+      message: `OpenClaw wacli live-owner ${action} timed out after ${helperTimeoutMs}ms.`,
+    };
+  }
   if (!result.stdout.trim()) {
     return undefined;
   }
@@ -447,9 +495,10 @@ async function main() {
 
   let refreshRun: CommandResult | undefined;
   let refresh: RefreshJson | undefined;
-  let status: HealthStatus = connected ? "healthy" : "paired_not_connected_readable";
+  const probePlan = resolveHealthProbePlan(connected, flags.refresh, owner?.timedOut === true);
+  let status = probePlan.status;
 
-  if (flags.refresh) {
+  if (probePlan.refreshAttempted) {
     // One-shot sync only: explicit once mode plus explicit idle exit. This is
     // the safe replacement for the old bare 'wacli sync --json' probe.
     refreshRun = await runCommand(
@@ -482,7 +531,7 @@ async function main() {
     lockInfo: doctor?.data?.lock_info,
     chatsReadable,
     sampleChatCount,
-    refreshAttempted: flags.refresh,
+    refreshAttempted: probePlan.refreshAttempted,
     refreshSucceeded: Boolean(refreshRun?.ok && refresh?.success === true),
     refreshTimedOut: refreshRun?.timedOut === true,
     owner,
@@ -491,11 +540,30 @@ async function main() {
     refresh,
   };
   report.message = buildMessage(report);
+  if (owner?.timedOut) {
+    report.message = owner.message ?? "WhatsApp CLI live-owner recovery timed out.";
+  }
   emit(report, flags.json);
 }
 
-main().catch((error) => {
-  const scriptName = path.basename(process.argv[1] ?? "wacli-health.ts");
-  console.error(`${scriptName}: ${String(error)}`);
-  process.exit(1);
-});
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return (
+      fs.realpathSync(path.resolve(process.argv[1])) ===
+      fs.realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isEntrypoint()) {
+  main().catch((error) => {
+    const scriptName = path.basename(process.argv[1] ?? "wacli-health.ts");
+    console.error(`${scriptName}: ${String(error)}`);
+    process.exit(1);
+  });
+}

@@ -3,10 +3,11 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Command = "status" | "ensure" | "stop";
 
-type Flags = {
+export type Flags = {
   command: Command;
   json: boolean;
   storeDir: string;
@@ -31,7 +32,7 @@ type OwnerPidFile = {
 
 type LifecycleEvent = "connected" | "disconnected" | "reconnecting" | "stopping" | "unknown";
 
-type LiveStatus = {
+export type LiveStatus = {
   ok: boolean;
   action: Command;
   storeDir: string;
@@ -39,6 +40,8 @@ type LiveStatus = {
   logFile: string;
   ownerRunning: boolean;
   ownerPid?: number;
+  ownerStartedAt?: string;
+  ownerAgeMs?: number;
   ownerCommandMatches: boolean;
   lockInfo?: string;
   lockPid?: number;
@@ -54,6 +57,18 @@ type LiveStatus = {
   pidFileRemoved?: boolean;
   stopReason?: "no_pid_file" | "not_running" | "stopped" | "forced_stop" | "pid_command_mismatch";
 };
+
+export type EnsureOwnerDeps = {
+  collectStatus: (flags: Flags) => Promise<LiveStatus>;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  startOwner: (flags: Flags, files: OwnerFiles) => Promise<void>;
+  stopOwner: (flags: Flags) => Promise<LiveStatus>;
+};
+
+const UNHEALTHY_LIFECYCLE_EVENTS = new Set<LifecycleEvent>(["disconnected", "reconnecting"]);
+const MIN_RESTART_AGE_MS = 30_000;
+const MAX_RECONNECT_GRACE_MS = 5_000;
 
 function usage() {
   console.error(`Usage:
@@ -231,10 +246,31 @@ async function runShortCommand(
   });
 }
 
-async function commandMatchesExpected(pid: number) {
+export function commandLooksLikeExpectedOwner(command: string, storeDir: string): boolean {
+  // ps returns argv as one display string. Normalize separator whitespace, then
+  // require both the wacli executable and exact owner arguments so an unrelated
+  // interpreter that merely receives wacli-looking argv is never signal-safe.
+  const normalizedCommand = command.trim().replace(/\s+/gu, " ");
+  const normalizedStoreDir = storeDir.trim().replace(/\s+/gu, " ");
+  const firstSeparator = normalizedCommand.indexOf(" ");
+  const executable =
+    firstSeparator === -1 ? normalizedCommand : normalizedCommand.slice(0, firstSeparator);
+  const args = firstSeparator === -1 ? "" : normalizedCommand.slice(firstSeparator + 1);
+  if (path.basename(executable) !== "wacli") {
+    return false;
+  }
+  return (
+    args === `--store ${normalizedStoreDir} sync --follow --json` ||
+    // Older owners omitted --store and therefore always used wacli's default.
+    // Never extend that legacy trust to a custom store: doing so could signal a
+    // default-store owner recorded in the wrong custom-store PID file.
+    (path.resolve(storeDir) === path.resolve(defaultStoreDir()) && args === "sync --follow --json")
+  );
+}
+
+async function commandMatchesExpected(pid: number, storeDir: string) {
   const result = await runShortCommand("ps", ["-o", "command=", "-p", String(pid)], 1_500);
-  const command = result.stdout.trim();
-  return command.includes("wacli sync --follow --json");
+  return commandLooksLikeExpectedOwner(result.stdout, storeDir);
 }
 
 async function readLogTail(logPath: string, tailLines: number): Promise<string[]> {
@@ -273,9 +309,14 @@ async function collectStatus(flags: Flags): Promise<LiveStatus> {
   const files = resolveOwnerFiles(flags.storeDir);
   const pidFile = await readPidFile(files.pidPath);
   const ownerPid = pidFile?.pid;
+  const ownerStartedAt = pidFile?.startedAt;
+  const parsedStartedAt = ownerStartedAt ? Date.parse(ownerStartedAt) : Number.NaN;
+  const ownerAgeMs = Number.isFinite(parsedStartedAt)
+    ? Math.max(0, Date.now() - parsedStartedAt)
+    : undefined;
   const ownerRunning = typeof ownerPid === "number" && ownerPid > 0 && processExists(ownerPid);
   const ownerCommandMatches =
-    ownerRunning && ownerPid ? await commandMatchesExpected(ownerPid) : false;
+    ownerRunning && ownerPid ? await commandMatchesExpected(ownerPid, flags.storeDir) : false;
   const lockInfo = await readLockInfo(flags.storeDir);
   const lockPidRunning =
     typeof lockInfo.pid === "number" && lockInfo.pid > 0 ? processExists(lockInfo.pid) : undefined;
@@ -308,6 +349,8 @@ async function collectStatus(flags: Flags): Promise<LiveStatus> {
     logFile: files.logPath,
     ownerRunning,
     ownerPid,
+    ownerStartedAt,
+    ownerAgeMs,
     ownerCommandMatches,
     lockInfo: lockInfo.raw,
     lockPid: lockInfo.pid,
@@ -320,15 +363,7 @@ async function collectStatus(flags: Flags): Promise<LiveStatus> {
   };
 }
 
-async function ensureOwner(flags: Flags): Promise<LiveStatus> {
-  await fsp.mkdir(flags.storeDir, { recursive: true, mode: 0o700 });
-  const files = resolveOwnerFiles(flags.storeDir);
-
-  const initial = await collectStatus(flags);
-  if (initial.connected || (initial.ownerRunning && initial.ownerCommandMatches)) {
-    return initial;
-  }
-
+async function startOwner(flags: Flags, files: OwnerFiles): Promise<void> {
   const logHandle = await fsp.open(files.logPath, "a", 0o600);
   try {
     const child = spawn("wacli", ["--store", flags.storeDir, "sync", "--follow", "--json"], {
@@ -348,24 +383,93 @@ async function ensureOwner(flags: Flags): Promise<LiveStatus> {
   } finally {
     await logHandle.close();
   }
+}
 
-  const deadline = Date.now() + flags.settleMs;
+function isExplicitlyUnhealthyOwner(status: LiveStatus): boolean {
+  return Boolean(
+    status.ownerRunning &&
+    status.ownerCommandMatches &&
+    status.lastLifecycleEvent &&
+    UNHEALTHY_LIFECYCLE_EVENTS.has(status.lastLifecycleEvent),
+  );
+}
+
+const defaultEnsureOwnerDeps: EnsureOwnerDeps = {
+  collectStatus,
+  now: Date.now,
+  sleep: async (ms) => await new Promise((resolve) => setTimeout(resolve, ms)),
+  startOwner,
+  stopOwner: async (flags) => await stopOwner(flags),
+};
+
+export async function ensureOwner(
+  flags: Flags,
+  deps: EnsureOwnerDeps = defaultEnsureOwnerDeps,
+): Promise<LiveStatus> {
+  await fsp.mkdir(flags.storeDir, { recursive: true, mode: 0o700 });
+  const files = resolveOwnerFiles(flags.storeDir);
+
+  let initial = await deps.collectStatus(flags);
+  if (initial.connected) {
+    return initial;
+  }
+
+  if (initial.ownerRunning && initial.ownerCommandMatches) {
+    if (!isExplicitlyUnhealthyOwner(initial)) {
+      return initial;
+    }
+
+    // A newly spawned owner commonly reports reconnecting before its first
+    // Connected event. Keep that startup window quiet so repeated health probes
+    // cannot churn a process that is still doing normal session setup.
+    if (typeof initial.ownerAgeMs === "number" && initial.ownerAgeMs < MIN_RESTART_AGE_MS) {
+      initial.message =
+        "OpenClaw wacli sync owner is reconnecting within its startup grace period.";
+      return initial;
+    }
+
+    // An established owner gets one short chance to self-recover. If its latest
+    // lifecycle event remains explicitly unhealthy, restart it once; do not
+    // loop restarts inside a single ensure request.
+    const reconnectDeadline = deps.now() + Math.min(flags.settleMs, MAX_RECONNECT_GRACE_MS);
+    while (deps.now() < reconnectDeadline) {
+      await deps.sleep(Math.min(500, Math.max(1, reconnectDeadline - deps.now())));
+      initial = await deps.collectStatus(flags);
+      if (initial.connected) {
+        initial.message =
+          "OpenClaw wacli sync owner recovered its live connection without a restart.";
+        return initial;
+      }
+      if (!isExplicitlyUnhealthyOwner(initial)) {
+        return initial;
+      }
+    }
+
+    // stopOwner re-checks the live process command immediately before signaling
+    // it. That second check is essential: the PID can exit and be reused after
+    // collectStatus, and a replacement process must never inherit our signal.
+    await deps.stopOwner(flags);
+  }
+
+  await deps.startOwner(flags, files);
+
+  const deadline = deps.now() + flags.settleMs;
   for (;;) {
-    const status = await collectStatus(flags);
+    const status = await deps.collectStatus(flags);
     if (status.connected) {
       status.message = "OpenClaw started a wacli sync owner and it reported a live connection.";
       return status;
     }
-    if (!status.ownerRunning && Date.now() > deadline) {
+    if (!status.ownerRunning && deps.now() > deadline) {
       status.message = "OpenClaw failed to keep a wacli sync owner running.";
       return status;
     }
-    if (Date.now() > deadline) {
+    if (deps.now() > deadline) {
       status.message =
         "OpenClaw started a wacli sync owner, but live connection did not settle in time.";
       return status;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await deps.sleep(500);
   }
 }
 
@@ -379,7 +483,7 @@ async function stopOwner(flags: Flags): Promise<LiveStatus> {
   let stopReason: LiveStatus["stopReason"] = "no_pid_file";
 
   if (ownerPid && processExists(ownerPid)) {
-    const matchesExpected = await commandMatchesExpected(ownerPid);
+    const matchesExpected = await commandMatchesExpected(ownerPid, flags.storeDir);
     if (!matchesExpected) {
       await fsp.rm(files.pidPath, { force: true });
       const status = await collectStatus(flags);
@@ -494,8 +598,24 @@ async function main() {
   process.exit(result.ok ? 0 : 1);
 }
 
-main().catch((error) => {
-  const scriptName = path.basename(process.argv[1] ?? "wacli-live.ts");
-  console.error(`${scriptName}: ${String(error)}`);
-  process.exit(1);
-});
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return (
+      fs.realpathSync(path.resolve(process.argv[1])) ===
+      fs.realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isEntrypoint()) {
+  main().catch((error) => {
+    const scriptName = path.basename(process.argv[1] ?? "wacli-live.ts");
+    console.error(`${scriptName}: ${String(error)}`);
+    process.exit(1);
+  });
+}
