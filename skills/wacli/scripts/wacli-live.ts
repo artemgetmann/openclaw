@@ -248,13 +248,19 @@ async function runShortCommand(
 
 export function commandLooksLikeExpectedOwner(command: string, storeDir: string): boolean {
   // ps returns argv as one display string. Normalize separator whitespace, then
-  // require the exact owner command suffix so an unrelated process that merely
-  // mentions "wacli sync" is not treated as signal-safe.
+  // require both the wacli executable and exact owner arguments so an unrelated
+  // interpreter that merely receives wacli-looking argv is never signal-safe.
   const normalizedCommand = command.trim().replace(/\s+/gu, " ");
   const normalizedStoreDir = storeDir.trim().replace(/\s+/gu, " ");
+  const firstSeparator = normalizedCommand.indexOf(" ");
+  const executable =
+    firstSeparator === -1 ? normalizedCommand : normalizedCommand.slice(0, firstSeparator);
+  const args = firstSeparator === -1 ? "" : normalizedCommand.slice(firstSeparator + 1);
+  if (path.basename(executable) !== "wacli") {
+    return false;
+  }
   return (
-    normalizedCommand.endsWith(`wacli --store ${normalizedStoreDir} sync --follow --json`) ||
-    normalizedCommand.endsWith("wacli sync --follow --json")
+    args === `--store ${normalizedStoreDir} sync --follow --json` || args === "sync --follow --json"
   );
 }
 

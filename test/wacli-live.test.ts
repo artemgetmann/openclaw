@@ -74,7 +74,7 @@ describe("wacli live owner ensure", () => {
     ).toBe(false);
     expect(
       commandLooksLikeExpectedOwner(
-        "node helper.js --note wacli --store /tmp/wacli-test sync --follow --json trailing",
+        "python malicious.py wacli --store /tmp/wacli-test sync --follow --json",
         "/tmp/wacli-test",
       ),
     ).toBe(false);
