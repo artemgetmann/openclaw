@@ -16,15 +16,39 @@ user-invocable: false
 
 ## Cross-Language Review
 
-When the recipient-facing language differs from the language the user normally
-uses with Jarvis, present one aligned pair in this order:
+First choose the review language using this precedence:
+
+1. An explicit review-language instruction in the current request.
+2. The most recent explicit conversation-wide review-language instruction in the
+   current conversation.
+3. The established language of the current conversation.
+4. If none of the above resolves it, the language of the user's unquoted
+   drafting or directive clause, excluding quoted or clearly delimited recipient
+   text. If that directive text is genuinely mixed, use the language of its first
+   complete directive clause, invite correction, and proceed with the draft.
+
+Never infer the review language from nationality or assume it is the user's
+native language. Do not select it merely from locale, timezone, profile data, or
+the fact of a single code-switched message. Mere code-switching is not preference
+evidence; the fallback above selects a review language only for the current
+draft. An explicit review-language instruction remains explicit when it appears
+in a code-switched message.
+
+An explicit current-request instruction wins for that draft. Treat wording such
+as "this time" as one-time. Wording such as "always" or "from now on" may
+establish a conversation-wide review-language instruction for later drafts in
+the current conversation; the most recent such instruction wins. This skill must
+not read or write `USER.md` or any profile or memory file. Durable persistence is
+deferred to an owner-verified profile or memory path outside this skill.
+
+In a group, shared, non-owner, or ambiguous context, never consult or apply owner
+profile preferences.
+
+When the target language differs from the selected review language, present one
+aligned pair in this order:
 
 1. `Meaning (<review language>)` — what the recipient-ready message means.
 2. `Ready to send (<target language>)` — the exact outbound message.
-
-Use the language the user normally uses with Jarvis as the review language
-unless the user has explicitly preferred another review language. Never infer
-the review language from nationality or assume it is the user's native language.
 
 Keep both blocks equivalent in facts, commitments, tone, names, dates, numbers,
 and links. For example, an English-speaking Jarvis conversation with an Italian
@@ -36,17 +60,23 @@ Ask for approval unambiguously against the target-language version, for example:
 target-language block. Never include the review block, headings, or commentary
 in the outbound payload.
 
-When the user revises or shortens the draft, regenerate both blocks and keep
-them aligned. Provide multiple stylistic variants only when explicitly
-requested; every variant must be its own aligned review/target pair.
+When the user revises or shortens the same draft, retain its previously selected
+review language, including a one-time selection, unless the current revision
+explicitly changes or corrects the review language. Then recompute the output
+shape. If the selected review and target languages still differ, regenerate both
+blocks and keep them aligned. If they match, emit only the target-ready message.
+Nothing is sent until the updated target-language message is approved. Provide
+multiple stylistic variants only when explicitly requested; every variant must be
+its own aligned review/target pair.
 
 ## Single-Language Exceptions
 
 Do not duplicate the message into review and target blocks when:
 
-- the send language matches the user's normal Jarvis language;
+- the target language matches the selected review language;
 - the user asks for target-language-only output, such as "Italian only";
-- an explicit user preference says they are fluent and want target-only output;
+- the user explicitly says in the current conversation that they are fluent and
+  want target-only output;
   or
 - the request is raw translation rather than a sendable recipient-facing
   message.
