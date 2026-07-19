@@ -20,6 +20,7 @@ import {
   pressChromeMcpKey,
   resetChromeMcpSessionsForTest,
   resolveChromeMcpCommandForTest,
+  resolveChromeMcpTempConfigForTest,
   setChromeMcpDevToolsWsEndpointProberForTest,
   setChromeMcpNpxResolverInputsForTest,
   resolveChromeMcpArgsForTest,
@@ -29,6 +30,7 @@ import {
   setChromeMcpProfileDirectoryForTest,
   setChromeMcpScreenshotFallbackForTest,
   setChromeMcpSessionFactoryForTest,
+  setChromeMcpTmpDirForTest,
   takeChromeMcpScreenshot,
 } from "./chrome-mcp.js";
 
@@ -151,6 +153,16 @@ async function writeExecutableFile(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, "#!/bin/sh\nexit 0\n");
   await fs.chmod(filePath, 0o755);
+}
+
+function expectPathBeneath(rootPath: string, candidatePath: string): void {
+  // Lexical containment avoids platform-specific realpath differences such as
+  // the macOS /var and /private/var aliases.
+  const relativePath = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+  expect(relativePath).not.toBe("");
+  expect(relativePath).not.toBe("..");
+  expect(relativePath.startsWith(`..${path.sep}`)).toBe(false);
+  expect(path.isAbsolute(relativePath)).toBe(false);
 }
 
 describe("chrome MCP npx resolution", () => {
@@ -912,13 +924,7 @@ describe("chrome MCP page parsing", () => {
 
     expect(screenshot).toEqual(Buffer.from("png-bytes"));
     const preferredTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
-    // Use lexical containment so macOS /var and /private/var aliases cannot
-    // turn an approved path assertion into a platform-specific realpath test.
-    const relativePath = path.relative(preferredTmpRoot, path.resolve(screenshotPath));
-    expect(relativePath).not.toBe("");
-    expect(relativePath).not.toBe("..");
-    expect(relativePath.startsWith(`..${path.sep}`)).toBe(false);
-    expect(path.isAbsolute(relativePath)).toBe(false);
+    expectPathBeneath(preferredTmpRoot, screenshotPath);
     await expect(fs.access(path.dirname(screenshotPath))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -934,6 +940,48 @@ describe("chrome MCP page parsing", () => {
       undefined,
       expect.anything(),
     );
+  });
+
+  it("shares a simulated fallback root with transport temp variables and screenshot output", async () => {
+    const fallbackRoot = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-fallback-root-"));
+    const { session, callTool } = createFakeSessionBundle();
+    let screenshotPath = "";
+    callTool.mockImplementation(async ({ name, arguments: args }: ToolCall) => {
+      if (name !== "take_screenshot" || typeof args?.filePath !== "string") {
+        throw new Error(`unexpected tool ${name}`);
+      }
+      screenshotPath = args.filePath;
+      await fs.writeFile(screenshotPath, Buffer.from("fallback-png"));
+      return { content: [{ type: "text", text: "ok" }] };
+    });
+    setChromeMcpTmpDirForTest(fallbackRoot);
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    try {
+      expect(resolveChromeMcpTempConfigForTest("darwin")).toEqual({
+        tmpDir: fallbackRoot,
+        transportEnv: { TMPDIR: fallbackRoot },
+      });
+      expect(resolveChromeMcpTempConfigForTest("win32")).toEqual({
+        tmpDir: fallbackRoot,
+        transportEnv: { TEMP: fallbackRoot, TMP: fallbackRoot },
+      });
+
+      await expect(
+        takeChromeMcpScreenshot({
+          profileName: "chrome-live",
+          targetId: "1",
+          format: "png",
+        }),
+      ).resolves.toEqual(Buffer.from("fallback-png"));
+
+      expectPathBeneath(fallbackRoot, screenshotPath);
+      await expect(fs.access(path.dirname(screenshotPath))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await fs.rm(fallbackRoot, { recursive: true, force: true });
+    }
   });
 
   it("fails clearly when Chrome MCP does not create the screenshot output file", async () => {

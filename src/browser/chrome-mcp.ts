@@ -107,6 +107,8 @@ let devToolsWsEndpointProber: ((port: number, browserPath: string) => Promise<bo
 let screenshotFallbackForTest: ChromeMcpScreenshotFallback | null = null;
 let chromeMcpStateDirOverrideForTest: string | null | undefined;
 let chromeMcpExecPathOverrideForTest: string | null = null;
+let chromeMcpTmpDirOverrideForTest: string | null = null;
+let cachedChromeMcpTmpDir: string | null = null;
 const profileDirectoryOverrides = new Map<string, string>();
 
 function traceChromeMcpStage(stage: string): void {
@@ -159,6 +161,27 @@ function resolveChromeMcpStateDir(): string | null {
 
 function resolveChromeMcpProcessExecPath(): string {
   return chromeMcpExecPathOverrideForTest?.trim() || process.execPath;
+}
+
+function resolveChromeMcpTmpDir(): string {
+  if (chromeMcpTmpDirOverrideForTest) {
+    return chromeMcpTmpDirOverrideForTest;
+  }
+  cachedChromeMcpTmpDir ??= resolvePreferredOpenClawTmpDir();
+  return cachedChromeMcpTmpDir;
+}
+
+function resolveChromeMcpTransportEnv(
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const tmpDir = resolveChromeMcpTmpDir();
+  if (platform === "win32") {
+    return { TEMP: tmpDir, TMP: tmpDir };
+  }
+  // The MCP SDK intentionally sanitizes inherited environment variables and
+  // may omit OS temp variables. Pin the platform-specific variables to the
+  // parent's selected root so the child accepts normal and fallback paths.
+  return { TMPDIR: tmpDir };
 }
 
 function resolveChromeMcpCommand(): ChromeMcpCommandResolution {
@@ -2520,6 +2543,7 @@ async function createRealSession(
   const transport = new StdioClientTransport({
     command: command.path,
     args,
+    env: resolveChromeMcpTransportEnv(),
     stderr: "pipe",
   });
   const client = new Client(
@@ -2858,10 +2882,9 @@ async function callTool(
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>, extension = ""): Promise<T> {
-  // Keep gateway-created paths on the shared OpenClaw temp root so they remain
-  // valid when the sanitized MCP child resolves a different OS temp directory.
-  // Outbound media validation already allows this hardened root as well.
-  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-chrome-mcp-"));
+  // Use the exact root passed to the MCP child so normal and fallback temp
+  // selections share one path contract. Media validation allows this root too.
+  const dir = await fs.mkdtemp(path.join(resolveChromeMcpTmpDir(), "openclaw-chrome-mcp-"));
   const filePath = path.join(dir, `${randomUUID()}${extension}`);
   try {
     return await fn(filePath);
@@ -2958,6 +2981,20 @@ export async function resolveChromeMcpArgsForTest(
 
 export function resolveChromeMcpCommandForTest(): ChromeMcpCommandResolution {
   return resolveChromeMcpCommand();
+}
+
+export function resolveChromeMcpTempConfigForTest(platform: NodeJS.Platform = process.platform): {
+  tmpDir: string;
+  transportEnv: Record<string, string>;
+} {
+  return {
+    tmpDir: resolveChromeMcpTmpDir(),
+    transportEnv: resolveChromeMcpTransportEnv(platform),
+  };
+}
+
+export function setChromeMcpTmpDirForTest(tmpDir: string | null): void {
+  chromeMcpTmpDirOverrideForTest = tmpDir;
 }
 
 export function setChromeMcpNpxResolverInputsForTest(params: {
@@ -3579,6 +3616,8 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
   defaultChromeUserDataDir = INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
   chromeMcpStateDirOverrideForTest = undefined;
   chromeMcpExecPathOverrideForTest = null;
+  chromeMcpTmpDirOverrideForTest = null;
+  cachedChromeMcpTmpDir = null;
   profileDirectoryOverrides.clear();
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
