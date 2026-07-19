@@ -14,6 +14,17 @@ user-invocable: false
   dates, numbers, and links.
 - Make the output ready for the user to approve, revise, or send.
 
+## Exact Recipient Payload Formatting
+
+- Render every exact recipient-ready payload as Markdown blockquote lines: prefix
+  every payload line with `>`.
+- Keep the exact draft plain and copyable. Do not switch to native rich
+  presentation merely because the content is structured.
+- For cross-language drafts, keep the meaning/review block as normal prose and
+  render only the exact target-language outbound block as quoted payload lines.
+- For single-language drafts, render the exact recipient-ready message as quoted
+  payload lines too.
+
 ## Cross-Language Review
 
 First choose the review language using this precedence:
