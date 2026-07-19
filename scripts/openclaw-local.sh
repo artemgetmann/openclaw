@@ -95,13 +95,57 @@ is_telegram_user_command() {
 
 ensure_telegram_user_lane_assets() {
   local env_file="$ROOT/scripts/telegram-e2e/.env.local"
-  local session_file="$ROOT/scripts/telegram-e2e/tmp/userbot.session"
+  local session_selector="$ROOT/scripts/telegram-e2e/tmp/userbot.session.path"
   local bootstrap_script="$ROOT/scripts/bootstrap-worktree-telegram.sh"
   local api_id=""
   local api_hash=""
+  local explicit_session=""
+  local explicit_env_file=""
+  local arg=""
+  local -a args=("$@")
+  local index=0
+
+  # Parse both CLI spellings without consuming or printing credential values.
+  # A fully explicit recovery command must reach the backend even when the
+  # lane-local compatibility assets are absent or ambiguous.
+  while [[ "$index" -lt "${#args[@]}" ]]; do
+    arg="${args[$index]}"
+    case "$arg" in
+      --session)
+        if [[ $((index + 1)) -lt ${#args[@]} ]]; then
+          explicit_session="${args[$((index + 1))]}"
+          index=$((index + 1))
+        fi
+        ;;
+      --session=*)
+        explicit_session="${arg#--session=}"
+        ;;
+      --env-file)
+        if [[ $((index + 1)) -lt ${#args[@]} ]]; then
+          explicit_env_file="${args[$((index + 1))]}"
+          index=$((index + 1))
+        fi
+        ;;
+      --env-file=*)
+        explicit_env_file="${arg#--env-file=}"
+        ;;
+    esac
+    index=$((index + 1))
+  done
 
   if [[ ! -f "$bootstrap_script" ]]; then
     return 0
+  fi
+
+  # Explicit absolute session + explicit credential file is a complete,
+  # hermetic asset set. Inspect only whether required values are present; never
+  # echo their contents into wrapper output or diagnostics.
+  if [[ "$explicit_session" == /* && -n "$explicit_env_file" && -f "$explicit_env_file" ]]; then
+    api_id="$(read_last_env_value "$explicit_env_file" "TELEGRAM_API_ID")"
+    api_hash="$(read_last_env_value "$explicit_env_file" "TELEGRAM_API_HASH")"
+    if [[ -n "$api_id" && -n "$api_hash" ]]; then
+      return 0
+    fi
   fi
 
   if [[ -f "$env_file" ]]; then
@@ -110,10 +154,10 @@ ensure_telegram_user_lane_assets() {
   fi
 
   # Ad-hoc worktrees can bypass scripts/new-worktree.sh and land without the
-  # userbot env/session that telegram-user depends on. Self-heal that lane-local
-  # bootstrap here so read-only transcript/debug commands do not fail on a
-  # missing copy step.
-  if [[ -n "$api_id" && -n "$api_hash" && -f "$session_file" ]]; then
+  # userbot env/session selector that telegram-user depends on. Self-heal that
+  # lane-local bootstrap here so read-only transcript/debug commands do not fail
+  # on a missing copy step.
+  if [[ -n "$api_id" && -n "$api_hash" && -f "$session_selector" ]]; then
     return 0
   fi
 
@@ -199,7 +243,7 @@ if [[ -x "$LOCAL_RESTART" ]]; then
 fi
 
 if is_telegram_user_command "$@"; then
-  ensure_telegram_user_lane_assets
+  ensure_telegram_user_lane_assets "$@"
   export OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT=1
 fi
 

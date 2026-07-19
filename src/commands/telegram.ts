@@ -830,11 +830,13 @@ function resolveTelegramUserRuntimeOptions(
   const envFile = cleanString(params.envFile);
   const session = cleanString(params.session);
   const defaultEnvFile = path.join(repoRoot, "scripts", "telegram-e2e", ".env.local");
-  const defaultSession = path.join(repoRoot, "scripts", "telegram-e2e", "tmp", "userbot.session");
 
   return {
     envFile: envFile ?? (telegramCommandDeps.fileExists(defaultEnvFile) ? defaultEnvFile : null),
-    session: session ?? (telegramCommandDeps.fileExists(defaultSession) ? defaultSession : null),
+    // Session ownership is resolved centrally by the backend. Supplying the old
+    // worktree-local SQLite path here would bypass its machine-owner selector
+    // and recreate the cross-worktree split this command is meant to diagnose.
+    session: session ?? null,
   };
 }
 

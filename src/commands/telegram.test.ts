@@ -959,17 +959,17 @@ describe("telegram commands", () => {
     expect(payload.current_lane_bot).toBe("@jarvis_tester_2_bot");
   });
 
-  it("uses repo-local telegram-user env and session files for baseline smoke", async () => {
+  it("uses repo-local credentials but leaves session ownership to the machine resolver", async () => {
     const runTelegramUserPrecheck = vi
       .fn()
       .mockResolvedValueOnce({
-        session_path: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+        session_path: "/Users/test/.openclaw/telegram-user/userbot.session",
         user: { user_id: 99, username: "artem" },
       })
       .mockResolvedValueOnce({
         backend_meta: {},
         chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_2_bot" },
-        session_path: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+        session_path: "/Users/test/.openclaw/telegram-user/userbot.session",
         user: { user_id: 99, username: "artem" },
       });
     const runTelegramUserSend = vi.fn(async () => ({ message: { message_id: 301 } }));
@@ -1044,18 +1044,18 @@ describe("telegram commands", () => {
 
     expect(runTelegramUserPrecheck).toHaveBeenNthCalledWith(1, {
       envFile: "/tmp/repo/scripts/telegram-e2e/.env.local",
-      session: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+      session: undefined,
     });
     expect(runTelegramUserSend).toHaveBeenCalledWith({
       chat: "@jarvis_tester_2_bot",
       envFile: "/tmp/repo/scripts/telegram-e2e/.env.local",
       message: expect.stringContaining("openclaw-telegram-baseline"),
-      session: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+      session: undefined,
     });
     expect(runTelegramUserWait).toHaveBeenCalledWith(
       expect.objectContaining({
         envFile: "/tmp/repo/scripts/telegram-e2e/.env.local",
-        session: "/tmp/repo/scripts/telegram-e2e/tmp/userbot.session",
+        session: undefined,
       }),
     );
   });

@@ -73,7 +73,7 @@ function createOpenclawLocalHarness(): {
       "TELEGRAM_API_ID=123456",
       "TELEGRAM_API_HASH=test-hash",
       "EOF",
-      'printf "session" > "$PWD/scripts/telegram-e2e/tmp/userbot.session"',
+      'printf "/tmp/machine-userbot.session\\n" > "$PWD/scripts/telegram-e2e/tmp/userbot.session.path"',
       'printf "bootstrap:%s\\n" "$*" >> "$OPENCLAW_TEST_CALLS"',
     ].join("\n"),
   );
@@ -161,8 +161,100 @@ describe("scripts/openclaw-local.sh restart routing", () => {
         fs.readFileSync(path.join(harness.root, "scripts", "telegram-e2e", ".env.local"), "utf8"),
       ).toContain("TELEGRAM_API_ID=123456");
       expect(
-        fs.existsSync(path.join(harness.root, "scripts", "telegram-e2e", "tmp", "userbot.session")),
+        fs.existsSync(
+          path.join(harness.root, "scripts", "telegram-e2e", "tmp", "userbot.session.path"),
+        ),
       ).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it.each([
+    {
+      label: "split session and equals env-file",
+      makeArgs: (sessionPath: string, envFilePath: string) => [
+        "telegram-user",
+        "status",
+        "--session",
+        sessionPath,
+        `--env-file=${envFilePath}`,
+      ],
+    },
+    {
+      label: "equals session and split env-file",
+      makeArgs: (sessionPath: string, envFilePath: string) => [
+        "telegram-user",
+        "status",
+        `--session=${sessionPath}`,
+        "--env-file",
+        envFilePath,
+      ],
+    },
+  ])("skips bootstrap for complete explicit Telegram assets: $label", ({ makeArgs }) => {
+    const harness = createOpenclawLocalHarness();
+    try {
+      const explicitEnvFile = path.join(harness.root, "recovery", ".env.local");
+      const explicitSession = path.join(harness.root, "recovery", "account.session");
+      fs.mkdirSync(path.dirname(explicitEnvFile), { recursive: true });
+      fs.writeFileSync(
+        explicitEnvFile,
+        "TELEGRAM_API_ID=explicit-id-secret\nTELEGRAM_API_HASH=explicit-hash-secret\n",
+        "utf8",
+      );
+
+      const result = harness.run(makeArgs(explicitSession, explicitEnvFile));
+      const calls = fs.readFileSync(harness.callsPath, "utf8");
+
+      expect(result.status).toBe(0);
+      expect(calls).not.toContain("bootstrap:");
+      expect(calls).toContain("telegram-user status");
+      expect(`${String(result.stdout)}${String(result.stderr)}${calls}`).not.toContain(
+        "explicit-hash-secret",
+      );
+      expect(fs.existsSync(path.join(harness.root, "scripts", "telegram-e2e", ".env.local"))).toBe(
+        false,
+      );
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it.each([
+    {
+      label: "absolute session without explicit env file",
+      makeArgs: (sessionPath: string, _envFilePath: string) => [
+        "telegram-user",
+        "status",
+        `--session=${sessionPath}`,
+      ],
+    },
+    {
+      label: "explicit env file with a relative session",
+      makeArgs: (_sessionPath: string, envFilePath: string) => [
+        "telegram-user",
+        "status",
+        "--session=relative.session",
+        `--env-file=${envFilePath}`,
+      ],
+    },
+  ])("keeps bootstrap self-healing for incomplete explicit assets: $label", ({ makeArgs }) => {
+    const harness = createOpenclawLocalHarness();
+    try {
+      const explicitEnvFile = path.join(harness.root, "recovery", ".env.local");
+      const explicitSession = path.join(harness.root, "recovery", "account.session");
+      fs.mkdirSync(path.dirname(explicitEnvFile), { recursive: true });
+      fs.writeFileSync(
+        explicitEnvFile,
+        "TELEGRAM_API_ID=explicit-id\nTELEGRAM_API_HASH=explicit-hash\n",
+        "utf8",
+      );
+
+      const result = harness.run(makeArgs(explicitSession, explicitEnvFile));
+      const calls = fs.readFileSync(harness.callsPath, "utf8");
+
+      expect(result.status).toBe(0);
+      expect(calls).toContain("bootstrap:--strict");
     } finally {
       harness.cleanup();
     }

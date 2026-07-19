@@ -17,7 +17,7 @@ import os
 import re
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -39,10 +39,14 @@ except Exception:  # pragma: no cover - import failure is reported by command ex
   functions = None
 
 
-DEFAULT_SESSION = Path(__file__).resolve().parent / "tmp" / "userbot.session"
+DEFAULT_SESSION = Path.home() / ".openclaw" / "telegram-user" / "userbot.session"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15
+DEFAULT_SESSION_LOCK = (
+  Path.home() / ".openclaw" / "telegram-user" / "userbot.session.openclaw.lock"
+)
 PENDING_AUTH_SUFFIX = ".openclaw-login.json"
 LOGIN_PASSWORD_ENV = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD"
+SESSION_LOCK_PATH_ENV = "OPENCLAW_TELEGRAM_USER_LOCK_PATH"
 
 
 def emit(payload: object, *, stream = sys.stdout) -> int:
@@ -204,7 +208,6 @@ def clear_session_artifacts(session_path: Path) -> list[str]:
   candidate_paths = [
     session_path,
     resolve_pending_auth_path(session_path),
-    session_path.with_name(f"{session_path.name}.openclaw.lock"),
     Path(f"{session_path}-journal"),
     Path(f"{session_path}-shm"),
     Path(f"{session_path}-wal"),
@@ -244,36 +247,110 @@ def classify_login_error(error: Exception) -> str:
   return error.__class__.__name__
 
 
-@contextmanager
-def acquire_session_lock(session_path: Path, timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS):
-  lock_path = session_path.with_name(f"{session_path.name}.openclaw.lock")
-  lock_path.parent.mkdir(parents=True, exist_ok=True)
-  with open(lock_path, "a+", encoding = "utf-8") as handle:
-    deadline = time.time() + max(1, timeout_seconds)
-    while True:
-      try:
-        if fcntl is not None:
-          fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-          break
-        if msvcrt is not None:  # pragma: no cover - Windows only
-          msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-          break
-        break
-      except OSError:
-        if time.time() >= deadline:
-          raise TimeoutError(f"timed out waiting for session lock at {lock_path}") from None
-        time.sleep(0.2)
+def resolve_session_lock_path(explicit: str | Path | None = None) -> Path:
+  # Normal invocations share one stable lock across repo clones, worktrees, and
+  # session-path spellings. A caller must opt into a different lock explicitly,
+  # which is useful for a genuinely separate Telegram account or a hermetic test.
+  if explicit is not None:
+    selected = Path(explicit).expanduser()
+    if not selected.is_absolute():
+      raise ValueError("E_INVALID_LOCK_SELECTOR: Telegram user lock override must be absolute.")
+    return selected
+  from_env = (os.environ.get(SESSION_LOCK_PATH_ENV) or "").strip()
+  selected = Path(from_env).expanduser() if from_env else DEFAULT_SESSION_LOCK
+  if not selected.is_absolute():
+    raise ValueError("E_INVALID_LOCK_SELECTOR: Telegram user lock override must be absolute.")
+  return selected
 
+
+def resolve_session_lock_scope(explicit: str | Path | None = None) -> str:
+  if explicit is not None:
+    return "argument_override"
+  if (os.environ.get(SESSION_LOCK_PATH_ENV) or "").strip():
+    return "environment_override"
+  return "canonical"
+
+
+def resolve_session_lock_paths(
+  session_path: Path,
+  lock_path_override: str | Path | None = None,
+) -> list[Path]:
+  primary_lock = resolve_session_lock_path(lock_path_override)
+  legacy_lock = session_path.with_name(f"{session_path.name}.openclaw.lock")
+  # During the mixed-version transition, every new process must participate in
+  # both lock protocols. Sort by absolute filesystem identity so two new
+  # processes cannot invert acquisition order, while retaining the caller's
+  # original path spelling for the Telethon database itself.
+  unique: dict[str, Path] = {}
+  for candidate in (primary_lock, legacy_lock):
+    unique.setdefault(os.path.abspath(os.fspath(candidate)), candidate)
+  return [unique[key] for key in sorted(unique)]
+
+
+@contextmanager
+def acquire_session_lock(
+  session_path: Path,
+  timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS,
+  *,
+  lock_path_override: str | Path | None = None,
+):
+  # Keep accepting the exact session path so call sites cannot accidentally
+  # normalize or replace the Telethon database path while selecting the lock.
+  # The primary identity is independent from it for cross-worktree safety, while
+  # the legacy bridge protects against already-running older callers.
+  lock_paths = resolve_session_lock_paths(session_path, lock_path_override)
+  lock_scope = resolve_session_lock_scope(lock_path_override)
+  deadline = time.time() + max(1, timeout_seconds)
+  acquired_handles = []
+  with ExitStack() as stack:
     try:
+      for lock_path in lock_paths:
+        lock_path.parent.mkdir(parents=True, exist_ok=True, mode = 0o700)
+        if lock_path == DEFAULT_SESSION_LOCK:
+          # The canonical directory is account-local state. Tighten permissions
+          # even when it predates this code; custom override parents may be
+          # intentionally shared, so their permissions remain caller-owned.
+          try:
+            os.chmod(lock_path.parent, 0o700)
+          except OSError:
+            pass
+        handle = stack.enter_context(open(lock_path, "a+", encoding = "utf-8"))
+        try:
+          os.chmod(lock_path, 0o600)
+        except OSError:
+          pass
+
+        while True:
+          try:
+            if fcntl is not None:
+              fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+              break
+            if msvcrt is not None:  # pragma: no cover - Windows only
+              msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+              break
+            break
+          except OSError:
+            if time.time() >= deadline:
+              # Never echo either lock path or the session path: callers may
+              # place them below an account-identifying directory.
+              raise TimeoutError(
+                f"timed out waiting for Telegram user session lock (scope={lock_scope})"
+              ) from None
+            time.sleep(0.2)
+        acquired_handles.append(handle)
+
       yield
     finally:
-      try:
-        if fcntl is not None:
-          fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        elif msvcrt is not None:  # pragma: no cover - Windows only
-          msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-      except OSError:
-        pass
+      # Release in reverse acquisition order. Closing would also release POSIX
+      # flock, but explicit unlock keeps the Windows path symmetric and clear.
+      for handle in reversed(acquired_handles):
+        try:
+          if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+          elif msvcrt is not None:  # pragma: no cover - Windows only
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+          pass
 
 
 def build_chat_payload(chat) -> dict[str, object | None]:
@@ -543,6 +620,10 @@ def resolve_download_output_path(output_raw: str, *, chat_raw: str, message) -> 
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description = "Telethon transport for OpenClaw Telegram user tooling")
   parser.add_argument("--session", help = "Telethon session path override")
+  parser.add_argument(
+    "--lock",
+    help = "Session lock path override for a separate account or hermetic test",
+  )
   subparsers = parser.add_subparsers(dest = "command", required = True)
 
   status = subparsers.add_parser("status", help = "Inspect login/session health")
@@ -630,7 +711,7 @@ async def run_precheck(args: argparse.Namespace) -> int:
       details = {"session_path": str(session_path)},
     )
 
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, me = await connect_client(session_path)
     try:
       chat_payload = None
@@ -664,7 +745,7 @@ async def run_status(args: argparse.Namespace) -> int:
     )
 
   if session_path.exists():
-    with acquire_session_lock(session_path):
+    with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
       api_id, api_hash = resolve_api_credentials()
       client = create_telegram_client(
         session_path,
@@ -728,7 +809,7 @@ async def run_login(args: argparse.Namespace) -> int:
   if not phone:
     return fail("E_USAGE", "Telegram login requires --phone.")
 
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     api_id, api_hash = resolve_api_credentials()
     client = create_telegram_client(
       session_path,
@@ -848,7 +929,7 @@ async def run_send(args: argparse.Namespace) -> int:
   caption = str(args.caption or "").strip()
   if not message_text and not media:
     return fail("E_USAGE", "Telegram send requires --message or --media.")
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       if media:
@@ -881,7 +962,7 @@ async def run_topic_create(args: argparse.Namespace) -> int:
   title = str(args.title or "").strip()
   if not title:
     return fail("E_USAGE", "Telegram topic-create requires --title.")
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       updates = await client(
@@ -908,7 +989,7 @@ async def run_topic_delete(args: argparse.Namespace) -> int:
   topic_anchor = int(args.topic_anchor or 0)
   if topic_anchor <= 0:
     return fail("E_USAGE", "Telegram topic-delete requires --topic-anchor.")
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       result = await client(
@@ -939,7 +1020,7 @@ async def run_read(args: argparse.Namespace) -> int:
     read_kwargs["min_id"] = int(args.after_id)
   if args.before_id:
     read_kwargs["max_id"] = int(args.before_id)
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       messages = await client.get_messages(resolve_chat(args.chat), **read_kwargs)
@@ -962,7 +1043,7 @@ async def run_read(args: argparse.Namespace) -> int:
 
 async def run_mark_read(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       # Omitting a message/max_id tells Telethon to acknowledge the current
@@ -977,7 +1058,7 @@ async def run_mark_unread(args: argparse.Namespace) -> int:
   if functions is None:
     return fail("E_TELETHON_IMPORT", "Telethon dialog read-state functions are unavailable.")
   session_path = resolve_session_path(args.session)
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       # Telegram models this as a dialog-level unread flag, not as rewinding
@@ -1002,7 +1083,7 @@ async def run_download(args: argparse.Namespace) -> int:
   if not output_raw:
     return fail("E_USAGE", "Telegram download requires --output.")
 
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       message = await client.get_messages(resolve_chat(args.chat), ids = message_id)
@@ -1035,7 +1116,7 @@ async def run_inbox(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
   contains = str(args.contains or "")
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     client, _ = await connect_client(session_path)
     try:
       dialogs = []
@@ -1065,7 +1146,7 @@ async def run_inbox(args: argparse.Namespace) -> int:
 
 async def run_logout(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
-  with acquire_session_lock(session_path):
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     removed_paths = clear_session_artifacts(session_path)
   return emit(
     {

@@ -15,6 +15,34 @@ Do not use Telegram as the default first-pass E2E path for non-Telegram bugs.
 For most agent/tool/browser issues, local OpenClaw CLI validation is the faster
 and more reliable default.
 
+## Choose the proof lane first
+
+- Unmerged or risky Telegram work uses an isolated tester bot and an isolated
+  worktree runtime. This includes restart, polling/watchdog, auth/pairing,
+  offset/cursor, retry, load, and global-config work.
+- Most parallel agents stop at local tests. Only Telegram-sensitive branches
+  claim an exclusive tester lane; a tester token must never have two pollers.
+- The real daily Jarvis bot is a serialized final acceptance canary only after
+  merge and deployment. A disposable Jarvis Lab topic isolates conversation
+  routing, not the gateway, token, cursor, config, provider quota, or runtime.
+- Never replace tester lanes with the daily bot, and never let multiple agents
+  use the daily bot concurrently.
+
+For an approved managed-Jarvis canary, preview the zero-mutation plan first:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --expected-commit <deployed-commit>
+```
+
+Run `--execute` only with fresh approval after the expected commit is deployed.
+The harness targets `ai.jarvis.gateway`, acquires the machine-wide canary lock,
+creates one uniquely named topic in the configured Jarvis Lab chat, records
+runtime/transport/message evidence, and cleans only its exact topic and local
+topic session. `sessions.delete` archives the transcript as
+`*.deleted.<timestamp>`; that archive is residual evidence, not permanent
+erasure.
+
 ## Required precheck before any live Telegram validation
 
 - Confirm the current git branch has a real name and is not `HEAD`.
@@ -41,6 +69,13 @@ and more reliable default.
 - For each new worktree:
   - Copy `.env.bots` from the main checkout if needed
   - Run `bash scripts/assign-bot.sh`
+- Telegram-as-user uses one machine-local canonical session and one shared
+  machine lock. Bootstrap may copy non-session compatibility configuration, but
+  it must never copy the SQLite session database into a worktree.
+- Explicit session and lock overrides remain available for hermetic tests or a
+  deliberately separate account. If legacy and canonical implicit sessions
+  disagree, stop on the ambiguity diagnostic; do not copy, delete, rotate, or
+  reauthenticate either database as an automatic repair.
 - `.env.bots` is the tester-bot pool. Each `BOT_TOKEN=...` entry is one
   tester-only bot that can be claimed by one active worktree lane.
 - `bash scripts/assign-bot.sh` writes the lane claim into `.env.local` as

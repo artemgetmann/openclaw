@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -91,23 +92,170 @@ const backendScriptPath = path.join(telegramE2eDir, "telethon_cli.py");
 const requirementsPath = path.join(telegramE2eDir, "requirements.txt");
 const repoLocalEnvFilePath = path.join(telegramE2eDir, ".env.local");
 const repoLocalSessionPath = path.join(telegramE2eDir, "tmp", "userbot.session");
+const repoLocalSessionSelectorPath = path.join(telegramE2eDir, "tmp", "userbot.session.path");
+function resolveTelegramUserMachineDir(env: NodeJS.ProcessEnv): string {
+  return path.join(readNonEmpty(env.HOME) ?? os.homedir(), ".openclaw", "telegram-user");
+}
 
-function resolveTelegramUserDefaultPaths(env: NodeJS.ProcessEnv) {
-  const telegramUserStateDir = path.join(resolveStateDir(env), "telegram-user");
-  const hasExplicitStateDir = Boolean(
-    env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim(),
+function resolveTelegramUserMachineSessionPath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveTelegramUserMachineDir(env), "userbot.session");
+}
+
+function resolveTelegramUserMachineLockPath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveTelegramUserMachineDir(env), "userbot.session.openclaw.lock");
+}
+
+type TelegramUserSessionSource =
+  | "explicit"
+  | "monitor-binding"
+  | "env-file"
+  | "process-env"
+  | "legacy-repo"
+  | "machine-default"
+  | "state-default";
+
+function readRepoLocalSessionSelector(): string | undefined {
+  if (!fsSync.existsSync(repoLocalSessionSelectorPath)) {
+    return undefined;
+  }
+  const selected = fsSync.readFileSync(repoLocalSessionSelectorPath, "utf8").trim();
+  if (!selected || !path.isAbsolute(selected)) {
+    throw new Error(
+      "E_INVALID_SESSION_SELECTOR: worktree Telegram session selector must contain one absolute path.",
+    );
+  }
+  return path.resolve(selected);
+}
+
+function isRecognizedLegacySession(value: string, env: NodeJS.ProcessEnv): boolean {
+  const normalized = value
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
+  if (
+    normalized === "scripts/telegram-e2e/tmp/userbot.session" ||
+    normalized === "scripts/telegram-e2e/userbot.session"
+  ) {
+    return true;
+  }
+  if (!path.isAbsolute(value)) {
+    return false;
+  }
+  const stateDefault = path.join(resolveStateDir(env), "telegram-user", "userbot.session");
+  const mainRepo = readNonEmpty(env.OPENCLAW_MAIN_REPO);
+  const knownAbsolutePaths = [
+    repoLocalSessionPath,
+    path.join(telegramE2eDir, "userbot.session"),
+    stateDefault,
+    path.join(
+      readNonEmpty(env.HOME) ?? os.homedir(),
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "telegram-user",
+      "userbot.session",
+    ),
+    ...(mainRepo
+      ? [
+          path.join(mainRepo, "scripts", "telegram-e2e", "tmp", "userbot.session"),
+          path.join(mainRepo, "scripts", "telegram-e2e", "userbot.session"),
+        ]
+      : []),
+  ];
+  return knownAbsolutePaths.some((candidate) => path.resolve(candidate) === path.resolve(value));
+}
+
+function assertNoImplicitSessionAmbiguity(candidates: Array<{ path: string; source: string }>) {
+  const unique = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate.path);
+    unique.set(resolved, [...(unique.get(resolved) ?? []), candidate.source]);
+  }
+  if (unique.size <= 1) {
+    return;
+  }
+  const sources = [...unique.values()].flat().join(",");
+  throw new Error(
+    `E_AMBIGUOUS_SESSION: divergent implicit Telegram session owners exist (${sources}). Set an absolute --session or USERBOT_SESSION.`,
   );
+}
+
+function dedupeImplicitSessionCandidates(
+  candidates: Array<{ path: string; source: string }>,
+): Array<{ path: string; source: string }> {
+  const unique = new Map<string, { path: string; source: string }>();
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate.path);
+    const existing = unique.get(resolved);
+    unique.set(resolved, {
+      path: resolved,
+      source: existing ? `${existing.source}+${candidate.source}` : candidate.source,
+    });
+  }
+  return [...unique.values()];
+}
+
+function resolveTelegramUserDefaultPaths(
+  env: NodeJS.ProcessEnv,
+  options: {
+    canonicalSession?: string | null;
+    checkSessionAmbiguity?: boolean;
+  } = {},
+) {
+  const telegramUserStateDir = path.join(resolveStateDir(env), "telegram-user");
   const preferRepoLocalCompat = env.OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT === "1";
+  const explicitCanonicalSession =
+    readNonEmpty(options.canonicalSession) ??
+    readNonEmpty(env.OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION);
+  if (explicitCanonicalSession && !path.isAbsolute(explicitCanonicalSession)) {
+    throw new Error("OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION must be an absolute path.");
+  }
+  const repoSessionSelector = readRepoLocalSessionSelector();
+  const machineSession = resolveTelegramUserMachineSessionPath(env);
+  const selectedMachineSession = explicitCanonicalSession ?? repoSessionSelector ?? machineSession;
+  const stateLegacySession = path.join(telegramUserStateDir, "userbot.session");
+  const implicitCandidates = dedupeImplicitSessionCandidates(
+    explicitCanonicalSession
+      ? [{ path: explicitCanonicalSession, source: "explicit-canonical" }]
+      : repoSessionSelector
+        ? [
+            // A persisted selector is an ownership claim even before its SQLite
+            // database exists. Keep it authoritative over state-local legacy,
+            // but still detect a later-created machine default as a competing
+            // owner instead of silently following a stale selector forever.
+            { path: repoSessionSelector, source: "repo-selector" },
+            ...(fsSync.existsSync(machineSession)
+              ? [{ path: machineSession, source: "machine" }]
+              : []),
+          ]
+        : [
+            ...(fsSync.existsSync(machineSession)
+              ? [{ path: machineSession, source: "machine" }]
+              : []),
+            ...(fsSync.existsSync(stateLegacySession)
+              ? [{ path: stateLegacySession, source: "state-legacy" }]
+              : []),
+            ...(preferRepoLocalCompat && fsSync.existsSync(repoLocalSessionPath)
+              ? [{ path: repoLocalSessionPath, source: "legacy-repo" }]
+              : []),
+          ],
+  );
+  if (options.checkSessionAmbiguity !== false) {
+    assertNoImplicitSessionAmbiguity(implicitCandidates);
+  }
+  // With only one historical owner on disk, keep using that database without
+  // copying it. Once more than one owner exists, the ambiguity guard above
+  // refuses to guess which mutable SQLite history is authoritative.
+  const soleExistingOwner =
+    implicitCandidates.length === 1 ? implicitCandidates[0]?.path : undefined;
   return {
     telegramUserStateDir,
     defaultEnvFilePath:
-      (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalEnvFilePath)
+      preferRepoLocalCompat && fsSync.existsSync(repoLocalEnvFilePath)
         ? repoLocalEnvFilePath
         : path.join(telegramUserStateDir, ".env.local"),
-    defaultSessionPath:
-      (preferRepoLocalCompat || !hasExplicitStateDir) && fsSync.existsSync(repoLocalSessionPath)
-        ? repoLocalSessionPath
-        : path.join(telegramUserStateDir, "userbot.session"),
+    defaultSessionPath: soleExistingOwner ?? selectedMachineSession,
   };
 }
 
@@ -116,7 +264,7 @@ function resolveTelegramUserDefaultPaths(env: NodeJS.ProcessEnv) {
 // credentials and session state.
 const backendRuntimeEnv = resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv;
 const { telegramUserStateDir, defaultEnvFilePath, defaultSessionPath } =
-  resolveTelegramUserDefaultPaths(backendRuntimeEnv);
+  resolveTelegramUserDefaultPaths(backendRuntimeEnv, { checkSessionAmbiguity: false });
 const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
 
 type PythonInvocation = {
@@ -307,29 +455,104 @@ function readNonEmpty(value: string | null | undefined): string | undefined {
 
 export function resolveTelegramUserSessionPath(params: {
   boundSession?: string | null;
+  canonicalSession?: string | null;
   env?: NodeJS.ProcessEnv;
   explicitSession?: string | null;
   loadedEnv?: Record<string, string>;
 }): string {
+  return resolveTelegramUserSessionSelection(params).sessionPath;
+}
+
+export function resolveTelegramUserSessionSelection(params: {
+  boundSession?: string | null;
+  canonicalSession?: string | null;
+  env?: NodeJS.ProcessEnv;
+  explicitSession?: string | null;
+  loadedEnv?: Record<string, string>;
+}): { sessionPath: string; source: TelegramUserSessionSource } {
   const env = params.env ?? process.env;
+  const candidates: Array<{
+    raw: string | undefined;
+    source: TelegramUserSessionSource;
+  }> = [
+    { raw: readNonEmpty(params.explicitSession), source: "explicit" },
+    { raw: readNonEmpty(params.boundSession), source: "monitor-binding" },
+    { raw: readNonEmpty(params.loadedEnv?.USERBOT_SESSION), source: "env-file" },
+    { raw: readNonEmpty(env.USERBOT_SESSION), source: "process-env" },
+    { raw: readNonEmpty(env.OPENCLAW_TELEGRAM_USER_SESSION), source: "process-env" },
+  ];
+  for (const candidate of candidates) {
+    if (!candidate.raw) {
+      continue;
+    }
+    // Only the two repo-relative spellings shipped by the legacy harness are
+    // migrated. Any other relative selector would recreate cwd-dependent
+    // worktree ownership, so separate accounts and hermetic tests must opt into
+    // an unambiguous absolute path.
+    const shouldMigrateLegacy =
+      candidate.source !== "explicit" &&
+      candidate.source !== "monitor-binding" &&
+      isRecognizedLegacySession(candidate.raw, env);
+    if (!shouldMigrateLegacy) {
+      if (!path.isAbsolute(candidate.raw)) {
+        throw new Error(
+          `E_INVALID_SESSION_SELECTOR: ${candidate.source} Telegram session selector must be absolute.`,
+        );
+      }
+      // Explicit selectors and arbitrary absolute env/process selectors are
+      // authoritative. Return before touching implicit legacy candidates so a
+      // divergent old database cannot make an explicit recovery command fail.
+      return { sessionPath: path.resolve(candidate.raw), source: candidate.source };
+    }
+
+    // Recognized legacy values deliberately re-enter default resolution: they
+    // are migration aliases, not separate-account overrides, and therefore must
+    // fail closed when more than one historical owner exists.
+    const { defaultSessionPath: runtimeDefaultSessionPath } = resolveTelegramUserDefaultPaths(env, {
+      canonicalSession: params.canonicalSession,
+    });
+    const canonicalSession =
+      readNonEmpty(params.canonicalSession) ??
+      readNonEmpty(env.OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION) ??
+      readRepoLocalSessionSelector() ??
+      runtimeDefaultSessionPath;
+    if (!path.isAbsolute(canonicalSession)) {
+      throw new Error(
+        `E_INVALID_SESSION_SELECTOR: ${candidate.source} Telegram session selector must be absolute.`,
+      );
+    }
+    return { sessionPath: path.resolve(canonicalSession), source: candidate.source };
+  }
   // Runtime identity normalization can replace a raw profile state directory
-  // with the canonical consumer app state. Derive the fallback from that same
-  // environment while retaining the explicit repo-local compatibility switch.
-  const { defaultSessionPath: runtimeDefaultSessionPath } = resolveTelegramUserDefaultPaths(env);
-  return path.resolve(
-    readNonEmpty(params.explicitSession) ??
-      readNonEmpty(params.boundSession) ??
-      readNonEmpty(params.loadedEnv?.USERBOT_SESSION) ??
-      readNonEmpty(env.USERBOT_SESSION) ??
-      readNonEmpty(env.OPENCLAW_TELEGRAM_USER_SESSION) ??
-      runtimeDefaultSessionPath,
+  // with canonical consumer app state. Only the truly implicit fallback reaches
+  // this ambiguity check; every authoritative selector has already returned.
+  const { defaultSessionPath: runtimeDefaultSessionPath } = resolveTelegramUserDefaultPaths(env, {
+    canonicalSession: params.canonicalSession,
+  });
+  const runtimeStateSessionPath = path.join(
+    resolveStateDir(env),
+    "telegram-user",
+    "userbot.session",
   );
+  const source: TelegramUserSessionSource =
+    path.resolve(runtimeDefaultSessionPath) === path.resolve(repoLocalSessionPath)
+      ? "legacy-repo"
+      : path.resolve(runtimeDefaultSessionPath) === path.resolve(runtimeStateSessionPath) &&
+          path.resolve(runtimeDefaultSessionPath) !==
+            path.resolve(resolveTelegramUserMachineSessionPath(env))
+        ? "state-default"
+        : "machine-default";
+  return { sessionPath: path.resolve(runtimeDefaultSessionPath), source };
 }
 
 type TelegramUserBackendSelection = {
   envFilePath: string;
   loadedEnv: Record<string, string>;
   sessionPath: string;
+  sessionSelection: {
+    sessionPath: string;
+    source: TelegramUserSessionSource;
+  };
 };
 
 async function resolveTelegramUserBackendSelection(
@@ -344,11 +567,16 @@ async function resolveTelegramUserBackendSelection(
   // damaged persisted binding first: it cannot influence this invocation and
   // must not make an explicit recovery command unusable.
   const binding = explicitEnvFile ? null : await readTelegramUserMonitorBinding(runtimeEnv);
-  const { defaultEnvFilePath: runtimeDefaultEnvFilePath } =
-    resolveTelegramUserDefaultPaths(runtimeEnv);
+  // Env-file discovery is independent from session ownership. Delay the
+  // implicit-session ambiguity check until after --session/binding/env selectors
+  // have had a chance to win in resolveTelegramUserSessionSelection.
+  const { defaultEnvFilePath: runtimeDefaultEnvFilePath } = resolveTelegramUserDefaultPaths(
+    runtimeEnv,
+    { checkSessionAmbiguity: false },
+  );
   const envFilePath = explicitEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
   const loadedEnv = await loadScopedEnvFile(envFilePath);
-  const sessionPath = resolveTelegramUserSessionPath({
+  const sessionSelection = resolveTelegramUserSessionSelection({
     explicitSession: options.session,
     // An explicit env file selects a complete credential context. Its
     // USERBOT_SESSION (or the normal fallback) must not inherit a stale session
@@ -357,7 +585,7 @@ async function resolveTelegramUserBackendSelection(
     env: runtimeEnv,
     loadedEnv,
   });
-  return { envFilePath, loadedEnv, sessionPath };
+  return { envFilePath, loadedEnv, sessionPath: sessionSelection.sessionPath, sessionSelection };
 }
 
 export async function resolveTelegramUserBackendSelectors(
@@ -367,23 +595,54 @@ export async function resolveTelegramUserBackendSelectors(
   return { envFilePath, sessionPath };
 }
 
+export function resolveTelegramUserLockSelection(params: {
+  env?: NodeJS.ProcessEnv;
+  loadedEnv?: Record<string, string>;
+}): { lockPath: string; scope: "explicit" | "machine" } {
+  const env = params.env ?? process.env;
+  // A managed process pin must beat copied/local credential files. Otherwise a
+  // stale env-file override can silently split callers that the runtime intended
+  // to serialize on one canonical lock.
+  const explicitLockPath =
+    readNonEmpty(env.OPENCLAW_TELEGRAM_USER_LOCK_PATH) ??
+    readNonEmpty(params.loadedEnv?.OPENCLAW_TELEGRAM_USER_LOCK_PATH);
+  if (explicitLockPath && !path.isAbsolute(explicitLockPath)) {
+    throw new Error("E_INVALID_LOCK_SELECTOR: Telegram user lock override must be absolute.");
+  }
+  const machineLockPath = path.resolve(resolveTelegramUserMachineLockPath(env));
+  const lockPath = path.resolve(explicitLockPath ?? machineLockPath);
+  return {
+    lockPath,
+    // Managed runtimes commonly export the canonical path explicitly. Report
+    // the effective ownership scope, not merely whether a selector was present.
+    scope: lockPath === machineLockPath ? "machine" : "explicit",
+  };
+}
+
 async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
   // Credential values and USERBOT_SESSION must come from one file snapshot.
   // Re-reading after selector resolution could pair credentials from a replaced
   // env file with the previous account's resolved session path.
-  const { envFilePath, loadedEnv, sessionPath } =
+  const { envFilePath, loadedEnv, sessionPath, sessionSelection } =
     await resolveTelegramUserBackendSelection(options);
+  const lockSelection = resolveTelegramUserLockSelection({
+    env: process.env,
+    loadedEnv,
+  });
   return {
     env: {
       ...process.env,
       ...loadedEnv,
       OPENCLAW_TELEGRAM_USER_ENV_FILE: envFilePath,
+      OPENCLAW_TELEGRAM_USER_LOCK_PATH: lockSelection.lockPath,
       OPENCLAW_TELEGRAM_USER_SESSION: sessionPath,
     },
     meta: {
       api_hash_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_HASH"),
       api_id_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_ID"),
       env_file: envFilePath,
+      lock_scope: lockSelection.scope,
+      session_source: sessionSelection.source,
       session_path: sessionPath,
     },
   };

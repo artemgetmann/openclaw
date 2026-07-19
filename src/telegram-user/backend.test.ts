@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ async function makeTelegramToolingRoot(prefix: string): Promise<string> {
 describe("telegram-user backend defaults", () => {
   afterEach(async () => {
     vi.resetModules();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     const roots = tempToolingRoots.splice(0);
     await Promise.all(roots.map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -55,7 +57,7 @@ describe("telegram-user backend defaults", () => {
     ).toBe(runtimeRoot);
   });
 
-  it("uses OpenClaw state for fresh install mutable Telegram user files", async () => {
+  it("keeps credentials profile-local but defaults the session to machine-local state", async () => {
     const stateDir = path.join(os.tmpdir(), `openclaw-telegram-user-${Date.now()}`);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
@@ -63,7 +65,7 @@ describe("telegram-user backend defaults", () => {
 
     expect(getTelegramUserDefaults()).toMatchObject({
       defaultEnvFilePath: path.join(stateDir, "telegram-user", ".env.local"),
-      defaultSessionPath: path.join(stateDir, "telegram-user", "userbot.session"),
+      defaultSessionPath: path.join(os.homedir(), ".openclaw", "telegram-user", "userbot.session"),
       telegramUserStateDir: path.join(stateDir, "telegram-user"),
     });
   });
@@ -84,6 +86,185 @@ describe("telegram-user backend defaults", () => {
         loadedEnv: { USERBOT_SESSION: "/tmp/from-env-file" },
       }),
     ).toBe("/tmp/from-flag");
+  });
+
+  it("migrates only recognized repo-relative session selectors to the machine owner", async () => {
+    const { resolveTelegramUserSessionSelection } = await import("./backend.js");
+    const canonicalSession = "/tmp/machine-owner/userbot.session";
+
+    expect(
+      resolveTelegramUserSessionSelection({
+        canonicalSession,
+        env: {} as NodeJS.ProcessEnv,
+        loadedEnv: { USERBOT_SESSION: "scripts/telegram-e2e/tmp/userbot.session" },
+      }),
+    ).toEqual({ sessionPath: canonicalSession, source: "env-file" });
+    expect(
+      resolveTelegramUserSessionSelection({
+        canonicalSession,
+        env: {} as NodeJS.ProcessEnv,
+        explicitSession: "/tmp/separate-account.session",
+        loadedEnv: { USERBOT_SESSION: "scripts/telegram-e2e/tmp/userbot.session" },
+      }),
+    ).toEqual({ sessionPath: "/tmp/separate-account.session", source: "explicit" });
+    expect(() =>
+      resolveTelegramUserSessionSelection({
+        canonicalSession,
+        env: {} as NodeJS.ProcessEnv,
+        loadedEnv: { USERBOT_SESSION: "custom/relative.session" },
+      }),
+    ).toThrow("E_INVALID_SESSION_SELECTOR: env-file Telegram session selector must be absolute.");
+  });
+
+  it("migrates a known state-local env selector but preserves explicit absolute overrides", async () => {
+    const { resolveTelegramUserSessionSelection } = await import("./backend.js");
+    const stateDir = "/tmp/jarvis-app-state";
+    const stateLocalSession = path.join(stateDir, "telegram-user", "userbot.session");
+    const canonicalSession = "/tmp/machine-owner/userbot.session";
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+    expect(
+      resolveTelegramUserSessionSelection({
+        canonicalSession,
+        env,
+        loadedEnv: { USERBOT_SESSION: stateLocalSession },
+      }),
+    ).toEqual({ sessionPath: canonicalSession, source: "env-file" });
+    expect(
+      resolveTelegramUserSessionSelection({
+        canonicalSession,
+        env,
+        explicitSession: stateLocalSession,
+      }),
+    ).toEqual({ sessionPath: stateLocalSession, source: "explicit" });
+  });
+
+  it("keeps an absent repo session selector target authoritative over existing state legacy", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-pinned-home-"));
+    const stateDir = path.join(homeDir, "state");
+    tempToolingRoots.push(homeDir);
+    const stateSession = path.join(stateDir, "telegram-user", "userbot.session");
+    const pinnedSession = path.join(stateDir, "canonical-owner", "userbot.session");
+    const machineSession = path.join(homeDir, ".openclaw", "telegram-user", "userbot.session");
+    const selectorPath = path.join(
+      process.cwd(),
+      "scripts",
+      "telegram-e2e",
+      "tmp",
+      "userbot.session.path",
+    );
+    await fs.mkdir(path.dirname(stateSession), { recursive: true });
+    await fs.writeFile(stateSession, "fixture-state\n");
+    const originalExistsSync = fsSync.existsSync;
+    const originalReadFileSync = fsSync.readFileSync;
+    vi.spyOn(fsSync, "existsSync").mockImplementation((target) =>
+      String(target) === selectorPath ? true : originalExistsSync(target),
+    );
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(((
+      target: fsSync.PathOrFileDescriptor,
+      options?: unknown,
+    ) =>
+      String(target) === selectorPath
+        ? `${pinnedSession}\n`
+        : originalReadFileSync(target, options as never)) as typeof fsSync.readFileSync);
+
+    const { resolveTelegramUserSessionSelection } = await import("./backend.js");
+    expect(
+      resolveTelegramUserSessionSelection({
+        env: { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      sessionPath: pinnedSession,
+      source: "machine-default",
+    });
+    await expect(fs.access(pinnedSession)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.mkdir(path.dirname(machineSession), { recursive: true });
+    await fs.writeFile(machineSession, "fixture-machine\n");
+    expect(() =>
+      resolveTelegramUserSessionSelection({
+        env: { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      }),
+    ).toThrow("E_AMBIGUOUS_SESSION");
+
+    expect(
+      resolveTelegramUserSessionSelection({
+        canonicalSession: pinnedSession,
+        env: { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      sessionPath: pinnedSession,
+      source: "machine-default",
+    });
+  });
+
+  it("lets a process lock pin override the env-file selector and validates the winner", async () => {
+    const { resolveTelegramUserLockSelection } = await import("./backend.js");
+
+    expect(
+      resolveTelegramUserLockSelection({
+        env: {
+          HOME: "/tmp/test-home",
+          OPENCLAW_TELEGRAM_USER_LOCK_PATH: "/tmp/process-owner.lock",
+        } as NodeJS.ProcessEnv,
+        loadedEnv: {
+          OPENCLAW_TELEGRAM_USER_LOCK_PATH: "/tmp/env-file-owner.lock",
+        },
+      }),
+    ).toEqual({
+      lockPath: "/tmp/process-owner.lock",
+      scope: "explicit",
+    });
+    expect(
+      resolveTelegramUserLockSelection({
+        env: {
+          HOME: "/tmp/test-home",
+          OPENCLAW_TELEGRAM_USER_LOCK_PATH:
+            "/tmp/test-home/.openclaw/telegram-user/userbot.session.openclaw.lock",
+        } as NodeJS.ProcessEnv,
+        loadedEnv: {
+          OPENCLAW_TELEGRAM_USER_LOCK_PATH: "/tmp/env-file-owner.lock",
+        },
+      }),
+    ).toEqual({
+      lockPath: "/tmp/test-home/.openclaw/telegram-user/userbot.session.openclaw.lock",
+      scope: "machine",
+    });
+    expect(() =>
+      resolveTelegramUserLockSelection({
+        env: {
+          OPENCLAW_TELEGRAM_USER_LOCK_PATH: "relative/process-owner.lock",
+        } as NodeJS.ProcessEnv,
+        loadedEnv: {
+          OPENCLAW_TELEGRAM_USER_LOCK_PATH: "/tmp/env-file-owner.lock",
+        },
+      }),
+    ).toThrow("E_INVALID_LOCK_SELECTOR");
+  });
+
+  it("lets an absolute selector bypass divergent defaults while implicit selection fails closed", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-ambiguity-home-"));
+    const stateDir = path.join(homeDir, "jarvis-state");
+    tempToolingRoots.push(homeDir);
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const machineSession = path.join(homeDir, ".openclaw", "telegram-user", "userbot.session");
+    const stateSession = path.join(stateDir, "telegram-user", "userbot.session");
+    await fs.mkdir(path.dirname(machineSession), { recursive: true });
+    await fs.mkdir(path.dirname(stateSession), { recursive: true });
+    await fs.writeFile(machineSession, "fixture-machine\n");
+    await fs.writeFile(stateSession, "fixture-state\n");
+
+    // Import itself must remain safe even though process.env points at divergent
+    // historical defaults. Explicit recovery selectors are resolved afterward.
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+    await expect(
+      resolveTelegramUserBackendSelectors({ session: "/tmp/separate-account.session" }),
+    ).resolves.toEqual({
+      envFilePath: path.join(stateDir, "telegram-user", ".env.local"),
+      sessionPath: "/tmp/separate-account.session",
+    });
+    await expect(resolveTelegramUserBackendSelectors({})).rejects.toThrow("E_AMBIGUOUS_SESSION");
   });
 
   it("discovers a monitor service binding in a later backend import for the same state", async () => {
@@ -176,7 +357,7 @@ describe("telegram-user backend defaults", () => {
 
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
-      sessionPath: path.join(identity.stateDir, "telegram-user", "userbot.session"),
+      sessionPath: path.join(homeDir, ".openclaw", "telegram-user", "userbot.session"),
     });
   });
 
@@ -193,7 +374,7 @@ describe("telegram-user backend defaults", () => {
 
     expect(getTelegramUserDefaults()).toMatchObject({
       defaultEnvFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
-      defaultSessionPath: path.join(identity.stateDir, "telegram-user", "userbot.session"),
+      defaultSessionPath: path.join(homeDir, ".openclaw", "telegram-user", "userbot.session"),
       telegramUserStateDir: path.join(identity.stateDir, "telegram-user"),
     });
   });
