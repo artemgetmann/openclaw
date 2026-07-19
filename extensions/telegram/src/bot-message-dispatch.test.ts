@@ -11,6 +11,7 @@ import { __testing as workLogTesting } from "./work-log.js";
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
+const prepareTelegramReplyForDelivery = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
 const guardedTelegramDeleteMessage = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  prepareTelegramReplyForDelivery,
 }));
 
 vi.mock("./send.js", () => ({
@@ -59,6 +61,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     createTelegramDraftStream.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
+    prepareTelegramReplyForDelivery.mockReset();
+    prepareTelegramReplyForDelivery.mockImplementation(async ({ reply }) => ({
+      reply,
+      cancelled: false,
+    }));
     editMessageTelegram.mockClear();
     guardedTelegramDeleteMessage.mockReset();
     guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: false, suppressed: true });
@@ -119,15 +126,18 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     };
   }
 
-  function createBot(): Bot {
+  function createBot(options?: { richMessages?: boolean }): Bot {
     return {
       api: {
         sendMessage: vi.fn(),
         editMessageText: vi.fn(),
         deleteMessage: vi.fn().mockResolvedValue(true),
+        ...(options?.richMessages ? { raw: { sendRichMessage: vi.fn() } } : {}),
       },
     } as unknown as Bot;
   }
+
+  const createRichBot = () => createBot({ richMessages: true });
 
   function createRuntime(): Parameters<typeof dispatchTelegramMessage>[0]["runtime"] {
     return {
@@ -790,7 +800,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
 
     const call = deliverReplies.mock.calls[0]?.[0];
     expect(call).toEqual(
@@ -800,6 +814,114 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       }),
     );
     expect(call).not.toHaveProperty("richMessages");
+  });
+
+  it("keeps table finals on legacy delivery when Telegram lacks rich raw API", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+  });
+
+  it("keeps table-and-blockquote drafts on copy-safe legacy delivery", async () => {
+    const draftText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "> Hi Sveta, here is the booking link: https://example.com.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: draftText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        richMessages: false,
+        replies: [expect.objectContaining({ text: draftText })],
+      }),
+    );
+  });
+
+  it("finalizes a streamed table preview as legacy after message_sending removes the table", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    const answerStream = createDraftStream(9301);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    prepareTelegramReplyForDelivery.mockImplementationOnce(async ({ reply }) => ({
+      reply: { ...reply, text: "Plain final after hook." },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: tableText });
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9301" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
+    expectFinalPreviewEditedInPlace(9301, "Plain final after hook.");
+  });
+
+  it("clears a streamed prose preview after message_sending adds a table", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    const answerStream = createDraftStream(9302);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    prepareTelegramReplyForDelivery.mockImplementationOnce(async ({ reply }) => ({
+      reply: { ...reply, text: tableText },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Plain final before hook." });
+        await dispatcherOptions.deliver({ text: "Plain final before hook." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
+    expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
   });
 
   it.each(["off", "code", "bullets"] as const)(
@@ -815,6 +937,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       await dispatchWithContext({
         context: createContext(),
         streamMode: "off",
+        bot: createRichBot(),
         cfg: {
           channels: { telegram: { markdown: { tables } } },
         } as Parameters<typeof dispatchTelegramMessage>[0]["cfg"],
@@ -840,6 +963,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "off",
+      bot: createRichBot(),
       telegramCfg: { richMessages: false },
     });
 
@@ -894,7 +1018,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
 
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1020,7 +1148,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
 
     const renderText = createTelegramDraftStream.mock.calls[0]?.[0]?.renderText;
     expect(renderText).toBeTypeOf("function");

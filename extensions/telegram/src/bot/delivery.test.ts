@@ -276,6 +276,33 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("does not rerun message_sending for a prepared reply while still reporting message_sent", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Adjusted once before transport." }],
+      runtime,
+      bot,
+      skipMessageSendingHooks: true,
+    });
+
+    expect(messageHookRunner.runMessageSending).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Adjusted once before transport.",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, content: "Adjusted once before transport." }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
   it("records one outbound activity timestamp after a successful reply payload", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
     const runtime = createRuntime(false);

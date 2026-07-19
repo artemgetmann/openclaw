@@ -39,7 +39,11 @@ import {
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
-import { deliverReplies, type TelegramReplyDeliveredEvent } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  prepareTelegramReplyForDelivery,
+  type TelegramReplyDeliveredEvent,
+} from "./bot/delivery.js";
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -65,6 +69,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
+import { getTelegramRichRawApi } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -533,17 +538,22 @@ export const dispatchTelegramMessage = async ({
   });
   const isEligibleRichTableFinalText = (payload: ReplyPayload, text: string) => {
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    return (
-      // A table needs the native block renderer, but account/config opt-outs
-      // still win. Never widen the rich-final surface beyond actual tables.
-      tableMode === "block" &&
-      telegramCfg.richMessages !== false &&
-      !hasMedia &&
-      !payload.isError &&
-      !isControlCommandReplyPayload(payload) &&
-      !isCopySafeDraftReplyPayload(payload) &&
-      markdownToIRWithMeta(text, { tableMode }).hasTables
-    );
+    if (
+      tableMode !== "block" ||
+      telegramCfg.richMessages === false ||
+      !getTelegramRichRawApi(bot.api) ||
+      hasMedia ||
+      payload.isError ||
+      isControlCommandReplyPayload(payload) ||
+      isCopySafeDraftReplyPayload(payload)
+    ) {
+      return false;
+    }
+    const parsed = markdownToIRWithMeta(text, { tableMode });
+    // Recipient drafts need literal, one-tap-copy quote bodies. Parse the
+    // Markdown IR instead of guessing from `>` so quoted code/text cannot
+    // accidentally enable a native table send.
+    return parsed.hasTables && !parsed.ir.styles.some((span) => span.style === "blockquote");
   };
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode, copySafeBlockquotes: true }),
@@ -1861,6 +1871,7 @@ export const dispatchTelegramMessage = async ({
       laneName?: LaneName;
       infoKind?: string;
       forceLegacyTextTransport?: boolean;
+      messageSendingHookApplied?: boolean;
     },
   ) => {
     let normalizedPayload =
@@ -1885,6 +1896,18 @@ export const dispatchTelegramMessage = async ({
         `telegram: final TTS supplement caption ${captionPreview ? "previewed" : "omitted"} captionLength=${captionPreview?.length ?? 0}`,
       );
       normalizedPayload = { ...normalizedPayload, text: captionPreview };
+    }
+    if (!classification?.messageSendingHookApplied) {
+      const prepared = await prepareTelegramReplyForDelivery({
+        reply: normalizedPayload,
+        chatId: String(chatId),
+        accountId: route.accountId,
+        thread: threadSpec,
+      });
+      if (prepared.cancelled) {
+        return false;
+      }
+      normalizedPayload = prepared.reply;
     }
     const durableReason =
       classification?.reason ??
@@ -1966,6 +1989,9 @@ export const dispatchTelegramMessage = async ({
       !hasMedia && (isCopySafeDraftReplyPayload(normalizedPayload) || durableReason === "final");
     const result = await deliverReplies({
       ...deliveryBaseOptions,
+      // sendPayload prepared message_sending above so table eligibility and
+      // actual delivery observe one rewritten reply, never two hook passes.
+      skipMessageSendingHooks: true,
       ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
       // Final-answer blockquotes are commonly used for draft messages the user
       // wants to copy into another chat. Render those quote bodies as Telegram
@@ -2208,14 +2234,27 @@ export const dispatchTelegramMessage = async ({
       return "skipped";
     }
     await beginFinalAnswerPhase("before-final-answer");
+    const preparedFinal = await prepareTelegramReplyForDelivery({
+      reply: applyTextToPayload(payload, preparedText),
+      chatId: String(chatId),
+      accountId: route.accountId,
+      thread: threadSpec,
+    });
+    if (preparedFinal.cancelled) {
+      return "skipped";
+    }
+    const finalPayload = preparedFinal.reply;
+    const finalText = finalPayload.text;
+    if (!finalText?.trim()) {
+      return "skipped";
+    }
     setDraftDurableSendClassification("answer", {
-      reason: classifyPayloadDurableSendReason(payload, "final"),
+      reason: classifyPayloadDurableSendReason(finalPayload, "final"),
       callsite: "answer-final-preview",
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    const finalPayload = applyTextToPayload(payload, preparedText);
-    if (isEligibleRichTableFinalText(finalPayload, preparedText)) {
+    if (isEligibleRichTableFinalText(finalPayload, finalText)) {
       // Native table blocks need a fresh durable rich send. A legacy edit
       // downgrades the table, while rich preview edits retain blank-bubble
       // history; prose and copy-safe drafts keep same-message legacy finish.
@@ -2226,6 +2265,7 @@ export const dispatchTelegramMessage = async ({
         callsite: "answer-final-rich-table-send",
         laneName: "answer",
         infoKind: "final",
+        messageSendingHookApplied: true,
       });
       result = delivered ? "sent" : "skipped";
     } else {
@@ -2237,10 +2277,11 @@ export const dispatchTelegramMessage = async ({
         forceNextAnswerFinalSend = false;
         await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
         const delivered = await sendPayload(finalPayload, {
-          reason: classifyPayloadDurableSendReason(payload, "final"),
+          reason: classifyPayloadDurableSendReason(finalPayload, "final"),
           callsite: "answer-final-forced-send",
           laneName: "answer",
           infoKind: "final",
+          messageSendingHookApplied: true,
         });
         result = delivered ? "sent" : "skipped";
       } else {
@@ -2249,10 +2290,11 @@ export const dispatchTelegramMessage = async ({
         // here would make the answer disappear before the replacement send lands.
         result = await deliverLaneText({
           laneName: "answer",
-          text: preparedText,
-          payload,
+          text: finalText,
+          payload: finalPayload,
           infoKind: "final",
           previewButtons,
+          messageSendingHookApplied: true,
         });
       }
     }
