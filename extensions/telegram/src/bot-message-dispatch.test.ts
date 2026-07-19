@@ -802,6 +802,55 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(call).not.toHaveProperty("richMessages");
   });
 
+  it.each(["off", "code", "bullets"] as const)(
+    "keeps table finals on legacy delivery when Telegram tables are %s",
+    async (tables) => {
+      const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+        cfg: {
+          channels: { telegram: { markdown: { tables } } },
+        } as Parameters<typeof dispatchTelegramMessage>[0]["cfg"],
+      });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          richMessages: false,
+          replies: [expect.objectContaining({ text: tableText })],
+        }),
+      );
+    },
+  );
+
+  it("keeps table finals on legacy delivery when rich messages are disabled", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramCfg: { richMessages: false },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+  });
+
   it("keeps fenced table text on legacy Telegram HTML transport", async () => {
     const fencedTableText = [
       "```markdown",
@@ -937,7 +986,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("finalizes streamed structured answers by editing the same preview with legacy HTML", async () => {
+  it("clears a streamed preview before sending an eligible table final through rich delivery", async () => {
     const answerStream = createDraftStream(9101);
     createTelegramDraftStream.mockReturnValueOnce(answerStream);
     const finalText = [
@@ -969,7 +1018,6 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         return { queuedFinal: true };
       },
     );
-    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9101" });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
@@ -984,16 +1032,15 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     expect(renderText(finalText)).not.toHaveProperty("richMessage");
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      9101,
-      finalText,
+    expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        richMessages: false,
-        tableMode: "block",
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: finalText })],
       }),
     );
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
     expect(guardedTelegramDeleteMessage).not.toHaveBeenCalled();
   });
 
@@ -1025,6 +1072,36 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(rendered).not.toHaveProperty("richMessage");
     expect(rendered.text).not.toContain("<blockquote>");
     expect(rendered.text).not.toContain("<a href");
+  });
+
+  it("finalizes streamed copy-safe drafts in the same legacy preview", async () => {
+    const answerStream = createDraftStream(9103);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const draftText = [
+      "Suggested reply:",
+      "",
+      "> Hi Sveta, here is the page: https://example.com/booking.",
+      "> Please confirm the passenger names.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: draftText });
+        await dispatcherOptions.deliver(
+          {
+            text: draftText,
+            channelData: { openclaw: { copySafeDraft: true } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9103" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerStream.update).toHaveBeenCalledWith(draftText);
+    expectFinalPreviewEditedInPlace(9103, draftText);
   });
 
   it("suppresses raw tool traces when preview streaming is on", async () => {

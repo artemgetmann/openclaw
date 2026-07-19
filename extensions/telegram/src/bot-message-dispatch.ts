@@ -531,6 +531,20 @@ export const dispatchTelegramMessage = async ({
     accountId: route.accountId,
     supportsBlockTables: true,
   });
+  const isEligibleRichTableFinalText = (payload: ReplyPayload, text: string) => {
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    return (
+      // A table needs the native block renderer, but account/config opt-outs
+      // still win. Never widen the rich-final surface beyond actual tables.
+      tableMode === "block" &&
+      telegramCfg.richMessages !== false &&
+      !hasMedia &&
+      !payload.isError &&
+      !isControlCommandReplyPayload(payload) &&
+      !isCopySafeDraftReplyPayload(payload) &&
+      markdownToIRWithMeta(text, { tableMode }).hasTables
+    );
+  };
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode, copySafeBlockquotes: true }),
     parseMode: "HTML" as const,
@@ -1479,9 +1493,9 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     try {
-      // This preview is only a draft fragment that arrived after progress was
-      // retained as Work Log. Remove it before the durable final send so the
-      // user sees one answer bubble, not a stale/blank preview plus the final.
+      // This preview is transient, either after retained progress or before a
+      // table final. Remove it before the durable send so the user never sees
+      // a stale legacy bubble beside the native table.
       await answerLane.stream.clear({ waitForInFlight: true });
     } catch (err) {
       logVerbose(
@@ -1936,16 +1950,16 @@ export const dispatchTelegramMessage = async ({
       hasMedia,
       isError: normalizedPayload.isError === true,
     });
-    const isTableFinal =
+    const isEligibleRichTableFinal =
       durableReason === "final" &&
-      !hasMedia &&
       typeof normalizedPayload.text === "string" &&
-      markdownToIRWithMeta(normalizedPayload.text, { tableMode: "block" }).hasTables;
+      classification?.forceLegacyTextTransport !== true &&
+      isEligibleRichTableFinalText(normalizedPayload, normalizedPayload.text);
     const shouldUseLegacyTextTransport =
       classification?.forceLegacyTextTransport === true ||
       // Keep ordinary finals on legacy HTML after rich delivery produced blank
       // Telegram bubbles. Valid unfenced tables alone opt into the guarded rich path.
-      (durableReason === "final" && !hasMedia && !isTableFinal) ||
+      (durableReason === "final" && !hasMedia && !isEligibleRichTableFinal) ||
       isControlCommandReplyPayload(normalizedPayload) ||
       isCopySafeDraftReplyPayload(normalizedPayload);
     const shouldUseCopySafeBlockquotes =
@@ -2200,31 +2214,47 @@ export const dispatchTelegramMessage = async ({
       sourceKind: "final",
     });
     let result: "sent" | "skipped" | "preview-finalized" | "preview-retained" | "preview-updated";
-    // Work Log retention requires a separate final bubble, but an already-streamed
-    // answer preview is already that separate bubble. Force a new send only when
-    // there is no visible answer identity available to finalize in place.
-    const shouldForceFreshFinalSend = forceNextAnswerFinalSend && !answerLane.hasStreamedMessage;
-    if (shouldForceFreshFinalSend) {
+    const finalPayload = applyTextToPayload(payload, preparedText);
+    if (isEligibleRichTableFinalText(finalPayload, preparedText)) {
+      // Native table blocks need a fresh durable rich send. A legacy edit
+      // downgrades the table, while rich preview edits retain blank-bubble
+      // history; prose and copy-safe drafts keep same-message legacy finish.
       forceNextAnswerFinalSend = false;
-      await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
-      const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
-        reason: classifyPayloadDurableSendReason(payload, "final"),
-        callsite: "answer-final-forced-send",
+      await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-rich-table-send");
+      const delivered = await sendPayload(finalPayload, {
+        reason: "final",
+        callsite: "answer-final-rich-table-send",
         laneName: "answer",
         infoKind: "final",
       });
       result = delivered ? "sent" : "skipped";
     } else {
-      forceNextAnswerFinalSend = false;
-      // Preserve the visible Telegram message across finalization. Clearing it
-      // here would make the answer disappear before the replacement send lands.
-      result = await deliverLaneText({
-        laneName: "answer",
-        text: preparedText,
-        payload,
-        infoKind: "final",
-        previewButtons,
-      });
+      // Work Log retention requires a separate final bubble, but an already-streamed
+      // answer preview is already that separate bubble. Force a new send only when
+      // there is no visible answer identity available to finalize in place.
+      const shouldForceFreshFinalSend = forceNextAnswerFinalSend && !answerLane.hasStreamedMessage;
+      if (shouldForceFreshFinalSend) {
+        forceNextAnswerFinalSend = false;
+        await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-forced-send");
+        const delivered = await sendPayload(finalPayload, {
+          reason: classifyPayloadDurableSendReason(payload, "final"),
+          callsite: "answer-final-forced-send",
+          laneName: "answer",
+          infoKind: "final",
+        });
+        result = delivered ? "sent" : "skipped";
+      } else {
+        forceNextAnswerFinalSend = false;
+        // Preserve the visible Telegram message across finalization. Clearing it
+        // here would make the answer disappear before the replacement send lands.
+        result = await deliverLaneText({
+          laneName: "answer",
+          text: preparedText,
+          payload,
+          infoKind: "final",
+          previewButtons,
+        });
+      }
     }
     if (result !== "skipped") {
       latencyTrace?.mark("final_telegram_send_edit_completed", {
