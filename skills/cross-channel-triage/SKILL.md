@@ -34,7 +34,30 @@ Default flow:
 5. Return explicit buckets and recommended next actions.
 6. Handle items one by one, starting with the highest-impact item.
 7. Require approval before any external send, purchase, deletion, archive, label
-   action, calendar change, or other risky action.
+   action beyond the routine read-state lifecycle below, calendar change, or
+   other risky action.
+
+## Read-State Lifecycle
+
+Treat read/unread state as a reversible part of an authorized triage workflow,
+not as proof that an item was handled.
+
+- Inspecting, shortlisting, previewing, or deep-reading an item must not change
+  its read state. Reading content for triage is observation, not resolution.
+- Once an item is genuinely handled, mark it read when the channel supports it.
+  Handled means its approved reply was sent, the user explicitly skipped or
+  classified it as no action, or the item was otherwise resolved.
+- If an item remains intentionally pending or deferred for the user's action,
+  preserve its unread state or mark it unread when the channel supports it.
+- Obey explicit user choices about read/unread state over these defaults.
+- Do not bulk-change ambiguous items. Resolve the intended messages or chats
+  first, especially where a channel exposes only chat-level state.
+- Report unsupported or failed state changes instead of implying they happened.
+
+Routine read/unread updates following these rules do not need separate approval
+inside an authorized triage flow. They are reversible bookkeeping. Existing
+approval requirements still apply to sends, deletes, archives, non-routine label
+changes, purchases, calendar changes, and other risky actions.
 
 ## Temporal Grounding
 

@@ -80,6 +80,24 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - If the resolved intent has passed, offer a recovery or reschedule draft rather
   than replying as though the original timing is still current.
 
+## Email read-state commands
+
+- Normal `himalaya message read <id>` automatically adds the `seen` flag. For
+  non-mutating triage inspection, use
+  `himalaya message read --preview <id>`.
+- List unread envelopes without changing them with
+  `himalaya envelope list not flag seen`.
+- Himalaya represents read state with the `seen` flag. Mark an envelope read
+  with `himalaya flag add <id> seen`; mark it unread with
+  `himalaya flag remove <id> seen`.
+- Envelope IDs are scoped to the selected account and folder. When either is
+  not already unambiguous, use
+  `himalaya flag add --account <account> --folder <folder> <id> seen` or the
+  equivalent `flag remove` command.
+- Re-list the intended account/folder before mutating stale or ambiguous IDs.
+  Do not bulk-change uncertain envelopes, and report unsupported or failed
+  updates instead of claiming success.
+
 - If Gmail auth fails and Himalaya is not safely configured for the same
   mailbox, report the blocker and ask whether the user wants to reconnect
   Google.
@@ -105,7 +123,8 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
   automated alerts, delivery notifications, and resolved FYI threads.
 - Read full messages only for shortlisted items where sender, subject,
   timestamp, and preview are not enough to classify urgency or reply-needed
-  state.
+  state. Use `himalaya message read --preview <id>` during triage so inspection
+  does not add the `seen` flag.
 - Escalate to thread/recent-mail context when a message appears to be part of an
   active conversation and earlier or newer messages may change the answer.
 - Bucket results as `Urgent`, `Needs reply soon`, `Waiting on them`,
@@ -195,6 +214,18 @@ Read email by ID (shows plain text):
 
 ```bash
 himalaya message read 42
+```
+
+Preview without marking the email read:
+
+```bash
+himalaya message read --preview 42
+```
+
+List unread email:
+
+```bash
+himalaya envelope list not flag seen
 ```
 
 Export raw MIME:

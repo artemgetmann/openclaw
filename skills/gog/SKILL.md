@@ -123,6 +123,19 @@ Email fallback policy
 - If the resolved intent has passed, offer a recovery or reschedule draft rather
   than replying as though the original timing is still current.
 
+### Gmail read-state commands
+
+- Gmail read/unread mutations consume message IDs:
+  `gog gmail mark-read <messageId> --account <account> --json --no-input`
+  and
+  `gog gmail unread <messageId> --account <account> --json --no-input`.
+- Multiple explicit message IDs may be passed in one command. Use IDs returned
+  by message-level results such as `gog gmail messages search`; do not pass a
+  thread ID returned by `gog gmail search`.
+- A conversation may contain several messages with different state. Identify
+  the intended message IDs before changing state, avoid broad query mutations
+  for ambiguous triage items, and report unsupported or failed updates.
+
 - If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
   report the blocker clearly and ask whether the user wants to reconnect Google.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
@@ -221,6 +234,8 @@ Common commands
 
 - Gmail search: `gog gmail search 'newer_than:7d' --max 10`
 - Gmail messages search (per email, ignores threading): `gog gmail messages search "in:inbox from:ryanair.com" --max 20 --account you@example.com`
+- Gmail mark explicit messages read: `gog gmail mark-read <messageId> --account you@example.com --json --no-input`
+- Gmail mark explicit messages unread: `gog gmail unread <messageId> --account you@example.com --json --no-input`
 - Gmail send (plain): `gog gmail send --to a@b.com --subject "Hi" --body "Hello"`
 - Gmail send (multi-line): `gog gmail send --to a@b.com --subject "Hi" --body-file ./message.txt`
 - Gmail send (stdin): `gog gmail send --to a@b.com --subject "Hi" --body-file -`

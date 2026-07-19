@@ -119,6 +119,18 @@ export type TelegramUserReadResult = {
   messages: TelegramUserMessage[];
 };
 
+export type TelegramUserMarkReadResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: string;
+  marked_read: true;
+};
+
+export type TelegramUserMarkUnreadResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: string;
+  marked_unread: true;
+};
+
 export type TelegramUserDownloadResult = {
   backend_meta?: TelegramUserBackendMeta;
   chat: string;

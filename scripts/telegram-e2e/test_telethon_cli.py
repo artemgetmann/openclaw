@@ -118,6 +118,24 @@ class FakeReadClient:
     return self.messages[:limit]
 
 
+class FakeReadStateClient:
+  def __init__(self) -> None:
+    self.disconnected = False
+    self.read_acknowledgements: list[object] = []
+    self.requests: list[object] = []
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+  async def send_read_acknowledge(self, chat):
+    self.read_acknowledgements.append(chat)
+    return None
+
+  async def __call__(self, request):
+    self.requests.append(request)
+    return True
+
+
 class FakeDownloadClient:
   def __init__(self, message: SimpleNamespace | None) -> None:
     self.disconnected = False
@@ -253,10 +271,17 @@ class FakeDeleteTopicHistoryRequest:
     self.top_msg_id = top_msg_id
 
 
+class FakeMarkDialogUnreadRequest:
+  def __init__(self, *, peer, unread: bool) -> None:
+    self.peer = peer
+    self.unread = unread
+
+
 class FakeTelethonFunctions:
   messages = SimpleNamespace(
     CreateForumTopicRequest = FakeCreateForumTopicRequest,
     DeleteTopicHistoryRequest = FakeDeleteTopicHistoryRequest,
+    MarkDialogUnreadRequest = FakeMarkDialogUnreadRequest,
   )
 
 
@@ -599,6 +624,59 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(len(emitted["messages"]), 1)
     self.assertEqual(emitted["messages"][0]["message_id"], 150)
 
+  async def test_run_mark_read_acknowledges_current_history(self) -> None:
+    fake_client = FakeReadStateClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_mark_read(
+          argparse.Namespace(chat = "@jarvis_tester_1_bot", session = str(session_path))
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(fake_client.read_acknowledgements, ["@jarvis_tester_1_bot"])
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(emitted, {"chat": "@jarvis_tester_1_bot", "marked_read": True})
+
+  async def test_run_mark_unread_sets_dialog_unread_flag(self) -> None:
+    fake_client = FakeReadStateClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_mark_unread(
+          argparse.Namespace(chat = "-1003783709877", session = str(session_path))
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(len(fake_client.requests), 1)
+    self.assertEqual(fake_client.requests[0].peer, -1003783709877)
+    self.assertTrue(fake_client.requests[0].unread)
+    self.assertEqual(emitted, {"chat": "-1003783709877", "marked_unread": True})
+
   async def test_run_download_saves_message_media_to_deterministic_output_path(self) -> None:
     message = build_fake_media_message(media_kind = "voice", message_id = 52830)
     fake_client = FakeDownloadClient(message)
@@ -879,6 +957,22 @@ class TelethonCliSyncTests(unittest.TestCase):
     self.assertEqual(download_args.command, "download")
     self.assertEqual(download_args.message_id, 52830)
     self.assertEqual(download_args.output, "/tmp/downloads")
+
+    mark_read_args = parser.parse_args([
+      "mark-read",
+      "--chat",
+      "@jarvis_tester_1_bot",
+    ])
+    self.assertEqual(mark_read_args.command, "mark-read")
+    self.assertEqual(mark_read_args.chat, "@jarvis_tester_1_bot")
+
+    mark_unread_args = parser.parse_args([
+      "mark-unread",
+      "--chat",
+      "-1003783709877",
+    ])
+    self.assertEqual(mark_unread_args.command, "mark-unread")
+    self.assertEqual(mark_unread_args.chat, "-1003783709877")
 
   def test_compute_inbox_scan_cap_keeps_filtered_queries_bounded_but_deeper(self) -> None:
     self.assertEqual(

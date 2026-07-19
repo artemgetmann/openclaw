@@ -5,6 +5,8 @@ const telegramUserInboxCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDoctorCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserMonitorListenCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserMonitorPollCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserMarkReadCommand = vi.fn().mockResolvedValue(undefined);
+const telegramUserMarkUnreadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserReadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDownloadCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserSendCommand = vi.fn().mockResolvedValue(undefined);
@@ -21,6 +23,8 @@ vi.mock("../commands/telegram-user.js", () => ({
   telegramUserInboxCommand,
   telegramUserMonitorListenCommand,
   telegramUserMonitorPollCommand,
+  telegramUserMarkReadCommand,
+  telegramUserMarkUnreadCommand,
   telegramUserReadCommand,
   telegramUserDownloadCommand,
   telegramUserSendCommand,
@@ -75,6 +79,8 @@ describe("telegram-user cli", () => {
       "openclaw telegram-user read --chat @jarvis_tester_1_bot --contains proof",
     );
     expect(help).toContain("--format compact");
+    expect(help).toContain("openclaw telegram-user mark-read --chat @jarvis_tester_1_bot --json");
+    expect(help).toContain("openclaw telegram-user mark-unread --chat @jarvis_tester_1_bot --json");
     expect(help).toContain(
       "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830",
     );
@@ -340,6 +346,52 @@ describe("telegram-user cli", () => {
         contains: "proof",
         json: true,
         limit: "5",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("registers read-state commands and forwards chat/backend options", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    expect(telegramUser?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["mark-read", "mark-unread"]),
+    );
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "mark-read",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--env-file",
+        "/tmp/tg.env",
+        "--session",
+        "/tmp/userbot.session",
+        "--json",
+      ],
+      { from: "user" },
+    );
+    await program.parseAsync(
+      ["telegram-user", "mark-unread", "--chat", "-1003783709877", "--json"],
+      { from: "user" },
+    );
+
+    expect(telegramUserMarkReadCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "@jarvis_tester_1_bot",
+        envFile: "/tmp/tg.env",
+        json: true,
+        session: "/tmp/userbot.session",
+      }),
+      expect.any(Object),
+    );
+    expect(telegramUserMarkUnreadCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat: "-1003783709877",
+        json: true,
       }),
       expect.any(Object),
     );

@@ -10,6 +10,8 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserInbox: vi.fn(),
   runTelegramUserLogin: vi.fn(),
   runTelegramUserLogout: vi.fn(),
+  runTelegramUserMarkRead: vi.fn(),
+  runTelegramUserMarkUnread: vi.fn(),
   runTelegramUserPrecheck: vi.fn(),
   runTelegramUserRead: vi.fn(),
   runTelegramUserDownload: vi.fn(),
@@ -53,6 +55,8 @@ const {
   telegramUserDoctorCommand,
   telegramUserLoginCommand,
   telegramUserLogoutCommand,
+  telegramUserMarkReadCommand,
+  telegramUserMarkUnreadCommand,
   telegramUserPrecheckCommand,
   telegramUserReadCommand,
   telegramUserDownloadCommand,
@@ -689,6 +693,50 @@ describe("telegram-user commands", () => {
       telegramUserReadCommand({ chat: "@jarvis_tester_1_bot", format: "full-table" }, runtime),
     ).rejects.toThrow(/--format must be either table or compact/i);
     expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+  });
+
+  it("marks current chat history read and renders structured JSON", async () => {
+    backendMocks.runTelegramUserMarkRead.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: "@jarvis_tester_1_bot",
+      marked_read: true,
+    });
+
+    await telegramUserMarkReadCommand(
+      {
+        chat: "@jarvis_tester_1_bot",
+        envFile: "/tmp/tg.env",
+        json: true,
+        session: "/tmp/userbot.session",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserMarkRead).toHaveBeenCalledWith({
+      chat: "@jarvis_tester_1_bot",
+      envFile: "/tmp/tg.env",
+      session: "/tmp/userbot.session",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"marked_read": true'));
+  });
+
+  it("marks a dialog unread and renders text confirmation", async () => {
+    backendMocks.runTelegramUserMarkUnread.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: "-1003783709877",
+      marked_unread: true,
+    });
+
+    await telegramUserMarkUnreadCommand({ chat: "-1003783709877" }, runtime);
+
+    expect(backendMocks.runTelegramUserMarkUnread).toHaveBeenCalledWith({
+      chat: "-1003783709877",
+      envFile: undefined,
+      session: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Telegram user mark-unread ok. chat=-1003783709877"),
+    );
   });
 
   it("downloads message media by chat and message id", async () => {

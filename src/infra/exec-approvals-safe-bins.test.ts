@@ -410,6 +410,25 @@ describe("exec approvals safe bins", () => {
     expect(
       evaluate(["wacli", "messages", "search", "invoice", "--transport", "history", "--json"]),
     ).toBe(true);
+    expect(evaluate(["gog", "gmail", "mark-read", "message-123", "--json"])).toBe(true);
+    expect(
+      evaluate([
+        "gog",
+        "gmail",
+        "unread",
+        "--query",
+        "from:person@example.com",
+        "--max",
+        "10",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate(["wacli", "chats", "mark-read", "--chat", "628123@s.whatsapp.net", "--json"]),
+    ).toBe(true);
+    expect(
+      evaluate(["wacli", "chats", "mark-unread", "--chat", "628123@s.whatsapp.net", "--json"]),
+    ).toBe(true);
     expect(
       evaluate([
         "openclaw",
@@ -424,6 +443,26 @@ describe("exec approvals safe bins", () => {
     ).toBe(true);
     expect(evaluate(["openclaw", "telegram-user", "status", "--json"])).toBe(true);
     expect(evaluate(["openclaw", "telegram-user", "doctor", "--json"])).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "mark-read",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "mark-unread",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--json",
+      ]),
+    ).toBe(true);
     expect(
       evaluate([
         "openclaw",
@@ -514,9 +553,23 @@ describe("exec approvals safe bins", () => {
       });
 
     expect(evaluate(["gog", "totally", "made", "up"])).toBe(false);
+    expect(evaluate(["gog", "gmail", "trash", "message-123"])).toBe(false);
     expect(evaluate(["himalaya", "message", "list", "inbox"])).toBe(false);
     expect(evaluate(["wacli", "random", "command"])).toBe(false);
+    expect(
+      evaluate(["wacli", "chats", "archive", "--chat", "628123@s.whatsapp.net", "--json"]),
+    ).toBe(false);
     expect(evaluate(["openclaw", "telegram-user", "random"])).toBe(false);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "archive",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--json",
+      ]),
+    ).toBe(false);
     expect(evaluate(["openclaw", "telegram", "status"])).toBe(false);
   });
 

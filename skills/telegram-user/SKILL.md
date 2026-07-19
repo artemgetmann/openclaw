@@ -120,6 +120,19 @@ Time-aware replies
 - If the resolved intent has passed, prefer a recovery or reschedule draft over
   replying as though the original timing is still current.
 
+Read-state commands
+
+- Reading with `read --chat` does not itself mark the Telegram chat read.
+- Mark the resolved chat read explicitly:
+  `openclaw telegram-user mark-read --chat <chat> --json`
+- Preserve or restore a pending chat as unread explicitly:
+  `openclaw telegram-user mark-unread --chat <chat> --json`
+- These commands change chat-level state. Resolve an unambiguous chat target
+  before using them, and report an unsupported or failed update rather than
+  claiming the state changed.
+- `mark-unread` sets a dialog reminder flag only. It cannot revoke a Telegram
+  read acknowledgement already sent by `mark-read`.
+
 - If `read` shows `media_kind` for a voice/audio message, download the payload
   with `telegram-user download`, then use the generic `media transcribe`
   command. Do not inspect Telethon internals or write a one-off downloader.
@@ -221,6 +234,10 @@ Default Commands
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --format compact`
 - Read recent messages matching known text:
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --contains "proof" --limit 5 --format compact`
+- Mark one resolved chat read:
+  `openclaw telegram-user mark-read --chat @jarvis_tester_1_bot --json`
+- Preserve or restore one pending chat as unread:
+  `openclaw telegram-user mark-unread --chat @jarvis_tester_1_bot --json`
 - Download media from a known message:
   `openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json`
 - Transcribe the downloaded audio file:
