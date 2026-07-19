@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -20,9 +21,11 @@ const runResult = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.P
 
 const initFixture = () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-bootstrap-telegram-"));
+  const home = path.join(root, "home");
   const mainRepo = path.join(root, "main");
   const worktree = path.join(root, "worktree");
 
+  mkdirSync(home, { recursive: true });
   mkdirSync(path.join(mainRepo, "scripts", "telegram-e2e", "tmp"), { recursive: true });
   mkdirSync(path.join(worktree, "scripts"), { recursive: true });
 
@@ -50,22 +53,24 @@ exit 1
     { encoding: "utf8", mode: 0o755 },
   );
 
-  return { mainRepo, worktree };
+  return { home, mainRepo, worktree };
 };
 
 describe("bootstrap-worktree-telegram", () => {
   it("copies canonical Telegram assets without claiming a tester bot in copy-only mode", () => {
-    const { mainRepo, worktree } = initFixture();
+    const { home, mainRepo, worktree } = initFixture();
 
     const result = runResult(
       worktree,
       "bash",
       ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
-      { OPENCLAW_MAIN_REPO: mainRepo },
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
     );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("telegram bootstrap complete");
+    expect(result.stdout).toContain("telegram_session_source=main-canonical-legacy");
+    expect(result.stdout).toContain("telegram_lock_scope=machine");
     expect(readFileSync(path.join(worktree, ".env.bots"), "utf8")).toContain(
       "BOT_TOKEN=111:exhausted",
     );
@@ -73,25 +78,32 @@ describe("bootstrap-worktree-telegram", () => {
       "TG_LOCAL=canonical-local\n",
     );
     expect(
+      existsSync(path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session")),
+    ).toBe(false);
+    expect(
       readFileSync(
-        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session"),
+        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session.path"),
         "utf8",
       ),
-    ).toBe("session-bytes\n");
+    ).toBe(
+      `${path.join(realpathSync(mainRepo), "scripts", "telegram-e2e", "tmp", "userbot.session")}\n`,
+    );
     expect(existsSync(path.join(worktree, ".env.local"))).toBe(false);
   });
 
   it("copies canonical Telegram assets before an optional exhausted-pool claim failure", () => {
-    const { mainRepo, worktree } = initFixture();
+    const { home, mainRepo, worktree } = initFixture();
 
     const result = runResult(
       worktree,
       "bash",
       ["scripts/bootstrap-worktree-telegram.sh", "--optional"],
-      { OPENCLAW_MAIN_REPO: mainRepo },
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
     );
 
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain("telegram_session_source=main-canonical-legacy");
+    expect(result.stdout).toContain("telegram_lock_scope=machine");
     expect(result.stdout).toContain("telegram bootstrap complete");
     expect(result.stderr).toContain("warning: telegram tester claim deferred; pool exhausted");
     expect(readFileSync(path.join(worktree, ".env.bots"), "utf8")).toContain(
@@ -104,21 +116,18 @@ describe("bootstrap-worktree-telegram", () => {
       "TG_LOCAL=canonical-local\n",
     );
     expect(
-      readFileSync(
-        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session"),
-        "utf8",
-      ),
-    ).toBe("session-bytes\n");
+      existsSync(path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session")),
+    ).toBe(false);
   });
 
   it("still copies canonical Telegram assets before surfacing a strict exhausted-pool failure", () => {
-    const { mainRepo, worktree } = initFixture();
+    const { home, mainRepo, worktree } = initFixture();
 
     const result = runResult(
       worktree,
       "bash",
       ["scripts/bootstrap-worktree-telegram.sh", "--strict"],
-      { OPENCLAW_MAIN_REPO: mainRepo },
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
     );
 
     expect(result.status).not.toBe(0);
@@ -127,10 +136,82 @@ describe("bootstrap-worktree-telegram", () => {
       "TG_LOCAL=canonical-local\n",
     );
     expect(
+      existsSync(path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session")),
+    ).toBe(false);
+  });
+
+  it("fails closed when machine and legacy implicit session owners diverge", () => {
+    const { home, mainRepo, worktree } = initFixture();
+    mkdirSync(path.join(home, ".openclaw", "telegram-user"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".openclaw", "telegram-user", "userbot.session"),
+      "other-session-bytes\n",
+    );
+
+    const result = runResult(
+      worktree,
+      "bash",
+      ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("E_AMBIGUOUS_SESSION");
+    expect(result.stderr).toContain("machine,main-canonical-legacy");
+    expect(result.stderr).not.toContain("session-bytes");
+  });
+
+  it("reports the known Jarvis app-support session as an implicit divergent owner", () => {
+    const { home, mainRepo, worktree } = initFixture();
+    const jarvisSession = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Jarvis",
+      ".jarvis",
+      "telegram-user",
+      "userbot.session",
+    );
+    mkdirSync(path.dirname(jarvisSession), { recursive: true });
+    writeFileSync(jarvisSession, "jarvis-session-bytes\n");
+
+    const result = runResult(
+      worktree,
+      "bash",
+      ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("E_AMBIGUOUS_SESSION");
+    expect(result.stderr).toContain("jarvis-state-legacy,main-canonical-legacy");
+    expect(result.stderr).not.toContain("jarvis-session-bytes");
+  });
+
+  it("allows an explicit machine session owner without copying its database", () => {
+    const { home, mainRepo, worktree } = initFixture();
+    const explicitSession = path.join(path.dirname(mainRepo), "separate-account.session");
+
+    const result = runResult(
+      worktree,
+      "bash",
+      ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
+      {
+        OPENCLAW_MAIN_REPO: mainRepo,
+        OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION: explicitSession,
+        HOME: home,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("telegram_session_source=explicit-canonical");
+    expect(result.stdout).toContain("telegram_lock_scope=machine");
+    expect(
       readFileSync(
-        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session"),
+        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session.path"),
         "utf8",
       ),
-    ).toBe("session-bytes\n");
+    ).toBe(`${explicitSession}\n`);
+    expect(existsSync(explicitSession)).toBe(false);
   });
 });

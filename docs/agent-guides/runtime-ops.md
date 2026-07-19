@@ -227,6 +227,21 @@ unique prompt token, bot username, token fingerprint, message IDs, and the
 relevant send path lines, including `sendRichMessage ok` when rich Telegram
 rendering is under test.
 
+For the daily managed Jarvis bot, use the separate serialized canary lane only
+after merge, deployment, and fresh approval:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --expected-commit <deployed-commit>
+bash scripts/prove-jarvis-telegram-runtime.sh --execute \
+  --expected-commit <deployed-commit>
+```
+
+That harness proves `ai.jarvis.gateway` and Jarvis Application Support,
+acquires the machine-wide canary lock, uses one disposable Jarvis Lab topic,
+and performs exact topic plus active-session cleanup. It does not make
+`prove-main-telegram-runtime.sh` a managed-Jarvis proof.
+
 ## Shared-Main Ship Lane
 
 For a PR that explicitly needs shared-main deploy proof after merge, use:

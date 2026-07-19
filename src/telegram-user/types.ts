@@ -180,6 +180,15 @@ export type TelegramUserBackendMeta = {
   api_hash_source: "env-file" | "process-env" | "missing";
   api_id_source: "env-file" | "process-env" | "missing";
   env_file: string;
+  lock_scope: "explicit" | "machine";
+  session_source:
+    | "explicit"
+    | "monitor-binding"
+    | "env-file"
+    | "process-env"
+    | "legacy-repo"
+    | "machine-default"
+    | "state-default";
   session_path: string;
 };
 

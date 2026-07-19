@@ -19,6 +19,26 @@ This skill exists because Telegram validation here has two failure classes:
 
 Do not skip the preflight.
 
+## Lane policy
+
+Choose one lane before doing anything live:
+
+1. Pre-merge or risky Telegram behavior uses an isolated tester bot, state,
+   config, port, and worktree runtime.
+2. The daily `ai.jarvis.gateway` bot is only a serialized post-merge,
+   post-deployment acceptance canary in a disposable Jarvis Lab topic.
+
+Most parallel agents run local tests. Telegram-sensitive branches claim
+exclusive tester lanes. Never replace tester lanes with the daily bot, and
+never allow concurrent daily-bot canaries: topics do not isolate token polling,
+cursor state, global config, provider quotas, or the gateway process.
+
+For the managed lane, run
+`bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --expected-commit
+<deployed-commit>` first. `--execute` requires fresh approval in the active
+Codex chat. The managed harness, not `prove-main-telegram-runtime.sh`, owns the
+`ai.jarvis.gateway` canary.
+
 ## Read first
 
 1. `docs/agent-guides/telegram-live.md`
@@ -43,6 +63,12 @@ Then prove:
 2. the runtime process belongs to the intended worktree
 3. the intended tester bot token is claimed by this worktree
 4. the userbot/session tooling is pointed at the same bot you think you are testing
+
+Telegram-as-user must resolve one machine-local canonical session and shared
+lock. Explicit session/lock overrides are only for hermetic tests or a
+deliberately separate account. Treat divergent implicit legacy sessions as a
+hard ambiguity; never repair that by copying, deleting, rotating, or
+reauthenticating credentials.
 
 ## Preferred operator path
 
@@ -72,6 +98,12 @@ Use exact message deletion only as a fallback when topic deletion fails or the
 local checkout does not yet expose `topic-delete`. If falling back, report the
 remaining topic anchor plainly so a follow-up can remove it. Do not claim cleanup
 is complete when an empty test topic remains.
+
+Deleting the Telegram topic does not remove its local OpenClaw session. For a
+managed canary, use the harness's exact-key `sessions.delete` cleanup and verify
+that key is absent afterward. The API archives the transcript as
+`*.deleted.<timestamp>`; report that residual archive and never rewrite the
+production session index or delete runtime files directly.
 
 ## Validation rule for /model and similar UX
 

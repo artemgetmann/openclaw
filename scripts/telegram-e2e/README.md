@@ -21,6 +21,29 @@ Before you trust any live result, prove the lane is clean:
 If you skip this, Telegram `getUpdates` conflicts can make another checkout
 answer your messages and waste an hour on fake regressions.
 
+## Tester lanes versus managed Jarvis
+
+- Pre-merge, parallel, restart-sensitive, polling, auth, cursor, retry, load,
+  and global-config work stays on isolated tester bots and worktree runtimes.
+- Most agents run local tests only. Telegram-sensitive branches claim an
+  exclusive tester token; the daily bot never replaces that pool.
+- The real daily `ai.jarvis.gateway` bot is one serialized post-merge,
+  post-deployment acceptance canary. Its disposable Jarvis Lab topic does not
+  isolate the gateway, bot token, polling cursor, config, or provider quota.
+
+Preview the managed canary without runtime, network, lock, filesystem, topic,
+message, or session mutation:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --expected-commit <deployed-commit>
+```
+
+Use `--execute` only after fresh approval. The harness records runtime,
+transport, message, and cleanup evidence; deletes only its exact topic and
+active topic-session key; and reports archived `*.deleted.<timestamp>`
+transcripts as residual artifacts rather than claiming permanent erasure.
+
 ## Reusable harness runbook
 
 Use this when a lane needs live Telegram proof.
@@ -273,22 +296,27 @@ that file for compatibility.
 
 ## AI/operator handoff (credentials continuity)
 
-Use one source of truth in your main checkout, then copy into each worktree.
+Use one machine-local Telegram-as-user session. Worktrees share it; they do not
+receive SQLite snapshots.
 
-1. Keep local-only credentials in main checkout:
-   - `scripts/telegram-e2e/.env.local`
-   - `scripts/telegram-e2e/tmp/userbot.session`
-2. Never commit or print raw secrets (`TELEGRAM_API_HASH`, `TG_BOT_TOKEN`, session contents).
+1. The canonical operator session is
+   `~/.openclaw/telegram-user/userbot.session`.
+2. Never commit, print, copy between worktrees, rotate, delete, or
+   automatically reauthenticate real credentials or session contents.
 3. For every new worktree, run:
    - `bash scripts/bootstrap-worktree-telegram.sh`
-4. Smoke check from that worktree:
+   - Bootstrap may copy compatibility env/pool files, but never the session DB.
+4. Confirm the non-secret diagnostics report the canonical session and
+   machine-wide lock before a smoke:
+   - `openclaw telegram-user status --json`
+5. Smoke check from that worktree:
    - `openclaw telegram-user send --chat "<chat-id-or-username>" --message "handoff smoke"`
-5. First runtime claim happens on first canonical ensure run:
+6. First runtime claim happens on first canonical ensure run:
    - `scripts/telegram-live-runtime.sh ensure`
    - This auto-claims a tester bot token for the worktree when one is available.
    - If the pool is exhausted, `ensure` now fails with token-claim diagnostics (`token_claim_reason`, pool counts, reserved counts) instead of pretending runtime startup failed.
    - Pool tokens that are already present in the stable/main Telegram config are treated as reserved and are never claimed by worktree live tests.
-6. For forum-topic probes, prefer the lane-injected `TELEGRAM_BOT_TOKEN` over any stale `TG_BOT_TOKEN` left in `scripts/telegram-e2e/.env.local`.
+7. For forum-topic probes, prefer the lane-injected `TELEGRAM_BOT_TOKEN` over any stale `TG_BOT_TOKEN` left in `scripts/telegram-e2e/.env.local`.
    - Reason: `scripts/telegram-e2e/.env.local` can lag behind the currently claimed tester bot.
    - The forum probe now prefers `TELEGRAM_BOT_TOKEN` first.
 
@@ -312,9 +340,9 @@ What it does:
      emergency backport.
 3. Creates `.worktrees/my-feature` on `codex/my-feature` from that base.
 4. Runs `bash scripts/bootstrap-worktree-telegram.sh`.
-   - Warm lanes use a copy-only bootstrap so `scripts/telegram-e2e/.env.local`
-     and `scripts/telegram-e2e/tmp/userbot.session` still land in the lane
-     without auto-claiming a tester bot token.
+   - Warm lanes use a copy-only bootstrap for compatibility env/pool files.
+   - No lane receives a copied `userbot.session`; all normal lanes resolve the
+     machine-local canonical session and shared lock.
 5. Attempts a bounded `scripts/telegram-live-runtime.sh ensure` so worktree creation does not hang for minutes waiting on runtime health.
    - If no tester token is claimable, bootstrap leaves the worktree usable and tells you to free a lane with `scripts/telegram-live-runtime.sh release`.
 6. Writes `.dev-launch.env` with a deterministic `OPENCLAW_STATE_DIR` and `OPENCLAW_GATEWAY_PORT`.
@@ -420,7 +448,10 @@ Telegram user env file keys:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
-- `USERBOT_SESSION` (optional override; fresh-install default is `~/.openclaw/telegram-user/userbot.session`; existing repo-local sessions are honored)
+- `USERBOT_SESSION` (optional explicit override for a hermetic test or separate
+  account; normal default is
+  `~/.openclaw/telegram-user/userbot.session`; recognized repo-local selectors
+  are handled as migration inputs and divergent implicit copies fail closed)
 - `TG_BOT_TOKEN` (`<botId>:<token>`)
 - `TG_BIN` (absolute path to built `tg`)
 - `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
@@ -659,13 +690,16 @@ Scope note:
 - `E_UNAUTHORIZED_SESSION` during `telegram-user precheck/send/read/wait` means the Telethon session is not authenticated.
   - Re-auth once through the internal Python backend if needed, then go back to the CLI.
 - `E_MISSING_SESSION`: no session file at canonical path.
-  - Sync `scripts/telegram-e2e/tmp/userbot.session` or set `USERBOT_SESSION`.
+  - Run the read-only status/doctor diagnostic. Do not copy a legacy database
+    or reauthenticate automatically.
 - `E_UNAUTHORIZED_SESSION`: session exists but is not logged in.
   - Re-auth once through the internal Python backend, then retry the CLI command.
 - `E_CHAT_NOT_RESOLVABLE`: precheck cannot resolve `--chat`.
   - Verify chat id/username and account access.
 - `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.
-  - Set `USERBOT_SESSION` explicitly or remove one file.
+  - Inspect the reported non-secret candidate sources and choose an explicit
+    session for that invocation. Do not delete or overwrite either file as an
+    automatic repair.
 - HTTP `503` or no bot replies usually means gateway is not fully started yet.
   - Wait for provider-start logs and retry.
 - If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
@@ -674,7 +708,10 @@ Scope note:
 
 - Thread targeting uses `reply_to` anchoring.
 - For private topics, thread id can appear as `message_thread_id` or `direct_messages_topic.topic_id`.
-- Runner session selection order:
-  - `USERBOT_SESSION` env var
-  - `scripts/telegram-e2e/tmp/userbot.session`
-  - `scripts/telegram-e2e/userbot.session` (legacy fallback if canonical missing)
+- Normal runners resolve `~/.openclaw/telegram-user/userbot.session` and the
+  machine-wide operator lock.
+- Explicit `--session`/selector and lock overrides remain available for
+  hermetic tests or deliberately separate accounts.
+- Recognized legacy repo-relative selectors are migration inputs, not a reason
+  to create another worktree database. Divergent implicit candidates fail
+  loudly with `E_AMBIGUOUS_SESSION`.

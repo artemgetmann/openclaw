@@ -4,8 +4,12 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
+import stat
+import subprocess
 import sys
 import tempfile
+import textwrap
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -334,6 +338,23 @@ def build_fake_dialog(
 
 
 class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
+  def setUp(self) -> None:
+    # Unit tests must never contend with or create the real machine-wide lock.
+    # Give every test its own explicit lock while preserving production defaults.
+    self.lock_temp_dir = tempfile.TemporaryDirectory()
+    self.addCleanup(self.lock_temp_dir.cleanup)
+    self.lock_env = patch.dict(
+      os.environ,
+      {
+        telethon_cli.SESSION_LOCK_PATH_ENV: str(
+          Path(self.lock_temp_dir.name) / "test-session.lock"
+        )
+      },
+      clear = False,
+    )
+    self.lock_env.start()
+    self.addCleanup(self.lock_env.stop)
+
   async def test_run_status_prefers_authorized_session_over_stale_pending_state(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
       session_path = Path(temp_dir) / "userbot.session"
@@ -874,6 +895,220 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TelethonCliSyncTests(unittest.TestCase):
+  def setUp(self) -> None:
+    # The synchronous helpers also get a hermetic override so this suite never
+    # opens ~/.openclaw state, even when a future test acquires the default lock.
+    self.lock_temp_dir = tempfile.TemporaryDirectory()
+    self.addCleanup(self.lock_temp_dir.cleanup)
+    self.lock_env = patch.dict(
+      os.environ,
+      {
+        telethon_cli.SESSION_LOCK_PATH_ENV: str(
+          Path(self.lock_temp_dir.name) / "test-session.lock"
+        )
+      },
+      clear = False,
+    )
+    self.lock_env.start()
+    self.addCleanup(self.lock_env.stop)
+
+  def test_canonical_lock_does_not_change_with_explicit_session_path(self) -> None:
+    with patch.dict(os.environ, {}, clear = True):
+      first_session = Path("/tmp/first-userbot.session")
+      second_session = Path("/tmp/second-userbot.session")
+
+      self.assertEqual(
+        telethon_cli.resolve_session_lock_path(),
+        telethon_cli.DEFAULT_SESSION_LOCK,
+      )
+      self.assertNotEqual(first_session, second_session)
+      self.assertNotEqual(
+        telethon_cli.resolve_session_lock_path(),
+        first_session.with_name(f"{first_session.name}.openclaw.lock"),
+      )
+      self.assertNotEqual(
+        telethon_cli.resolve_session_lock_path(),
+        second_session.with_name(f"{second_session.name}.openclaw.lock"),
+      )
+
+  def test_lock_argument_overrides_environment_without_normalizing_session(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      explicit_lock = Path(temp_dir) / "explicit.lock"
+      environment_lock = Path(temp_dir) / "environment.lock"
+      raw_session = str(Path(temp_dir) / "nested" / ".." / "userbot.session")
+
+      with patch.dict(
+        os.environ,
+        {telethon_cli.SESSION_LOCK_PATH_ENV: str(environment_lock)},
+        clear = False,
+      ):
+        parser = telethon_cli.build_parser()
+        args = parser.parse_args([
+          "--session",
+          raw_session,
+          "--lock",
+          str(explicit_lock),
+          "status",
+        ])
+
+        self.assertEqual(args.session, raw_session)
+        self.assertEqual(telethon_cli.resolve_session_path(args.session), Path(raw_session))
+        self.assertEqual(telethon_cli.resolve_session_lock_path(args.lock), explicit_lock)
+        self.assertEqual(telethon_cli.resolve_session_lock_scope(args.lock), "argument_override")
+
+  def test_relative_lock_override_is_rejected(self) -> None:
+    with self.assertRaisesRegex(ValueError, "E_INVALID_LOCK_SELECTOR"):
+      telethon_cli.resolve_session_lock_path("relative/account.lock")
+
+  def test_lock_timeout_diagnostic_does_not_reveal_override_path(self) -> None:
+    secret_lock = Path("/tmp/account-name-that-must-not-leak.lock")
+    with (
+      patch.object(telethon_cli.time, "time", side_effect = [0, 2]),
+      patch.object(telethon_cli.time, "sleep"),
+      patch.object(telethon_cli.fcntl, "flock", side_effect = OSError("busy")),
+    ):
+      with self.assertRaises(TimeoutError) as raised:
+        with telethon_cli.acquire_session_lock(
+          Path("/tmp/session-that-must-not-leak.session"),
+          timeout_seconds = 1,
+          lock_path_override = secret_lock,
+        ):
+          self.fail("contended lock unexpectedly acquired")
+
+    diagnostic = str(raised.exception)
+    self.assertIn("scope=argument_override", diagnostic)
+    self.assertNotIn(str(secret_lock), diagnostic)
+    self.assertNotIn("session-that-must-not-leak", diagnostic)
+
+  def test_canonical_lock_uses_private_directory_and_file_modes(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      canonical_lock = Path(temp_dir) / "telegram-user" / "userbot.session.openclaw.lock"
+      with (
+        patch.dict(os.environ, {}, clear = True),
+        patch.object(telethon_cli, "DEFAULT_SESSION_LOCK", canonical_lock),
+      ):
+        with telethon_cli.acquire_session_lock(Path(temp_dir) / "unused.session"):
+          self.assertEqual(stat.S_IMODE(canonical_lock.parent.stat().st_mode), 0o700)
+          self.assertEqual(stat.S_IMODE(canonical_lock.stat().st_mode), 0o600)
+
+  @unittest.skipIf(telethon_cli.fcntl is None, "requires POSIX flock")
+  def test_lock_serializes_separate_processes_with_different_sessions(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      lock_path = Path(temp_dir) / "hermetic.lock"
+      helper = textwrap.dedent(
+        """
+        import os
+        import sys
+        import time
+        from pathlib import Path
+
+        import telethon_cli
+
+        print("starting", flush=True)
+        with telethon_cli.acquire_session_lock(Path(sys.argv[1]), timeout_seconds=3):
+          print("acquired", flush=True)
+          time.sleep(float(sys.argv[2]))
+        """
+      )
+      env = {
+        **os.environ,
+        telethon_cli.SESSION_LOCK_PATH_ENV: str(lock_path),
+      }
+
+      first = subprocess.Popen(
+        [sys.executable, "-c", helper, str(Path(temp_dir) / "first.session"), "0.8"],
+        cwd = SCRIPT_DIR,
+        env = env,
+        stderr = subprocess.PIPE,
+        stdout = subprocess.PIPE,
+        text = True,
+      )
+      self.assertEqual(first.stdout.readline().strip(), "starting")
+      self.assertEqual(first.stdout.readline().strip(), "acquired")
+
+      second = subprocess.Popen(
+        [sys.executable, "-c", helper, str(Path(temp_dir) / "second.session"), "0"],
+        cwd = SCRIPT_DIR,
+        env = env,
+        stderr = subprocess.PIPE,
+        stdout = subprocess.PIPE,
+        text = True,
+      )
+      self.assertEqual(second.stdout.readline().strip(), "starting")
+      time.sleep(0.2)
+      self.assertIsNone(second.poll(), "second process bypassed the shared lock")
+
+      first_stdout, first_stderr = first.communicate(timeout = 3)
+      second_stdout, second_stderr = second.communicate(timeout = 3)
+      self.assertEqual(first.returncode, 0, first_stderr)
+      self.assertEqual(second.returncode, 0, second_stderr)
+      self.assertEqual(first_stdout, "")
+      self.assertIn("acquired", second_stdout)
+
+  @unittest.skipIf(telethon_cli.fcntl is None, "requires POSIX flock")
+  def test_legacy_per_session_lock_blocks_new_version_operation(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "noncanonical.session"
+      machine_lock = Path(temp_dir) / "machine.lock"
+      legacy_lock = session_path.with_name(f"{session_path.name}.openclaw.lock")
+      old_helper = textwrap.dedent(
+        """
+        import fcntl
+        import sys
+        import time
+
+        with open(sys.argv[1], "a+", encoding="utf-8") as handle:
+          fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+          print("old-acquired", flush=True)
+          time.sleep(0.8)
+        """
+      )
+      new_helper = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+
+        import telethon_cli
+
+        print("new-starting", flush=True)
+        with telethon_cli.acquire_session_lock(Path(sys.argv[1]), timeout_seconds=3):
+          print("new-acquired", flush=True)
+        """
+      )
+      env = {
+        **os.environ,
+        telethon_cli.SESSION_LOCK_PATH_ENV: str(machine_lock),
+      }
+
+      old_process = subprocess.Popen(
+        [sys.executable, "-c", old_helper, str(legacy_lock)],
+        cwd = SCRIPT_DIR,
+        env = env,
+        stderr = subprocess.PIPE,
+        stdout = subprocess.PIPE,
+        text = True,
+      )
+      self.assertEqual(old_process.stdout.readline().strip(), "old-acquired")
+
+      new_process = subprocess.Popen(
+        [sys.executable, "-c", new_helper, str(session_path)],
+        cwd = SCRIPT_DIR,
+        env = env,
+        stderr = subprocess.PIPE,
+        stdout = subprocess.PIPE,
+        text = True,
+      )
+      self.assertEqual(new_process.stdout.readline().strip(), "new-starting")
+      time.sleep(0.2)
+      self.assertIsNone(new_process.poll(), "new process bypassed the legacy session lock")
+
+      old_stdout, old_stderr = old_process.communicate(timeout = 3)
+      new_stdout, new_stderr = new_process.communicate(timeout = 3)
+      self.assertEqual(old_process.returncode, 0, old_stderr)
+      self.assertEqual(new_process.returncode, 0, new_stderr)
+      self.assertEqual(old_stdout, "")
+      self.assertIn("new-acquired", new_stdout)
+
   def test_build_dialog_payload_accepts_datetime_mute_until(self) -> None:
     future_mute_until = datetime.now(timezone.utc) + timedelta(hours = 1)
     dialog = build_fake_dialog(chat_id = 101, is_user = True, unread_count = 1)
@@ -901,6 +1136,22 @@ class TelethonCliSyncTests(unittest.TestCase):
 
       with self.assertRaisesRegex(ValueError, "unexpected directory artifact"):
         telethon_cli.clear_session_artifacts(session_path)
+
+  def test_clear_session_artifacts_retains_transition_lock_files(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      legacy_lock = session_path.with_name(f"{session_path.name}.openclaw.lock")
+      machine_lock = Path(temp_dir) / "machine.openclaw.lock"
+      session_path.touch()
+      legacy_lock.touch()
+      machine_lock.touch()
+
+      with patch.object(telethon_cli, "DEFAULT_SESSION_LOCK", machine_lock):
+        removed_paths = telethon_cli.clear_session_artifacts(session_path)
+
+      self.assertIn(str(session_path), removed_paths)
+      self.assertTrue(legacy_lock.exists())
+      self.assertTrue(machine_lock.exists())
 
   def test_build_parser_rejects_password_flag(self) -> None:
     parser = telethon_cli.build_parser()
