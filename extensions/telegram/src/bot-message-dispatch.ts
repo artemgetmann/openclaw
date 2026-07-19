@@ -2259,14 +2259,39 @@ export const dispatchTelegramMessage = async ({
       // downgrades the table, while rich preview edits retain blank-bubble
       // history; prose and copy-safe drafts keep same-message legacy finish.
       forceNextAnswerFinalSend = false;
-      await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-rich-table-send");
-      const delivered = await sendPayload(finalPayload, {
-        reason: "final",
-        callsite: "answer-final-rich-table-send",
-        laneName: "answer",
-        infoKind: "final",
-        messageSendingHookApplied: true,
-      });
+      const previewStream = answerLane.stream;
+      const hasVisibleAnswerPreview =
+        answerLane.hasStreamedMessage &&
+        (typeof previewStream?.messageId() === "number" ||
+          previewStream?.sendMayHaveLanded?.() === true);
+      if (hasVisibleAnswerPreview) {
+        // Keep the visible legacy preview as the failure fallback. Rich send
+        // rejection is ambiguous, so only a confirmed durable send may remove it.
+        retainPreviewOnCleanupByLane.answer = true;
+      }
+      let delivered: boolean;
+      try {
+        delivered = await sendPayload(finalPayload, {
+          reason: "final",
+          callsite: "answer-final-rich-table-send",
+          laneName: "answer",
+          infoKind: "final",
+          messageSendingHookApplied: true,
+        });
+      } catch (error) {
+        // Preserve the fallback even if queued lifecycle work reset the flag
+        // while the rich request was in flight. Do not retry an ambiguous send.
+        if (hasVisibleAnswerPreview) {
+          retainPreviewOnCleanupByLane.answer = true;
+        }
+        throw error;
+      }
+      if (delivered && hasVisibleAnswerPreview) {
+        await discardTransientAnswerPreviewBeforeForcedFinal("answer-final-rich-table-send");
+      } else if (hasVisibleAnswerPreview) {
+        // A false return is an unconfirmed final. Leave the preview visible.
+        retainPreviewOnCleanupByLane.answer = true;
+      }
       result = delivered ? "sent" : "skipped";
     } else {
       // Work Log retention requires a separate final bubble, but an already-streamed

@@ -793,7 +793,13 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   });
 
   it("lets valid unfenced table finals use guarded rich delivery", async () => {
-    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
       return { queuedFinal: true };
@@ -817,7 +823,13 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   });
 
   it("keeps table finals on legacy delivery when Telegram lacks rich raw API", async () => {
-    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
       return { queuedFinal: true };
@@ -915,6 +927,9 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
     expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      answerStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(deliverReplies.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -1174,6 +1189,69 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
     expect(guardedTelegramDeleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("retains a streamed table preview when durable rich delivery reports false", async () => {
+    const answerStream = createDraftStream(9104);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: tableText });
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies).toHaveBeenCalled();
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("retains a streamed table preview when durable rich delivery rejects", async () => {
+    const answerStream = createDraftStream(9105);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: tableText });
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    // The dispatcher owns the existing error fallback; this is not a second
+    // rich-final attempt and must not erase the already-visible preview.
+    deliverReplies.mockRejectedValueOnce(new Error("rich delivery rejected")).mockResolvedValue({
+      delivered: true,
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
   it("renders streamed draft-preview blockquotes as copy-safe legacy code blocks", async () => {
