@@ -13,6 +13,8 @@ import {
   runTelegramUserInbox,
   runTelegramUserLogin,
   runTelegramUserLogout,
+  runTelegramUserMarkRead,
+  runTelegramUserMarkUnread,
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserDownload,
@@ -40,6 +42,8 @@ import type {
   TelegramUserInboxDialog,
   TelegramUserInboxResult,
   TelegramUserLoginResult,
+  TelegramUserMarkReadResult,
+  TelegramUserMarkUnreadResult,
   TelegramUserMessage,
   TelegramUserLogoutResult,
   TelegramUserPrecheck,
@@ -641,6 +645,20 @@ function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
   runtime.log(formatTelegramUserMessages(result.messages));
 }
 
+function logMarkReadText(runtime: RuntimeEnv, result: TelegramUserMarkReadResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  runtime.log(ok(`Telegram user mark-read ok. chat=${result.chat}`));
+  runtime.log(formatBackendMeta(result.backend_meta));
+}
+
+function logMarkUnreadText(runtime: RuntimeEnv, result: TelegramUserMarkUnreadResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  runtime.log(ok(`Telegram user mark-unread ok. chat=${result.chat}`));
+  runtime.log(formatBackendMeta(result.backend_meta));
+}
+
 function logDownloadText(runtime: RuntimeEnv, result: TelegramUserDownloadResult) {
   const rich = isRich();
   const ok = rich ? theme.success : (text: string) => text;
@@ -988,6 +1006,44 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     return;
   }
   logReadText(runtime, result);
+}
+
+export async function telegramUserMarkReadCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  if (!chat) {
+    throw new Error("Telegram user mark-read requires --chat.");
+  }
+  const result = await runTelegramUserMarkRead({
+    ...resolveBackendOptions(opts),
+    chat,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logMarkReadText(runtime, result);
+}
+
+export async function telegramUserMarkUnreadCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  if (!chat) {
+    throw new Error("Telegram user mark-unread requires --chat.");
+  }
+  const result = await runTelegramUserMarkUnread({
+    ...resolveBackendOptions(opts),
+    chat,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logMarkUnreadText(runtime, result);
 }
 
 export async function telegramUserDownloadCommand(

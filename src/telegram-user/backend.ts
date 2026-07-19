@@ -20,6 +20,8 @@ import type {
   TelegramUserInboxResult,
   TelegramUserLoginResult,
   TelegramUserLogoutResult,
+  TelegramUserMarkReadResult,
+  TelegramUserMarkUnreadResult,
   TelegramUserPrecheck,
   TelegramUserReadResult,
   TelegramUserSendResult,
@@ -623,6 +625,28 @@ export async function runTelegramUserRead(
   return runBackendCommand<TelegramUserReadResult>({
     ...params,
     args,
+  });
+}
+
+export async function runTelegramUserMarkRead(
+  params: {
+    chat: string;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserMarkReadResult> {
+  return runBackendCommand<TelegramUserMarkReadResult>({
+    ...params,
+    args: ["mark-read", "--chat", params.chat],
+  });
+}
+
+export async function runTelegramUserMarkUnread(
+  params: {
+    chat: string;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserMarkUnreadResult> {
+  return runBackendCommand<TelegramUserMarkUnreadResult>({
+    ...params,
+    args: ["mark-unread", "--chat", params.chat],
   });
 }
 

@@ -188,9 +188,13 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["drive", "search"],
       ["gmail", "drafts", "create"],
       ["gmail", "drafts", "send"],
+      // Read-state changes are reversible and stay scoped to explicit message
+      // ids or a caller-supplied Gmail query; do not allow broader organize families.
+      ["gmail", "mark-read"],
       ["gmail", "messages", "search"],
       ["gmail", "search"],
       ["gmail", "send"],
+      ["gmail", "unread"],
       ["sheets", "append"],
       ["sheets", "clear"],
       ["sheets", "get"],
@@ -293,6 +297,10 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     commandFamilies: [
       ["auth"],
       ["chats", "list"],
+      // These sync only the selected chat's reversible read marker. Keep other
+      // chat-state mutation commands outside Normal mode.
+      ["chats", "mark-read"],
+      ["chats", "mark-unread"],
       ["doctor"],
       ["history", "backfill"],
       ["messages", "search"],
@@ -340,6 +348,10 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "topic-create"],
       ["telegram-user", "topic-delete"],
       ["telegram-user", "read"],
+      // Telegram read-state commands remain target-scoped through --chat and
+      // do not open the rest of the OpenClaw command tree.
+      ["telegram-user", "mark-read"],
+      ["telegram-user", "mark-unread"],
       ["telegram-user", "download"],
       ["telegram-user", "inbox"],
       ["telegram-user", "wait"],

@@ -584,6 +584,12 @@ def build_parser() -> argparse.ArgumentParser:
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
   read.add_argument("--contains", default = "", help = "Only return messages containing this substring")
 
+  mark_read = subparsers.add_parser("mark-read", help = "Acknowledge current chat history as read")
+  mark_read.add_argument("--chat", required = True, help = "Target chat username or id")
+
+  mark_unread = subparsers.add_parser("mark-unread", help = "Set the dialog unread flag")
+  mark_unread.add_argument("--chat", required = True, help = "Target chat username or id")
+
   download = subparsers.add_parser("download", help = "Download media from one message")
   download.add_argument("--chat", required = True, help = "Target chat username or id")
   download.add_argument("--message-id", type = int, required = True, help = "Message id containing media")
@@ -954,6 +960,39 @@ async def run_read(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_mark_read(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      # Omitting a message/max_id tells Telethon to acknowledge the current
+      # history boundary, matching Telegram's "mark chat read" behavior.
+      await client.send_read_acknowledge(resolve_chat(args.chat))
+      return emit({"chat": args.chat, "marked_read": True})
+    finally:
+      await client.disconnect()
+
+
+async def run_mark_unread(args: argparse.Namespace) -> int:
+  if functions is None:
+    return fail("E_TELETHON_IMPORT", "Telethon dialog read-state functions are unavailable.")
+  session_path = resolve_session_path(args.session)
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      # Telegram models this as a dialog-level unread flag, not as rewinding
+      # message history or changing the server's read acknowledgement.
+      await client(
+        functions.messages.MarkDialogUnreadRequest(
+          peer = resolve_chat(args.chat),
+          unread = True,
+        )
+      )
+      return emit({"chat": args.chat, "marked_unread": True})
+    finally:
+      await client.disconnect()
+
+
 async def run_download(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   message_id = int(args.message_id or 0)
@@ -1058,6 +1097,10 @@ async def run() -> int:
       return await run_topic_delete(args)
     if args.command == "read":
       return await run_read(args)
+    if args.command == "mark-read":
+      return await run_mark_read(args)
+    if args.command == "mark-unread":
+      return await run_mark_unread(args)
     if args.command == "download":
       return await run_download(args)
     if args.command == "inbox":

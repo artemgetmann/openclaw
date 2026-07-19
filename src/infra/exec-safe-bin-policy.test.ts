@@ -106,9 +106,12 @@ describe("exec safe bin policy product-owned cli defaults", () => {
     expect(
       validateSafeBinArgv(["message", "write", "-H", "To:recipient@example.com"], himalayaProfile),
     ).toBe(true);
-    expect(
-      validateSafeBinArgv(["message", "read", "42", "--preview", "trimmed"], himalayaProfile),
-    ).toBe(true);
+    expect(validateSafeBinArgv(["message", "read", "42", "--preview"], himalayaProfile)).toBe(true);
+    expect(validateSafeBinArgv(["envelope", "list", "not", "flag", "seen"], himalayaProfile)).toBe(
+      true,
+    );
+    expect(validateSafeBinArgv(["flag", "add", "42", "seen"], himalayaProfile)).toBe(true);
+    expect(validateSafeBinArgv(["flag", "remove", "42", "seen"], himalayaProfile)).toBe(true);
   });
 
   it("allows gog auth and read probes without flag-by-flag updates", () => {
@@ -145,6 +148,15 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         gogProfile,
       ),
     ).toBe(true);
+    expect(validateSafeBinArgv(["gmail", "mark-read", "message-123"], gogProfile)).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["gmail", "unread", "--query", "from:person@example.com", "--max", "10"],
+        gogProfile,
+      ),
+    ).toBe(true);
+    // Read-state exposure must not accidentally admit unrelated Gmail mutations.
+    expect(validateSafeBinArgv(["gmail", "trash", "message-123"], gogProfile)).toBe(false);
   });
 
   it("allows real wacli direct commands with family-scoped unknown flags", () => {
@@ -177,12 +189,49 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         wacliProfile,
       ),
     ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["chats", "mark-read", "--chat", "628123@s.whatsapp.net", "--json"],
+        wacliProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["chats", "mark-unread", "--chat", "628123@s.whatsapp.net", "--json"],
+        wacliProfile,
+      ),
+    ).toBe(true);
+    // Keep adjacent chat-state mutations outside the narrow read-state grant.
+    expect(
+      validateSafeBinArgv(
+        ["chats", "archive", "--chat", "628123@s.whatsapp.net", "--json"],
+        wacliProfile,
+      ),
+    ).toBe(false);
   });
 
   it("allows Telegram-as-me direct commands only through telegram-user families", () => {
     const openclawProfile = SAFE_BIN_PROFILES.openclaw;
     expect(validateSafeBinArgv(["telegram-user", "status", "--json"], openclawProfile)).toBe(true);
     expect(validateSafeBinArgv(["telegram-user", "doctor", "--json"], openclawProfile)).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["telegram-user", "mark-read", "--chat", "@jarvis_tester_1_bot", "--json"],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["telegram-user", "mark-unread", "--chat", "@jarvis_tester_1_bot", "--json"],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["telegram-user", "archive", "--chat", "@jarvis_tester_1_bot", "--json"],
+        openclawProfile,
+      ),
+    ).toBe(false);
     expect(
       validateSafeBinArgv(
         ["telegram-user", "doctor", "--chat", "@jarvis_tester_1_bot", "--json"],

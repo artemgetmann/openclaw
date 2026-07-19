@@ -102,6 +102,19 @@ Time-aware WhatsApp context
 - If the resolved intent has passed, offer a recovery or reschedule draft rather
   than replying as though the original timing is still current.
 
+Read-state commands
+
+- WhatsApp read/unread state here is chat-level, not per-message.
+- Mark one resolved chat read:
+  `wacli chats mark-read --chat <target> --json`
+- Preserve or restore one pending chat as unread:
+  `wacli chats mark-unread --chat <target> --json`
+- These commands update WhatsApp's synced chat app-state, not sender-facing
+  per-message delivery or read receipts.
+- Resolve ambiguous names or numbers to the intended chat before changing
+  state. Do not bulk-change sibling JID chats, and report unsupported or failed
+  updates instead of claiming success.
+
 - Treat raw `wacli doctor` as fallback/debug-only.
   Under a live OpenClaw-owned lock it can report `CONNECTED false` even when
   `wacli sync --follow` is healthy, so do not use it as the primary readiness

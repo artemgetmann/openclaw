@@ -75,6 +75,14 @@ export function registerTelegramUserCli(program: Command) {
             "Read matching recent DM messages in compact agent-friendly rows; add --json only when raw metadata is needed.",
           ],
           [
+            "openclaw telegram-user mark-read --chat @jarvis_tester_1_bot --json",
+            "Acknowledge the chat's current message history as read.",
+          ],
+          [
+            "openclaw telegram-user mark-unread --chat @jarvis_tester_1_bot --json",
+            "Set the dialog unread flag without rewinding message history.",
+          ],
+          [
             "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830 --output /tmp/openclaw-media --json",
             "Download media from a known Telegram message id before running generic media tools.",
           ],
@@ -248,6 +256,30 @@ export function registerTelegramUserCli(program: Command) {
     await runTelegramUserCommand(async () => {
       const { telegramUserDownloadCommand } = await import("../commands/telegram-user.js");
       await telegramUserDownloadCommand(opts, defaultRuntime);
+    });
+  });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("mark-read")
+      .description("Acknowledge current Telegram chat history as read")
+      .requiredOption("--chat <target>", "Target chat username or id"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserMarkReadCommand } = await import("../commands/telegram-user.js");
+      await telegramUserMarkReadCommand(opts, defaultRuntime);
+    });
+  });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("mark-unread")
+      .description("Set the Telegram dialog unread flag")
+      .requiredOption("--chat <target>", "Target chat username or id"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserMarkUnreadCommand } = await import("../commands/telegram-user.js");
+      await telegramUserMarkUnreadCommand(opts, defaultRuntime);
     });
   });
 
