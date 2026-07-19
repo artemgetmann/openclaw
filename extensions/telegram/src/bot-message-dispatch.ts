@@ -30,6 +30,7 @@ import type {
 } from "../../../src/config/types.js";
 import { danger, logVerbose } from "../../../src/globals.js";
 import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
+import { markdownToIRWithMeta } from "../../../src/markdown/ir.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import {
   formatMonitorReceipt,
@@ -1935,18 +1936,22 @@ export const dispatchTelegramMessage = async ({
       hasMedia,
       isError: normalizedPayload.isError === true,
     });
+    const isTableFinal =
+      durableReason === "final" &&
+      !hasMedia &&
+      typeof normalizedPayload.text === "string" &&
+      markdownToIRWithMeta(normalizedPayload.text, { tableMode: "block" }).hasTables;
     const shouldUseLegacyTextTransport =
       classification?.forceLegacyTextTransport === true ||
-      (durableReason === "final" && !hasMedia) ||
+      // Keep ordinary finals on legacy HTML after rich delivery produced blank
+      // Telegram bubbles. Valid unfenced tables alone opt into the guarded rich path.
+      (durableReason === "final" && !hasMedia && !isTableFinal) ||
       isControlCommandReplyPayload(normalizedPayload) ||
       isCopySafeDraftReplyPayload(normalizedPayload);
     const shouldUseCopySafeBlockquotes =
       !hasMedia && (isCopySafeDraftReplyPayload(normalizedPayload) || durableReason === "final");
     const result = await deliverReplies({
       ...deliveryBaseOptions,
-      // Final text currently stays on ordinary Telegram HTML transport because
-      // rich-message delivery previously produced blank bubbles. Media/voice
-      // supplements still use their normal media path.
       ...(shouldUseLegacyTextTransport ? { richMessages: false } : {}),
       // Final-answer blockquotes are commonly used for draft messages the user
       // wants to copy into another chat. Render those quote bodies as Telegram

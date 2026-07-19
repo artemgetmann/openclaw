@@ -782,6 +782,50 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("lets valid unfenced table finals use guarded rich delivery", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    const call = deliverReplies.mock.calls[0]?.[0];
+    expect(call).toEqual(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+    expect(call).not.toHaveProperty("richMessages");
+  });
+
+  it("keeps fenced table text on legacy Telegram HTML transport", async () => {
+    const fencedTableText = [
+      "```markdown",
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "```",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: fencedTableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [expect.objectContaining({ text: fencedTableText })],
+      }),
+    );
+  });
+
   it("enables copy-safe blockquote rendering for final draft-style answers", async () => {
     const draftText = [
       "I would send:",
@@ -790,7 +834,13 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "> Confirm if this works.",
     ].join("\n");
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: draftText }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        {
+          text: draftText,
+          channelData: { openclaw: { copySafeDraft: true } },
+        },
+        { kind: "final" },
+      );
       return { queuedFinal: true };
     });
     deliverReplies.mockResolvedValue({ delivered: true });
@@ -800,6 +850,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         copySafeBlockquotes: true,
+        richMessages: false,
         replies: [expect.objectContaining({ text: draftText })],
       }),
     );
