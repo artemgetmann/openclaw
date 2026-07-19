@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type RawData, type WebSocket, WebSocketServer } from "ws";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
@@ -885,14 +886,16 @@ describe("chrome MCP page parsing", () => {
     );
   });
 
-  it("reads Chrome MCP screenshots from the requested output file", async () => {
+  it("reads screenshots from isolated files beneath the approved temp root and cleans them up", async () => {
     const { session, callTool } = createFakeSessionBundle();
+    let screenshotPath = "";
     callTool.mockImplementation(async ({ name, arguments: args }: ToolCall) => {
       if (name === "take_screenshot") {
         const filePath = args?.filePath;
         if (typeof filePath !== "string") {
           throw new Error("missing filePath");
         }
+        screenshotPath = filePath;
         await fs.writeFile(filePath, Buffer.from("png-bytes"));
         return { content: [{ type: "text", text: "ok" }] };
       }
@@ -908,6 +911,17 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(screenshot).toEqual(Buffer.from("png-bytes"));
+    const preferredTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+    // Use lexical containment so macOS /var and /private/var aliases cannot
+    // turn an approved path assertion into a platform-specific realpath test.
+    const relativePath = path.relative(preferredTmpRoot, path.resolve(screenshotPath));
+    expect(relativePath).not.toBe("");
+    expect(relativePath).not.toBe("..");
+    expect(relativePath.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativePath)).toBe(false);
+    await expect(fs.access(path.dirname(screenshotPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(callTool).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "take_screenshot",
