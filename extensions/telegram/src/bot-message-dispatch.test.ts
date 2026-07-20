@@ -1688,6 +1688,85 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("hides MEDIA directives and local paths from streamed final previews", async () => {
+    const answerStream = createDraftStream(111);
+    createTelegramDraftStream.mockReturnValue(answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text:
+            "Done. The PDF is attached.\n\nDetails stay in this paragraph.\n" +
+            "MEDIA:/tmp/private/generated-report.pdf",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Done. The PDF is attached.\n\nDetails stay in this paragraph.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "final" },
+        );
+        await dispatcherOptions.deliver(
+          { mediaUrl: "file:///tmp/private/generated-report.pdf" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerStream.update).toHaveBeenCalledWith(
+      "Done. The PDF is attached.\n\nDetails stay in this paragraph.",
+    );
+    expect(answerStream.update).not.toHaveBeenCalledWith(expect.stringContaining("MEDIA:"));
+    expect(answerStream.update).not.toHaveBeenCalledWith(expect.stringContaining("/tmp/private"));
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      111,
+      "Done. The PDF is attached.\n\nDetails stay in this paragraph.",
+      expect.objectContaining({ richMessages: false }),
+    );
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ mediaUrl: "file:///tmp/private/generated-report.pdf" }],
+      }),
+    );
+  });
+
+  it("does not classify unmarked media-only finals as TTS supplements", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          mediaUrl: "file:///tmp/unmarked-voice.ogg",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const runtime = createRuntime();
+
+    await dispatchWithContext({ context: createContext(), runtime });
+
+    const logLines = (runtime.log as ReturnType<typeof vi.fn>).mock.calls.map(([line]) =>
+      String(line),
+    );
+    expect(logLines.some((line) => line.includes("lane=tts"))).toBe(false);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          {
+            mediaUrl: "file:///tmp/unmarked-voice.ogg",
+            audioAsVoice: true,
+          },
+        ],
+      }),
+    );
+  });
+
   it("finalizes a phase-less answer block before a preview-captioned TTS voice supplement and does not reuse progress on the next turn", async () => {
     const leakedProgressDraftStream = createSequencedDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
