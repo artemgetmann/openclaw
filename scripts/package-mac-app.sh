@@ -929,6 +929,8 @@ ensure_consumer_gog_runtime() {
   local archive=""
   local expected_sha256=""
   local extracted_bin=""
+  local expected_arch=""
+  local extracted_archs=""
   local thin_bins=()
 
   if [[ -x "$universal_bin" ]] \
@@ -979,8 +981,13 @@ ensure_consumer_gog_runtime() {
       rm -rf "$download_root"
       exit 1
     fi
-    if [[ "$("$extracted_bin" --version 2>/dev/null || true)" != *"v${version}"* ]]; then
-      echo "ERROR: downloaded gog version mismatch for darwin_${release_arch}." >&2
+    expected_arch="$release_arch"
+    if [[ "$expected_arch" == "amd64" ]]; then
+      expected_arch="x86_64"
+    fi
+    extracted_archs="$(/usr/bin/lipo -archs "$extracted_bin" 2>/dev/null || true)"
+    if [[ "$extracted_archs" != "$expected_arch" ]]; then
+      echo "ERROR: downloaded gog architecture mismatch for darwin_${release_arch}: ${extracted_archs:-unknown}." >&2
       rm -rf "$download_root"
       exit 1
     fi
@@ -997,6 +1004,13 @@ ensure_consumer_gog_runtime() {
   packaged_archs="$(/usr/bin/lipo -archs "$universal_bin")"
   if [[ "$packaged_archs" != *"arm64"* || "$packaged_archs" != *"x86_64"* ]]; then
     echo "ERROR: universal gog payload is missing a required architecture: $packaged_archs" >&2
+    exit 1
+  fi
+  # Execute only the universal output so the build host selects its native
+  # slice. Thin cross-architecture execution would require Rosetta on arm64 and
+  # cannot work at all when an Intel release host validates the arm64 archive.
+  if [[ "$("$universal_bin" --version 2>/dev/null || true)" != *"v${version}"* ]]; then
+    echo "ERROR: universal gog payload does not report expected version v${version}." >&2
     exit 1
   fi
   printf '%s\n' "$universal_bin"
