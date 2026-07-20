@@ -1,7 +1,14 @@
 # Native Computer Use Runtime Plan
 
-Last updated: 2026-06-12
-Status: fork-backed adapter spike in progress, dev-only
+Last updated: 2026-07-20
+Status: historical benchmark plan; consumer packaging status corrected below
+
+> Current product truth (2026-07-20): the default Jarvis skill and system prompt
+> now expose the OpenComputerUse-backed runtime. Consumer packages therefore
+> embed the pinned universal release app and verify its identity, source ref,
+> architectures, license notice, and signature. The older dev-only/deferred
+> statements below describe the benchmark phase and remain as historical
+> decision evidence.
 
 ## Goal
 

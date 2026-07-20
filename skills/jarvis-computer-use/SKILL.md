@@ -9,6 +9,32 @@ metadata:
         "displayName": "Jarvis Computer Use",
         "os": ["darwin"],
         "requires": { "bins": ["openclaw"] },
+        "packagedArtifacts":
+          [
+            {
+              "id": "open-computer-use",
+              "kind": "macos-app",
+              "requirement": "consumer-release",
+              "path": "native/Open Computer Use.app",
+              "executable": "Contents/MacOS/OpenComputerUse",
+              "bundleIdentifier": "com.ifuryst.opencomputeruse",
+              "version": "0.1.53",
+              "architectures": ["arm64", "x86_64"],
+              "sourceRepo": "https://github.com/artemgetmann/open-codex-computer-use.git",
+              "sourceRef": "a8ad90ed703fbdc2095e900c2b2574bfa4d60f36",
+              "buildCommand":
+                [
+                  "./scripts/build-open-computer-use-app.sh",
+                  "--configuration",
+                  "release",
+                  "--arch",
+                  "universal",
+                ],
+              "licenseSource": "LICENSE",
+              "licensePath": "Contents/Resources/OpenComputerUse-LICENSE.txt",
+              "receiptPath": "Contents/Resources/OpenClaw-Packaging-Receipt.json",
+            },
+          ],
       },
   }
 ---

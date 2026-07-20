@@ -281,10 +281,20 @@ import fs from "node:fs";
 
 const manifestPath = process.argv[2];
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-if (manifest.format !== 1 || !manifest.skills || !Array.isArray(manifest.managedTools)) {
+if (
+  manifest.format !== 1 ||
+  !manifest.skills ||
+  !Array.isArray(manifest.managedTools) ||
+  !Array.isArray(manifest.packagedArtifacts)
+) {
   throw new Error(`invalid capabilities manifest: ${manifestPath}`);
 }
 NODE
+
+  "$ROOT_DIR/scripts/verify-consumer-packaged-artifacts.sh" \
+    "$manifest_path" \
+    "$(dirname "$skills_dir")" \
+    --require-signed
 }
 
 load_consumer_default_bundled_skills
