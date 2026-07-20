@@ -174,7 +174,40 @@ Every stage fails closed. A successful run means one Mac is running an explicit
 app-support hotfix from merged `main`. It does not mean a public Jarvis update
 was published, `/Applications/Jarvis.app` changed, or managed-bundle steady
 state was restored. Replace the protected hotfix with a package-seeded runtime
-through the managed release/update lane after the incident.
+through the managed release/update lane under the follow-up timing policy
+below.
+
+### Hotfix follow-up and release timing
+
+A break-glass runtime hotfix and a signed/notarized Jarvis release solve
+different timing problems. The hotfix restores one protected app-support
+runtime quickly; a normal release makes packaged steady state available to
+installed copies and public distribution. Do not assume that every merged
+runtime PR or protected hotfix requires an immediate app release.
+
+By default, leave a successful protected hotfix in place temporarily and batch
+several merged, verified fixes into the next planned normal Jarvis release.
+Keep its deployed commit and `runtime_source=jarvis-break-glass-hotfix`
+provenance visible, and track the package-seeded replacement against a bounded
+follow-up such as a named release or owner checkpoint. Batching saves operator
+time, agent tokens, and repeated build/sign/notarization cycles without
+pretending the temporary state is risk-free.
+
+Package immediately instead when any of these triggers applies:
+
+- protection is absent, failed, or no longer verifies
+- the older installed app can overwrite the fixed runtime
+- public or other installed users need the fix now
+- security, compatibility, migration, or release-critical risk makes waiting
+  unsafe
+- the owner explicitly requests an immediate package or release
+
+Protection reduces the normal downgrade risk; it does not eliminate every
+path. Manual protection removal, app-support state reset, and unusual or older
+reinstall paths can still restore stale packaged code. Re-evaluate release
+urgency if one of those conditions appears. Until a trigger changes, describe
+package work as deferred or batched into the next planned release, not as a
+repeatedly urgent incident action.
 
 1. Managed-package daily Jarvis
    - This is the steady state: `/Applications/Jarvis.app` seeds the
