@@ -180,6 +180,25 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
     expect(result.stderr).toContain("invalid packaged artifact path");
   });
 
+  it("tracks the supported summarize CLI version from the bundled skill", () => {
+    const output = execFileSync(process.execPath, [manifestScript, path.join(root, "skills")], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+
+    expect(parsed.managedTools).toContainEqual(
+      expect.objectContaining({
+        skillName: "summarize",
+        installId: "brew",
+        kind: "brew",
+        bins: ["summarize"],
+        formula: "summarize",
+        versionCommand: ["summarize", "--version"],
+        recommendedVersion: "0.21.6",
+      }),
+    );
+  });
+
   it("fails when a local CLI is newer than packaged release metadata", () => {
     const skillsRoot = makeTempRoot();
     const binDir = path.join(makeTempRoot(), "bin");

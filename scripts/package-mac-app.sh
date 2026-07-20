@@ -370,6 +370,9 @@ verify_required_capabilities_manifest() {
   local runtime_root="$1"
   local context_label="$2"
   local manifest_path="$runtime_root/openclaw/capabilities.manifest.json"
+  local gog_path="$runtime_root/openclaw/tools/gog"
+  local gog_version=""
+  local gog_archs=""
 
   if [[ ! -f "$manifest_path" ]]; then
     echo "ERROR: ${context_label} is missing capabilities.manifest.json." >&2
@@ -382,7 +385,27 @@ verify_required_capabilities_manifest() {
   # declared in the same manifest are still present and current.
   "$ROOT_DIR/scripts/verify-consumer-packaged-artifacts.sh" \
     "$manifest_path" \
-    "$runtime_root/openclaw"
+    "$runtime_root/openclaw" || return 1
+
+  # Cached and smoke-reused runtimes must also carry the app-owned managed CLI
+  # payload. Otherwise a cache hit can silently regress clean installs back to
+  # "gog must already exist somewhere on the user's PATH."
+  gog_version="$(managed_tool_recommended_version "$manifest_path" "gog" "gog")" || return 1
+  if [[ ! -x "$gog_path" ]]; then
+    echo "ERROR: ${context_label} is missing the app-managed Google Workspace CLI." >&2
+    echo "Expected executable: $gog_path" >&2
+    return 1
+  fi
+  if [[ "$("$gog_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
+    echo "ERROR: ${context_label} has the wrong Google Workspace CLI version." >&2
+    echo "Expected version: $gog_version" >&2
+    return 1
+  fi
+  gog_archs="$(/usr/bin/lipo -archs "$gog_path" 2>/dev/null || true)"
+  if [[ "$gog_archs" != *"arm64"* || "$gog_archs" != *"x86_64"* ]]; then
+    echo "ERROR: ${context_label} Google Workspace CLI is not universal: ${gog_archs:-unknown}" >&2
+    return 1
+  fi
 }
 
 write_transitional_memory_template_if_missing() {
@@ -870,6 +893,131 @@ ensure_consumer_uv_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+managed_tool_recommended_version() {
+  local manifest_path="$1"
+  local skill_name="$2"
+  local bin_name="$3"
+
+  "$VALIDATED_NODE_BIN" --input-type=module - "$manifest_path" "$skill_name" "$bin_name" <<'NODE'
+import fs from "node:fs";
+
+const [manifestPath, skillName, binName] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const match = manifest.managedTools?.find(
+  (tool) =>
+    tool?.skillName === skillName &&
+    Array.isArray(tool.bins) &&
+    tool.bins.includes(binName) &&
+    typeof tool.recommendedVersion === "string",
+);
+
+if (!match?.recommendedVersion) {
+  throw new Error(
+    `No recommended version for managed tool ${skillName}/${binName} in ${manifestPath}`,
+  );
+}
+process.stdout.write(match.recommendedVersion);
+NODE
+}
+
+ensure_consumer_gog_runtime() {
+  local version="$1"
+  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/gog-v${version}-darwin-universal"
+  local universal_bin="${cache_root}/gog"
+  local download_root=""
+  local release_arch=""
+  local archive=""
+  local expected_sha256=""
+  local extracted_bin=""
+  local thin_bins=()
+
+  if [[ -x "$universal_bin" ]] \
+    && [[ "$("$universal_bin" --version 2>/dev/null || true)" == *"v${version}"* ]] \
+    && [[ "$(/usr/bin/lipo -archs "$universal_bin" 2>/dev/null || true)" == *"arm64"* ]] \
+    && [[ "$(/usr/bin/lipo -archs "$universal_bin" 2>/dev/null || true)" == *"x86_64"* ]]; then
+    printf '%s\n' "$universal_bin"
+    return 0
+  fi
+
+  # gog is a self-contained Go CLI, so the app can own it without Homebrew.
+  # Build one universal payload from the two official release archives, then
+  # let the normal app codesigning pass sign that payload with Jarvis.
+  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-gog.XXXXXX")"
+  for release_arch in arm64 amd64; do
+    # Release asset digests are pinned with the product version. A metadata bump
+    # without reviewed payload hashes must fail closed instead of downloading
+    # unverified executable code into a signed Jarvis release.
+    case "${version}:${release_arch}" in
+      0.33.0:arm64)
+        expected_sha256="d73b324fa3a35a08175432761c8bfd410896b1a22365aa89890ac4fbfdf7c66e"
+        ;;
+      0.33.0:amd64)
+        expected_sha256="259c4bf1f41bc725936eb816aac9d5c95df9eaf21be0a8df93a9c42fe55f83a4"
+        ;;
+      *)
+        echo "ERROR: no reviewed gog release digest for v${version} darwin_${release_arch}." >&2
+        echo "Update ensure_consumer_gog_runtime with the official release asset digest." >&2
+        rm -rf "$download_root"
+        exit 1
+        ;;
+    esac
+    archive="${download_root}/gogcli_${version}_darwin_${release_arch}.tar.gz"
+    echo "📥 Downloading Google Workspace CLI ${version} (darwin_${release_arch})" >&2
+    curl -fsSL \
+      "https://github.com/openclaw/gogcli/releases/download/v${version}/$(basename "$archive")" \
+      -o "$archive"
+    if ! printf '%s  %s\n' "$expected_sha256" "$archive" | shasum -a 256 -c - >/dev/null; then
+      echo "ERROR: downloaded gog checksum mismatch: $archive" >&2
+      rm -rf "$download_root"
+      exit 1
+    fi
+    mkdir -p "${download_root}/${release_arch}"
+    tar -xzf "$archive" -C "${download_root}/${release_arch}"
+    extracted_bin="${download_root}/${release_arch}/gog"
+    if [[ ! -x "$extracted_bin" ]]; then
+      echo "ERROR: downloaded gog archive is missing its executable: $archive" >&2
+      rm -rf "$download_root"
+      exit 1
+    fi
+    if [[ "$("$extracted_bin" --version 2>/dev/null || true)" != *"v${version}"* ]]; then
+      echo "ERROR: downloaded gog version mismatch for darwin_${release_arch}." >&2
+      rm -rf "$download_root"
+      exit 1
+    fi
+    thin_bins+=("$extracted_bin")
+  done
+
+  mkdir -p "$cache_root"
+  /usr/bin/lipo -create "${thin_bins[@]}" -output "${universal_bin}.tmp"
+  chmod 0755 "${universal_bin}.tmp"
+  mv "${universal_bin}.tmp" "$universal_bin"
+  rm -rf "$download_root"
+
+  local packaged_archs
+  packaged_archs="$(/usr/bin/lipo -archs "$universal_bin")"
+  if [[ "$packaged_archs" != *"arm64"* || "$packaged_archs" != *"x86_64"* ]]; then
+    echo "ERROR: universal gog payload is missing a required architecture: $packaged_archs" >&2
+    exit 1
+  fi
+  printf '%s\n' "$universal_bin"
+}
+
+bundle_consumer_managed_tool_payloads() {
+  local manifest_path="$1"
+  local gog_version=""
+  local gog_runtime=""
+  local tools_dir="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/tools"
+
+  # Keep app-owned mutation intentionally narrow. summarize is version-tracked
+  # but remains Homebrew-managed because its supported install also requires
+  # node, ffmpeg, tesseract, and yt-dlp.
+  gog_version="$(managed_tool_recommended_version "$manifest_path" "gog" "gog")"
+  gog_runtime="$(ensure_consumer_gog_runtime "$gog_version")"
+  mkdir -p "$tools_dir"
+  cp "$gog_runtime" "$tools_dir/gog"
+  chmod 0755 "$tools_dir/gog"
+}
+
 resolve_matrix_crypto_package_root() {
   local package_root=""
 
@@ -1083,6 +1231,7 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/consumer-capabilities-manifest.mjs"
       hash_consumer_runtime_path "scripts/materialize-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/verify-consumer-packaged-artifacts.sh"
+      hash_consumer_runtime_path "scripts/package-mac-app.sh"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
       hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
       hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
@@ -1307,6 +1456,8 @@ prepare_bundled_consumer_runtime() {
     "$ROOT_DIR/scripts/materialize-consumer-packaged-artifacts.sh" \
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+    bundle_consumer_managed_tool_payloads \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json"
   fi
 
   local bundled_template_src="$ROOT_DIR/docs/reference/templates"
