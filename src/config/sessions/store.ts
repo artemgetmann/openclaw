@@ -676,9 +676,16 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
       }
       if (hasFailure) {
         task.reject(failed);
-        continue;
+      } else {
+        task.resolve(result);
       }
-      task.resolve(result);
+
+      if (queue.pending.length > 0) {
+        // A busy queue can otherwise chain whole-store read/parse/clone/stringify
+        // work through promise continuations. Yield after both successful and failed
+        // attempts: the first task still starts immediately, and FIFO order remains.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
     }
   } finally {
     queue.running = false;
