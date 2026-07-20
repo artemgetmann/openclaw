@@ -92,7 +92,15 @@ function normalizeToolProgressLine(text?: string) {
 }
 
 function normalizeAnswerPreviewText(text: string): string {
-  return normalizeAdjacentProgressBoundaries(text)
+  // A streaming snapshot can end at the directive prefix before the local
+  // path arrives. Remove the entire transport line without re-parsing the
+  // answer: the final parser owns media extraction, while preview sanitization
+  // must preserve the user's paragraph and list formatting byte-for-byte.
+  const previewSafeText = text
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("MEDIA:"))
+    .join("\n");
+  return normalizeAdjacentProgressBoundaries(previewSafeText)
     .replace(/\.{3,}/g, "")
     .trimEnd();
 }
@@ -1437,7 +1445,10 @@ export const dispatchTelegramMessage = async ({
           lane === answerLane && useMessagePreviewTransportForDm && !firstDmAnswerPreviewDelivered,
         fastFirstPreview:
           lane === answerLane && useMessagePreviewTransportForDm && firstDmAnswerPreviewDelivered,
-        nextTextHasCompletionBoundary: hasCompleteFirstPreviewBoundary(text),
+        // Completion must be evaluated after transport directives are removed.
+        // Otherwise a final sentence followed by `MEDIA:/path` looks incomplete
+        // and never reaches the preview even though the visible text is ready.
+        nextTextHasCompletionBoundary: hasCompleteFirstPreviewBoundary(previewText),
       })
     ) {
       lane.lastPartialText = previewText;
@@ -2367,12 +2378,11 @@ export const dispatchTelegramMessage = async ({
               info.kind === "block" && assistantPhase === "final_answer" ? "final" : info.kind;
             const hasPayloadMedia =
               Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-            const hasPayloadText =
-              typeof payload.text === "string" && payload.text.trim().length > 0;
             const isTtsMediaFinalBoundary =
               deliveryKind === "final" &&
               hasPayloadMedia &&
-              (!hasPayloadText || isFinalTtsSupplementPayload(payload));
+              payload.audioAsVoice === true &&
+              isFinalTtsSupplementPayload(payload);
             if (deliveryKind === "final") {
               // Assistant callbacks are fire-and-forget; ensure queued boundary
               // rotations/partials are applied before final delivery mapping.
