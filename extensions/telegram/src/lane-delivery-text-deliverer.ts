@@ -640,7 +640,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         );
       }
       await params.stopDraftLane(lane);
-      const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText), {
+      const hasOwnPayloadText = typeof payload.text === "string" && payload.text.trim().length > 0;
+      // `deliveryText` may contain the accumulated answer preview even when this
+      // final payload is only a follow-up document. Missing payload text is an
+      // explicit captionless media contract at this durable seam, so never
+      // rehydrate lane text onto it. Nonblank payload text remains an intentional
+      // caption and keeps the existing merge/fallback behavior.
+      const finalPayload =
+        hasMedia && !hasOwnPayloadText
+          ? { ...payload, text: undefined }
+          : params.applyTextToPayload(payload, deliveryText);
+      const delivered = await params.sendPayload(finalPayload, {
         reason: payload.isError ? "error" : hasMedia ? "media" : "final",
         callsite: "lane-final-standard-send",
         laneName,
