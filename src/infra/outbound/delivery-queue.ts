@@ -175,6 +175,39 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   await fs.promises.rename(tmp, filePath);
 }
 
+/**
+ * Remove known-successful payloads from a queued batch.
+ *
+ * The replacement lands atomically before the caller attempts the next payload.
+ * The index supports best-effort batches where an earlier failed item remains
+ * pending while a later successful item is removed from the durable array.
+ * A crash after the provider accepted a payload but before this write remains
+ * ambiguous and can replay that payload; providers do not expose a transaction
+ * spanning their send and our local queue file.
+ */
+export async function checkpointDelivery(
+  id: string,
+  completedPayloadCount: number,
+  stateDir?: string,
+  payloadIndex = 0,
+): Promise<void> {
+  const count = Math.max(0, Math.floor(completedPayloadCount));
+  if (count === 0) {
+    return;
+  }
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const entry: QueuedDelivery = JSON.parse(raw);
+  const index = Math.max(0, Math.floor(payloadIndex));
+  entry.payloads.splice(index, count);
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
 /** Load all pending delivery entries from the queue directory. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
@@ -303,6 +336,9 @@ export type DeliverFn = (
     cfg: OpenClawConfig;
   } & QueuedDeliveryParams & {
       skipQueue?: boolean;
+      onPayloadComplete?: () => Promise<void>;
+      onPayloadFailed?: () => void;
+      throwOnPartialFailure?: boolean;
     },
 ) => Promise<unknown>;
 
@@ -370,6 +406,7 @@ export async function recoverPendingDeliveries(opts: {
       continue;
     }
 
+    let pendingPayloadIndex = 0;
     try {
       await opts.deliver({
         cfg: opts.cfg,
@@ -385,6 +422,16 @@ export async function recoverPendingDeliveries(opts: {
         silent: entry.silent,
         mirror: entry.mirror,
         skipQueue: true, // Prevent re-enqueueing during recovery
+        // Persist each known-successful payload before attempting the next one.
+        // This preserves FIFO suffix recovery across another startup crash.
+        onPayloadComplete: async () =>
+          await checkpointDelivery(entry.id, 1, opts.stateDir, pendingPayloadIndex),
+        // Failed best-effort items remain pending while later successes are
+        // removed by their shifted index from the same durable array.
+        onPayloadFailed: () => {
+          pendingPayloadIndex += 1;
+        },
+        throwOnPartialFailure: true,
       });
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;

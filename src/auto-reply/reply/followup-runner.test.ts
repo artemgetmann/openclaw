@@ -812,6 +812,44 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await expect(loadDurableFollowups()).resolves.toEqual([]);
   });
 
+  it("checkpoints a successful payload prefix before retrying a failed suffix", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "delivery-prefix-checkpoint",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "a" }, { text: "b" }],
+      meta: {},
+    });
+    routeReplyMock
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, error: "media failed" });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow("media failed");
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([{ text: "b" }]);
+
+    routeReplyMock.mockResolvedValueOnce({ ok: true });
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls.map(([call]) => call.payload.text)).toEqual(["a", "b", "b"]);
+    await ackDurableFollowup(deliveryRecord?.id);
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
   it("drains a same-process staged FIFO prefix before later collected input", async () => {
     const settings = { mode: "collect" as const, debounceMs: 0, cap: 20 };
     const queueKey = `delivery-retry-fifo-${Date.now()}`;
