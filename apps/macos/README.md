@@ -190,6 +190,20 @@ lane. For normal hotfix validation, follow the fast runtime/app-support split in
 `docs/agent-guides/runtime-ops.md` instead of rebuilding, notarizing, or
 publishing app artifacts.
 
+Do not open an immediate signed/notarized release task after every merged
+runtime fix. The normal policy is to batch several merged, verified fixes into
+the next planned Jarvis release while a protected break-glass runtime retains
+clear provenance and a bounded, tracked package follow-up. Release immediately
+only when protection is absent or failing, an older package can overwrite the
+fix, users need the fix now, security/compatibility/migration/release-critical
+risk makes waiting unsafe, or the owner explicitly asks. Protection lowers
+downgrade risk but cannot cover manual removal, state resets, or every unusual
+or older reinstall path. See
+`docs/agent-guides/runtime-ops.md` ("Hotfix follow-up and release timing") for
+the full decision rule. Until a trigger changes, report packaging as deferred
+or batched rather than repeatedly urgent; this saves time, tokens, and build
+cycles without hiding the remaining safety risk.
+
 Run the read-only disk gate before starting a release package. By default it
 checks both repo `dist/` output and build-artifact `runs/` staging, requires 25
 GiB free on each unique filesystem, and prints target resolution plus the

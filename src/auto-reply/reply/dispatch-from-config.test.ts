@@ -1912,6 +1912,208 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("orders a mixed Telegram block final as text, captionless media, then voice", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const finalText = "Done. The requested PDF is attached.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      // The embedded runner resolves MEDIA directives before this callback, so
+      // dispatch-from-config receives one mixed final rather than raw MEDIA text.
+      await opts?.onBlockReply?.({
+        text: finalText,
+        mediaUrl: "file:///tmp/block-generated-report.pdf",
+      });
+      // This is the failing live shape: the durable answer exists only in the
+      // block callback and no second final payload is returned.
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(3);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "file:///tmp/block-generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        text: finalText,
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
+      }),
+    );
+    const [textOrder, documentOrder, voiceOrder] = (
+      dispatcher.sendFinalReply as ReturnType<typeof vi.fn>
+    ).mock.invocationCallOrder;
+    expect(textOrder).toBeLessThan(documentOrder ?? Number.POSITIVE_INFINITY);
+    expect(documentOrder).toBeLessThan(voiceOrder ?? Number.POSITIVE_INFINITY);
+  });
+
+  it("orders a mixed Telegram block final as text then captionless media when TTS is off", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "off";
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const finalText = "Done. The PDF is attached without voice.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: finalText,
+        mediaUrl: "file:///tmp/block-generated-report-no-tts.pdf",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "file:///tmp/block-generated-report-no-tts.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
+    });
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+  });
+
+  it("discards deferred Telegram block media when the resolver returns an authoritative final", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "off";
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const finalText = "Done. The authoritative PDF is attached once.";
+    const finalMediaUrl = "file:///tmp/authoritative-final-report.pdf";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      // Some runners expose the final through both surfaces. The block copy is
+      // provisional; flushing it as well would duplicate the same document.
+      await opts?.onBlockReply?.({
+        text: finalText,
+        mediaUrl: finalMediaUrl,
+      });
+      return {
+        text: finalText,
+        mediaUrl: finalMediaUrl,
+      } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: finalText,
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: finalMediaUrl,
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
+    });
+  });
+
+  it("skips aborted deferred Telegram block media after finalizing its text", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "off";
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const controller = new AbortController();
+    const finalText = "Done. The interrupted attachment is not sent.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.(
+        {
+          text: finalText,
+          mediaUrl: "file:///tmp/aborted-block-report.pdf",
+        },
+        { abortSignal: controller.signal },
+      );
+      controller.abort();
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+  });
+
   it("synthesizes a block-stream TTS supplement from the exact finalized answer only", async () => {
     setNoAbort();
     ttsMocks.state.autoMode = "always";
@@ -2515,6 +2717,225 @@ describe("dispatchReplyFromConfig", () => {
         },
       }),
     );
+  });
+
+  it("splits a Telegram final with a document before synthesizing one voice supplement", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const finalText = "Done. The requested PDF is attached once.";
+    const replyResolver = async () =>
+      ({
+        text: finalText,
+        mediaUrl: "file:///tmp/private/generated-report.pdf",
+      }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: finalText },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(3);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: finalText,
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "file:///tmp/private/generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        text: finalText,
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+        channelData: {
+          openclaw: {
+            finalTtsSupplement: true,
+          },
+        },
+      }),
+    );
+    expect(dispatcher.finalizeBlockReply).toHaveBeenCalledTimes(1);
+    const [textOrder, documentOrder, voiceOrder] = (
+      dispatcher.sendFinalReply as ReturnType<typeof vi.fn>
+    ).mock.invocationCallOrder;
+    expect(textOrder).toBeLessThan(documentOrder ?? Number.POSITIVE_INFINITY);
+    expect(documentOrder).toBeLessThan(voiceOrder ?? Number.POSITIVE_INFINITY);
+    expect(finalText).not.toContain("MEDIA:");
+  });
+
+  it("splits a Telegram final document without synthesizing voice when TTS is off", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "off";
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async () =>
+      ({
+        text: "Done. The PDF is attached.",
+        mediaUrl: "file:///tmp/generated-report.pdf",
+      }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "Done. The PDF is attached.",
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "file:///tmp/generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
+    });
+  });
+
+  it("keeps a Telegram final document single-delivery when TTS synthesis fails", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "always";
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async () =>
+      ({
+        text: "Done. The PDF is attached.",
+        mediaUrl: "file:///tmp/generated-report.pdf",
+      }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(3);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "file:///tmp/generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(3, {
+      text: "Voice note failed. Final text is above.",
+      channelData: {
+        openclaw: {
+          finalTtsSupplement: true,
+          ttsFailureStatus: true,
+        },
+      },
+    });
+  });
+
+  it("preserves route-to-originating delivery when splitting Telegram final media", async () => {
+    setNoAbort();
+    ttsMocks.state.autoMode = "off";
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+    });
+    const replyResolver = async () =>
+      ({
+        text: "Done. Routed PDF attached.",
+        mediaUrl: "file:///tmp/routed-report.pdf",
+      }) satisfies ReplyPayload;
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(mocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:12345",
+        payload: expect.objectContaining({
+          text: "Done. Routed PDF attached.",
+        }),
+      }),
+    );
+    const routedTextPayload = (
+      mocks.routeReply.mock.calls[0]?.[0] as { payload?: ReplyPayload } | undefined
+    )?.payload;
+    expect(routedTextPayload?.mediaUrl).toBeUndefined();
+    expect(routedTextPayload?.mediaUrls).toBeUndefined();
+    expect(mocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:12345",
+        payload: {
+          mediaUrl: "file:///tmp/routed-report.pdf",
+          channelData: {
+            openclaw: {
+              finalMediaSupplement: "captionless",
+            },
+          },
+        },
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts.final).toBe(2);
+  });
+
+  it("preserves an explicitly marked Telegram voice supplement as one payload", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const supplement = {
+      text: "Final answer preview.",
+      mediaUrl: "file:///tmp/explicit-voice.ogg",
+      audioAsVoice: true,
+      channelData: {
+        openclaw: {
+          finalTtsSupplement: true,
+        },
+      },
+    } satisfies ReplyPayload;
+    const replyResolver = async () => supplement;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(supplement);
+    expect(dispatcher.finalizeBlockReply).not.toHaveBeenCalled();
   });
 
   it("uses the visible final answer for Telegram TTS captions even when synthesis returns progress text", async () => {
