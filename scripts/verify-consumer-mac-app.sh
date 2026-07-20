@@ -301,6 +301,7 @@ assert_app_managed_cli_payloads() {
   local runtime_root="$1"
   local manifest_path="$runtime_root/capabilities.manifest.json"
   local gog_path="$runtime_root/tools/gog"
+  local gog_license_path="$runtime_root/tools/gog.LICENSE"
   local gog_version=""
   local gog_archs=""
 
@@ -321,6 +322,10 @@ NODE
 
   if [[ ! -x "$gog_path" ]]; then
     echo "ERROR: bundled runtime is missing app-managed Google Workspace CLI: $gog_path" >&2
+    exit 1
+  fi
+  if [[ ! -s "$gog_license_path" ]]; then
+    echo "ERROR: bundled runtime is missing the Gog MIT license notice: $gog_license_path" >&2
     exit 1
   fi
   if [[ "$("$gog_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then

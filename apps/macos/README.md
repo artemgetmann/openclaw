@@ -115,7 +115,8 @@ The Google Workspace CLI is app-managed: fresh packages include a universal
 `openclaw/tools/gog` payload at the skill's recommended version, and gateway
 startup copies it into Jarvis-owned state when the managed copy is missing or
 older. This gives clean installs and app updates the same pinned CLI without
-mutating Homebrew. Heavier optional tools such as `summarize` remain
+mutating Homebrew. Its MIT license notice ships beside the binary as
+`openclaw/tools/gog.LICENSE`. Heavier optional tools such as `summarize` remain
 package-manager-managed; their recommended versions are visible in skill
 status, but Jarvis does not silently install or upgrade their global
 dependencies.

@@ -371,6 +371,7 @@ verify_required_capabilities_manifest() {
   local context_label="$2"
   local manifest_path="$runtime_root/openclaw/capabilities.manifest.json"
   local gog_path="$runtime_root/openclaw/tools/gog"
+  local gog_license_path="$runtime_root/openclaw/tools/gog.LICENSE"
   local gog_version=""
   local gog_archs=""
 
@@ -394,6 +395,11 @@ verify_required_capabilities_manifest() {
   if [[ ! -x "$gog_path" ]]; then
     echo "ERROR: ${context_label} is missing the app-managed Google Workspace CLI." >&2
     echo "Expected executable: $gog_path" >&2
+    return 1
+  fi
+  if [[ ! -s "$gog_license_path" ]]; then
+    echo "ERROR: ${context_label} is missing the Gog MIT license notice." >&2
+    echo "Expected file: $gog_license_path" >&2
     return 1
   fi
   if [[ "$("$gog_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
@@ -924,6 +930,7 @@ ensure_consumer_gog_runtime() {
   local version="$1"
   local cache_root="${ROOT_DIR}/.cache/consumer-runtime/gog-v${version}-darwin-universal"
   local universal_bin="${cache_root}/gog"
+  local license_path="${cache_root}/LICENSE"
   local download_root=""
   local release_arch=""
   local archive=""
@@ -934,6 +941,7 @@ ensure_consumer_gog_runtime() {
   local thin_bins=()
 
   if [[ -x "$universal_bin" ]] \
+    && [[ -s "$license_path" ]] \
     && [[ "$("$universal_bin" --version 2>/dev/null || true)" == *"v${version}"* ]] \
     && [[ "$(/usr/bin/lipo -archs "$universal_bin" 2>/dev/null || true)" == *"arm64"* ]] \
     && [[ "$(/usr/bin/lipo -archs "$universal_bin" 2>/dev/null || true)" == *"x86_64"* ]]; then
@@ -998,6 +1006,11 @@ ensure_consumer_gog_runtime() {
   /usr/bin/lipo -create "${thin_bins[@]}" -output "${universal_bin}.tmp"
   chmod 0755 "${universal_bin}.tmp"
   mv "${universal_bin}.tmp" "$universal_bin"
+  if [[ ! -s "${download_root}/arm64/LICENSE" ]]; then
+    echo "ERROR: pinned Gog release archive is missing its MIT license notice." >&2
+    exit 1
+  fi
+  cp "${download_root}/arm64/LICENSE" "$license_path"
   rm -rf "$download_root"
 
   local packaged_archs
@@ -1029,6 +1042,7 @@ bundle_consumer_managed_tool_payloads() {
   gog_runtime="$(ensure_consumer_gog_runtime "$gog_version")"
   mkdir -p "$tools_dir"
   cp "$gog_runtime" "$tools_dir/gog"
+  cp "$(dirname "$gog_runtime")/LICENSE" "$tools_dir/gog.LICENSE"
   chmod 0755 "$tools_dir/gog"
 }
 
