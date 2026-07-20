@@ -6,6 +6,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const ALLOWED_INSTALL_KINDS = new Set(["brew", "node", "go", "uv", "download"]);
+const ALLOWED_PACKAGED_ARTIFACT_KINDS = new Set(["macos-app"]);
+const ALLOWED_PACKAGED_ARTIFACT_REQUIREMENTS = new Set(["consumer-release"]);
 
 function usage() {
   console.error(
@@ -260,6 +262,96 @@ function extractInstallSpecs(frontmatter) {
     .filter(Boolean);
 }
 
+function assertSafeRelativeArtifactPath(value, field, artifactId) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    path.isAbsolute(value) ||
+    value.split(/[\\/]/).includes("..")
+  ) {
+    throw new Error(
+      `invalid packaged artifact ${field} for ${artifactId}: ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+function requiredArtifactString(value, field, artifactId) {
+  if (typeof value !== "string" || !value) {
+    throw new Error(`packaged artifact ${artifactId} must declare ${field}`);
+  }
+  return value;
+}
+
+function normalizePackagedArtifact(raw, index) {
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`packaged artifact ${index} must be an object`);
+  }
+  const id = typeof raw.id === "string" && raw.id ? raw.id : `artifact-${index}`;
+  if (typeof raw.kind !== "string" || !ALLOWED_PACKAGED_ARTIFACT_KINDS.has(raw.kind)) {
+    throw new Error(`unsupported packaged artifact kind for ${id}: ${JSON.stringify(raw.kind)}`);
+  }
+  if (
+    typeof raw.requirement !== "string" ||
+    !ALLOWED_PACKAGED_ARTIFACT_REQUIREMENTS.has(raw.requirement)
+  ) {
+    throw new Error(
+      `unsupported packaged artifact requirement for ${id}: ${JSON.stringify(raw.requirement)}`,
+    );
+  }
+
+  const architectures = normalizeStringArray(raw.architectures).toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+  if (architectures.length === 0) {
+    throw new Error(`packaged artifact ${id} must declare architectures`);
+  }
+  const buildCommand = normalizeStringArray(raw.buildCommand);
+  if (buildCommand.length === 0) {
+    throw new Error(`packaged artifact ${id} must declare buildCommand`);
+  }
+
+  // Release-required native payloads are a packaging contract, not advisory
+  // setup hints. Keep every identity/build input explicit so the packager and
+  // verifier consume the same declaration and fail closed on drift.
+  return {
+    id,
+    kind: raw.kind,
+    requirement: raw.requirement,
+    path: assertSafeRelativeArtifactPath(raw.path, "path", id),
+    executable: assertSafeRelativeArtifactPath(raw.executable, "executable", id),
+    bundleIdentifier: requiredArtifactString(raw.bundleIdentifier, "bundleIdentifier", id),
+    version: requiredArtifactString(raw.version, "version", id),
+    architectures,
+    sourceRepo: requiredArtifactString(raw.sourceRepo, "sourceRepo", id),
+    sourceRef:
+      typeof raw.sourceRef === "string" && /^[a-f0-9]{40}$/.test(raw.sourceRef)
+        ? raw.sourceRef
+        : (() => {
+            throw new Error(`packaged artifact ${id} must declare a full commit sourceRef`);
+          })(),
+    buildCommand,
+    licenseSource: assertSafeRelativeArtifactPath(raw.licenseSource, "licenseSource", id),
+    licensePath: assertSafeRelativeArtifactPath(raw.licensePath, "licensePath", id),
+    receiptPath: assertSafeRelativeArtifactPath(raw.receiptPath, "receiptPath", id),
+  };
+}
+
+function extractPackagedArtifacts(frontmatter) {
+  return extractJsonishObjectsFromArray(frontmatter, "packagedArtifacts").map(
+    (objectText, index) => {
+      try {
+        return normalizePackagedArtifact(parseJsonishObject(objectText), index);
+      } catch (error) {
+        throw new Error(
+          `invalid packagedArtifacts metadata: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+    },
+  );
+}
+
 function extractDisplayName(frontmatter) {
   const match = frontmatter.match(/"displayName"\s*:\s*"([^"]+)"/);
   return match?.[1];
@@ -273,12 +365,14 @@ export function buildConsumerCapabilitiesManifest(skillsDirArg) {
 
   const skills = {};
   const managedTools = [];
+  const packagedArtifacts = [];
 
   for (const skillName of listSkillNames(skillsDir)) {
     const skillDir = path.join(skillsDir, skillName);
     const markdown = readSkillMarkdown(skillsDir, skillName);
     const frontmatter = extractFrontmatter(markdown);
     const install = extractInstallSpecs(frontmatter);
+    const requiredArtifacts = extractPackagedArtifacts(frontmatter);
     const hash = hashSkillDirectory(skillDir);
 
     skills[skillName] = {
@@ -313,16 +407,24 @@ export function buildConsumerCapabilitiesManifest(skillsDirArg) {
         ...(spec.recommendedVersion ? { recommendedVersion: spec.recommendedVersion } : {}),
       });
     }
+
+    for (const artifact of requiredArtifacts) {
+      packagedArtifacts.push({ skillName, ...artifact });
+    }
   }
 
   managedTools.sort((left, right) =>
     `${left.skillName}:${left.installId}`.localeCompare(`${right.skillName}:${right.installId}`),
+  );
+  packagedArtifacts.sort((left, right) =>
+    `${left.skillName}:${left.id}`.localeCompare(`${right.skillName}:${right.id}`),
   );
 
   return {
     format: 1,
     skills,
     managedTools,
+    packagedArtifacts,
   };
 }
 
