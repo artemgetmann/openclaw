@@ -831,6 +831,68 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
+    @Test func `managed setup repairs stale default account authorization overrides`() async throws {
+        let savedRoot = SavedConfigRoot()
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let initialRoot: [String: Any] = [
+                "channels": [
+                    "telegram": [
+                        "enabled": false,
+                        "botToken": "777000:test-child-token",
+                        "dmPolicy": "pairing",
+                        "allowFrom": [],
+                        "groupPolicy": "disabled",
+                        "groupAllowFrom": [],
+                        "accounts": [
+                            "default": [
+                                "botToken": "777000:test-child-token",
+                                "dmPolicy": "pairing",
+                                "allowFrom": [],
+                                "groupPolicy": "disabled",
+                                "groupAllowFrom": [],
+                                "futureSetting": "preserved",
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
+                saveLocal: { root in savedRoot.set(root) }))
+
+            let store = ChannelsStore(isPreview: true)
+            _ = try await store.applyTelegramSetupBootstrap(
+                token: "777000:test-child-token",
+                dmPolicy: "allowlist",
+                allowFrom: ["1336356696"],
+                enabled: true)
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            let accounts = try #require(telegram["accounts"] as? [String: Any])
+            let defaultAccount = try #require(accounts["default"] as? [String: Any])
+
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect(telegram["allowFrom"] as? [String] == ["1336356696"])
+            #expect(telegram["groupPolicy"] as? String == "allowlist")
+            #expect(telegram["groupAllowFrom"] as? [String] == ["1336356696"])
+            #expect(defaultAccount["dmPolicy"] as? String == "allowlist")
+            #expect(defaultAccount["allowFrom"] as? [String] == ["1336356696"])
+            #expect(defaultAccount["groupPolicy"] as? String == "allowlist")
+            #expect(defaultAccount["groupAllowFrom"] as? [String] == ["1336356696"])
+            #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+            #expect(defaultAccount["futureSetting"] as? String == "preserved")
+
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
     @Test func `managed telegram setup not found clears stale verification state`() async throws {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let store = ChannelsStore(isPreview: true)
