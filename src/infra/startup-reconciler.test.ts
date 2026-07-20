@@ -150,14 +150,13 @@ describe("startup reconciler", () => {
     );
   });
 
-  it("updates the Jarvis-managed Google Workspace CLI when a satisfying local copy exists", async () => {
+  it("installs the Jarvis-managed Google Workspace CLI on a clean Mac from the packaged copy", async () => {
     const root = await makeTempRoot("startup-reconciler-tool");
     const packageRoot = path.join(root, "package");
     const stateDir = path.join(root, "state");
-    const localBin = path.join(root, "local-bin");
     await fs.mkdir(packageRoot, { recursive: true });
-    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.33.0\n");
-    const env = { ...process.env, PATH: localBin };
+    await writeExecutable(path.join(packageRoot, "tools", "gog"), "#!/bin/sh\necho gog v0.33.0\n");
+    const env = { ...process.env, PATH: "" };
     await writeManifest({
       packageRoot,
       managedTools: [

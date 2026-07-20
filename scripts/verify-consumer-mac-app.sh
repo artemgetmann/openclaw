@@ -287,6 +287,43 @@ if (manifest.format !== 1 || !manifest.skills || !Array.isArray(manifest.managed
 NODE
 }
 
+assert_app_managed_cli_payloads() {
+  local runtime_root="$1"
+  local manifest_path="$runtime_root/capabilities.manifest.json"
+  local gog_path="$runtime_root/tools/gog"
+  local gog_version=""
+  local gog_archs=""
+
+  gog_version="$(
+    "$OPENCLAW_NODE_BIN" --input-type=module - "$manifest_path" <<'NODE'
+import fs from "node:fs";
+
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const gog = manifest.managedTools?.find(
+  (tool) => tool?.skillName === "gog" && tool.bins?.includes("gog"),
+);
+if (typeof gog?.recommendedVersion !== "string" || !gog.recommendedVersion) {
+  throw new Error("capabilities manifest has no recommended gog version");
+}
+process.stdout.write(gog.recommendedVersion);
+NODE
+  )"
+
+  if [[ ! -x "$gog_path" ]]; then
+    echo "ERROR: bundled runtime is missing app-managed Google Workspace CLI: $gog_path" >&2
+    exit 1
+  fi
+  if [[ "$("$gog_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
+    echo "ERROR: bundled Google Workspace CLI does not match recommended version $gog_version" >&2
+    exit 1
+  fi
+  gog_archs="$(/usr/bin/lipo -archs "$gog_path" 2>/dev/null || true)"
+  if [[ "$gog_archs" != *"arm64"* || "$gog_archs" != *"x86_64"* ]]; then
+    echo "ERROR: bundled Google Workspace CLI is not universal: ${gog_archs:-unknown}" >&2
+    exit 1
+  fi
+}
+
 load_consumer_default_bundled_skills
 
 actual_name="$(plist_print CFBundleDisplayName)"
@@ -373,6 +410,8 @@ assert_bundled_skill_content_current \
 assert_capabilities_manifest_present \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
+assert_app_managed_cli_payloads \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"
 
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then
