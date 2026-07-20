@@ -2552,6 +2552,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
       mediaUrl: "file:///tmp/private/generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
     });
     expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
       3,
@@ -2602,6 +2607,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
       mediaUrl: "file:///tmp/generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
     });
   });
 
@@ -2624,6 +2634,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(3);
     expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
       mediaUrl: "file:///tmp/generated-report.pdf",
+      channelData: {
+        openclaw: {
+          finalMediaSupplement: "captionless",
+        },
+      },
     });
     expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(3, {
       text: "Voice note failed. Final text is above.",
@@ -2683,6 +2698,11 @@ describe("dispatchReplyFromConfig", () => {
         to: "telegram:12345",
         payload: {
           mediaUrl: "file:///tmp/routed-report.pdf",
+          channelData: {
+            openclaw: {
+              finalMediaSupplement: "captionless",
+            },
+          },
         },
       }),
     );

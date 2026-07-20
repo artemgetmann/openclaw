@@ -65,6 +65,7 @@ import {
   markControlCommandReplyPayload,
 } from "./control-command-reply.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
+import { markCaptionlessFinalMediaSupplement } from "./final-media-supplement.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
@@ -1275,8 +1276,13 @@ export async function dispatchReplyFromConfig(params: {
         const { text: _fullFinalCaption, ...mediaOnlyPayload } = reply;
         // The full answer already owns the durable text bubble. Keep generated
         // files as separate follow-ups without repeating that answer as a
-        // document caption.
-        await deliverSplitFinalPayload(mediaOnlyPayload, "mixed-final-media");
+        // document caption. The explicit marker prevents Telegram's lane
+        // finalizer from treating the missing caption as an invitation to
+        // rehydrate the already-finalized answer text.
+        await deliverSplitFinalPayload(
+          markCaptionlessFinalMediaSupplement(mediaOnlyPayload),
+          "mixed-final-media",
+        );
 
         const ttsAttemptStartedAt = Date.now();
         const ttsReply = await maybeApplyAutomaticTts(replyWithoutMedia, "final");

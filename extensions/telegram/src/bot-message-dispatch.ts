@@ -9,6 +9,7 @@ import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
 import { isControlCommandReplyPayload } from "../../../src/auto-reply/reply/control-command-reply.js";
 import { isCopySafeDraftReplyPayload } from "../../../src/auto-reply/reply/copy-safe-reply.js";
+import { isCaptionlessFinalMediaSupplement } from "../../../src/auto-reply/reply/final-media-supplement.js";
 import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
@@ -2490,6 +2491,26 @@ export const dispatchTelegramMessage = async ({
                 callsite: "dispatch-final-tts-supplement",
                 infoKind: deliveryKind,
               });
+              await flushBufferedFinalAnswer();
+              return;
+            }
+
+            if (
+              deliveryKind === "final" &&
+              hasMedia &&
+              isCaptionlessFinalMediaSupplement(payload)
+            ) {
+              // The final answer already owns the streamed text message. Bypass
+              // lane text merging entirely so its accumulated preview cannot be
+              // resurrected as this document's caption.
+              await sendFinalPayloadThenCleanupProgress(
+                { ...payload, text: undefined },
+                {
+                  reason: "media",
+                  callsite: "dispatch-final-captionless-media-supplement",
+                  infoKind: deliveryKind,
+                },
+              );
               await flushBufferedFinalAnswer();
               return;
             }

@@ -1767,6 +1767,113 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("sends a marked captionless document after finalized text and before TTS voice", async () => {
+    const answerStream = createDraftStream(111);
+    createTelegramDraftStream.mockReturnValue(answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Proof complete retry.",
+          channelData: { openclaw: { assistantPhase: "final_answer" } },
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Proof complete retry.",
+            channelData: { openclaw: { assistantPhase: "final_answer" } },
+          },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            // Deliberately include the accumulated final text to prove the
+            // explicit marker wins before lane delivery reaches Telegram.
+            text: "Proof complete retry.",
+            mediaUrl: "file:///tmp/proof.pdf",
+            channelData: { openclaw: { finalMediaSupplement: "captionless" } },
+          },
+          { kind: "final" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            text: "Proof complete retry.",
+            mediaUrl: "file:///tmp/proof-voice.ogg",
+            audioAsVoice: true,
+            channelData: { openclaw: { finalTtsSupplement: true } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      111,
+      "Proof complete retry.",
+      expect.objectContaining({ richMessages: false }),
+    );
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: undefined,
+            mediaUrl: "file:///tmp/proof.pdf",
+            channelData: { openclaw: { finalMediaSupplement: "captionless" } },
+          }),
+        ],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            mediaUrl: "file:///tmp/proof-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+    expect(editMessageTelegram.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("preserves an intentional caption on an unmarked final media payload", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Intentional document caption.",
+          mediaUrl: "file:///tmp/captioned.pdf",
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Intentional document caption.",
+            mediaUrl: "file:///tmp/captioned.pdf",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("finalizes a phase-less answer block before a preview-captioned TTS voice supplement and does not reuse progress on the next turn", async () => {
     const leakedProgressDraftStream = createSequencedDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
