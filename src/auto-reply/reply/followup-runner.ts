@@ -23,6 +23,7 @@ import {
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import {
+  checkpointDurableFollowupDelivery,
   loadDurableFollowupDelivery,
   persistDurableFollowupDelivery,
 } from "./queue/durable-store.js";
@@ -140,8 +141,19 @@ export function createFollowupRunner(params: {
       return;
     }
 
+    const markPayloadComplete = async () => {
+      if (queued.deliveryPayloads === undefined) {
+        return;
+      }
+      // Persist first: once the next provider call begins, disk must already
+      // identify the exact FIFO suffix that remains after a restart.
+      await checkpointDurableFollowupDelivery(queued.durableId, 1);
+      queued.deliveryPayloads = queued.deliveryPayloads.slice(1);
+    };
+
     for (const payload of payloads) {
       if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
+        await markPayloadComplete();
         continue;
       }
       if (
@@ -149,6 +161,7 @@ export function createFollowupRunner(params: {
         !payload.mediaUrl &&
         !payload.mediaUrls?.length
       ) {
+        await markPayloadComplete();
         continue;
       }
       await typingSignals.signalTextDelta(payload.text);
@@ -188,6 +201,7 @@ export function createFollowupRunner(params: {
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
       }
+      await markPayloadComplete();
     }
   };
 

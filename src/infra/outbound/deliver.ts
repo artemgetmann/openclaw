@@ -29,7 +29,12 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  checkpointDelivery,
+  enqueueDelivery,
+  failDelivery,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
@@ -264,6 +269,12 @@ type DeliverOutboundPayloadsCoreParams = {
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
   silent?: boolean;
+  /** @internal Called after one original payload is fully handled. */
+  onPayloadComplete?: () => Promise<void>;
+  /** @internal Called when a best-effort payload remains pending. */
+  onPayloadFailed?: () => void;
+  /** @internal Surface a caught best-effort failure to a recovery owner. */
+  throwOnPartialFailure?: boolean;
 };
 
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -503,18 +514,31 @@ export async function deliverOutboundPayloads(
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
-  const wrappedParams = params.onError
-    ? {
-        ...params,
-        onError: (err: unknown, payload: NormalizedOutboundPayload) => {
-          hadPartialFailure = true;
-          params.onError!(err, payload);
-        },
-      }
-    : params;
+  let pendingQueueIndex = 0;
+  const wrappedParams = {
+    ...params,
+    // Checkpoint before the next provider call. Best-effort failures advance
+    // the durable-array index instead of blocking later successes from being
+    // removed. The provider-acceptance/local-write ambiguity remains.
+    onPayloadComplete: queueId
+      ? async () => await checkpointDelivery(queueId, 1, undefined, pendingQueueIndex)
+      : params.onPayloadComplete,
+    onPayloadFailed: queueId
+      ? () => {
+          pendingQueueIndex += 1;
+        }
+      : params.onPayloadFailed,
+    onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+      hadPartialFailure = true;
+      params.onError?.(err, payload);
+    },
+  };
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);
+    if (hadPartialFailure && params.throwOnPartialFailure) {
+      throw new Error("partial delivery failure (bestEffort)");
+    }
     if (queueId) {
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
@@ -611,7 +635,6 @@ async function deliverOutboundPayloadsCore(
       results.push(await handler.sendText(chunk, overrides));
     }
   };
-  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
@@ -636,7 +659,13 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
-  for (const payload of normalizedPayloads) {
+  for (const originalPayload of payloads) {
+    let payloadFailed = false;
+    const payload = normalizePayloadsForChannelDelivery([originalPayload], channel, handler)[0];
+    if (!payload) {
+      await params.onPayloadComplete?.();
+      continue;
+    }
     let payloadSummary = buildPayloadSummary(payload);
     try {
       throwIfAborted(abortSignal);
@@ -748,10 +777,21 @@ async function deliverOutboundPayloadsCore(
         content: payloadSummary.text,
         error: err instanceof Error ? err.message : String(err),
       });
+      payloadFailed = true;
       if (!params.bestEffort) {
         throw err;
       }
       params.onError?.(err, payloadSummary);
+    } finally {
+      if (!payloadFailed) {
+        // Checkpoint errors intentionally escape instead of being mistaken for
+        // provider-send failures by the best-effort catch above.
+        await params.onPayloadComplete?.();
+      }
+    }
+    if (payloadFailed) {
+      params.onPayloadFailed?.();
+      continue;
     }
   }
   if (params.mirror && results.length > 0) {
