@@ -1455,6 +1455,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
           'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
         );
       });
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Recovered after resetting the session." }],
+        meta: { durationMs: 1 },
+      });
 
       const { run } = createMinimalRun({
         sessionEntry,
@@ -1464,15 +1468,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
 
-      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
       const payload = Array.isArray(res) ? res[0] : res;
       expect(payload).toMatchObject({
-        text: expect.stringContaining("Context limit exceeded during compaction"),
+        text: "Recovered after resetting the session.",
       });
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       expect(sessionStore.main.fallbackNoticeSelectedModel).toBeUndefined();
       expect(sessionStore.main.fallbackNoticeActiveModel).toBeUndefined();
@@ -1833,6 +1833,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
           },
         },
       }));
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Continued autonomously in the fresh session." }],
+        meta: { durationMs: 1 },
+      });
 
       const { run } = createMinimalRun({
         sessionEntry,
@@ -1842,15 +1846,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
 
-      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
       const payload = Array.isArray(res) ? res[0] : res;
       expect(payload).toMatchObject({
-        text: expect.stringContaining("Context limit exceeded"),
+        text: "Continued autonomously in the fresh session.",
       });
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -1924,10 +1924,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionStore.main.systemPromptReport).toBeUndefined();
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main.modelProvider).toBeUndefined();
-      expect(persisted.main.model).toBeUndefined();
-      expect(persisted.main.contextTokens).toBeUndefined();
-      expect(persisted.main.systemPromptReport).toBeUndefined();
+      // The retry is a real successful run, so persistence may immediately
+      // record its selected model. The stale pre-reset model must not survive.
+      expect(persisted.main.modelProvider).toBe("anthropic");
+      expect(persisted.main.model).toBe("claude");
+      expect(persisted.main.contextTokens).not.toBe(123456);
+      expect(persisted.main.systemPromptReport?.provider).not.toBe("qwencode");
     });
   });
 

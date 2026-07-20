@@ -209,6 +209,33 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("Final answer.");
   });
 
+  it("preserves a terminal error after Telegram already streamed the matching preview", async () => {
+    const terminalError = {
+      text: "Context recovery failed.",
+      isError: true,
+    };
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: (payload) => payload.text === terminalError.text,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [{ text: "Still working." }, terminalError],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject(terminalError);
+  });
+
   it("drops source-preview-only payloads after transient Telegram preview block streaming", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,

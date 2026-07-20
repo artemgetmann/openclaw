@@ -48,8 +48,7 @@ function isTextOnlyDurableFinalPayload(payload: ReplyPayload): boolean {
     payload.text.trim().length > 0 &&
     !hasPayloadMedia(payload) &&
     !payload.interactive &&
-    !payload.btw &&
-    !payload.isError
+    !payload.btw
   );
 }
 
@@ -255,16 +254,27 @@ export async function buildReplyPayloads(params: {
   const preservedFinalPayloads = params.preserveFinalPayloadsAfterBlockStreaming
     ? keepLastTextOnlyFinalPayload(durablePayloads)
     : durablePayloads;
+  // Telegram previews are mutable transport, not proof that the terminal
+  // payload became durable. Preserve the selected final even when the block
+  // pipeline saw identical text; otherwise a streamed context error can clear
+  // the preview and leave the user with no terminal explanation.
+  const authoritativeFinalPayload = params.preserveFinalPayloadsAfterBlockStreaming
+    ? preservedFinalPayloads.findLast(isTextOnlyDurableFinalPayload)
+    : undefined;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
       ? preservedFinalPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+          (payload) =>
+            payload === authoritativeFinalPayload ||
+            !params.blockReplyPipeline?.hasSentPayload(payload),
         )
       : params.directlySentBlockKeys?.size
         ? preservedFinalPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
+            (payload) =>
+              payload === authoritativeFinalPayload ||
+              !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
         : preservedFinalPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
