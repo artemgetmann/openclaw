@@ -28,6 +28,19 @@ openclaw_runtime_payload_files() {
   \) ! -path '*/bin/node' -print0
 }
 
+openclaw_runtime_nested_app_bundles() {
+  local app_bundle="$1"
+  local runtime_root
+
+  runtime_root="$(openclaw_runtime_payload_root "$app_bundle")"
+  [[ -d "$runtime_root" ]] || return 0
+
+  # Nested apps under Resources are code bundles in their own right. Their
+  # executables are signed first by openclaw_runtime_payload_files; emit the
+  # enclosing bundles afterward so their CodeResources seal matches.
+  find "$runtime_root" -type d -name '*.app' -print0
+}
+
 openclaw_runtime_node_binary_files() {
   local app_bundle="$1"
   local runtime_root

@@ -92,7 +92,18 @@ hashes against the source checkout. If a skill changes, rerun packaging without
 runtime reuse so Jarvis does not ship stale model-facing skill instructions.
 Packaging also writes
 `OpenClawRuntime/openclaw/capabilities.manifest.json`, which records packaged
-skill hashes plus managed CLI version expectations from skill metadata. During
+skill hashes, managed CLI version expectations, and release-required native
+artifacts from skill metadata. A fresh consumer runtime builds the pinned
+universal `Open Computer Use.app` declared by `jarvis-computer-use`, places it
+under the resolved OpenClaw package root, and preserves its MIT license notice
+and source-ref receipt. The source is built in a process-isolated directory
+under the standard build-artifact `runs/` bucket, so parallel release jobs
+cannot mutate one checkout and interrupted builds remain cleanup-managed.
+Cached/reused runtimes and final app verification fail
+closed if the app is missing, has the wrong bundle ID/version/ref, lacks either
+required architecture, lacks the license, or is not signed in the final app.
+Changing the pinned ref, skill declaration, or materializer invalidates the
+consumer runtime cache. During
 fresh runtime packaging, local installed CLIs such as `gog`, `wacli`, or
 `himalaya` are compared against the packaged `recommendedVersion`; if the local
 tool is newer, packaging fails so the release cannot accidentally ship stale

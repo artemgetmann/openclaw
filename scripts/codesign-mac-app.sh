@@ -374,6 +374,19 @@ else
 fi
 phase_log_elapsed "$runtime_payload_started_ms" "Sign runtime payloads"
 
+# Seal nested runtime apps only after their Mach-O children have the Jarvis
+# identity. Signing a child afterward would invalidate the nested bundle.
+runtime_nested_apps_started_ms="$(phase_now_ms)"
+if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" ]]; then
+  echo "Note: skipping nested runtime app signing (SKIP_RUNTIME_PAYLOAD_CODESIGN=1)."
+else
+  while IFS= read -r -d '' runtime_app; do
+    echo "Signing nested runtime app: $runtime_app"
+    sign_plain_item "$runtime_app"
+  done < <(openclaw_runtime_nested_app_bundles "$APP_BUNDLE")
+fi
+phase_log_elapsed "$runtime_nested_apps_started_ms" "Sign nested runtime apps"
+
 # Finally sign the bundle
 bundle_sign_started_ms="$(phase_now_ms)"
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"

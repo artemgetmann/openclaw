@@ -376,6 +376,13 @@ verify_required_capabilities_manifest() {
     echo "Expected file: $manifest_path" >&2
     return 1
   fi
+
+  # Skill hashes prove instructions, not the native code those instructions
+  # promise. Reject cached/reused runtimes unless all release-required payloads
+  # declared in the same manifest are still present and current.
+  "$ROOT_DIR/scripts/verify-consumer-packaged-artifacts.sh" \
+    "$manifest_path" \
+    "$runtime_root/openclaw"
 }
 
 write_transitional_memory_template_if_missing() {
@@ -1074,6 +1081,8 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "package.json"
       hash_consumer_runtime_path "pnpm-lock.yaml"
       hash_consumer_runtime_path "scripts/consumer-capabilities-manifest.mjs"
+      hash_consumer_runtime_path "scripts/materialize-consumer-packaged-artifacts.sh"
+      hash_consumer_runtime_path "scripts/verify-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
       hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
       hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
@@ -1295,6 +1304,9 @@ prepare_bundled_consumer_runtime() {
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills" \
       --out "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
       --fail-on-local-drift
+    "$ROOT_DIR/scripts/materialize-consumer-packaged-artifacts.sh" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
   fi
 
   local bundled_template_src="$ROOT_DIR/docs/reference/templates"
