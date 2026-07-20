@@ -11,6 +11,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
+  checkpointDelivery,
   computeBackoffMs,
   type DeliverFn,
   enqueueDelivery,
@@ -271,6 +272,38 @@ describe("delivery-queue", () => {
       const persisted = JSON.parse(fs.readFileSync(filePath, "utf-8"));
       expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
     });
+
+    it("atomically retains only the undelivered suffix", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "2",
+          payloads: [{ text: "a" }, { text: "b" }],
+        },
+        tmpDir,
+      );
+
+      await checkpointDelivery(id, 1, tmpDir);
+
+      const [entry] = await loadPendingDeliveries(tmpDir);
+      expect(entry?.payloads).toEqual([{ text: "b" }]);
+    });
+
+    it("removes a later success while retaining an earlier best-effort failure", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "2",
+          payloads: [{ text: "a" }, { text: "b" }],
+        },
+        tmpDir,
+      );
+
+      await checkpointDelivery(id, 1, tmpDir, 1);
+
+      const [entry] = await loadPendingDeliveries(tmpDir);
+      expect(entry?.payloads).toEqual([{ text: "a" }]);
+    });
   });
 
   describe("computeBackoffMs", () => {
@@ -390,6 +423,43 @@ describe("delivery-queue", () => {
       // Queue should be empty after recovery.
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
+    });
+
+    it("retries only the undelivered suffix after a partial recovery failure", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "2",
+          payloads: [{ text: "a" }, { text: "b" }],
+        },
+        tmpDir,
+      );
+      const sent: string[] = [];
+      let failB = true;
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        for (const payload of params.payloads) {
+          sent.push(payload.text ?? "");
+          if (payload.text === "b" && failB) {
+            failB = false;
+            throw new Error("media failed");
+          }
+          await params.onPayloadComplete?.();
+        }
+      });
+
+      const first = await runRecovery({ deliver });
+      expect(first.result.failed).toBe(1);
+      expect((await loadPendingDeliveries(tmpDir))[0]?.payloads).toEqual([{ text: "b" }]);
+
+      setEntryState(id, {
+        retryCount: 1,
+        lastAttemptAt: Date.now() - computeBackoffMs(2),
+      });
+      const second = await runRecovery({ deliver });
+
+      expect(second.result.recovered).toBe(1);
+      expect(sent).toEqual(["a", "b", "b"]);
+      await expect(loadPendingDeliveries(tmpDir)).resolves.toEqual([]);
     });
 
     it("moves entries that exceeded max retries to failed/", async () => {

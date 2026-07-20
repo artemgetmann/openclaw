@@ -30,6 +30,7 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  checkpointDelivery: vi.fn(async () => {}),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
 }));
@@ -64,6 +65,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
+  checkpointDelivery: queueMocks.checkpointDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
 }));
@@ -210,6 +212,8 @@ describe("deliverOutboundPayloads", () => {
     internalHookMocks.triggerInternalHook.mockClear();
     queueMocks.enqueueDelivery.mockClear();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
+    queueMocks.checkpointDelivery.mockClear();
+    queueMocks.checkpointDelivery.mockResolvedValue(undefined);
     queueMocks.ackDelivery.mockClear();
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
@@ -808,6 +812,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
+    expect(queueMocks.checkpointDelivery).toHaveBeenCalledWith("mock-queue-id", 1, undefined, 1);
   });
 
   it("emits internal message:sent hook with success=true for chunked payload delivery", async () => {
@@ -886,6 +891,28 @@ describe("deliverOutboundPayloads", () => {
       "mock-queue-id",
       "partial delivery failure (bestEffort)",
     );
+  });
+
+  it("checkpoints each successful payload before a later payload is attempted", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+      .mockRejectedValueOnce(new Error("media failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: whatsappChunkConfig,
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "a" }, { text: "b" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("media failed");
+
+    expect(sendWhatsApp.mock.calls.map(([, text]) => text)).toEqual(["a", "b"]);
+    expect(queueMocks.checkpointDelivery).toHaveBeenCalledOnce();
+    expect(queueMocks.checkpointDelivery).toHaveBeenCalledWith("mock-queue-id", 1, undefined, 0);
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith("mock-queue-id", "media failed");
   });
 
   it("acks the queue entry when delivery is aborted", async () => {

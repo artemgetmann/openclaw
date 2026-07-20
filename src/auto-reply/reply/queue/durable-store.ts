@@ -627,6 +627,54 @@ export async function persistDurableFollowupDelivery(params: {
   return record;
 }
 
+/**
+ * Remove a known-successful prefix from a durable delivery-only carrier.
+ *
+ * The suffix is replaced atomically before another payload is routed, so both
+ * immediate retry and startup recovery resume at the first undelivered item.
+ * Provider acceptance followed by a crash before this checkpoint is still
+ * ambiguous; local durability cannot provide cross-provider exactly-once send.
+ */
+export async function checkpointDurableFollowupDelivery(
+  id: string | undefined,
+  completedPayloadCount = 1,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DurableFollowupRecord | undefined> {
+  const cleaned = id?.trim();
+  const count = Math.max(0, Math.floor(completedPayloadCount));
+  if (!cleaned || count === 0) {
+    return undefined;
+  }
+  const filePath = resolveDurableFollowupPath(cleaned, env);
+  const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  if (!isDurableFollowupRecord(parsed) || !parsed.delivery) {
+    throw new Error(`Durable followup delivery checkpoint lost carrier ${cleaned}`);
+  }
+  if (isDurableFollowupRecordCancelled(parsed, env)) {
+    await ackDurableFollowup(parsed.id, env);
+    throw new DurableFollowupCancelledError(parsed.queueKey);
+  }
+  const updated: DurableFollowupRecord = {
+    ...parsed,
+    delivery: {
+      ...parsed.delivery,
+      payloads: parsed.delivery.payloads.slice(count),
+    },
+  };
+  await writeJsonAtomic(filePath, updated, {
+    mode: 0o600,
+    ensureDirMode: 0o700,
+    trailingNewline: true,
+  });
+  // Cancellation can race the atomic replacement. Remove a carrier rewritten
+  // after the cancellation scan instead of resurrecting cancelled delivery.
+  if (isDurableFollowupRecordCancelled(updated, env)) {
+    await ackDurableFollowup(updated.id, env);
+    throw new DurableFollowupCancelledError(updated.queueKey);
+  }
+  return updated;
+}
+
 async function removeCoveredInputRecords(
   record: DurableFollowupRecord,
   env: NodeJS.ProcessEnv,
