@@ -1,17 +1,25 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
 describe("buildPairingReply", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempDirs: string[];
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
     process.env.OPENCLAW_PROFILE = "isolated";
+    tempDirs = [];
   });
 
   afterEach(() => {
     envSnapshot.restore();
+    for (const tempDir of tempDirs) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   const cases = [
@@ -81,5 +89,57 @@ describe("buildPairingReply", () => {
     expect(text).not.toContain(
       "consumer-main-durable-lane-20260405 pairing approve telegram QRS678",
     );
+  });
+
+  it("prefers the packaged executable when the app-owned CLI is executable", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
+    tempDirs.push(tempRoot);
+    const stateDir = path.join(tempRoot, "Jarvis State");
+    const managedCliPath = path.join(stateDir, "bin", "openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.mkdirSync(path.dirname(managedCliPath), { recursive: true });
+    fs.writeFileSync(managedCliPath, "#!/bin/sh\n");
+    fs.chmodSync(managedCliPath, 0o755);
+
+    const text = buildPairingReply({
+      channel: "telegram",
+      idLine: "Your Telegram user id: 42",
+      code: "QRS678",
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+    });
+
+    expect(text).toContain(
+      `OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${configPath}' '${managedCliPath}' pairing approve telegram QRS678`,
+    );
+    expect(text).not.toContain(" openclaw pairing approve telegram QRS678");
+  });
+
+  it("keeps the generic CLI when the app-owned candidate is not executable", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
+    tempDirs.push(tempRoot);
+    const stateDir = path.join(tempRoot, "Jarvis State");
+    const managedCliPath = path.join(stateDir, "bin", "openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.mkdirSync(path.dirname(managedCliPath), { recursive: true });
+    fs.writeFileSync(managedCliPath, "#!/bin/sh\n");
+    fs.chmodSync(managedCliPath, 0o644);
+
+    const text = buildPairingReply({
+      channel: "telegram",
+      idLine: "Your Telegram user id: 42",
+      code: "QRS678",
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+    });
+
+    expect(text).toContain(
+      `OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${configPath}' openclaw pairing approve telegram QRS678`,
+    );
+    expect(text).not.toContain(`'${managedCliPath}' pairing approve`);
   });
 });
