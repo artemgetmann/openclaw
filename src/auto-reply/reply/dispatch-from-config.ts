@@ -942,6 +942,10 @@ export async function dispatchReplyFromConfig(params: {
     // and return no final payload. Track those visible blocks so final-mode TTS
     // still gets one additive supplement; sourcePreview blocks stay progress-only.
     let durableBlockFinalText = "";
+    const deferredTelegramBlockMedia: Array<{
+      payload: ReplyPayload;
+      abortSignal?: AbortSignal;
+    }> = [];
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
@@ -979,6 +983,30 @@ export async function dispatchReplyFromConfig(params: {
               !sourceReplyPolicy.suppressAutomaticSourceDelivery;
             if (shouldTrackBlockAsDurableFinal && payload.text?.trim()) {
               durableBlockFinalText += payload.text;
+            }
+            const shouldDeferTelegramBlockMedia =
+              isTelegramProvider &&
+              shouldTrackBlockAsDurableFinal &&
+              hasReplyMedia(payload) &&
+              // Preserve the established media-only block path. The ordering
+              // bug exists when media belongs to an accumulated text answer:
+              // either this mixed payload owns the text, or an earlier block
+              // already established the durable answer that this media follows.
+              Boolean(payload.text?.trim() || durableBlockFinalText.trim());
+            if (shouldDeferTelegramBlockMedia) {
+              const { text: _blockCaption, ...mediaOnlyPayload } = payload;
+              // A Telegram document cannot participate in the mutable text
+              // preview. Hold it until the resolver settles, then emit it only
+              // if block text becomes the authoritative final. If the resolver
+              // returns a separate final, that payload wins and this provisional
+              // media is discarded instead of being delivered twice.
+              deferredTelegramBlockMedia.push({
+                payload: markCaptionlessFinalMediaSupplement(
+                  sanitizeTelegramVisiblePayload(mediaOnlyPayload),
+                ),
+                abortSignal: context?.abortSignal,
+              });
+              return;
             }
             // Block callbacks are preview/progress material until the resolver
             // either returns a final payload or the accumulated block text is
@@ -1114,6 +1142,40 @@ export async function dispatchReplyFromConfig(params: {
       logInfo(
         `telegram: block-stream final preview finalized before tts textLength=${blockFinalTextForTts.length}`,
       );
+      // The resolver returned no authoritative final, so the accumulated block
+      // answer now owns delivery. Flush its deferred media after text promotion
+      // and preview finalization, but before TTS, preserving text -> media ->
+      // voice ordering. Each original block abort signal still gates delivery.
+      for (const deferredMedia of deferredTelegramBlockMedia) {
+        if (deferredMedia.abortSignal?.aborted) {
+          continue;
+        }
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const result = await routeReply({
+            payload: deferredMedia.payload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            abortSignal: deferredMedia.abortSignal,
+            isGroup,
+            groupId,
+          });
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (block-final-media) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+          queuedFinal = result.ok || queuedFinal;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(deferredMedia.payload) || queuedFinal;
+        }
+      }
       const ttsAttemptStartedAt = Date.now();
       logInfo(
         `tts: final supplement synthesis start path=block-stream textLength=${blockFinalTextForTts.length} channel=${ttsChannel ?? "unknown"}`,
