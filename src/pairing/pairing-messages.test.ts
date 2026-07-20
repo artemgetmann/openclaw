@@ -117,15 +117,13 @@ describe("buildPairingReply", () => {
     expect(text).not.toContain(" openclaw pairing approve telegram QRS678");
   });
 
-  it("keeps the generic CLI when the app-owned candidate is not executable", () => {
+  it("keeps the generic CLI when the app-owned candidate is missing", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
     tempDirs.push(tempRoot);
     const stateDir = path.join(tempRoot, "Jarvis State");
     const managedCliPath = path.join(stateDir, "bin", "openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
-    fs.mkdirSync(path.dirname(managedCliPath), { recursive: true });
-    fs.writeFileSync(managedCliPath, "#!/bin/sh\n");
-    fs.chmodSync(managedCliPath, 0o644);
+    fs.mkdirSync(stateDir, { recursive: true });
 
     const text = buildPairingReply({
       channel: "telegram",
