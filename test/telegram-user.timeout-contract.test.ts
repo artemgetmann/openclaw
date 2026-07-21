@@ -17,7 +17,7 @@ describe("Telegram-as-me timeout contract", () => {
   it("requires verification before retrying an indeterminate send", () => {
     const skill = readBundledSkill("telegram-user");
 
-    expect(skill).toContain("delivery state is unknown");
-    expect(skill).toContain("Do not blindly retry");
+    expect(skill).toContain("Telegram or local state is unknown");
+    expect(skill).toMatch(/Do not\s+blindly retry/);
   });
 });

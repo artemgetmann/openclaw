@@ -32,6 +32,7 @@ import type {
 
 const execFileAsync = promisify(execFile);
 const telegramUserBackendTimeoutMs = 60_000;
+const telegramUserReadOnlyBackendCommands = new Set(["status", "precheck", "read", "inbox"]);
 
 const telegramUserToolingFiles = [
   "requirements.txt",
@@ -735,10 +736,13 @@ export function parseTelegramUserBackendExecError(
   const timedOut = code === "ETIMEDOUT" || (killed && signal === "SIGTERM");
 
   if (timedOut) {
-    const retryGuidance =
-      params.command === "send"
+    // Only commands that cannot create duplicate messages, topics, auth
+    // challenges, or local state changes are safe to repeat automatically.
+    const retryGuidance = telegramUserReadOnlyBackendCommands.has(params.command)
+      ? " The operation did not return a result and may be retried."
+      : params.command === "send"
         ? " Telegram delivery state is unknown; read the target chat before retrying to avoid a duplicate message."
-        : " The operation did not return a result and may be retried.";
+        : " The operation may have changed Telegram or local state; current state is unknown. Inspect current state before retrying.";
     return new Error(
       `E_BACKEND_TIMEOUT: Telegram user backend exceeded ${params.timeoutMs}ms.${retryGuidance}`,
     );
