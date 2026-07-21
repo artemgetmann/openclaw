@@ -373,18 +373,57 @@ enum JarvisAccountActivationConfig {
         var media = tools["media"] as? [String: Any] ?? [:]
         var audio = media["audio"] as? [String: Any] ?? [:]
         audio["enabled"] = true
-        if audio["models"] == nil {
-            audio["models"] = [
-                [
-                    "type": "provider",
-                    "provider": "jarvis-managed-openai",
-                    "model": "gpt-4o-mini-transcribe",
-                ],
-            ]
+
+        // Older consumer packages seeded a bare direct-OpenAI transcription
+        // entry before account activation. Replace that exact seed wherever it
+        // appears in the ordered fallback list; keeping even one copy could
+        // bypass the Jarvis backend. Entries with custom options are not the
+        // package seed and remain untouched.
+        let configuredModels = audio["models"] as? [[String: Any]]
+        let managedModel: [String: Any] = [
+            "type": "provider",
+            "provider": "jarvis-managed-openai",
+            "model": "gpt-4o-mini-transcribe",
+        ]
+        if let configuredModels {
+            var replacedLegacySeed = false
+            var normalizedModels: [[String: Any]] = []
+            for model in configuredModels {
+                if Self.isLegacyDirectOpenAIAudioSeed(model) {
+                    // Multiple copies add no fallback value. Collapse them to
+                    // one managed entry at the first legacy-seed position.
+                    if !replacedLegacySeed {
+                        normalizedModels.append(managedModel)
+                        replacedLegacySeed = true
+                    }
+                } else {
+                    normalizedModels.append(model)
+                }
+            }
+            if replacedLegacySeed {
+                audio["models"] = normalizedModels
+            }
+        } else {
+            audio["models"] = [managedModel]
         }
         media["audio"] = audio
         tools["media"] = media
         root["tools"] = tools
+    }
+
+    private static func isLegacyDirectOpenAIAudioSeed(_ model: [String: Any]) -> Bool {
+        let allowedKeys: Set<String> = ["type", "provider", "model", "apiKey"]
+        guard Set(model.keys).isSubset(of: allowedKeys),
+              model["provider"] as? String == "openai",
+              model["model"] as? String == "gpt-4o-mini-transcribe"
+        else {
+            return false
+        }
+
+        // Config migration strips the old package marker, so accept its absent
+        // form too. Any different key value is operator configuration.
+        guard let apiKey = model["apiKey"] else { return true }
+        return apiKey as? String == "${OPENAI_NON_MODEL_API_KEY}"
     }
 
     private static func removeAccountAccessTokenSecretProvider(from root: inout [String: Any]) {

@@ -406,7 +406,8 @@ describe("buildAgentSystemPrompt", () => {
       "Before sending or claiming any user-facing screenshot, screen recording, or other media proof",
     );
     expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
-    expect(prompt).toContain("media transcribe --file <path> --json");
+    expect(prompt).toContain("openclaw media transcribe --file <path> --json");
+    expect(prompt).toContain("`media` is a subcommand, not a standalone binary to probe");
     expect(prompt).toContain(
       "channel-specific voice-note retrieval belongs in the matching channel skill",
     );

@@ -13,6 +13,7 @@ metadata:
             "bins":
               [
                 "wacli",
+                "openclaw",
                 "./scripts/wacli-live.sh",
                 "./scripts/wacli-health.sh",
                 "./scripts/wacli-auth-local.sh",
@@ -89,6 +90,20 @@ Automation Rule
   thread movement, inbound or outbound, changes or duplicates the reply, stop
   and update the reply or ask the user before sending. This is mandatory even if
   the user already approved an older draft.
+
+Voice notes and audio
+
+- When a WhatsApp message contains a voice note or audio attachment, download
+  it with
+  `wacli media download --chat <jid> --id <message-id> --output <directory> --json`,
+  then transcribe the local file through the generic media command:
+  `openclaw media transcribe --file /path/to/downloaded-audio.oga --json`
+- Use the generic media command even when a local `whisper` binary is present.
+  It applies the runtime's configured provider path, including the
+  Render-backed managed transcription service in managed Jarvis.
+- Do not invoke `whisper`, `whisper-cli`, or another ad hoc local model directly
+  unless `openclaw media transcribe` failed and the user explicitly asks for a
+  local fallback. Report the managed-path failure before falling back.
 
 Time-aware WhatsApp context
 
