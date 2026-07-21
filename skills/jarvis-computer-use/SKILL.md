@@ -130,3 +130,18 @@ normal apps such as TextEdit, Finder, Telegram, Safari, or System Settings,
 first suspect that the Mac session is locked or sleeping. Ask the user to
 unlock or approve the existing unlock/keep-awake recovery flow before debugging
 permissions, TCC, or app-specific adapters.
+
+## Permission Recovery
+
+- Preflight with a harmless Finder or TextEdit observation. If Accessibility or
+  Screen Recording is missing, stop retrying the original GUI task.
+- Use the exact bundled/dev app identity reported by `openclaw gui-control`. If
+  the helper is custom or PATH-based, resolve its real containing app and bundle
+  ID before any reset. If a permission is simply off, let the user enable it.
+- Reset only a stale grant: System Settings already shows that exact app enabled
+  while the runtime still reports it missing. Ask for explicit approval, use
+  the reported `tccutil` command for the stale service, reopen the app, and have
+  the user re-enable that exact permission in System Settings.
+- Re-run the harmless observation before resuming the original task. Stable
+  signing, bundle ID, and install path normally preserve grants across updates,
+  but identity/path changes or a TCC reset can require approval again.
