@@ -78,12 +78,15 @@ Automation Rule
   deadline and must be allowed to return its structured result or error first.
   If the shell tool says the command is still running and returns a process or
   session id, poll that same process; do not launch a duplicate command.
-- `E_BACKEND_TIMEOUT` on a `send`, or an external SIGTERM before the CLI returns,
-  means Telegram delivery state is unknown. Do not blindly retry. Re-read the
-  target chat with a narrow `--contains` filter and inspect reply/topic metadata
-  before deciding whether another send is needed. `read` does not accept
-  `--topic-anchor`; topic verification uses the returned `reply_to_top_id`,
-  `reply_to_msg_id`, or DM topic metadata.
+- `E_BACKEND_TIMEOUT` on any mutating command, or an external SIGTERM before a
+  mutating command returns, means Telegram or local state is unknown. Do not
+  blindly retry. For `send`, re-read the target chat with a narrow `--contains`
+  filter and inspect reply/topic metadata before deciding whether another send
+  is needed. `read` does not accept `--topic-anchor`; topic verification uses
+  the returned `reply_to_top_id`, `reply_to_msg_id`, or DM topic metadata. For
+  other mutations such as login or topic creation, inspect the relevant current
+  state first. Only `status`, `precheck`, `read`, and `inbox` are safe to retry
+  automatically after the backend timeout.
 - Use structured CLI filters before shell parsing. If you need to find a known
   chat or message, prefer `inbox --contains ...`, `read --contains ...`, or
   `wait --contains ...`; do not pipe Telegram JSON to `grep` when one of those
