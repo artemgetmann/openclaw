@@ -73,9 +73,13 @@ Automation Rule
   `skills/telegram-user/scripts/telegram-user-cli.sh <subcommand> ...`
 - Run one command per call. Do not add shell chains, pipes, or redirection
   around the wrapper unless the user explicitly asks for raw shell plumbing.
-- When the agent shell/exec tool has its own deadline, set it to at least 90 seconds
-  for an installed `telegram-user` command. The CLI backend owns a 60-second
-  deadline and must be allowed to return its structured result or error first.
+- When the agent shell/exec tool has its own deadline, set it to at least 330
+  seconds for a one-shot installed `telegram-user` command. A cold or stale
+  environment can spend up to 60 seconds creating its virtual environment and
+  180 seconds installing dependencies before the CLI backend starts its own
+  60-second deadline. The outer layer must allow that whole budget, plus a small
+  scheduling margin, to return its structured result or error first. For
+  `wait` or monitor commands, add the requested wait duration to that budget.
   If the shell tool says the command is still running and returns a process or
   session id, poll that same process; do not launch a duplicate command.
 - `E_BACKEND_TIMEOUT` on any mutating command, or an external SIGTERM before a
