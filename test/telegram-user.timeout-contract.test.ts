@@ -10,7 +10,8 @@ describe("Telegram-as-me timeout contract", () => {
   it("keeps the agent wrapper alive longer than the CLI backend deadline", () => {
     const skill = readBundledSkill("telegram-user");
 
-    expect(skill).toContain("at least 90 seconds");
+    expect(skill).toContain("at least 330");
+    expect(skill).toContain("180 seconds installing dependencies");
     expect(skill).toContain("poll that same process");
   });
 

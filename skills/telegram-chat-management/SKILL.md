@@ -72,9 +72,10 @@ openclaw telegram-user topic-create --chat -1003783709877 --title "launch follow
 openclaw telegram-user send --chat -1003783709877 --topic-anchor 12345 --message "Jarvis, continue this workstream from docs/plans/launch-follow-up.md. Reply in this topic with the next 3 actions. Do not post publicly or DM anyone without approval." --json
 ```
 
-Give the installed command at least 90 seconds at the outer shell/exec
-layer. If it returns a running process id, poll that process instead of
-starting a second send. If the command is killed or reports
+Give a one-shot installed command at least 330 seconds at the outer shell/exec
+layer. This covers cold dependency bootstrap plus the backend deadline. If it
+returns a running process id, poll that process instead of starting a second
+send. If the command is killed or reports
 `E_BACKEND_TIMEOUT`, treat delivery as unknown and verify the target chat
 before retrying so the handoff cannot be duplicated.
 
