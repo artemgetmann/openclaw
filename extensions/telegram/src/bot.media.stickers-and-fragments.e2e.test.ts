@@ -314,6 +314,77 @@ describe("telegram text fragments", () => {
   );
 
   it(
+    "keeps a 3967-character Telegram split open across polling-cycle skew",
+    async () => {
+      // This reproduces the July 21 incident: the first client chunk was 3,967
+      // characters, so the old 350ms burst timer fired before later updates.
+      const { handler, replySpy } = await createBotHandlerWithOptions({
+        testTimings: {
+          mediaGroupFlushMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+          mediaBurstGraceMs: TELEGRAM_TEST_TIMINGS.mediaBurstGraceMs,
+        },
+      });
+      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const parts = ["A".repeat(3967), "B".repeat(3900), "final continuation"];
+
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 24,
+            date: 1736380800,
+            text: parts[0],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        // Cross the old 350ms deadline while remaining inside the hardened
+        // 1.5s burst window. No agent turn may start yet.
+        await vi.advanceTimersByTimeAsync(500);
+        expect(replySpy).not.toHaveBeenCalled();
+
+        for (let index = 1; index < parts.length; index += 1) {
+          await handler({
+            message: {
+              chat: { id: 42, type: "private" },
+              from: { id: 7, first_name: "Ada" },
+              message_id: 24 + index,
+              date: 1736380800,
+              text: parts[index],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          });
+        }
+
+        const flushTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 1500);
+        const flushTimer = setTimeoutSpy.mock.calls[flushTimerIndex]?.[0] as
+          | (() => unknown)
+          | undefined;
+        if (flushTimerIndex >= 0) {
+          clearTimeout(
+            setTimeoutSpy.mock.results[flushTimerIndex]?.value as ReturnType<typeof setTimeout>,
+          );
+        }
+        expect(flushTimer).toBeTypeOf("function");
+        await flushTimer?.();
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
+        for (const part of parts) {
+          expect(payload.RawBody).toContain(part.slice(0, 32));
+        }
+      } finally {
+        setTimeoutSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "flushes pending burst text before processing a command",
     async () => {
       const { handler, replySpy } = await createBotHandlerWithOptions({});

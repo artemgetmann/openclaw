@@ -172,7 +172,10 @@ export const registerTelegramHandlers = ({
   logger,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
-  const DEFAULT_TEXT_BURST_MAX_GAP_MS = 350;
+  // Long client-side splits can arrive across separate Bot API polling cycles.
+  // Keep the grace aligned with the near-limit fragment path so a 3,967-char
+  // first chunk does not flush before its continuation reaches this handler.
+  const DEFAULT_TEXT_BURST_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_BURST_START_THRESHOLD_CHARS = 800;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -193,7 +196,10 @@ export const registerTelegramHandlers = ({
   const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_GAP_MS = 1500;
   const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_ID_GAP = 3;
   const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_DATE_GAP_SECONDS = 3;
-  const DEFAULT_MEDIA_BURST_GRACE_MS = 1200;
+  // Standalone media and its text can be serialized several seconds apart even
+  // when Telegram timestamps them as one send. A bounded 3.5s hold covers that
+  // transport skew without changing command flushing or sender/topic isolation.
+  const DEFAULT_MEDIA_BURST_GRACE_MS = 3500;
   const TELEGRAM_MEDIA_BURST_GRACE_MS =
     typeof opts.testTimings?.mediaBurstGraceMs === "number" &&
     Number.isFinite(opts.testTimings.mediaBurstGraceMs)
