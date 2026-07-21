@@ -39,6 +39,30 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
+export const CHATGPT_AUTH_RECOVERY_MESSAGE =
+  "Your ChatGPT sign-in has expired or is no longer valid. Open the Jarvis Mac app → AI access → Continue with ChatGPT, then sign in again.";
+
+/**
+ * Turn provider internals into the one recovery path a Jarvis user can act on.
+ * Require both the Codex provider identity and an auth failure so unrelated
+ * ChatGPT usage-limit or model errors keep their more specific copy.
+ */
+export function formatProviderAuthRecoveryMessage(params: {
+  provider?: string;
+  errorText: string;
+}): string | undefined {
+  const provider = params.provider?.trim().toLowerCase();
+  const raw = params.errorText.trim();
+  const isChatGptProvider = provider === "openai-codex" || /\bopenai-codex\b/i.test(raw);
+  if (!isChatGptProvider) {
+    return undefined;
+  }
+  if (!isAuthPermanentErrorMessage(raw) && !isAuthErrorMessage(raw)) {
+    return undefined;
+  }
+  return CHATGPT_AUTH_RECOVERY_MESSAGE;
+}
+
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
@@ -754,6 +778,14 @@ export function formatAssistantErrorText(
     return "LLM request failed with an unknown error.";
   }
 
+  const authRecovery = formatProviderAuthRecoveryMessage({
+    provider: opts?.provider,
+    errorText: raw,
+  });
+  if (authRecovery) {
+    return authRecovery;
+  }
+
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -845,6 +877,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
+    const authRecovery = formatProviderAuthRecoveryMessage({ errorText: trimmed });
+    if (authRecovery) {
+      return authRecovery;
+    }
+
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +

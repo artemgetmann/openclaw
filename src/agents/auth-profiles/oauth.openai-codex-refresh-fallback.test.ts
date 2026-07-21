@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
-import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest, resolveApiKeyForProfile } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -23,9 +23,9 @@ const {
   buildProviderAuthDoctorHintWithPluginMock,
   readCodexCliCredentialsMock,
 } = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
+  refreshProviderOAuthCredentialWithPluginMock: vi.fn<
+    (_params?: { context?: unknown }) => Promise<unknown>
+  >(async () => undefined),
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
   readCodexCliCredentialsMock: vi.fn<() => unknown>(() => null),
@@ -56,6 +56,7 @@ function createExpiredOauthStore(params: {
   profileId: string;
   provider: string;
   access?: string;
+  accountId?: string;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -66,6 +67,7 @@ function createExpiredOauthStore(params: {
         access: params.access ?? "cached-access-token",
         refresh: "refresh-token",
         expires: Date.now() - 60_000,
+        accountId: params.accountId,
       },
     },
   };
@@ -92,6 +94,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     buildProviderAuthDoctorHintWithPluginMock.mockResolvedValue(undefined);
     readCodexCliCredentialsMock.mockReset();
     readCodexCliCredentialsMock.mockReturnValue(null);
+    resetOAuthRefreshQueuesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     agentDir = path.join(tempRoot, "agents", "main", "agent");
@@ -104,6 +107,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   });
 
   afterEach(async () => {
+    resetOAuthRefreshQueuesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     envSnapshot.restore();
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -134,6 +138,182 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       email: undefined,
     });
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists rotated credentials returned by the provider plugin", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+      }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "rotated-access-token",
+      refresh: "rotated-refresh-token",
+      expires: Date.now() + 60 * 60_000,
+    });
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    expect(result?.apiKey).toBe("rotated-access-token");
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(persisted.profiles[profileId]).toMatchObject({
+      access: "rotated-access-token",
+      refresh: "rotated-refresh-token",
+    });
+  });
+
+  it("serializes concurrent same-process refreshes and spends the token once", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+      }),
+      agentDir,
+    );
+    let inFlight = 0;
+    let maxInFlight = 0;
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      return {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "shared-fresh-access",
+        refresh: "shared-fresh-refresh",
+        expires: Date.now() + 60 * 60_000,
+      };
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        resolveApiKeyForProfile({
+          store: ensureAuthProfileStore(agentDir),
+          profileId,
+          agentDir,
+        }),
+      ),
+    );
+
+    expect(maxInFlight).toBe(1);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result?.apiKey)).toEqual(
+      Array.from({ length: 10 }, () => "shared-fresh-access"),
+    );
+  });
+
+  it("lets sibling agent stores adopt one rotated credential", async () => {
+    const profileId = "openai-codex:default";
+    const siblingDirs = Array.from({ length: 20 }, (_, index) =>
+      path.join(tempRoot, "agents", `sibling-${index}`, "agent"),
+    );
+    await Promise.all(siblingDirs.map((dir) => fs.mkdir(dir, { recursive: true })));
+    for (const dir of [agentDir, ...siblingDirs]) {
+      saveAuthProfileStore(
+        createExpiredOauthStore({
+          profileId,
+          provider: "openai-codex",
+        }),
+        dir,
+      );
+    }
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "one-shared-access",
+        refresh: "one-shared-refresh",
+        expires: Date.now() + 60 * 60_000,
+      };
+    });
+
+    const results = await Promise.all(
+      siblingDirs.map((dir) =>
+        resolveApiKeyForProfile({
+          store: ensureAuthProfileStore(dir),
+          profileId,
+          agentDir: dir,
+        }),
+      ),
+    );
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(results.every((result) => result?.apiKey === "one-shared-access")).toBe(true);
+    const mainStore = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(mainStore.profiles[profileId]).toMatchObject({
+      access: "one-shared-access",
+      refresh: "one-shared-refresh",
+    });
+  });
+
+  it("refuses to adopt or overwrite a different account across agent stores", async () => {
+    const profileId = "openai-codex:default";
+    const secondaryDir = path.join(tempRoot, "agents", "secondary", "agent");
+    await fs.mkdir(secondaryDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-account-access",
+            refresh: "main-account-refresh",
+            expires: Date.now() + 60 * 60_000,
+            accountId: "acct-main",
+          },
+        },
+      },
+      agentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-secondary",
+      }),
+      secondaryDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "secondary-fresh-access",
+      refresh: "secondary-fresh-refresh",
+      expires: Date.now() + 2 * 60 * 60_000,
+      accountId: "acct-secondary",
+    });
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(secondaryDir),
+      profileId,
+      agentDir: secondaryDir,
+    });
+
+    expect(result?.apiKey).toBe("secondary-fresh-access");
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    const mainStore = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(mainStore.profiles[profileId]).toMatchObject({
+      access: "main-account-access",
+      accountId: "acct-main",
+    });
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {
