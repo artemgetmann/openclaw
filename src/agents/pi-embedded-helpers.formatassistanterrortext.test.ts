@@ -2,9 +2,11 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  CHATGPT_AUTH_RECOVERY_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  sanitizeUserFacingText,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -18,6 +20,39 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+  it("turns expired ChatGPT OAuth into the exact Jarvis recovery path", () => {
+    const msg = makeAssistantError(
+      "OAuth token refresh failed for openai-codex: refresh_token_reused",
+    );
+
+    const result = formatAssistantErrorText(msg, { provider: "openai-codex" });
+
+    expect(result).toBe(CHATGPT_AUTH_RECOVERY_MESSAGE);
+    expect(result).not.toContain("refresh_token_reused");
+  });
+  it("uses provider context for ChatGPT 401 errors without provider text", () => {
+    const msg = makeAssistantError("401 unauthorized");
+
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      CHATGPT_AUTH_RECOVERY_MESSAGE,
+    );
+  });
+  it("does not point other provider auth failures to ChatGPT settings", () => {
+    const msg = makeAssistantError("401 unauthorized");
+
+    expect(formatAssistantErrorText(msg, { provider: "anthropic" })).not.toBe(
+      CHATGPT_AUTH_RECOVERY_MESSAGE,
+    );
+  });
+  it("removes raw OAuth details from error payload normalization", () => {
+    const result = sanitizeUserFacingText(
+      "OAuth token refresh failed for openai-codex: refresh_token_reused. Please re-authenticate.",
+      { errorContext: true },
+    );
+
+    expect(result).toBe(CHATGPT_AUTH_RECOVERY_MESSAGE);
+    expect(result).not.toContain("refresh_token_reused");
   });
   it("returns context overflow for Anthropic 'Request size exceeds model context window'", () => {
     // This is the new Anthropic error format that wasn't being detected.

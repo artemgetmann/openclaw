@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { saveJsonFile } from "../../infra/json-file.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -19,6 +21,19 @@ export function resolveLegacyAuthStorePath(agentDir?: string): string {
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
   const pathname = resolveAuthStorePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
+}
+
+/**
+ * Every agent sharing one OAuth profile must refresh through the same lock.
+ * Hashing the provider/profile pair keeps arbitrary profile IDs filesystem-safe
+ * while the NUL separator prevents ambiguous concatenation collisions.
+ */
+export function resolveOAuthRefreshLockPath(provider: string, profileId: string): string {
+  const hash = createHash("sha256");
+  hash.update(provider, "utf8");
+  hash.update("\u0000", "utf8");
+  hash.update(profileId, "utf8");
+  return path.join(resolveStateDir(), "locks", "oauth-refresh", `sha256-${hash.digest("hex")}`);
 }
 
 export function ensureAuthStoreFile(pathname: string) {

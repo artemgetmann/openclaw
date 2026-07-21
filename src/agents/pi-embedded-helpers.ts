@@ -11,7 +11,9 @@ export {
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
+  CHATGPT_AUTH_RECOVERY_MESSAGE,
   formatBillingErrorMessage,
+  formatProviderAuthRecoveryMessage,
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,
