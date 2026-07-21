@@ -407,4 +407,31 @@ describe("telegram-user backend defaults", () => {
       sessionPath: path.join(stateDir, "flag.session"),
     });
   });
+
+  it("turns a killed backend send into an explicit unknown-delivery timeout", async () => {
+    const { parseTelegramUserBackendExecError } = await import("./backend.js");
+    const processError = Object.assign(new Error("Command failed"), {
+      killed: true,
+      signal: "SIGTERM",
+      stderr: "",
+    });
+
+    const parsed = parseTelegramUserBackendExecError(processError, {
+      command: "send",
+      env: {} as NodeJS.ProcessEnv,
+      meta: {
+        api_hash_source: "missing",
+        api_id_source: "missing",
+        env_file: "/tmp/telegram.env",
+        lock_scope: "machine",
+        session_path: "/tmp/telegram.session",
+        session_source: "explicit",
+      },
+      timeoutMs: 60_000,
+    });
+
+    expect(parsed.message).toContain("E_BACKEND_TIMEOUT");
+    expect(parsed.message).toContain("delivery state is unknown");
+    expect(parsed.message).toContain("read the target chat before retrying");
+  });
 });

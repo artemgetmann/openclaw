@@ -31,6 +31,7 @@ import type {
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+const telegramUserBackendTimeoutMs = 60_000;
 
 const telegramUserToolingFiles = [
   "requirements.txt",
@@ -712,6 +713,40 @@ function readExecErrorStderr(error: unknown): string {
   return "";
 }
 
+/**
+ * Preserve timeout semantics that Node's execFile reports out-of-band instead
+ * of on stderr. Without this branch a timed-out Telegram command collapses to
+ * "failed without diagnostic output", and agents cannot distinguish a safe
+ * read retry from a send that Telegram may already have accepted.
+ */
+export function parseTelegramUserBackendExecError(
+  error: unknown,
+  params: {
+    command: string;
+    env: NodeJS.ProcessEnv;
+    meta: TelegramUserBackendMeta;
+    timeoutMs: number;
+  },
+): Error {
+  const processError = error && typeof error === "object" ? error : undefined;
+  const killed = processError && "killed" in processError ? processError.killed === true : false;
+  const signal = processError && "signal" in processError ? processError.signal : undefined;
+  const code = processError && "code" in processError ? processError.code : undefined;
+  const timedOut = code === "ETIMEDOUT" || (killed && signal === "SIGTERM");
+
+  if (timedOut) {
+    const retryGuidance =
+      params.command === "send"
+        ? " Telegram delivery state is unknown; read the target chat before retrying to avoid a duplicate message."
+        : " The operation did not return a result and may be retried.";
+    return new Error(
+      `E_BACKEND_TIMEOUT: Telegram user backend exceeded ${params.timeoutMs}ms.${retryGuidance}`,
+    );
+  }
+
+  return parseBackendError(readExecErrorStderr(error), params.env, params.meta);
+}
+
 async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
   const python = await ensureTelethonPython();
   const { env: baseEnv, meta } = await buildBackendEnv(options);
@@ -720,7 +755,7 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
     const { stdout } = await execFileAsync(python, [backendScriptPath, ...options.args], {
       cwd: toolingRoot,
       env,
-      timeout: 60_000,
+      timeout: telegramUserBackendTimeoutMs,
       maxBuffer: 4 * 1024 * 1024,
     });
     const sanitizedStdout = sanitizeBackendText(stdout, env);
@@ -731,7 +766,12 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
     parsed.backend_meta ??= meta;
     return parsed;
   } catch (error) {
-    throw parseBackendError(readExecErrorStderr(error), env, meta);
+    throw parseTelegramUserBackendExecError(error, {
+      command: options.args[0] ?? "unknown",
+      env,
+      meta,
+      timeoutMs: telegramUserBackendTimeoutMs,
+    });
   }
 }
 
