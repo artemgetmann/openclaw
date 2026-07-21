@@ -53,11 +53,17 @@ Setup routing
   v0.31.0+ as the cutoff for `auth setup`, `GOG_HELP=agent`, classified
   corrupt-token reauth recovery, and global `--readonly` / `GOG_READONLY=1`.
   If the local binary is older, use the older setup flow and say so plainly.
-- If OAuth client credentials, account auth, or `gog auth list` are missing,
-  use the shared `consumer-setup` skill instead of pushing raw setup commands at
-  the user.
-- In consumer lanes, run `gog` as a direct lane-local exec call. Do not wrap it
-  in shell chains, pipes, or `nodes/system.run`.
+- If OAuth client credentials or account auth are missing, `gog auth list`
+  returns no matching account, or a read probe reports `invalid_grant`, expired,
+  revoked, or corrupt-token evidence, route to the shared `consumer-setup`
+  skill. That skill owns Google account disambiguation, prior-service recovery,
+  forced consent, browser handoff, consent-checkbox verification, callback and
+  Keychain handling, post-auth surface verification, and automatic resumption of
+  the original task. Do not duplicate or improvise that recovery flow here.
+- In consumer lanes, run the current runtime's `gog` as a direct lane-local
+  exec call. Normal permissions allow direct `gog ...` commands; do not wrap
+  them in shell chains, pipes, redirection, or `nodes/system.run`, and do not
+  bounce to a paired node unless local `gog` is unavailable.
 - If `gog` is wrapped through `openclaw nodes run`, insert `--` before the
   child argv so `gog` keeps its own flags.
 - Start with the cheapest truthful checks: `gog auth list`, then a read-only
@@ -72,19 +78,6 @@ Setup routing
   plain product language instead of burning turns on unrelated command retries.
 - Keep the CLI setup path opt-in. If the user explicitly wants the terminal
   flow, you can execute the normal `gog auth ...` commands yourself.
-- Prefer direct safe-bin invocation first: `gog auth list`, then a read-only
-  probe like `gog gmail search`, `gog drive search`, or `gog calendar events`.
-- In Normal permissions mode, direct `gog ...` commands are allowed. The
-  default restriction is on shell wrappers (`bash -lc`, `sh -c`), pipes,
-  chaining, and redirection.
-- If the current runtime already has `gog`, stay local first. Do not bounce to
-  a paired node unless local `gog` is actually unavailable.
-- If you wrap `gog` through `openclaw nodes run`, insert `--` before the child
-  argv so `gog` keeps its own flags.
-- Ban dumb shell chaining, pipes, and redirection around `gog`.
-- Allow node execution when the runtime supports it. Missing
-  `system.run.prepare` alone is not a valid reason to mark `gog` execution as
-  blocked.
 - If setup is missing, do not dump raw CLI setup commands back to a consumer.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - On v0.31.0+, `gog auth setup` is the preferred guided setup entrypoint and
@@ -95,9 +88,14 @@ Email fallback policy
 
 - For Gmail read/search/send tasks, use `gog` when the task is clearly
   Google/Gmail-specific.
-- If `gog` fails because Google auth is expired/revoked, the provider is
-  unavailable, or the tool is missing, try `himalaya` only after confirming its
-  configured account is the same mailbox the user intended.
+- For `invalid_grant`, expired, revoked, or corrupt-token evidence, immediately
+  hand recovery to `consumer-setup`; do not ask the user to diagnose or propose
+  reauthentication. The shared flow decides whether the account is known,
+  restores the authorized services, handles secure-user stops, verifies access,
+  and resumes the task.
+- Use `himalaya` only when guarded Google recovery is unavailable, blocked, or
+  declined, and only after confirming its configured account is the same
+  mailbox the user intended.
 - For sends, never silently fall back to a different sender identity. If the
   same-mailbox identity is unclear, stop and ask the user which account to use.
 - Before drafting a Gmail reply, re-read or re-search the thread/person first
@@ -136,8 +134,8 @@ Email fallback policy
   the intended message IDs before changing state, avoid broad query mutations
   for ambiguous triage items, and report unsupported or failed updates.
 
-- If Gmail/Google auth fails and no safe same-mailbox email fallback exists,
-  report the blocker clearly and ask whether the user wants to reconnect Google.
+- If guarded Google recovery cannot start or cannot finish, report the exact
+  blocker and the smallest secure browser or Keychain step the user must take.
 - For Calendar, Drive, Docs, Sheets, and Contacts tasks, do not suggest
   Himalaya as a fallback. Himalaya is email-only.
 
@@ -169,63 +167,19 @@ Gmail triage pattern
 
 Setup Routing
 
-- If `gog` is missing OAuth credentials, has no authorized account, or the
-  requested account/surfaces are not ready, route setup through
-  `consumer-setup`.
-- Use the raw CLI steps below only when you are the one performing setup or the
-  user explicitly asks for the terminal path.
-- For new Google setups, default to the Google Workspace core bundle:
-  `gmail,calendar,drive,contacts,docs,sheets`.
-- Do not default to Drive-only or make the user come back later for Calendar
-  unless they explicitly want a narrower scope.
-- For local consumer OAuth setup, use
-  `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`
-  and its resumable polling flow. On macOS, the helper serializes auth across
-  sessions, bounds Keychain waits, and launches `gog auth add` in the
-  background so the Google consent screen can open while you keep chatting.
-  Other platforms use a direct background worker and do not provide the macOS
-  single-flight guarantee.
-- Do not start `gog auth setup`, `gog auth add`, `gog auth list`, or another
-  helper session in parallel with an active helper session. Continue, wait,
-  reopen, or stop the existing session so macOS shows at most one Keychain
-  approval prompt.
-- If the helper is unavailable or blocked, report that setup is blocked instead
-  of bypassing its macOS single-flight protection with a direct auth command.
-- Prefer opening the real Google consent tab in Google Chrome when available.
-  If Chrome handoff is not available, fall back to the default browser instead
-  of stalling on auth errors.
-- After starting the helper, tell the user plainly that you opened the Google
-  consent flow in the browser and that Google may require them to finish the
-  sign-in, Touch ID, passkey, or 2FA step there themselves.
-- Do not pretend the agent can bypass biometrics or Google account protections.
-  Say explicitly that this is a secure Google step and that manual completion
-  may be required even when the rest of the workflow is automated.
-- Poll completion with
-  `skills/gog/scripts/gog-auth-local.sh wait --session <id>` before claiming
-  Google is connected.
-- If the Google page opened but the local callback expired or was missed, use
-  `skills/gog/scripts/gog-auth-local.sh reopen --session <id>` and tell the
-  user to complete the approval immediately in that browser window.
-- Translate common Google failures into direct product language instead of
-  generic auth noise:
-  missing OAuth client credentials, OAuth app still in Testing without this
-  account added as a test user, required API not enabled, missed localhost
-  callback handoff, local Keychain approval still pending, or a corrupt token
-  that v0.31.0+ can recover from automatically.
-- When Keychain approval times out, tell the user to unlock the Mac, retry once,
-  enter their Mac login password in the single macOS Keychain prompt, and choose
-  Always Allow. Never capture, store, type, or bypass that password.
-- Once auth completes, verify with `gog auth list` before moving into Gmail,
-  Calendar, Drive, Docs, Sheets, or Contacts actions.
-- Treat successful auth as a resume point. After `gog auth list` or another
-  read-only probe succeeds, continue the user’s original Gmail/Calendar/Drive
-  task automatically instead of asking them to restate it.
+- `gog` owns Google Workspace task execution and detection of setup/auth
+  failures. `consumer-setup` owns the complete consumer Google connection and
+  recovery procedure. Route there whenever credentials, account authorization,
+  requested services, or token health are not ready.
+- Use the raw CLI reference below only when the user explicitly asks for an
+  unguarded terminal path. Never run it alongside an active guarded setup
+  session.
 
 Setup (terminal-only reference)
 
-- Consumer/Jarvis setup must use the guarded helper above. The raw commands here
-  are only for a user who explicitly requested an unguarded terminal workflow;
-  never run them beside an active helper session.
+- Consumer/Jarvis setup must use the guarded flow owned by `consumer-setup`.
+  The raw commands here are only for a user who explicitly requested an
+  unguarded terminal workflow; never run them beside an active helper session.
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
