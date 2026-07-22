@@ -21,7 +21,7 @@ metadata:
               "version": "0.1.53",
               "architectures": ["arm64", "x86_64"],
               "sourceRepo": "https://github.com/artemgetmann/open-codex-computer-use.git",
-              "sourceRef": "a8ad90ed703fbdc2095e900c2b2574bfa4d60f36",
+              "sourceRef": "86e2655c1b2ad750db2635350cbda54b5a0cb87d",
               "buildCommand":
                 [
                   "./scripts/build-open-computer-use-app.sh",
