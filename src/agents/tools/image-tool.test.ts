@@ -429,6 +429,8 @@ describe("image tool implicit imageModel config", () => {
       expect(tool?.description).toContain(
         "Only use this tool when images were NOT already provided",
       );
+      expect(tool?.description).toContain("judge the whole user request");
+      expect(tool?.description).toContain("Do not rubber-stamp");
     });
   });
 

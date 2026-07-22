@@ -38,6 +38,8 @@ describe("image_generate tool", () => {
     });
 
     expect(tool).not.toBeNull();
+    expect(tool?.description).toContain("inspect the exact final output");
+    expect(tool?.description).toContain("full user intent");
     const result = await tool?.execute("tool-1", { action: "list" });
     expect(result).toMatchObject({
       content: [

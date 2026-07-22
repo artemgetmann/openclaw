@@ -403,7 +403,7 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("use the `screen-record` skill and `openclaw screen record`");
     expect(prompt).toContain(
-      "Before sending or claiming any user-facing screenshot, screen recording, or other media proof",
+      "Before sending, presenting, or claiming any generated or edited user-facing artifact is ready",
     );
     expect(prompt).toContain("For audio transcription");
     expect(prompt).toContain("openclaw media transcribe --file <path> --json");
@@ -484,6 +484,22 @@ describe("buildAgentSystemPrompt", () => {
       "- image_generate: Generate new images or edit reference images with the configured image-generation model",
     );
     expect(prompt).toContain("- image: Analyze an image with the configured image model");
+  });
+
+  it("requires a whole-deliverable quality review before sending created artifacts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["image_generate", "image", "message"],
+    });
+
+    expect(prompt).toContain("inspect the exact final artifact after the last edit");
+    expect(prompt).toContain("the whole user request");
+    expect(prompt).toContain("readability, composition, fidelity, usefulness, and safety");
+    expect(prompt).toContain("A narrow check");
+    expect(prompt).toContain(
+      "For image creation or content-aware visual edits, prefer `image_generate`",
+    );
+    expect(prompt).toContain("targeted redaction where preserving untouched pixels matters");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {

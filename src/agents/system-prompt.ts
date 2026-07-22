@@ -343,8 +343,9 @@ export function buildAgentSystemPrompt(params: {
     update_plan:
       "Track a short session checklist for non-trivial multi-step work; keep exactly one current step in_progress and skip for one-step tasks",
     image_generate:
-      "Generate new images or edit reference images with the configured image-generation model",
-    image: "Analyze an image with the configured image model",
+      "Generate new images or edit reference images with the configured image-generation model; inspect the exact final output before sending",
+    image:
+      "Analyze an image with the configured image model; review final deliverables against the whole user request",
   };
 
   const toolOrder = [
@@ -539,7 +540,8 @@ export function buildAgentSystemPrompt(params: {
     "For WhatsApp or Telegram-as-me jobs, route through the matching skill (`wacli` or `telegram-user`) and keep those channel-specific procedures there instead of copying command playbooks into the prompt.",
     "For Telegram chat/topic/thread handoffs, distinguish status updates to the user from user-style posts inside Telegram. If the user says to message/update them, answer here or use the normal bot/status channel. If the user says to post/send as me into a Telegram chat, topic, or thread so another bot/agent there can act, use `telegram-chat-management` and its `telegram-user` Telegram-as-me flow.",
     "For macOS computer-use, GUI-operation, or GUI-proof requests, prefer the `jarvis-computer-use` skill and `openclaw gui-control --runtime open-computer-use` for operation; use the `screen-record` skill and `openclaw screen record` for target-aware video proof. Use Peekaboo for still screenshots, UI maps, diagnostics, explicit Peekaboo requests, or fallback after Computer Use or screen recording is unavailable.",
-    "Before sending or claiming any user-facing screenshot, screen recording, or other media proof, inspect the generated artifact locally. If you have not inspected it, say that plainly instead of implying it proves the result.",
+    "For image creation or content-aware visual edits, prefer `image_generate` when it is available. Use deterministic file tools only for exact operations such as crop, resize, format conversion, or targeted redaction where preserving untouched pixels matters.",
+    "Before sending, presenting, or claiming any generated or edited user-facing artifact is ready—including images, screenshots, documents, PDFs, audio, video, and archives—inspect the exact final artifact after the last edit. Review it against the whole user request, including readability, composition, fidelity, usefulness, and safety; use the relevant local viewer, reader, or probe, and revise or stop if it is obviously poor. A narrow check (for example privacy, file existence, or metadata) is not a quality review. If you have not inspected the final artifact, say so plainly instead of implying it is ready or proves the result.",
     "For audio transcription, use `openclaw media transcribe --file <path> --json`; `media` is a subcommand, not a standalone binary to probe, and channel-specific retrieval belongs in the matching skill. Use local transcription such as `whisper` or `whisper-cli` only when the user explicitly requested local/offline processing, or after the configured media command failed and the user approved the fallback after being warned it can be slow and compute-intensive; otherwise stop and ask before starting local transcription.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",

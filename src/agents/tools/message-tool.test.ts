@@ -557,6 +557,13 @@ describe("message tool description", () => {
     },
   });
 
+  it("requires inspection of created or edited attachments before sending", () => {
+    const tool = createMessageTool({ config: {} as never });
+
+    expect(tool.description).toContain("inspect the exact final artifact");
+    expect(tool.description).toContain("Transport success does not prove artifact quality");
+  });
+
   it("hides BlueBubbles group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
