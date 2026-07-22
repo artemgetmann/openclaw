@@ -405,11 +405,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Before sending or claiming any user-facing screenshot, screen recording, or other media proof",
     );
-    expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
-    expect(prompt).toContain("media transcribe --file <path> --json");
+    expect(prompt).toContain("For audio transcription");
+    expect(prompt).toContain("openclaw media transcribe --file <path> --json");
+    expect(prompt).toContain("`media` is a subcommand, not a standalone binary to probe");
     expect(prompt).toContain(
-      "channel-specific voice-note retrieval belongs in the matching channel skill",
+      "the user approved the fallback after being warned it can be slow and compute-intensive",
     );
+    expect(prompt).toContain("stop and ask before starting local transcription");
+    expect(prompt).toContain("channel-specific retrieval belongs in the matching skill");
     expect(prompt).not.toContain("wacli-recent-reply.sh");
     expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
     expect(prompt).not.toContain("do not inspect Telethon internals");
