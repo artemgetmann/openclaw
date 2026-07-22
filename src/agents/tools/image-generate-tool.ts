@@ -404,7 +404,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured image-generation model (agents.defaults.imageGenerationModel). Use action="list" to inspect registered providers, models, readiness, and auth hints. After generation or editing, inspect the exact final output with the image tool against the full user intent before sending it.',
+      'Generate new images or edit reference images with the configured image-generation model (agents.defaults.imageGenerationModel). Use action="list" to inspect registered providers, models, readiness, and auth hints. After generation or editing, inspect the exact final output against the full user intent before sending it: use the image tool when available, otherwise use an available local viewer or vision path and say plainly if visual inspection is not possible.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

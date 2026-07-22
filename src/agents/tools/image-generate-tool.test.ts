@@ -40,6 +40,8 @@ describe("image_generate tool", () => {
     expect(tool).not.toBeNull();
     expect(tool?.description).toContain("inspect the exact final output");
     expect(tool?.description).toContain("full user intent");
+    expect(tool?.description).toContain("when available");
+    expect(tool?.description).toContain("local viewer or vision path");
     const result = await tool?.execute("tool-1", { action: "list" });
     expect(result).toMatchObject({
       content: [
