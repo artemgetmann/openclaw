@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-JARVIS_LABEL="ai.jarvis.gateway"
+JARVIS_LABEL="${OPENCLAW_JARVIS_GATEWAY_LABEL:-ai.jarvis.gateway}"
 OPENCLAW_SHARED_LABEL="ai.openclaw.gateway"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 JARVIS_HOME="${OPENCLAW_JARVIS_HOME:-${HOME}/Library/Application Support/Jarvis}"
@@ -279,6 +279,9 @@ assert_protected_hotfix_runtime_provenance() {
 
   is_git_commit "${installed_commit}" || die "protected-hotfix compatibility manifest has missing or invalid gitCommit"
   [[ -n "${installed_version}" ]] || die "protected-hotfix compatibility manifest is missing bundleVersion"
+  is_git_commit "${protected_commit}" || die "protected-hotfix marker has missing or invalid protectedRuntimeGitCommit"
+  is_git_commit "${compatibility_commit}" || die "protected-hotfix marker has missing or invalid compatibilityManifestGitCommit"
+  is_git_commit "${app_commit}" || die "installed Jarvis app manifest has missing or invalid gitCommit"
   commit_matches "${LIVE_RUNTIME_COMMIT}" "${protected_commit}" || \
     die "protected-hotfix marker commit=${protected_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
   commit_matches "${installed_commit}" "${compatibility_commit}" || \
@@ -294,6 +297,7 @@ assert_protected_hotfix_runtime_provenance() {
   [[ -n "${backup_path}" && -r "${backup_path}" ]] || \
     die "protected-hotfix backup receipt is missing or unreadable"
   backup_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${backup_path}")"
+  is_git_commit "${backup_commit}" || die "protected-hotfix backup receipt has missing or invalid gitCommit"
   commit_matches "${LIVE_RUNTIME_COMMIT}" "${backup_commit}" || \
     die "protected-hotfix backup commit=${backup_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
 }

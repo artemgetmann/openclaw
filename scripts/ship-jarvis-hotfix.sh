@@ -760,6 +760,7 @@ prove_break_glass_runtime() {
     OPENCLAW_JARVIS_PROTECTION_MARKER="${JARVIS_PROTECTION_MARKER}" \
     OPENCLAW_INSTALLED_JARVIS_APP_PATH="${INSTALLED_JARVIS_APP_PATH}" \
     OPENCLAW_JARVIS_APP_MANIFEST="${INSTALLED_JARVIS_APP_MANIFEST}" \
+    OPENCLAW_JARVIS_GATEWAY_LABEL="${JARVIS_LABEL}" \
       bash "${PROVE_RUNTIME_SCRIPT}" \
         --runtime-source jarvis-break-glass-hotfix \
         --expected-commit "${expected_commit}" \
