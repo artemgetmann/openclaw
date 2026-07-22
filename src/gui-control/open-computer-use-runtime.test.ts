@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -407,6 +408,27 @@ describe("formatOpenComputerUseTccRecoveryGuidance", () => {
   });
 });
 
+async function createPackagedOpenComputerUse(
+  packageRoot: string,
+  bundleIdentifier = "com.ifuryst.opencomputeruse",
+): Promise<string> {
+  const appRoot = path.join(packageRoot, "native", "Open Computer Use.app");
+  const packagedCommand = path.join(appRoot, "Contents", "MacOS", "OpenComputerUse");
+  await fs.mkdir(path.dirname(packagedCommand), { recursive: true });
+  await fs.writeFile(packagedCommand, "");
+  await fs.writeFile(
+    path.join(appRoot, "Contents", "Info.plist"),
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      "<plist><dict>",
+      "<key>CFBundleIdentifier</key>",
+      `<string>${bundleIdentifier}</string>`,
+      "</dict></plist>",
+    ].join("\n"),
+  );
+  return packagedCommand;
+}
+
 describe("OpenComputerUseRuntime", () => {
   it("uses an explicit OCU command before discovery", () => {
     expect(
@@ -430,18 +452,9 @@ describe("OpenComputerUseRuntime", () => {
     ).toBe("/tmp/env-ocu");
   });
 
-  it("uses the OCU env override before packaged app discovery", async () => {
+  it("keeps packaged consumer resolution on the production app despite an env override", async () => {
     const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
-    const packagedCommand = path.join(
-      packageRoot,
-      "native",
-      "Open Computer Use.app",
-      "Contents",
-      "MacOS",
-      "OpenComputerUse",
-    );
-    await fs.mkdir(path.dirname(packagedCommand), { recursive: true });
-    await fs.writeFile(packagedCommand, "");
+    const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
 
     expect(
       resolveOpenComputerUseCommand(
@@ -452,21 +465,25 @@ describe("OpenComputerUseRuntime", () => {
         },
         packageRoot,
       ),
-    ).toBe("/tmp/env-ocu");
+    ).toBe(packagedCommand);
+  });
+
+  it("does not let an explicit Dev command override the packaged consumer app", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
+
+    expect(
+      resolveOpenComputerUseCommand(
+        "/private/tmp/Open Computer Use Socket Test Dev v2.app/Contents/MacOS/OpenComputerUse",
+        { OPENCLAW_ALLOW_DEV_OPEN_COMPUTER_USE: "1" },
+        packageRoot,
+      ),
+    ).toBe(packagedCommand);
   });
 
   it("prefers the release app embedded in the resolved package root by default", async () => {
     const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
-    const packagedCommand = path.join(
-      packageRoot,
-      "native",
-      "Open Computer Use.app",
-      "Contents",
-      "MacOS",
-      "OpenComputerUse",
-    );
-    await fs.mkdir(path.dirname(packagedCommand), { recursive: true });
-    await fs.writeFile(packagedCommand, "");
+    const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
 
     expect(
       resolveOpenComputerUseCommand(
@@ -479,7 +496,63 @@ describe("OpenComputerUseRuntime", () => {
     ).toBe(packagedCommand);
   });
 
-  it("discovers the installed dev app executable when no shim is configured", async () => {
+  it("reads the nested OCU identity instead of an outer Jarvis app identity", async () => {
+    const outerAppRoot = await fs.mkdtemp(path.join(os.tmpdir(), "Jarvis.app-"));
+    const packageRoot = path.join(
+      outerAppRoot,
+      "Jarvis.app",
+      "Contents",
+      "Resources",
+      "OpenClawRuntime",
+      "openclaw",
+    );
+    await fs.mkdir(path.join(outerAppRoot, "Jarvis.app", "Contents"), { recursive: true });
+    await fs.writeFile(
+      path.join(outerAppRoot, "Jarvis.app", "Contents", "Info.plist"),
+      "<plist><dict><key>CFBundleIdentifier</key><string>ai.jarvis.mac</string></dict></plist>",
+    );
+    const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
+
+    expect(resolveOpenComputerUseCommand(undefined, {}, packageRoot)).toBe(packagedCommand);
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "validates the production identity from a binary Info.plist",
+    async () => {
+      const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+      const packagedCommand = await createPackagedOpenComputerUse(packageRoot);
+      const infoPlistPath = path.join(
+        packageRoot,
+        "native",
+        "Open Computer Use.app",
+        "Contents",
+        "Info.plist",
+      );
+      execFileSync("/usr/bin/plutil", ["-convert", "binary1", infoPlistPath]);
+
+      expect(resolveOpenComputerUseCommand(undefined, {}, packageRoot)).toBe(packagedCommand);
+    },
+  );
+
+  it("rejects a packaged app whose Info.plist carries the Dev bundle identity", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    await createPackagedOpenComputerUse(packageRoot, "com.ifuryst.opencomputeruse.dev");
+
+    expect(() => resolveOpenComputerUseCommand(undefined, {}, packageRoot)).toThrow(
+      "expected com.ifuryst.opencomputeruse",
+    );
+  });
+
+  it("fails closed when a packaged native payload is missing production OCU", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    await fs.mkdir(path.join(packageRoot, "native"));
+
+    expect(() => resolveOpenComputerUseCommand(undefined, {}, packageRoot)).toThrow(
+      "refusing PATH or development fallback",
+    );
+  });
+
+  it("does not auto-discover an installed dev app", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-command-test-"));
     const appCommand = path.join(
       tempDir,
@@ -492,7 +565,61 @@ describe("OpenComputerUseRuntime", () => {
     await fs.mkdir(path.dirname(appCommand), { recursive: true });
     await fs.writeFile(appCommand, "");
 
-    expect(resolveOpenComputerUseCommand(undefined, { HOME: tempDir }, null)).toBe(appCommand);
+    expect(resolveOpenComputerUseCommand(undefined, { HOME: tempDir }, null)).toBe(
+      "open-computer-use",
+    );
+  });
+
+  it("rejects a Dev-named app override without explicit developer intent", () => {
+    expect(() =>
+      resolveOpenComputerUseCommand(
+        "/private/tmp/Open Computer Use Socket Test Dev v2.app/Contents/MacOS/OpenComputerUse",
+        {},
+        null,
+      ),
+    ).toThrow("OPENCLAW_ALLOW_DEV_OPEN_COMPUTER_USE=1");
+  });
+
+  it("rejects a .dev bundle identity supplied through the environment", () => {
+    expect(() =>
+      resolveOpenComputerUseCommand(
+        undefined,
+        {
+          OPENCLAW_OPEN_COMPUTER_USE_BIN:
+            "/tmp/com.ifuryst.opencomputeruse.dev/Contents/MacOS/OpenComputerUse",
+        },
+        null,
+      ),
+    ).toThrow("explicit developer intent");
+  });
+
+  it("rejects a renamed app when Info.plist carries the Dev bundle identity", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-renamed-dev-"));
+    const appRoot = path.join(tempDir, "Open Computer Use.app");
+    const command = path.join(appRoot, "Contents", "MacOS", "OpenComputerUse");
+    await fs.mkdir(path.dirname(command), { recursive: true });
+    await fs.writeFile(command, "");
+    await fs.writeFile(
+      path.join(appRoot, "Contents", "Info.plist"),
+      "<plist><dict><key>CFBundleIdentifier</key><string>com.ifuryst.opencomputeruse.dev</string></dict></plist>",
+    );
+
+    expect(() => resolveOpenComputerUseCommand(command, {}, null)).toThrow(
+      "explicit developer intent",
+    );
+  });
+
+  it("allows an explicitly opted-in Dev helper for isolated engineering runs", () => {
+    const devCommand =
+      "/Users/user/Applications/Open Computer Use (Dev).app/Contents/MacOS/OpenComputerUse";
+
+    expect(
+      resolveOpenComputerUseCommand(
+        devCommand,
+        { OPENCLAW_ALLOW_DEV_OPEN_COMPUTER_USE: "1" },
+        null,
+      ),
+    ).toBe(devCommand);
   });
 
   it("falls back to the PATH shim when OCU is not otherwise discoverable", () => {
