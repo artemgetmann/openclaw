@@ -178,6 +178,7 @@ function managedChildEnv() {
     OPENCLAW_LOG_DIR: path.join(stateDir, "logs"),
     OPENCLAW_PROFILE: "consumer",
     OPENCLAW_LAUNCHD_LABEL: label,
+    OPENCLAW_JARVIS_GATEWAY_LABEL: label,
     OPENCLAW_GATEWAY_PORT: "18789",
     // Receipt selectors are test seams in the reusable runtime prover, but the
     // daily canary must always bind them to canonical installed Jarvis state.

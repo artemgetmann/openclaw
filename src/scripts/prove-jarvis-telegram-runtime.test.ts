@@ -63,6 +63,7 @@ ${
 [[ -z "$OPENCLAW_GATEWAY_PASSWORD" && -z "$CLAWDBOT_GATEWAY_PASSWORD" ]] || exit 33
 [[ -z "$CLAWDBOT_GATEWAY_PORT" && "$OPENCLAW_GATEWAY_PORT" == "18789" ]] || exit 34
 [[ "$OPENCLAW_CONFIG_PATH" == "${stateDir}/openclaw.json" ]] || exit 35
+[[ "$OPENCLAW_JARVIS_GATEWAY_LABEL" == "ai.jarvis.gateway" ]] || exit 40
 [[ "$OPENCLAW_JARVIS_INSTALLED_MANIFEST" == "${stateDir}/.consumer-bundled-runtime.json" ]] || exit 36
 [[ "$OPENCLAW_JARVIS_PROTECTION_MARKER" == "${stateDir}/.consumer-bundled-runtime.protection.json" ]] || exit 37
 [[ "$OPENCLAW_INSTALLED_JARVIS_APP_PATH" == "/Applications/Jarvis.app" ]] || exit 38
@@ -212,6 +213,7 @@ if (args[0] === "channels" && args[1] === "status") {
       CLAWDBOT_GATEWAY_TOKEN: "hostile-legacy-token",
       OPENCLAW_GATEWAY_PASSWORD: "hostile-current-password",
       CLAWDBOT_GATEWAY_PASSWORD: "hostile-legacy-password",
+      OPENCLAW_JARVIS_GATEWAY_LABEL: "ai.jarvis.gateway.hostile",
       OPENCLAW_JARVIS_INSTALLED_MANIFEST: path.join(root, "hostile-installed-manifest.json"),
       OPENCLAW_JARVIS_PROTECTION_MARKER: path.join(root, "hostile-protection-marker.json"),
       OPENCLAW_INSTALLED_JARVIS_APP_PATH: path.join(root, "Hostile.app"),
