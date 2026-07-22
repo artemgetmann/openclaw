@@ -11,13 +11,17 @@ JARVIS_LOG_DIR="${OPENCLAW_JARVIS_LOG_DIR:-${JARVIS_STATE_DIR}/logs}"
 JARVIS_NODE="${OPENCLAW_JARVIS_NODE_BIN:-${JARVIS_STATE_DIR}/tools/node/bin/node}"
 JARVIS_ENTRYPOINT="${OPENCLAW_JARVIS_ENTRYPOINT:-${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js}"
 JARVIS_RUNTIME_ROOT="$(dirname -- "$(dirname -- "${JARVIS_ENTRYPOINT}")")"
-JARVIS_INSTALLED_MANIFEST="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json"
-JARVIS_PROTECTION_MARKER="${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json"
+JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
+JARVIS_APP_MANIFEST="${OPENCLAW_JARVIS_APP_MANIFEST:-${JARVIS_APP_PATH}/Contents/Resources/OpenClawRuntime/manifest.json}"
+JARVIS_INSTALLED_MANIFEST="${OPENCLAW_JARVIS_INSTALLED_MANIFEST:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.json}"
+JARVIS_PROTECTION_MARKER="${OPENCLAW_JARVIS_PROTECTION_MARKER:-${JARVIS_STATE_DIR}/.consumer-bundled-runtime.protection.json}"
 LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-launchctl}"
 LSOF_BIN="${OPENCLAW_LSOF_BIN:-lsof}"
 JQ_BIN="${OPENCLAW_JQ_BIN:-jq}"
 ID_BIN="${OPENCLAW_ID_BIN:-id}"
 EXPECTED_COMMIT=""
+EXPECTED_RUNTIME_SOURCE="jarvis-managed-bundle"
+EXPECTED_PACKAGE_VERSION=""
 STATUS_STDOUT_FILE=""
 STATUS_STDERR_FILE=""
 STATUS_JSON_FILE=""
@@ -31,13 +35,15 @@ LIVE_CONFIG_PATH=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/prove-jarvis-runtime.sh [--expected-commit <sha>]
+Usage: scripts/prove-jarvis-runtime.sh [--expected-commit <sha>] [--runtime-source <source>]
 
 Read-only proof for the installed Jarvis-managed gateway runtime.
 
 The proof targets ai.jarvis.gateway, Jarvis app-support state, and the
-app-managed bundled runtime. It does not deploy, restart, bootout, install,
-touch /Applications/Jarvis.app, or mutate ai.openclaw.gateway.
+app-managed bundled runtime by default. Pass
+--runtime-source jarvis-break-glass-hotfix only for an explicitly protected
+hotfix. It does not deploy, restart, bootout, install, touch
+/Applications/Jarvis.app, or mutate ai.openclaw.gateway.
 EOF
 }
 
@@ -46,7 +52,9 @@ log() {
 }
 
 die() {
-  log "ERROR: $*" >&2
+  # Keep failure metadata machine-readable and credential-free so callers can
+  # explain a source mismatch without echoing raw launchd or status output.
+  log "ERROR: $*; runtime_source_observed=${LIVE_RUNTIME_SOURCE:-unknown}; runtime_source_expected=${EXPECTED_RUNTIME_SOURCE}" >&2
   exit 1
 }
 
@@ -56,6 +64,18 @@ parse_args() {
       --expected-commit)
         EXPECTED_COMMIT="${2:-}"
         [[ -n "${EXPECTED_COMMIT}" ]] || die "--expected-commit requires a value"
+        shift 2
+        ;;
+      --runtime-source)
+        EXPECTED_RUNTIME_SOURCE="${2:-}"
+        [[ "${EXPECTED_RUNTIME_SOURCE}" == "jarvis-managed-bundle" || \
+          "${EXPECTED_RUNTIME_SOURCE}" == "jarvis-break-glass-hotfix" ]] || \
+          die "--runtime-source must be jarvis-managed-bundle or jarvis-break-glass-hotfix"
+        shift 2
+        ;;
+      --expected-package-version)
+        EXPECTED_PACKAGE_VERSION="${2:-}"
+        [[ -n "${EXPECTED_PACKAGE_VERSION}" ]] || die "--expected-package-version requires a value"
         shift 2
         ;;
       --help|-h)
@@ -225,6 +245,59 @@ assert_packaged_runtime_provenance() {
   die "Jarvis runtime commit ${LIVE_RUNTIME_COMMIT} does not match installed package manifest ${installed_commit}; packaged Jarvis proof refused"
 }
 
+assert_protected_hotfix_runtime_provenance() {
+  local installed_commit=""
+  local installed_version=""
+  local protected_commit=""
+  local compatibility_commit=""
+  local compatibility_version=""
+  local backup_path=""
+  local backup_commit=""
+  local app_commit=""
+  local app_version=""
+  local compatibility_source=""
+
+  # The compatibility manifest intentionally describes the installed app while
+  # the marker and backup receipt preserve the newer live payload's identity.
+  # All three records are required; a marker alone is not protection proof.
+  [[ -r "${JARVIS_INSTALLED_MANIFEST}" ]] || \
+    die "protected-hotfix compatibility manifest is not readable: ${JARVIS_INSTALLED_MANIFEST}"
+  [[ -r "${JARVIS_PROTECTION_MARKER}" ]] || \
+    die "protected-hotfix marker is not readable: ${JARVIS_PROTECTION_MARKER}"
+  [[ -r "${JARVIS_APP_MANIFEST}" ]] || \
+    die "installed Jarvis app manifest is not readable: ${JARVIS_APP_MANIFEST}"
+
+  installed_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${JARVIS_INSTALLED_MANIFEST}")"
+  installed_version="$("${JQ_BIN}" -r '.bundleVersion // empty' "${JARVIS_INSTALLED_MANIFEST}")"
+  protected_commit="$("${JQ_BIN}" -r '.protectedRuntimeGitCommit // empty' "${JARVIS_PROTECTION_MARKER}")"
+  compatibility_commit="$("${JQ_BIN}" -r '.compatibilityManifestGitCommit // empty' "${JARVIS_PROTECTION_MARKER}")"
+  compatibility_version="$("${JQ_BIN}" -r '.compatibilityManifestBundleVersion // empty' "${JARVIS_PROTECTION_MARKER}")"
+  compatibility_source="$("${JQ_BIN}" -r '.compatibilityManifestSource // empty' "${JARVIS_PROTECTION_MARKER}")"
+  backup_path="$("${JQ_BIN}" -r '.backupPath // empty' "${JARVIS_PROTECTION_MARKER}")"
+  app_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${JARVIS_APP_MANIFEST}")"
+  app_version="$("${JQ_BIN}" -r '.bundleVersion // empty' "${JARVIS_APP_MANIFEST}")"
+
+  is_git_commit "${installed_commit}" || die "protected-hotfix compatibility manifest has missing or invalid gitCommit"
+  [[ -n "${installed_version}" ]] || die "protected-hotfix compatibility manifest is missing bundleVersion"
+  commit_matches "${LIVE_RUNTIME_COMMIT}" "${protected_commit}" || \
+    die "protected-hotfix marker commit=${protected_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
+  commit_matches "${installed_commit}" "${compatibility_commit}" || \
+    die "protected-hotfix compatibility commit=${compatibility_commit:-missing}, expected ${installed_commit}"
+  [[ "${compatibility_version}" == "${installed_version}" ]] || \
+    die "protected-hotfix compatibility version=${compatibility_version:-missing}, expected ${installed_version}"
+  [[ "${compatibility_source}" == "${JARVIS_APP_PATH}" ]] || \
+    die "protected-hotfix compatibility source=${compatibility_source:-missing}, expected ${JARVIS_APP_PATH}"
+  commit_matches "${installed_commit}" "${app_commit}" || \
+    die "installed Jarvis app commit=${app_commit:-missing}, expected compatibility commit ${installed_commit}"
+  [[ "${app_version}" == "${installed_version}" ]] || \
+    die "installed Jarvis app version=${app_version:-missing}, expected compatibility version ${installed_version}"
+  [[ -n "${backup_path}" && -r "${backup_path}" ]] || \
+    die "protected-hotfix backup receipt is missing or unreadable"
+  backup_commit="$("${JQ_BIN}" -r '.gitCommit // empty' "${backup_path}")"
+  commit_matches "${LIVE_RUNTIME_COMMIT}" "${backup_commit}" || \
+    die "protected-hotfix backup commit=${backup_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
+}
+
 identity_field() {
   local line="$1"
   local key="$2"
@@ -263,14 +336,18 @@ assert_live_runtime_identity() {
   LIVE_CONFIG_PATH="$(identity_field "${line}" "configPath" || true)"
 
   assert_identity_field "serviceLabel" "${LIVE_SERVICE_LABEL}" "${JARVIS_LABEL}"
-  if [[ "${LIVE_RUNTIME_SOURCE}" == "jarvis-break-glass-hotfix" ]]; then
+  if [[ "${EXPECTED_RUNTIME_SOURCE}" == "jarvis-managed-bundle" && \
+    "${LIVE_RUNTIME_SOURCE}" == "jarvis-break-glass-hotfix" ]]; then
     die "runtimeSource=jarvis-break-glass-hotfix; packaged Jarvis proof refused"
   fi
-  assert_identity_field "runtimeSource" "${LIVE_RUNTIME_SOURCE}" "jarvis-managed-bundle"
+  assert_identity_field "runtimeSource" "${LIVE_RUNTIME_SOURCE}" "${EXPECTED_RUNTIME_SOURCE}"
   assert_identity_field "stateDir" "${LIVE_STATE_DIR}" "${JARVIS_STATE_DIR}"
   assert_identity_field "configPath" "${LIVE_CONFIG_PATH}" "${JARVIS_CONFIG_PATH}"
   [[ -n "${LIVE_RUNTIME_COMMIT}" ]] || die "runtimeCommit=missing, expected ${EXPECTED_COMMIT:-a live daemon revision}"
   commit_matches "${EXPECTED_COMMIT}" "${LIVE_RUNTIME_COMMIT}" || die "runtimeCommit=${LIVE_RUNTIME_COMMIT:-missing}, expected ${EXPECTED_COMMIT}"
+  if [[ -n "${EXPECTED_PACKAGE_VERSION}" ]]; then
+    assert_identity_field "runtimePackageVersion" "${LIVE_RUNTIME_PACKAGE_VERSION}" "${EXPECTED_PACKAGE_VERSION}"
+  fi
 }
 
 run_status_json() {
@@ -318,6 +395,19 @@ assert_status_probe() {
   local status_file="$1"
   local rpc_ok=""
   local healthy=""
+  local status_service_label=""
+  local status_runtime_source=""
+  local status_runtime_commit=""
+  local status_runtime_package_version=""
+  local status_state_dir=""
+  local status_config_path=""
+
+  status_service_label="$(jq_field "${status_file}" '.runtimeFingerprint.serviceLabel // empty')"
+  status_runtime_source="$(jq_field "${status_file}" '.runtimeFingerprint.runtimeSource // empty')"
+  status_runtime_commit="$(jq_field "${status_file}" '.runtimeFingerprint.runtimeCommit // empty')"
+  status_runtime_package_version="$(jq_field "${status_file}" '.runtimeFingerprint.runtimePackageVersion // empty')"
+  status_state_dir="$(jq_field "${status_file}" '.runtimeFingerprint.stateDir // empty')"
+  status_config_path="$(jq_field "${status_file}" '.runtimeFingerprint.configPath // empty')"
 
   rpc_ok="$(
     "${JQ_BIN}" -r --arg probe_url "ws://127.0.0.1:${PORT}" '
@@ -344,6 +434,15 @@ assert_status_probe() {
 
   [[ "${rpc_ok}" == "true" ]] || die "RPC probe is not ok"
   [[ "${healthy}" == "true" ]] || die "gateway health is not healthy"
+  assert_identity_field "status serviceLabel" "${status_service_label}" "${JARVIS_LABEL}"
+  assert_identity_field "status runtimeSource" "${status_runtime_source}" "${EXPECTED_RUNTIME_SOURCE}"
+  commit_matches "${LIVE_RUNTIME_COMMIT}" "${status_runtime_commit}" || \
+    die "live runtime status runtimeCommit=${status_runtime_commit:-missing}, expected ${LIVE_RUNTIME_COMMIT}"
+  assert_identity_field "status stateDir" "${status_state_dir}" "${JARVIS_STATE_DIR}"
+  assert_identity_field "status configPath" "${status_config_path}" "${JARVIS_CONFIG_PATH}"
+  if [[ -n "${EXPECTED_PACKAGE_VERSION}" ]]; then
+    assert_identity_field "status runtimePackageVersion" "${status_runtime_package_version}" "${EXPECTED_PACKAGE_VERSION}"
+  fi
 }
 
 print_proof() {
@@ -358,7 +457,7 @@ print_proof() {
   log "config_path=${LIVE_CONFIG_PATH}"
   log "pid=${jarvis_pid}"
   log "listener=127.0.0.1:${PORT}"
-  log "launchctl_loaded_config=jarvis-managed-bundle"
+  log "launchctl_loaded_config=jarvis-application-support"
   log "rpc=ok"
   log "health=healthy"
   log "runtime_mutation=none"
@@ -384,7 +483,11 @@ main() {
   require_jarvis_listener_owner "${jarvis_pid}" "${listener_output}"
   require_live_gateway_log_owner "${jarvis_pid}"
   assert_live_runtime_identity
-  assert_packaged_runtime_provenance
+  if [[ "${EXPECTED_RUNTIME_SOURCE}" == "jarvis-managed-bundle" ]]; then
+    assert_packaged_runtime_provenance
+  else
+    assert_protected_hotfix_runtime_provenance
+  fi
 
   STATUS_STDOUT_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-runtime-status.XXXXXX")"
   STATUS_STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-runtime-status.err.XXXXXX")"

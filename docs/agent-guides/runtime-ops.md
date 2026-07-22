@@ -229,9 +229,11 @@ repeatedly urgent incident action.
    - Merge first and fast-forward sacred `main`; never copy unmerged worktree
      output into the daily runtime.
    - A source-refreshed or protected payload must report
-     `runtime_source=jarvis-break-glass-hotfix`. It is intentionally rejected by
-     `scripts/prove-jarvis-runtime.sh`, because that script proves package-seeded
-     provenance, not merely a healthy process at a managed-looking path.
+     `runtime_source=jarvis-break-glass-hotfix`. The default
+     `scripts/prove-jarvis-runtime.sh` invocation intentionally rejects it as
+     packaged proof. Use explicit
+     `--runtime-source jarvis-break-glass-hotfix` only when proving the complete
+     protection/compatibility/backup receipt for that exact commit.
    - If the installed app is older, run
      `scripts/protect-jarvis-runtime-from-app-reseed.sh --expected-live-commit <sha>`
      in dry-run mode first, then use `--apply` only after verifying the exact
@@ -269,6 +271,24 @@ bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
 bash scripts/prove-jarvis-telegram-runtime.sh --execute \
   --expected-commit <deployed-commit>
 ```
+
+Those commands default to strict `jarvis-managed-bundle` proof and are the
+correct lane after a packaged release. After `scripts/ship-jarvis-hotfix.sh`,
+use the explicit protected source for both preview and execution:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --runtime-source jarvis-break-glass-hotfix \
+  --expected-commit <deployed-commit>
+bash scripts/prove-jarvis-telegram-runtime.sh --execute \
+  --runtime-source jarvis-break-glass-hotfix \
+  --expected-commit <deployed-commit>
+```
+
+The hotfix ship wrapper prints the exact zero-mutation post-deploy preview
+command. The canary never auto-falls back between sources. A protected-hotfix
+failure must be repaired as protected provenance; tester-lane warm-up applies
+only to isolated worktree bots.
 
 That harness proves `ai.jarvis.gateway` and Jarvis Application Support,
 acquires the machine-wide canary lock, uses one disposable Jarvis Lab topic,
@@ -325,10 +345,12 @@ This does not touch `/Applications/Jarvis.app`. It writes a compatibility
 manifest plus an audit marker under
 `~/Library/Application Support/Jarvis/.jarvis` so reopening the old app does not
 silently reseed over the fixed app-support runtime. After protection, runtime
-status must report `jarvis-break-glass-hotfix`, and
-`scripts/prove-jarvis-runtime.sh` must reject the temporary state as packaged
-proof. The compatibility manifest exists only to prevent downgrade while the
-replacement Jarvis package is prepared.
+status must report `jarvis-break-glass-hotfix`, and the default
+`scripts/prove-jarvis-runtime.sh` invocation must reject the temporary state as
+packaged proof. Its explicit protected-hotfix selector may prove that temporary
+state without claiming managed-bundle steady state. The compatibility manifest
+exists only to prevent downgrade while the replacement Jarvis package is
+prepared.
 
 Use `--dry-run` before the first live rollout or whenever the PR/runtime state
 is not obvious. Use `--skip-live` only when the proof level is intentionally

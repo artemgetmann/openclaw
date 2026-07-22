@@ -28,6 +28,7 @@ PR_REQUIRED_SCRIPT="${OPENCLAW_SHIP_PR_REQUIRED_SCRIPT:-${MAIN_REPO}/scripts/pr-
 PACKAGE_SCRIPT="${OPENCLAW_SHIP_PACKAGE_SCRIPT:-${MAIN_REPO}/scripts/package-consumer-mac-app-fast.sh}"
 OPEN_APP_SCRIPT="${OPENCLAW_SHIP_OPEN_APP_SCRIPT:-${MAIN_REPO}/scripts/open-consumer-mac-app.sh}"
 PROTECT_SCRIPT="${OPENCLAW_SHIP_PROTECT_SCRIPT:-${MAIN_REPO}/scripts/protect-jarvis-runtime-from-app-reseed.sh}"
+PROVE_RUNTIME_SCRIPT="${OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT:-${MAIN_REPO}/scripts/prove-jarvis-runtime.sh}"
 
 JARVIS_APP_PATH="${OPENCLAW_SHIP_JARVIS_APP_PATH:-${MAIN_REPO}/dist/Jarvis.app}"
 INSTALLED_JARVIS_APP_PATH="${OPENCLAW_INSTALLED_JARVIS_APP_PATH:-/Applications/Jarvis.app}"
@@ -132,6 +133,7 @@ require_preflight_tools() {
   [[ -x "${PACKAGE_SCRIPT}" ]] || die "package helper is missing or not executable: ${PACKAGE_SCRIPT}"
   [[ -x "${OPEN_APP_SCRIPT}" ]] || die "app-open helper is missing or not executable: ${OPEN_APP_SCRIPT}"
   [[ -x "${PROTECT_SCRIPT}" ]] || die "runtime-protection helper is missing or not executable: ${PROTECT_SCRIPT}"
+  [[ -x "${PROVE_RUNTIME_SCRIPT}" ]] || die "runtime-proof helper is missing or not executable: ${PROVE_RUNTIME_SCRIPT}"
 }
 
 expected_main_repo() {
@@ -738,83 +740,39 @@ telegram_default_proof() {
 prove_break_glass_runtime() {
   local expected_commit="$1"
   local expected_version="$2"
-  local domain="gui/$(${ID_BIN} -u)"
-  local launchctl_output=""
+  local proof_output=""
   local pid=""
-  local listener_output=""
-  local service_label=""
   local runtime_source=""
   local runtime_commit=""
   local runtime_package_version=""
-  local state_dir=""
-  local config_path=""
-  local rpc_ok=""
-  local protected_commit=""
 
-  STATUS_STDOUT_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-status.XXXXXX")"
-  STATUS_STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-status.err.XXXXXX")"
-  STATUS_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/jarvis-hotfix-status.json.XXXXXX")"
+  # Runtime shipping and the post-deploy canary share one read-only provenance
+  # contract. Keep the wrapper's legacy summary keys as aliases only; the
+  # canonical helper owns all source, protection, daemon, listener, and RPC checks.
+  proof_output="$(
+    OPENCLAW_JARVIS_HOME="${JARVIS_HOME}" \
+    OPENCLAW_JARVIS_STATE_DIR="${JARVIS_STATE_DIR}" \
+    OPENCLAW_JARVIS_CONFIG_PATH="${JARVIS_CONFIG_PATH}" \
+    OPENCLAW_JARVIS_LOG_DIR="${JARVIS_LOG_DIR}" \
+    OPENCLAW_JARVIS_NODE_BIN="${JARVIS_NODE}" \
+    OPENCLAW_JARVIS_ENTRYPOINT="${JARVIS_ENTRYPOINT}" \
+    OPENCLAW_JARVIS_INSTALLED_MANIFEST="${JARVIS_MANIFEST}" \
+    OPENCLAW_JARVIS_PROTECTION_MARKER="${JARVIS_PROTECTION_MARKER}" \
+    OPENCLAW_INSTALLED_JARVIS_APP_PATH="${INSTALLED_JARVIS_APP_PATH}" \
+    OPENCLAW_JARVIS_APP_MANIFEST="${INSTALLED_JARVIS_APP_MANIFEST}" \
+      bash "${PROVE_RUNTIME_SCRIPT}" \
+        --runtime-source jarvis-break-glass-hotfix \
+        --expected-commit "${expected_commit}" \
+        --expected-package-version "${expected_version}"
+  )" || die "protected-hotfix runtime proof failed"
+  printf '%s\n' "${proof_output}"
 
-  [[ -x "${JARVIS_NODE}" ]] || die "installed Jarvis node is missing: ${JARVIS_NODE}"
-  [[ -r "${JARVIS_ENTRYPOINT}" ]] || die "installed Jarvis entrypoint is missing: ${JARVIS_ENTRYPOINT}"
-  OPENCLAW_HOME="${JARVIS_HOME}" \
-  OPENCLAW_STATE_DIR="${JARVIS_STATE_DIR}" \
-  OPENCLAW_CONFIG_PATH="${JARVIS_CONFIG_PATH}" \
-  OPENCLAW_LOG_DIR="${JARVIS_LOG_DIR}" \
-  OPENCLAW_PROFILE=consumer \
-  OPENCLAW_LAUNCHD_LABEL="${JARVIS_LABEL}" \
-    "${JARVIS_NODE}" "${JARVIS_ENTRYPOINT}" gateway status --deep --require-rpc --json \
-      >"${STATUS_STDOUT_FILE}" 2>"${STATUS_STDERR_FILE}" || {
-        # Status diagnostics can include config-derived text. Keep failure
-        # output closed instead of risking credential disclosure.
-        die "Jarvis deep RPC status failed"
-      }
-  extract_status_json
-
-  service_label="$("${JQ_BIN}" -r '.runtimeFingerprint.serviceLabel // empty' "${STATUS_JSON_FILE}")"
-  runtime_source="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimeSource // empty' "${STATUS_JSON_FILE}")"
-  runtime_commit="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimeCommit // empty' "${STATUS_JSON_FILE}")"
-  runtime_package_version="$("${JQ_BIN}" -r '.runtimeFingerprint.runtimePackageVersion // empty' "${STATUS_JSON_FILE}")"
-  state_dir="$("${JQ_BIN}" -r '.runtimeFingerprint.stateDir // empty' "${STATUS_JSON_FILE}")"
-  config_path="$("${JQ_BIN}" -r '.runtimeFingerprint.configPath // empty' "${STATUS_JSON_FILE}")"
-  rpc_ok="$("${JQ_BIN}" -r --arg url "ws://127.0.0.1:${PORT}" '
-    .rpc.ok // ([.targets[]? | select(.url == $url and .connect.rpcOk == true)] | length > 0)
-  ' "${STATUS_JSON_FILE}")"
-
-  [[ "${service_label}" == "${JARVIS_LABEL}" ]] || die "status serviceLabel=${service_label:-missing}, expected ${JARVIS_LABEL}"
-  [[ "${runtime_source}" == "jarvis-break-glass-hotfix" ]] || \
-    die "status runtimeSource=${runtime_source:-missing}, expected jarvis-break-glass-hotfix"
-  commit_matches "${expected_commit}" "${runtime_commit}" || \
-    die "status runtimeCommit=${runtime_commit:-missing}, expected ${expected_commit}"
-  [[ "${runtime_package_version}" == "${expected_version}" ]] || \
-    die "status runtimePackageVersion=${runtime_package_version:-missing}, expected ${expected_version}"
-  [[ "${state_dir}" == "${JARVIS_STATE_DIR}" ]] || die "status stateDir=${state_dir:-missing}, expected ${JARVIS_STATE_DIR}"
-  [[ "${config_path}" == "${JARVIS_CONFIG_PATH}" ]] || die "status configPath=${config_path:-missing}, expected ${JARVIS_CONFIG_PATH}"
-  [[ "${rpc_ok}" == "true" ]] || die "Jarvis RPC proof failed"
-
-  [[ -r "${JARVIS_PROTECTION_MARKER}" ]] || die "Jarvis protection marker is missing after apply"
-  protected_commit="$("${JQ_BIN}" -r '.protectedRuntimeGitCommit // empty' "${JARVIS_PROTECTION_MARKER}")"
-  commit_matches "${expected_commit}" "${protected_commit}" || \
-    die "protection marker commit=${protected_commit:-missing}, expected ${expected_commit}"
-
-  # Never print the raw launchctl job: its environment can contain credentials.
-  # Parse only the process identity fields needed for proof, then emit a fixed
-  # credential-free command assembled from expected app-support paths.
-  launchctl_output="$(${LAUNCHCTL_BIN} print "${domain}/${JARVIS_LABEL}" 2>/dev/null || true)"
-  pid="$(printf '%s\n' "${launchctl_output}" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
-  [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || die "launchctl did not report a live ${JARVIS_LABEL} PID"
-  printf '%s\n' "${launchctl_output}" | awk -v expected="program = ${JARVIS_NODE}" '
-    { line=$0; sub(/^[[:space:]]+/, "", line); if (line == expected) found=1 }
-    END { exit(found ? 0 : 1) }
-  ' || die "launchctl program does not match installed Jarvis node"
-  printf '%s\n' "${launchctl_output}" | awk -v expected="${JARVIS_ENTRYPOINT}" '
-    { line=$0; sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line); if (line == expected) found=1 }
-    END { exit(found ? 0 : 1) }
-  ' || die "launchctl arguments do not contain installed Jarvis entrypoint"
-
-  listener_output="$(${LSOF_BIN} -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
-  printf '%s\n' "${listener_output}" | awk -v pid="${pid}" 'NR > 1 && $2 == pid { found=1 } END { exit(found ? 0 : 1) }' || \
-    die "TCP port ${PORT} is not owned by ${JARVIS_LABEL} pid=${pid}"
+  runtime_commit="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_commit=([^ ]+).*$/\1/p' | tail -n 1)"
+  runtime_package_version="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_package_version=([^ ]+).*$/\1/p' | tail -n 1)"
+  runtime_source="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*runtime_source=([^ ]+).*$/\1/p' | tail -n 1)"
+  pid="$(printf '%s\n' "${proof_output}" | sed -nE 's/^.*pid=([1-9][0-9]*).*$/\1/p' | tail -n 1)"
+  [[ -n "${runtime_commit}" && -n "${runtime_package_version}" && -n "${runtime_source}" && -n "${pid}" ]] || \
+    die "protected-hotfix runtime proof omitted required summary fields"
 
   printf 'installed_runtime_commit=%s\n' "${runtime_commit}"
   printf 'runtime_package_version=%s\n' "${runtime_package_version}"
@@ -827,7 +785,8 @@ prove_break_glass_runtime() {
   printf 'applications_jarvis_app=untouched\n'
   printf 'public_release=false\n'
   printf 'managed_bundle_steady_state=false\n'
-  cleanup_status_files
+  printf 'post_deploy_telegram_canary=%s\n' \
+    "bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --runtime-source jarvis-break-glass-hotfix --expected-commit ${expected_commit}"
 }
 
 main() {

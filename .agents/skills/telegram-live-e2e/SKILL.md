@@ -33,11 +33,21 @@ exclusive tester lanes. Never replace tester lanes with the daily bot, and
 never allow concurrent daily-bot canaries: topics do not isolate token polling,
 cursor state, global config, provider quotas, or the gateway process.
 
-For the managed lane, run
-`bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --expected-commit
-<deployed-commit>` first. `--execute` requires fresh approval in the active
-Codex chat. The managed harness, not `prove-main-telegram-runtime.sh`, owns the
-`ai.jarvis.gateway` canary.
+Choose the deployed source explicitly:
+
+- After a packaged release, omit `--runtime-source` or pass
+  `--runtime-source jarvis-managed-bundle`. This strict default rejects a
+  protected source hotfix.
+- After `scripts/ship-jarvis-hotfix.sh`, pass
+  `--runtime-source jarvis-break-glass-hotfix`. This requires the exact commit,
+  complete protection marker/compatibility/backup receipts, Jarvis Application
+  Support identity, PID/listener ownership, and deep RPC health.
+- Use tester-lane warm-up only for isolated worktree bots. It is not a daily
+  `ai.jarvis.gateway` provenance repair.
+
+Always run `--dry-run` first. `--execute` requires fresh approval in the active
+Codex chat. There is no automatic source fallback. This harness, not
+`prove-main-telegram-runtime.sh`, owns the daily `ai.jarvis.gateway` canary.
 
 ## Read first
 

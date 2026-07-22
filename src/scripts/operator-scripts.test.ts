@@ -170,10 +170,13 @@ function writeJarvisProofFixture(
   options: {
     commit?: string;
     manifestCommit?: string;
+    runtimeSource?: "jarvis-managed-bundle" | "jarvis-break-glass-hotfix";
+    statusRuntimeSource?: "jarvis-managed-bundle" | "jarvis-break-glass-hotfix";
     protection?: {
       protectedRuntimeGitCommit: string;
       compatibilityManifestGitCommit: string;
       compatibilityManifestBundleVersion: string;
+      backupCommit?: string;
     };
     launchctl?: Parameters<typeof jarvisLaunchctlFixture>[1];
   } = {},
@@ -183,17 +186,27 @@ function writeJarvisProofFixture(
   const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
   const nodeBin = path.join(stateDir, "tools", "node", "bin", "node");
   const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
+  const appPath = path.join(root, "Applications", "Jarvis.app");
+  const appManifest = path.join(
+    appPath,
+    "Contents",
+    "Resources",
+    "OpenClawRuntime",
+    "manifest.json",
+  );
   const binDir = path.join(root, "bin");
   const commit = options.commit ?? "389c0513cf";
+  const runtimeSource = options.runtimeSource ?? "jarvis-managed-bundle";
   fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
   fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.mkdirSync(path.dirname(appManifest), { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(entrypoint, "fixture\n");
   writeExecutable(
     nodeBin,
     `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"jarvis-managed-bundle","runtimeCommit":"${commit}","runtimePackageVersion":"2026.6.28","launchServiceVersion":"2026.6.28","stateDir":"${stateDir}","configPath":"${stateDir}/openclaw.json"},"rpc":{"ok":true},"health":{"healthy":true}}'
+printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runtimeSource":"${options.statusRuntimeSource ?? runtimeSource}","runtimeCommit":"${commit}","runtimePackageVersion":"2026.6.28","launchServiceVersion":"2026.6.28","stateDir":"${stateDir}","configPath":"${stateDir}/openclaw.json"},"rpc":{"ok":true},"health":{"healthy":true}}'
 `,
   );
   writeExecutable(
@@ -201,7 +214,7 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
     jarvisLaunchctlFixture(stateDir, options.launchctl),
   );
   writeExecutable(path.join(binDir, "lsof"), jarvisLsofFixture(stateDir));
-  writeJarvisRuntimeLog(stateDir, { commit });
+  writeJarvisRuntimeLog(stateDir, { commit, runtimeSource });
   fs.writeFileSync(
     path.join(stateDir, ".consumer-bundled-runtime.json"),
     JSON.stringify({
@@ -210,13 +223,35 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
       gitCommit: options.manifestCommit ?? commit,
     }),
   );
+  fs.writeFileSync(
+    appManifest,
+    JSON.stringify({
+      format: 1,
+      bundleVersion: "300",
+      gitCommit: options.manifestCommit ?? commit,
+    }),
+  );
   if (options.protection) {
+    const backupPath = path.join(stateDir, ".consumer-bundled-runtime.json.backup.fixture");
+    fs.writeFileSync(
+      backupPath,
+      JSON.stringify({
+        format: 1,
+        bundleVersion: "301",
+        gitCommit: options.protection.backupCommit ?? commit,
+      }),
+    );
     fs.writeFileSync(
       path.join(stateDir, ".consumer-bundled-runtime.protection.json"),
-      JSON.stringify({ format: 1, ...options.protection }),
+      JSON.stringify({
+        format: 1,
+        ...options.protection,
+        compatibilityManifestSource: appPath,
+        backupPath,
+      }),
     );
   }
-  return { home, stateDir, binDir };
+  return { home, stateDir, binDir, appPath };
 }
 
 function jarvisLsofFixture(stateDir: string, options: { includeGatewayLog?: boolean } = {}) {
@@ -641,6 +676,7 @@ printf '%s\\n' '250'
       OPENCLAW_SHIP_PACKAGE_SCRIPT: mutationStub,
       OPENCLAW_SHIP_OPEN_APP_SCRIPT: mutationStub,
       OPENCLAW_SHIP_PROTECT_SCRIPT: mutationStub,
+      OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT: mutationStub,
       OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE: releaseLockPath,
     };
     const result = spawnSync(
@@ -741,6 +777,7 @@ exit 9
           OPENCLAW_SHIP_PACKAGE_SCRIPT: helper,
           OPENCLAW_SHIP_OPEN_APP_SCRIPT: helper,
           OPENCLAW_SHIP_PROTECT_SCRIPT: helper,
+          OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT: helper,
         },
         encoding: "utf8",
       },
@@ -1009,6 +1046,23 @@ else
 fi
 `,
     );
+    const proveRuntimeScript = path.join(binDir, "prove-runtime");
+    writeExecutable(
+      proveRuntimeScript,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "status proof $*" >> '${callsLog}'
+printf '%s\n' \
+  '[prove-jarvis-runtime] jarvis_runtime_proof=true' \
+  '[prove-jarvis-runtime] runtime_source=jarvis-break-glass-hotfix' \
+  '[prove-jarvis-runtime] runtime_commit=${headSha}' \
+  '[prove-jarvis-runtime] runtime_package_version=2026.7.14.1' \
+  '[prove-jarvis-runtime] pid=200' \
+  '[prove-jarvis-runtime] listener=127.0.0.1:18789' \
+  '[prove-jarvis-runtime] rpc=ok' \
+  '[prove-jarvis-runtime] health=healthy'
+`,
+    );
     const plistBuddy = path.join(binDir, "PlistBuddy");
     writeExecutable(
       plistBuddy,
@@ -1093,6 +1147,7 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
       OPENCLAW_SHIP_PACKAGE_SCRIPT: packageScript,
       OPENCLAW_SHIP_OPEN_APP_SCRIPT: openScript,
       OPENCLAW_SHIP_PROTECT_SCRIPT: protectScript,
+      OPENCLAW_SHIP_PROVE_RUNTIME_SCRIPT: proveRuntimeScript,
       OPENCLAW_SHIP_INSTALLED_MANIFEST: manifest,
       OPENCLAW_SHIP_INSTALLED_APP_MANIFEST: installedAppManifest,
       OPENCLAW_SHIP_PROTECTION_MARKER: marker,
@@ -1207,6 +1262,9 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
     );
     expect(result.stdout).toContain("applications_jarvis_app=untouched");
     expect(result.stdout).toContain("public_release=false");
+    expect(result.stdout).toContain(
+      `post_deploy_telegram_canary=bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --runtime-source jarvis-break-glass-hotfix --expected-commit ${headSha}`,
+    );
     expect(result.stdout).not.toContain(token);
     const calls = fs.readFileSync(callsLog, "utf8").trim().split("\n");
     expect(calls).toContain("pr-required --pr 124 --wait --timeout 1800");
@@ -1364,6 +1422,7 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
     const fixture = writeJarvisProofFixture({
       commit: "dd8a89b",
       manifestCommit: "ce3ed18",
+      runtimeSource: "jarvis-break-glass-hotfix",
       protection: {
         protectedRuntimeGitCommit: "dd8a89b",
         compatibilityManifestGitCommit: "ce3ed18",
@@ -1379,6 +1438,143 @@ printf '%s\\n' '{"runtimeFingerprint":{"serviceLabel":"ai.jarvis.gateway","runti
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("runtimeSource=jarvis-break-glass-hotfix");
     expect(result.stderr).toContain("packaged Jarvis proof refused");
+  });
+
+  it("accepts only a fully protected source hotfix when explicitly selected", () => {
+    const fixture = writeJarvisProofFixture({
+      commit: "dd8a89b",
+      manifestCommit: "ce3ed18",
+      runtimeSource: "jarvis-break-glass-hotfix",
+      protection: {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+      },
+    });
+
+    const result = runScript(
+      "scripts/prove-jarvis-runtime.sh",
+      ["--runtime-source", "jarvis-break-glass-hotfix", "--expected-commit", "dd8a89b"],
+      {
+        HOME: fixture.home,
+        PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_INSTALLED_JARVIS_APP_PATH: fixture.appPath,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("runtime_source=jarvis-break-glass-hotfix");
+    expect(result.stdout).toContain("runtime_commit=dd8a89b");
+    expect(result.stdout).toContain("rpc=ok");
+  });
+
+  it.each([
+    ["missing marker", undefined, "marker is not readable"],
+    [
+      "wrong protected commit",
+      {
+        protectedRuntimeGitCommit: "badc0de",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+      },
+      "marker commit=badc0de",
+    ],
+    [
+      "wrong compatibility commit",
+      {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "badc0de",
+        compatibilityManifestBundleVersion: "300",
+      },
+      "compatibility commit=badc0de",
+    ],
+    [
+      "wrong compatibility version",
+      {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "999",
+      },
+      "compatibility version=999",
+    ],
+    [
+      "wrong backup receipt",
+      {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+        backupCommit: "badc0de",
+      },
+      "backup commit=badc0de",
+    ],
+  ] as const)("rejects protected-hotfix proof with %s", (_label, protection, reason) => {
+    const fixture = writeJarvisProofFixture({
+      commit: "dd8a89b",
+      manifestCommit: "ce3ed18",
+      runtimeSource: "jarvis-break-glass-hotfix",
+      ...(protection ? { protection } : {}),
+    });
+    const result = runScript(
+      "scripts/prove-jarvis-runtime.sh",
+      ["--runtime-source", "jarvis-break-glass-hotfix", "--expected-commit", "dd8a89b"],
+      {
+        HOME: fixture.home,
+        PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_INSTALLED_JARVIS_APP_PATH: fixture.appPath,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(reason);
+    expect(result.stderr).toContain("runtime_source_observed=jarvis-break-glass-hotfix");
+  });
+
+  it("rejects a managed source when protected-hotfix proof is explicitly selected", () => {
+    const fixture = writeJarvisProofFixture();
+    const result = runScript(
+      "scripts/prove-jarvis-runtime.sh",
+      ["--runtime-source", "jarvis-break-glass-hotfix", "--expected-commit", "389c051"],
+      {
+        HOME: fixture.home,
+        PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_INSTALLED_JARVIS_APP_PATH: fixture.appPath,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "runtimeSource=jarvis-managed-bundle, expected jarvis-break-glass-hotfix",
+    );
+  });
+
+  it("rejects protected-hotfix proof when the installed app no longer matches compatibility", () => {
+    const fixture = writeJarvisProofFixture({
+      commit: "dd8a89b",
+      manifestCommit: "ce3ed18",
+      runtimeSource: "jarvis-break-glass-hotfix",
+      protection: {
+        protectedRuntimeGitCommit: "dd8a89b",
+        compatibilityManifestGitCommit: "ce3ed18",
+        compatibilityManifestBundleVersion: "300",
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.appPath, "Contents", "Resources", "OpenClawRuntime", "manifest.json"),
+      JSON.stringify({ format: 1, bundleVersion: "300", gitCommit: "badc0de" }),
+    );
+
+    const result = runScript(
+      "scripts/prove-jarvis-runtime.sh",
+      ["--runtime-source", "jarvis-break-glass-hotfix", "--expected-commit", "dd8a89b"],
+      {
+        HOME: fixture.home,
+        PATH: `${fixture.binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_INSTALLED_JARVIS_APP_PATH: fixture.appPath,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed Jarvis app commit=badc0de");
   });
 
   it("accepts target-level rpc and health fields in Jarvis status JSON", () => {
