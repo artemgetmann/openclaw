@@ -409,6 +409,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("openclaw media transcribe --file <path> --json");
     expect(prompt).toContain("`media` is a subcommand, not a standalone binary to probe");
     expect(prompt).toContain(
+      "the user explicitly approved the local fallback after being warned that it can be slow and compute-intensive",
+    );
+    expect(prompt).toContain("stop and ask before starting local transcription");
+    expect(prompt).toContain(
       "channel-specific voice-note retrieval belongs in the matching channel skill",
     );
     expect(prompt).not.toContain("wacli-recent-reply.sh");
