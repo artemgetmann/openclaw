@@ -100,7 +100,68 @@ extension ChannelsSettings {
     }
 
     var consumerTelegramLiveSection: some View {
-        self.telegramSection(title: "Connected bot")
+        VStack(alignment: .leading, spacing: 16) {
+            self.telegramSection(title: "Connected bot")
+            self.consumerTelegramGroupsSection
+        }
+    }
+
+    var consumerTelegramGroupsSection: some View {
+        let botHandle = self.consumerTelegramBotUsername.map { "@\($0)" } ?? "your Jarvis bot"
+
+        return self.formSection("Telegram Groups") {
+            Text(ConsumerSetupStep.telegramGroup.subtitle)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if self.consumerTelegramGroupGuideDismissed {
+                // Dismissal hides the repeated tutorial, not the durable entry
+                // point. Users can restore the guide without resetting setup.
+                Button("Show Setup Guide") {
+                    self.consumerTelegramGroupGuideDismissed = false
+                }
+                .buttonStyle(.bordered)
+            } else {
+                self.telegramGroupGuidanceRow(
+                    title: TelegramGroupGuidanceCopy.directMessageTitle,
+                    subtitle: TelegramGroupGuidanceCopy.directMessageSubtitle,
+                    systemImage: "bubble.left.and.bubble.right")
+                self.telegramGroupGuidanceRow(
+                    title: TelegramGroupGuidanceCopy.groupTitle,
+                    subtitle: TelegramGroupGuidanceCopy.groupSubtitle(botHandle: botHandle),
+                    systemImage: "person.2")
+                self.telegramGroupGuidanceRow(
+                    title: TelegramGroupGuidanceCopy.adminTitle,
+                    subtitle: TelegramGroupGuidanceCopy.adminSubtitle(botHandle: botHandle),
+                    systemImage: "checkmark.shield")
+
+                Button("I’ve Done This") {
+                    self.consumerTelegramGroupGuideDismissed = true
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func telegramGroupGuidanceRow(
+        title: String,
+        subtitle: String,
+        systemImage: String) -> some View
+    {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func telegramSection(title: String) -> some View {

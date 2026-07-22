@@ -518,6 +518,11 @@ extension ChannelsSettings {
             } else {
                 VStack(alignment: .leading, spacing: 16) {
                     self.telegramSetupSection
+                    if AppFlavor.current.isConsumer,
+                       self.store.consumerTelegramReadyForFirstTask()
+                    {
+                        self.consumerTelegramGroupsSection
+                    }
                     self.genericChannelSection(channel)
                 }
             }

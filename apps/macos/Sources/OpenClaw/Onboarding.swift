@@ -39,7 +39,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .telegram:
             return "Connect Telegram"
         case .telegramGroup:
-            return "Add Jarvis to a Group (Optional)"
+            return "Add Jarvis to a Telegram Group (Recommended)"
         }
     }
 
@@ -56,7 +56,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .telegram:
             return "Telegram will open so you can approve Jarvis."
         case .telegramGroup:
-            return "Recommended if you want Jarvis to run more than one task at a time with Telegram topics."
+            return "Use Telegram topics to give Jarvis multiple tasks at the same time. " +
+                "Think of each topic as a separate chat, so one long task won’t block the next one."
         }
     }
 
@@ -87,6 +88,26 @@ enum JarvisAccountActivationCopy {
     static let retryButton = "Retry"
     static let inactiveEmail = "No Jarvis access found for that email. Try a different address."
     static let accountRecoveryUnavailable = "That email is already active. Try a different address or contact Jarvis support."
+}
+
+enum TelegramGroupGuidanceCopy {
+    // Keep every instruction anchored in Telegram so "admin" and "topics"
+    // cannot be mistaken for permissions inside the Jarvis Mac app.
+    static let directMessageTitle = "Direct messages for simple control"
+    static let directMessageSubtitle = "Use your direct message (DM) with Jarvis for one task at a time."
+    static let groupTitle = "Group topics for multiple tasks"
+    static func groupSubtitle(botHandle: String) -> String {
+        "Add \(botHandle) and turn on Topics in the group’s Telegram settings. " +
+            "Start each new task in a separate topic."
+    }
+    static let adminTitle = "In the Telegram group, make Jarvis an admin"
+    static func adminSubtitle(botHandle: String) -> String {
+        "This lets Jarvis respond without you needing to tag it (\(botHandle)) " +
+            "or reply directly to one of its messages."
+    }
+    static let finishTitle = "Finish now or do this later"
+    static let finishSubtitle = "Nothing here is required. You can configure a Telegram group later in " +
+        "Jarvis Settings → Channels → Telegram."
 }
 
 @MainActor

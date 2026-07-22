@@ -66,6 +66,28 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `optional Telegram group step explains actions in Telegram`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            #expect(ConsumerSetupStep.telegramGroup.title == "Add Jarvis to a Telegram Group (Recommended)")
+            #expect(ConsumerSetupStep.telegramGroup.subtitle ==
+                "Use Telegram topics to give Jarvis multiple tasks at the same time. " +
+                "Think of each topic as a separate chat, so one long task won’t block the next one.")
+            #expect(TelegramGroupGuidanceCopy.directMessageTitle == "Direct messages for simple control")
+            #expect(TelegramGroupGuidanceCopy.directMessageSubtitle ==
+                "Use your direct message (DM) with Jarvis for one task at a time.")
+            #expect(TelegramGroupGuidanceCopy.groupTitle == "Group topics for multiple tasks")
+            #expect(TelegramGroupGuidanceCopy.groupSubtitle(botHandle: "@jarvis") ==
+                "Add @jarvis and turn on Topics in the group’s Telegram settings. " +
+                "Start each new task in a separate topic.")
+            #expect(TelegramGroupGuidanceCopy.adminTitle == "In the Telegram group, make Jarvis an admin")
+            #expect(TelegramGroupGuidanceCopy.adminSubtitle(botHandle: "@jarvis") ==
+                "This lets Jarvis respond without you needing to tag it (@jarvis) or reply directly to one of its messages.")
+            #expect(TelegramGroupGuidanceCopy.finishSubtitle ==
+                "Nothing here is required. You can configure a Telegram group later in " +
+                "Jarvis Settings → Channels → Telegram.")
+        }
+    }
+
     @Test func `activated account step advances to telegram without success copy`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let state = AppState(preview: true)

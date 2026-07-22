@@ -215,6 +215,24 @@ struct ChannelsSettingsSmokeTests {
             presentation: .settings).body
     }
 
+    @Test func `consumer Telegram groups guide builds before and after dismissal`() async {
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_APP_VARIANT": "consumer"],
+            defaults: [consumerTelegramGroupGuideDismissedKey: false])
+        {
+            let store = makeConsumerTelegramSetupStore()
+            let view = ChannelsSettings(store: store)
+
+            #expect(!view.consumerTelegramGroupGuideDismissed)
+            _ = view.consumerTelegramGroupsSection
+
+            view.consumerTelegramGroupGuideDismissed = true
+
+            #expect(view.consumerTelegramGroupGuideDismissed)
+            _ = view.consumerTelegramGroupsSection
+        }
+    }
+
     @Test func `consumer telegram first task guides wake up message and accepts legacy status`() {
         let expectedInstruction =
             "Telegram connected. In Telegram, press Start, then send " +
