@@ -105,6 +105,10 @@ enum TelegramGroupGuidanceCopy {
         "This lets Jarvis respond without you needing to tag it (\(botHandle)) " +
             "or reply directly to one of its messages."
     }
+    static let groupAccessWarningTitle = "Group access still needs to be enabled"
+    static let groupAccessWarningSubtitle = "Before relying on a group, open Jarvis Settings → General and " +
+        "turn on Show advanced settings. Then go to Channels → Telegram → Configuration and add your " +
+        "Telegram user ID under Group Allow From. Otherwise Jarvis will stay silent in the group."
     static let finishTitle = "Finish now or do this later"
     static let finishSubtitle = "Nothing here is required. You can configure a Telegram group later in " +
         "Jarvis Settings → Channels → Telegram."

@@ -233,6 +233,78 @@ struct ChannelsSettingsSmokeTests {
         }
     }
 
+    @Test func `consumer Telegram group access mirrors account override precedence`() {
+        let openRoot: [String: Any] = [
+            "channels": ["telegram": ["groupPolicy": "open"]],
+        ]
+        #expect(ChannelsStore.consumerTelegramGroupAccessConfigured(root: openRoot))
+
+        let allowedRoot: [String: Any] = [
+            "channels": [
+                "telegram": [
+                    "defaultAccount": "default",
+                    "groupPolicy": "allowlist",
+                    "groupAllowFrom": ["123"],
+                    "accounts": ["default": ["groupAllowFrom": ["123"]]],
+                ],
+            ],
+        ]
+        #expect(ChannelsStore.consumerTelegramGroupAccessConfigured(root: allowedRoot))
+
+        let legacyAllowFromFallback: [String: Any] = [
+            "channels": [
+                "telegram": [
+                    "groupPolicy": "allowlist",
+                    "allowFrom": ["123"],
+                ],
+            ],
+        ]
+        #expect(ChannelsStore.consumerTelegramGroupAccessConfigured(root: legacyAllowFromFallback))
+
+        let blockedByAccountOverride: [String: Any] = [
+            "channels": [
+                "telegram": [
+                    "defaultAccount": "default",
+                    "groupPolicy": "allowlist",
+                    "groupAllowFrom": ["123"],
+                    "allowFrom": ["123"],
+                    "accounts": ["default": ["groupAllowFrom": [], "allowFrom": ["123"]]],
+                ],
+            ],
+        ]
+        #expect(!ChannelsStore.consumerTelegramGroupAccessConfigured(root: blockedByAccountOverride))
+
+        let namedAccountFallback: [String: Any] = [
+            "channels": [
+                "telegram": [
+                    "groupPolicy": "open",
+                    "accounts": [
+                        "work": ["groupPolicy": "disabled"],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!ChannelsStore.consumerTelegramGroupAccessConfigured(root: namedAccountFallback))
+
+        let boundAccountWins: [String: Any] = [
+            "agents": ["list": [["id": "main", "default": true]]],
+            "bindings": [[
+                "agentId": "main",
+                "match": ["channel": "telegram", "accountId": "work"],
+            ]],
+            "channels": [
+                "telegram": [
+                    "defaultAccount": "default",
+                    "accounts": [
+                        "default": ["groupPolicy": "open"],
+                        "work": ["groupPolicy": "disabled"],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!ChannelsStore.consumerTelegramGroupAccessConfigured(root: boundAccountWins))
+    }
+
     @Test func `consumer telegram first task guides wake up message and accepts legacy status`() {
         let expectedInstruction =
             "Telegram connected. In Telegram, press Start, then send " +

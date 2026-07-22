@@ -235,6 +235,94 @@ extension ChannelsStore {
         self.consumerTelegramLooksLive() && self.consumerTelegramFirstTaskVerified
     }
 
+    func consumerTelegramGroupAccessConfigured() -> Bool {
+        // Completion is durable, so only trust the saved configuration. Using
+        // configDraft here would let an unsaved advanced-settings edit dismiss
+        // the guide even though the running Telegram bot remains blocked.
+        let root = AppStateStore.shared.connectionMode == .remote
+            ? self.configRoot
+            : OpenClawConfigFile.loadDict()
+        return Self.consumerTelegramGroupAccessConfigured(root: root)
+    }
+
+    static func consumerTelegramGroupAccessConfigured(root: [String: Any]) -> Bool {
+        let channels = root["channels"] as? [String: Any]
+        let telegram = channels?["telegram"] as? [String: Any] ?? [:]
+        let accounts = telegram["accounts"] as? [String: Any]
+        let configuredAccountIDs = accounts?.keys.sorted() ?? []
+        let configuredByNormalizedID = Dictionary(
+            uniqueKeysWithValues: configuredAccountIDs.map { (self.normalizeTelegramConfigID($0), $0) })
+        let boundAccountID = self.defaultAgentTelegramBindingAccountID(root: root)
+        let preferredAccountID = (telegram["defaultAccount"] as? String).map(self.normalizeTelegramConfigID)
+        let defaultAccountID: String = if let boundAccountID {
+            configuredByNormalizedID[boundAccountID] ?? boundAccountID
+        } else if let preferredAccountID,
+                  let configuredPreferred = configuredByNormalizedID[preferredAccountID]
+        {
+            configuredPreferred
+        } else if let configuredDefault = configuredByNormalizedID["default"] {
+            configuredDefault
+        } else {
+            configuredAccountIDs.first ?? "default"
+        }
+        let account = accounts?[defaultAccountID] as? [String: Any]
+        let defaults = channels?["defaults"] as? [String: Any]
+
+        // Account values override the channel defaults at runtime. Mirror that
+        // precedence so the UI does not claim group access works when an empty
+        // account-level allowlist is still blocking every group message.
+        let policy = (account?["groupPolicy"] as? String)
+            ?? (telegram["groupPolicy"] as? String)
+            ?? (defaults?["groupPolicy"] as? String)
+            ?? "allowlist"
+        if policy == "open" { return true }
+        guard policy == "allowlist" else { return false }
+
+        let accountGroupAllowFrom = account?["groupAllowFrom"] as? [Any] ?? []
+        let channelGroupAllowFrom = telegram["groupAllowFrom"] as? [Any] ?? []
+        if account?["groupAllowFrom"] != nil {
+            return !accountGroupAllowFrom.isEmpty
+        }
+        if telegram["groupAllowFrom"] != nil {
+            return !channelGroupAllowFrom.isEmpty
+        }
+
+        // Telegram falls back to the DM sender allowlist only when the dedicated
+        // group list is absent. An explicitly empty list intentionally blocks
+        // groups and must remain authoritative.
+        let accountAllowFrom = account?["allowFrom"] as? [Any] ?? []
+        let channelAllowFrom = telegram["allowFrom"] as? [Any] ?? []
+        let effectiveAllowFrom = account?["allowFrom"] != nil ? accountAllowFrom : channelAllowFrom
+        return !effectiveAllowFrom.isEmpty
+    }
+
+    private static func defaultAgentTelegramBindingAccountID(root: [String: Any]) -> String? {
+        let agents = ((root["agents"] as? [String: Any])?["list"] as? [[String: Any]]) ?? []
+        let defaultAgent = agents.first(where: { $0["default"] as? Bool == true }) ?? agents.first
+        let defaultAgentID = self.normalizeTelegramConfigID((defaultAgent?["id"] as? String) ?? "main")
+        let bindings = root["bindings"] as? [[String: Any]] ?? []
+
+        for binding in bindings where (binding["type"] as? String) != "acp" {
+            guard self.normalizeTelegramConfigID((binding["agentId"] as? String) ?? "main") == defaultAgentID,
+                  let match = binding["match"] as? [String: Any],
+                  self.normalizeTelegramConfigID(match["channel"] as? String) == "telegram",
+                  let rawAccountID = match["accountId"] as? String,
+                  rawAccountID != "*"
+            else {
+                continue
+            }
+            return self.normalizeTelegramConfigID(rawAccountID)
+        }
+        return nil
+    }
+
+    private static func normalizeTelegramConfigID(_ value: String?) -> String {
+        let raw = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-"))
+        let normalized = raw.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "-" }
+        return String(normalized).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
     private func consumerTelegramConfigFallback() -> ConsumerTelegramConfigFallback {
         guard AppFlavor.current.isConsumer else {
             return ConsumerTelegramConfigFallback(configured: false, lockedSenderId: nil)

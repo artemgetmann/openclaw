@@ -108,6 +108,7 @@ extension ChannelsSettings {
 
     var consumerTelegramGroupsSection: some View {
         let botHandle = self.consumerTelegramBotUsername.map { "@\($0)" } ?? "your Jarvis bot"
+        let groupAccessConfigured = self.store.consumerTelegramGroupAccessConfigured()
 
         return self.formSection("Telegram Groups") {
             Text(ConsumerSetupStep.telegramGroup.subtitle)
@@ -136,10 +137,18 @@ extension ChannelsSettings {
                     subtitle: TelegramGroupGuidanceCopy.adminSubtitle(botHandle: botHandle),
                     systemImage: "checkmark.shield")
 
+                if !groupAccessConfigured {
+                    self.telegramGroupGuidanceRow(
+                        title: TelegramGroupGuidanceCopy.groupAccessWarningTitle,
+                        subtitle: TelegramGroupGuidanceCopy.groupAccessWarningSubtitle,
+                        systemImage: "exclamationmark.triangle")
+                }
+
                 Button("I’ve Done This") {
                     self.consumerTelegramGroupGuideDismissed = true
                 }
                 .buttonStyle(.bordered)
+                .disabled(!groupAccessConfigured)
             }
         }
     }
