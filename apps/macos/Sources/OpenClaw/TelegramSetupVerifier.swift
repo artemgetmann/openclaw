@@ -37,7 +37,7 @@ enum TelegramSetupVerifierError: LocalizedError {
         case .conflict:
             return "This bot is already active somewhere else. Close the other Jarvis window or use a different bot token."
         case .noDirectMessage:
-            return "No Telegram DM arrived during this check. Send the bot a fresh private message, then click Verify Telegram."
+            return "No Telegram message arrived yet. Send “Wake up, my friend!” to the bot, then click Verify Telegram again."
         }
     }
 }
@@ -87,14 +87,47 @@ enum TelegramSetupVerifier {
         token: String,
         timeoutSeconds: TimeInterval = 45
     ) async throws -> TelegramSetupDirectMessage? {
+        try await self.waitForFirstDirectMessage(
+            token: token,
+            timeoutSeconds: timeoutSeconds,
+            fetchUpdates: { token, offset in
+                try await self.request(
+                    token: token,
+                    method: "getUpdates",
+                    queryItems: self.updatesQueryItems(offset: offset))
+            },
+            sleep: { try await Task.sleep(nanoseconds: $0) })
+    }
+
+    static func waitForFirstDirectMessage(
+        token: String,
+        timeoutSeconds: TimeInterval,
+        fetchUpdates: @escaping (String, Int?) async throws -> [TelegramUpdate],
+        sleep: @escaping (UInt64) async throws -> Void
+    ) async throws -> TelegramSetupDirectMessage? {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         var offset: Int?
+        var latestRetryableError: TelegramSetupVerifierError?
 
         while Date() < deadline {
-            let response: [TelegramUpdate] = try await self.request(
-                token: token,
-                method: "getUpdates",
-                queryItems: self.updatesQueryItems(offset: offset))
+            let response: [TelegramUpdate]
+            do {
+                response = try await fetchUpdates(token, offset)
+                latestRetryableError = nil
+            } catch let error as TelegramSetupVerifierError {
+                // The gateway poller may need a moment to release getUpdates
+                // after onboarding disables Telegram. A brief 409 or transport
+                // failure is therefore recoverable inside the existing wait;
+                // invalid tokens and other API failures are not.
+                switch error {
+                case .conflict, .transport:
+                    latestRetryableError = error
+                    try await sleep(1_500_000_000)
+                    continue
+                case .malformedToken, .api, .noDirectMessage:
+                    throw error
+                }
+            }
 
             if let update = response.compactMap(Self.directMessage).first {
                 return update
@@ -104,9 +137,12 @@ enum TelegramSetupVerifier {
                 offset = lastUpdate.updateId + 1
             }
 
-            try await Task.sleep(nanoseconds: 1_500_000_000)
+            try await sleep(1_500_000_000)
         }
 
+        if let latestRetryableError {
+            throw latestRetryableError
+        }
         return nil
     }
 
@@ -114,6 +150,7 @@ enum TelegramSetupVerifier {
         guard let message = update.message else { return nil }
         guard message.chat.type == "private" else { return nil }
         guard let sender = message.from, sender.isBot != true else { return nil }
+        guard self.isFirstTaskMessage(text: message.text, caption: message.caption) else { return nil }
         return TelegramSetupDirectMessage(
             updateId: update.updateId,
             messageId: message.messageId,
@@ -126,6 +163,23 @@ enum TelegramSetupVerifier {
             caption: message.caption,
             date: message.date,
             messageThreadId: message.messageThreadId)
+    }
+
+    static func isFirstTaskMessage(text: String?, caption: String?) -> Bool {
+        // Telegram's Start button sends /start. It activates the chat but is not
+        // the user's first task, so keep polling until an actual text or caption
+        // arrives. This also makes Verify safe to click before the user sends the
+        // requested wake-up message.
+        let normalizedText = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedCaption = caption?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalizedText.isEmpty || !normalizedCaption.isEmpty else { return false }
+
+        let command = normalizedText
+            .lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .first
+            .map(String.init)
+        return command != "/start" && command?.hasPrefix("/start@") != true
     }
 
     private static func updatesQueryItems(offset: Int?) -> [URLQueryItem] {
@@ -218,7 +272,7 @@ private struct TelegramBotUser: Decodable {
     let username: String?
 }
 
-private struct TelegramUpdate: Decodable {
+struct TelegramUpdate: Decodable {
     let updateId: Int
     let message: TelegramMessage?
 
@@ -228,7 +282,7 @@ private struct TelegramUpdate: Decodable {
     }
 }
 
-private struct TelegramMessage: Decodable {
+struct TelegramMessage: Decodable {
     let messageId: Int
     let from: TelegramUser?
     let chat: TelegramChat
@@ -248,7 +302,7 @@ private struct TelegramMessage: Decodable {
     }
 }
 
-private struct TelegramUser: Decodable {
+struct TelegramUser: Decodable {
     let id: Int
     let isBot: Bool?
     let firstName: String?
@@ -262,7 +316,7 @@ private struct TelegramUser: Decodable {
     }
 }
 
-private struct TelegramChat: Decodable {
+struct TelegramChat: Decodable {
     let id: Int64
     let type: String
     let username: String?
