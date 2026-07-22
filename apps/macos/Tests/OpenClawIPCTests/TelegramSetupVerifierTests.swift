@@ -14,6 +14,7 @@ import Testing
 
     @Test func `first task recovers from early verify start command and transient polling conflict`() async throws {
         var batches: [Result<[TelegramUpdate], Error>] = [
+            .failure(URLError(.timedOut)),
             .failure(TelegramSetupVerifierError.conflict),
             .success([self.update(id: 1, text: "/start")]),
             .success([self.update(id: 2, text: "Wake up, my friend!")]),

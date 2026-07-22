@@ -127,6 +127,17 @@ enum TelegramSetupVerifier {
                 case .malformedToken, .api, .noDirectMessage:
                     throw error
                 }
+            } catch {
+                // URLSession can throw URLError before request() converts a
+                // response into a Telegram-specific error. Retry those raw
+                // transport failures too, but never turn task cancellation
+                // into another network attempt.
+                if Task.isCancelled || error is CancellationError {
+                    throw error
+                }
+                latestRetryableError = .transport(error.localizedDescription)
+                try await sleep(1_500_000_000)
+                continue
             }
 
             if let update = response.compactMap(Self.directMessage).first {
