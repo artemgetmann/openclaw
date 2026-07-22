@@ -156,7 +156,31 @@ describe("browser client", () => {
     });
     expect(calls[1]?.init?.timeoutMs).toBe(55_000);
     expect(calls[2]?.init?.timeoutMs).toBe(50_000);
-    expect(calls[3]?.init?.timeoutMs).toBe(65_000);
+    expect(calls[3]?.init?.timeoutMs).toBe(75_000);
+  });
+
+  it("adds bounded transport slack to short browser action timeouts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true, targetId: "t1" }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "press",
+      ref: "1_153",
+      key: "Enter",
+      timeoutMs: 10_000,
+    });
+
+    expect(calls[0]?.init?.timeoutMs).toBe(20_000);
   });
 
   it("uses the attach-ready timeout budget for browser discovery calls", async () => {
