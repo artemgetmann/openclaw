@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ConsumerTelegramSetupCardContent: View {
     static let firstTaskInstruction =
-        "Telegram connected. In Telegram, press Start, then send “Wake up, my friend!” and click Verify Telegram."
+        "In Telegram, send “Wake up, my friend!” to your new bot. Then return here and click Verify Telegram."
 
     enum Presentation {
         case onboarding
@@ -64,8 +64,8 @@ struct ConsumerTelegramSetupCardContent: View {
     private var pendingApprovalInstruction: String? {
         guard self.awaitingManagedApproval else { return nil }
         return self.store.telegramManagedSuggestedBotUsername.map {
-            "In Telegram, approve @\($0), click Create, then click Check status here."
-        } ?? "In Telegram, approve the bot, click Create, then click Check status here."
+            "In Telegram:\n1. Approve @\($0) and click Create.\n2. Open the new bot and press Start.\n3. Return here and click Check status."
+        } ?? "In Telegram:\n1. Approve the bot and click Create.\n2. Open the new bot and press Start.\n3. Return here and click Check status."
     }
 
     private var showsInitialSetupAction: Bool {
@@ -181,8 +181,7 @@ struct ConsumerTelegramSetupCardContent: View {
 
             if let pendingApprovalInstruction {
                 Text(pendingApprovalInstruction)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -210,7 +209,7 @@ struct ConsumerTelegramSetupCardContent: View {
 
             if self.readyForFirstTaskVerification {
                 Text(Self.firstTaskInstruction)
-                    .font(.callout)
+                    .font(.body)
 
                 HStack(spacing: 10) {
                     if let username = self.store.consumerTelegramBotUsername() {
