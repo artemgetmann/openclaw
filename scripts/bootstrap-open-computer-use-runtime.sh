@@ -36,6 +36,12 @@ OCU_WORKDIR="${OPENCLAW_OPEN_COMPUTER_USE_WORKDIR:-/tmp/jarvis-ocu-pinned-runtim
 OCU_APP_PATH="${OPENCLAW_OPEN_COMPUTER_USE_APP_PATH:-${HOME}/Applications/Open Computer Use (Dev).app}"
 OCU_BIN_PATH_FILE="${OPENCLAW_OPEN_COMPUTER_USE_BIN_PATH_FILE:-/tmp/jarvis-ocu-stability-bin-path.txt}"
 OCU_BUILD_CONFIGURATION="${OPENCLAW_OPEN_COMPUTER_USE_CONFIGURATION:-debug}"
+OCU_RUN_DOCTOR="${OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR:-0}"
+OCU_DOCTOR_TIMEOUT_SECONDS="${OPENCLAW_OPEN_COMPUTER_USE_DOCTOR_TIMEOUT_SECONDS:-15}"
+OCU_DOCTOR_PID=""
+OCU_DOCTOR_WATCHDOG_PID=""
+OCU_DOCTOR_TIMEOUT_MARKER=""
+OCU_DOCTOR_OWNER_TOKEN=""
 
 usage() {
   cat <<'EOF'
@@ -50,6 +56,9 @@ Environment overrides:
   OPENCLAW_OPEN_COMPUTER_USE_APP_PATH         Stable dev app destination
   OPENCLAW_OPEN_COMPUTER_USE_BIN_PATH_FILE    File to receive the executable path
   OPENCLAW_OPEN_COMPUTER_USE_CONFIGURATION    debug or release
+  OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR       Set to 1 to explicitly run the Dev permission check
+  OPENCLAW_OPEN_COMPUTER_USE_DOCTOR_TIMEOUT_SECONDS
+                                               Doctor timeout in seconds (default: 15)
   OPEN_COMPUTER_USE_CODESIGN_MODE             Passed through to OCU's app build
 EOF
 }
@@ -102,6 +111,78 @@ build_runtime_app() {
   )
 }
 
+cleanup_doctor_processes() {
+  local bin_path="${OCU_APP_PATH}/Contents/MacOS/OpenComputerUse"
+
+  if [[ -n "${OCU_DOCTOR_WATCHDOG_PID}" ]]; then
+    kill "${OCU_DOCTOR_WATCHDOG_PID}" 2>/dev/null || true
+    wait "${OCU_DOCTOR_WATCHDOG_PID}" 2>/dev/null || true
+    OCU_DOCTOR_WATCHDOG_PID=""
+  fi
+
+  if [[ -n "${OCU_DOCTOR_PID}" ]]; then
+    kill -TERM "${OCU_DOCTOR_PID}" 2>/dev/null || true
+    wait "${OCU_DOCTOR_PID}" 2>/dev/null || true
+    OCU_DOCTOR_PID=""
+  fi
+
+  # Native records this token only when this doctor invocation launches a new
+  # app agent. Reusing the token for cleanup leaves pre-existing Dev agents
+  # untouched while still avoiding broad process-name matching.
+  if [[ -x "${bin_path}" && -n "${OCU_DOCTOR_OWNER_TOKEN}" ]]; then
+    OPEN_COMPUTER_USE_APP_AGENT_OWNER_TOKEN="${OCU_DOCTOR_OWNER_TOKEN}" \
+      "${bin_path}" __open-computer-use-stop-owned-app-agent >/dev/null 2>&1 || true
+  fi
+
+  [[ -z "${OCU_DOCTOR_TIMEOUT_MARKER}" ]] || rm -f "${OCU_DOCTOR_TIMEOUT_MARKER}"
+}
+
+run_doctor_with_cleanup() {
+  local bin_path="$1"
+  local doctor_status=0
+
+  if [[ ! "${OCU_DOCTOR_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[open-computer-use-bootstrap] doctor timeout must be a positive integer" >&2
+    return 2
+  fi
+
+  OCU_DOCTOR_TIMEOUT_MARKER="${TMPDIR:-/tmp}/openclaw-ocu-doctor-timeout.$$"
+  OCU_DOCTOR_OWNER_TOKEN="openclaw-bootstrap-$$-${RANDOM}-${RANDOM}"
+  rm -f "${OCU_DOCTOR_TIMEOUT_MARKER}"
+  trap cleanup_doctor_processes EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  OPEN_COMPUTER_USE_APP_AGENT_OWNER_TOKEN="${OCU_DOCTOR_OWNER_TOKEN}" "${bin_path}" doctor &
+  OCU_DOCTOR_PID=$!
+  (
+    watchdog_sleep_pid=""
+    trap 'kill "${watchdog_sleep_pid}" 2>/dev/null || true; exit 0' TERM INT
+    sleep "${OCU_DOCTOR_TIMEOUT_SECONDS}" &
+    watchdog_sleep_pid=$!
+    wait "${watchdog_sleep_pid}"
+    if kill -0 "${OCU_DOCTOR_PID}" 2>/dev/null; then
+      : > "${OCU_DOCTOR_TIMEOUT_MARKER}"
+      kill -TERM "${OCU_DOCTOR_PID}" 2>/dev/null || true
+    fi
+  ) &
+  OCU_DOCTOR_WATCHDOG_PID=$!
+
+  set +e
+  wait "${OCU_DOCTOR_PID}"
+  doctor_status=$?
+  set -e
+  OCU_DOCTOR_PID=""
+  if [[ -f "${OCU_DOCTOR_TIMEOUT_MARKER}" ]]; then
+    doctor_status=124
+  fi
+
+  cleanup_doctor_processes
+  trap - EXIT HUP INT TERM
+  return "${doctor_status}"
+}
+
 install_runtime_app() {
   local built_app="${OCU_WORKDIR}/dist/Open Computer Use (Dev).app"
   local bin_path="${OCU_APP_PATH}/Contents/MacOS/OpenComputerUse"
@@ -129,8 +210,12 @@ install_runtime_app() {
   log "writing binary pointer ${OCU_BIN_PATH_FILE}"
   printf '%s\n' "${bin_path}" > "${OCU_BIN_PATH_FILE}"
 
-  log "checking permission status"
-  "${bin_path}" doctor || true
+  if [[ "${OCU_RUN_DOCTOR}" == "1" ]]; then
+    log "checking permission status with explicit developer intent"
+    run_doctor_with_cleanup "${bin_path}"
+  else
+    log "skipping permission check (set OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR=1 to opt in)"
+  fi
 
   log "ready"
   printf 'OPENCLAW_OPEN_COMPUTER_USE_BIN=%s\n' "${bin_path}"
@@ -152,6 +237,11 @@ esac
 
 if [[ "${OCU_BUILD_CONFIGURATION}" != "debug" && "${OCU_BUILD_CONFIGURATION}" != "release" ]]; then
   echo "Error: unsupported OPENCLAW_OPEN_COMPUTER_USE_CONFIGURATION=${OCU_BUILD_CONFIGURATION}" >&2
+  exit 1
+fi
+
+if [[ "${OCU_RUN_DOCTOR}" != "0" && "${OCU_RUN_DOCTOR}" != "1" ]]; then
+  echo "Error: OPENCLAW_OPEN_COMPUTER_USE_RUN_DOCTOR must be 0 or 1" >&2
   exit 1
 fi
 

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,7 @@ const OPEN_COMPUTER_USE_RELEASE_BUNDLE_ID = "com.ifuryst.opencomputeruse";
 const OPEN_COMPUTER_USE_DEV_APP_NAME = "Open Computer Use (Dev).app";
 const OPEN_COMPUTER_USE_PACKAGED_APP_NAME = "Open Computer Use.app";
 const OPEN_COMPUTER_USE_EXECUTABLE = "Contents/MacOS/OpenComputerUse";
+const OPEN_COMPUTER_USE_ALLOW_DEV_ENV = "OPENCLAW_ALLOW_DEV_OPEN_COMPUTER_USE";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -156,6 +158,80 @@ function inferOpenComputerUseAppIdentity(command: string): OpenComputerUseAppIde
   return { recognized: false, command };
 }
 
+function openComputerUseBundleIdentifier(command: string): string | undefined {
+  const normalizedCommand = command.replaceAll("\\", "/");
+  // Jarvis embeds OCU beneath an outer Jarvis.app path. The executable's TCC
+  // identity belongs to the innermost containing app, not the first app bundle
+  // present in the absolute path.
+  const appMarkerIndex = normalizedCommand.toLowerCase().lastIndexOf(".app/");
+  if (appMarkerIndex < 0) {
+    return undefined;
+  }
+
+  const infoPlistPath = path.join(
+    normalizedCommand.slice(0, appMarkerIndex + ".app".length),
+    "Contents",
+    "Info.plist",
+  );
+
+  // Release packaging may serialize Info.plist as XML or binary. Prefer the
+  // system plist reader on macOS so identity checks follow the actual bundle
+  // metadata rather than assuming one serialization format.
+  if (fsSync.existsSync("/usr/bin/plutil")) {
+    try {
+      return execFileSync(
+        "/usr/bin/plutil",
+        ["-extract", "CFBundleIdentifier", "raw", "-o", "-", infoPlistPath],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+    } catch {
+      // Source fixtures and non-Apple plutil variants may not support
+      // extraction. The XML reader below keeps tests and source builds useful.
+    }
+  }
+  try {
+    const infoPlist = fsSync.readFileSync(infoPlistPath, "utf8");
+    const match = infoPlist.match(
+      /<key>\s*CFBundleIdentifier\s*<\/key>\s*<string>\s*([^<]+?)\s*<\/string>/i,
+    );
+    return match?.[1]?.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function isDevelopmentOpenComputerUseCommand(command: string): boolean {
+  const normalizedCommand = command.replaceAll("\\", "/");
+
+  // Dev bundles may carry a test suffix (for example, "Socket Test Dev v2").
+  // Treat any Open Computer Use app whose basename includes "Dev" as the
+  // development identity instead of relying on one canonical test app name.
+  const appBasename = normalizedCommand
+    .split("/")
+    .find((part) => /^Open Computer Use.*\.app$/i.test(part));
+  return (
+    Boolean(appBasename && /\bdev\b/i.test(appBasename)) ||
+    normalizedCommand.toLowerCase().includes(OPEN_COMPUTER_USE_DEV_BUNDLE_ID) ||
+    openComputerUseBundleIdentifier(command) === OPEN_COMPUTER_USE_DEV_BUNDLE_ID
+  );
+}
+
+function assertDevelopmentOpenComputerUseIntent(command: string, env: NodeJS.ProcessEnv): void {
+  if (!isDevelopmentOpenComputerUseCommand(command)) {
+    return;
+  }
+  if (env[OPEN_COMPUTER_USE_ALLOW_DEV_ENV]?.trim() === "1") {
+    return;
+  }
+
+  // A dev helper owns a separate macOS TCC identity and may display its own
+  // permission onboarding. Never let an ordinary resolution path select it
+  // merely because a stale app or override remains on disk.
+  throw new Error(
+    `Refusing Open Computer Use development helper without explicit developer intent. Set ${OPEN_COMPUTER_USE_ALLOW_DEV_ENV}=1 only for isolated engineering runs.`,
+  );
+}
+
 export function resolveOpenComputerUseCommand(
   command?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -165,42 +241,45 @@ export function resolveOpenComputerUseCommand(
     cwd: process.cwd(),
   }),
 ): string {
-  if (command?.trim()) {
-    return command;
-  }
-
-  const envCommand = env.OPENCLAW_OPEN_COMPUTER_USE_BIN?.trim();
-  if (envCommand) {
-    return envCommand;
-  }
-
   if (packageRoot) {
+    const packagedNativeRoot = path.join(packageRoot, "native");
     const packagedAppCommand = path.join(
-      packageRoot,
-      "native",
+      packagedNativeRoot,
       OPEN_COMPUTER_USE_PACKAGED_APP_NAME,
       OPEN_COMPUTER_USE_EXECUTABLE,
     );
     if (fsSync.existsSync(packagedAppCommand)) {
+      const bundleIdentifier = openComputerUseBundleIdentifier(packagedAppCommand);
+      if (bundleIdentifier !== OPEN_COMPUTER_USE_RELEASE_BUNDLE_ID) {
+        throw new Error(
+          `Refusing packaged Open Computer Use helper with bundle id ${bundleIdentifier ?? "unknown"}; expected ${OPEN_COMPUTER_USE_RELEASE_BUNDLE_ID}.`,
+        );
+      }
       return packagedAppCommand;
     }
-  }
-
-  const home = env.HOME?.trim();
-  if (home) {
-    const devAppCommand = path.join(
-      home,
-      "Applications",
-      OPEN_COMPUTER_USE_DEV_APP_NAME,
-      OPEN_COMPUTER_USE_EXECUTABLE,
-    );
-    if (fsSync.existsSync(devAppCommand)) {
-      return devAppCommand;
+    if (fsSync.existsSync(packagedNativeRoot)) {
+      throw new Error(
+        `Packaged Open Computer Use helper is missing from ${packagedNativeRoot}; refusing PATH or development fallback.`,
+      );
     }
   }
 
-  // Preserve the PATH shim fallback for developer installs, CI fakes, and
-  // hosts that intentionally provide OCU outside the default dev app path.
+  const explicitCommand = command?.trim();
+  if (explicitCommand) {
+    assertDevelopmentOpenComputerUseIntent(explicitCommand, env);
+    return explicitCommand;
+  }
+
+  const envCommand = env.OPENCLAW_OPEN_COMPUTER_USE_BIN?.trim();
+  if (envCommand) {
+    assertDevelopmentOpenComputerUseIntent(envCommand, env);
+    return envCommand;
+  }
+
+  // Preserve the identity-neutral PATH shim for developer installs and CI
+  // fakes, but never auto-discover a Dev app from ~/Applications. Packaged
+  // consumer runtimes resolve their production app above; engineering runs
+  // must opt into a Dev app through an explicit command plus the allow flag.
   return "open-computer-use";
 }
 
