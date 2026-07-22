@@ -6,6 +6,7 @@ set -euo pipefail
 # filesystem, process table, lock, logs, Telegram, or session state.
 MODE=""
 EXPECTED_COMMIT=""
+RUNTIME_SOURCE="jarvis-managed-bundle"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run|--execute)
@@ -18,6 +19,11 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_COMMIT="$2"
       shift 2
       ;;
+    --runtime-source)
+      [[ $# -ge 2 ]] || { printf '%s\n' "--runtime-source requires a value" >&2; exit 2; }
+      RUNTIME_SOURCE="$2"
+      shift 2
+      ;;
     *)
       printf 'unknown argument: %s\n' "$1" >&2
       exit 2
@@ -26,6 +32,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$MODE" ]] || { printf '%s\n' "choose --dry-run or --execute" >&2; exit 2; }
+[[ "$RUNTIME_SOURCE" == "jarvis-managed-bundle" || \
+  "$RUNTIME_SOURCE" == "jarvis-break-glass-hotfix" ]] || {
+  printf '%s\n' "--runtime-source must be jarvis-managed-bundle or jarvis-break-glass-hotfix" >&2
+  exit 2
+}
 [[ "$EXPECTED_COMMIT" =~ ^[0-9a-fA-F]{7,40}$ ]] || {
   printf '%s\n' "--expected-commit must be a 7-40 character hexadecimal commit" >&2
   exit 2
@@ -48,8 +59,8 @@ LAB_CHAT="${OPENCLAW_JARVIS_LAB_CHAT_ID:--1003783709877}"
 if [[ "$MODE" == "dry-run" ]]; then
   # Keep this JSON literal and parseable. In particular, do not generate a nonce
   # here: even temporary randomness would make dry-run dynamic and harder to audit.
-  printf '{"schema":"openclaw.jarvis-telegram-runtime-proof.v1","mode":"dry-run","expectedCommit":"%s","target":{"selector":"OPENCLAW_JARVIS_LAB_CHAT_ID","chatId":"%s","defaultChatId":"-1003783709877"},"mutations":false,"plan":["prove-managed-runtime-provenance","acquire-machine-canary-lock","snapshot-pid-bot-transport-log","create-generated-topic","send-generated-anchor-only","wait-bounded-thread-reply","read-bounded-evidence","verify-runtime-and-appended-log","delete-exact-topic-and-verify-marker-absent","delete-one-canonical-session-via-gateway-api","verify-session-absent","release-token-matched-lock","emit-one-structured-evidence-object"]}\n' \
-    "$EXPECTED_COMMIT" "$LAB_CHAT"
+  printf '{"schema":"openclaw.jarvis-telegram-runtime-proof.v2","mode":"dry-run","expectedCommit":"%s","runtimeSource":{"selected":"%s","default":"jarvis-managed-bundle","autoFallback":false},"target":{"selector":"OPENCLAW_JARVIS_LAB_CHAT_ID","chatId":"%s","defaultChatId":"-1003783709877"},"mutations":false,"plan":["prove-selected-runtime-provenance","acquire-machine-canary-lock","snapshot-pid-bot-transport-log","create-generated-topic","send-generated-anchor-only","wait-bounded-thread-reply","read-bounded-evidence","verify-runtime-and-appended-log","delete-exact-topic-and-verify-marker-absent","delete-one-canonical-session-via-gateway-api","verify-session-absent","release-token-matched-lock","emit-one-structured-evidence-object"]}\n' \
+    "$EXPECTED_COMMIT" "$RUNTIME_SOURCE" "$LAB_CHAT"
   exit 0
 fi
 
@@ -62,18 +73,18 @@ JARVIS_ENTRYPOINT="${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js"
 ROOT_DIR="${BASH_SOURCE[0]%/*}/.."
 
 [[ -x "$JARVIS_NODE" ]] || {
-  printf '{"schema":"openclaw.jarvis-telegram-runtime-proof.v1","result":"failed","reason":"installed Jarvis Node is unavailable","cleanup":{"topic":"not-created","session":"not-inspected","lock":"not-acquired"},"residuals":[]}\n'
+  printf '{"schema":"openclaw.jarvis-telegram-runtime-proof.v2","result":"failed","reason":"installed Jarvis Node is unavailable","runtimeSource":{"selected":"%s","observed":null,"autoFallback":false},"cleanup":{"topic":"not-created","session":"not-inspected","lock":"not-acquired"},"residuals":[]}\n' "$RUNTIME_SOURCE"
   exit 1
 }
 
-exec "$JARVIS_NODE" --input-type=module - "$EXPECTED_COMMIT" "$LAB_CHAT" "$ROOT_DIR" "$JARVIS_ENTRYPOINT" "$JARVIS_STATE_DIR" <<'NODE'
+exec "$JARVIS_NODE" --input-type=module - "$EXPECTED_COMMIT" "$RUNTIME_SOURCE" "$LAB_CHAT" "$ROOT_DIR" "$JARVIS_ENTRYPOINT" "$JARVIS_STATE_DIR" <<'NODE'
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const [expectedCommit, labChat, repoRoot, entrypoint, stateDir] = process.argv.slice(2);
+const [expectedCommit, selectedRuntimeSource, labChat, repoRoot, entrypoint, stateDir] = process.argv.slice(2);
 const label = "ai.jarvis.gateway";
 const logPath = path.join(stateDir, "logs", "gateway.log");
 const operatorSession = path.join(os.homedir(), ".openclaw", "telegram-user", "userbot.session");
@@ -90,8 +101,8 @@ const lockPath = testMode && process.env.OPENCLAW_JARVIS_TELEGRAM_PROOF_TEST_LOC
   : `/tmp/openclaw-jarvis-telegram-canary-${process.getuid()}.lock`;
 
 const runId = crypto.randomUUID();
-const nonce = `JARVIS_MANAGED_CANARY_${runId.replaceAll("-", "").toUpperCase()}`;
-const title = `Jarvis managed canary ${runId}`;
+const nonce = `JARVIS_RUNTIME_CANARY_${runId.replaceAll("-", "").toUpperCase()}`;
+const title = `Jarvis runtime canary ${runId}`;
 const prompt = `Reply with exactly ${nonce}`;
 const startedAt = Date.now();
 const token = crypto.randomBytes(24).toString("hex");
@@ -123,6 +134,7 @@ let appendedLogBytes = 0;
 let appendedLogScan = "not-run";
 let archives = [];
 let provenanceIdentity;
+let provenanceFailure;
 const residuals = [];
 const actions = [];
 
@@ -166,7 +178,15 @@ function managedChildEnv() {
     OPENCLAW_LOG_DIR: path.join(stateDir, "logs"),
     OPENCLAW_PROFILE: "consumer",
     OPENCLAW_LAUNCHD_LABEL: label,
+    OPENCLAW_JARVIS_GATEWAY_LABEL: label,
     OPENCLAW_GATEWAY_PORT: "18789",
+    // Receipt selectors are test seams in the reusable runtime prover, but the
+    // daily canary must always bind them to canonical installed Jarvis state.
+    // Never let an operator shell redirect provenance to alternate fixtures.
+    OPENCLAW_JARVIS_INSTALLED_MANIFEST: path.join(stateDir, ".consumer-bundled-runtime.json"),
+    OPENCLAW_JARVIS_PROTECTION_MARKER: path.join(stateDir, ".consumer-bundled-runtime.protection.json"),
+    OPENCLAW_INSTALLED_JARVIS_APP_PATH: "/Applications/Jarvis.app",
+    OPENCLAW_JARVIS_APP_MANIFEST: "/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json",
     OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION: operatorSession,
     OPENCLAW_TELEGRAM_USER_LOCK_PATH: operatorLockPath,
   };
@@ -264,7 +284,7 @@ function parseProvenance(stdout) {
   };
   if (identity.proof !== "true"
     || identity.serviceLabel !== label
-    || identity.runtimeSource !== "jarvis-managed-bundle"
+    || identity.runtimeSource !== selectedRuntimeSource
     || !identity.runtimeCommit?.toLowerCase().startsWith(expectedCommit.toLowerCase())
     || identity.stateDir !== stateDir
     || identity.configPath !== path.join(stateDir, "openclaw.json")
@@ -273,9 +293,39 @@ function parseProvenance(stdout) {
     || identity.listener !== "127.0.0.1:18789"
     || identity.rpc !== "ok"
     || identity.health !== "healthy") {
-    throw new Error("managed Jarvis provenance output failed identity validation");
+    throw new Error(`Jarvis provenance output failed identity validation for runtimeSource=${selectedRuntimeSource}`);
   }
   return identity;
+}
+
+function classifyProvenanceFailure(result) {
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const observed = output.match(/runtime_source_observed=(jarvis-managed-bundle|jarvis-break-glass-hotfix|unknown)/)?.[1]
+    ?? output.match(/runtime_source=(jarvis-managed-bundle|jarvis-break-glass-hotfix)/)?.[1]
+    ?? "unknown";
+  const rules = [
+    [/marker is not readable|marker is missing/i, "protection-marker-missing", "protected-hotfix marker is missing or unreadable"],
+    [/marker commit=/i, "protection-marker-commit-mismatch", "protected-hotfix marker commit does not match the live runtime"],
+    [/compatibility commit=/i, "protection-compatibility-commit-mismatch", "protected-hotfix compatibility commit does not match the installed manifest"],
+    [/compatibility version=/i, "protection-compatibility-version-mismatch", "protected-hotfix compatibility version does not match the installed manifest"],
+    [/backup receipt is missing|backup commit=/i, "protection-backup-mismatch", "protected-hotfix backup receipt is missing or mismatched"],
+    [/runtimeCommit=/i, "runtime-commit-mismatch", "live runtime commit does not match the expected commit"],
+    [/runtimeSource=/i, "runtime-source-mismatch", "live runtime source does not match the selected canary source"],
+    [/TCP port .* not owned|no listener found/i, "listener-owner-mismatch", "gateway listener ownership proof failed"],
+    [/PID|pid=/i, "pid-owner-mismatch", "gateway PID ownership proof failed"],
+    [/RPC probe is not ok|deep RPC status failed/i, "rpc-unhealthy", "deep RPC health proof failed"],
+  ];
+  const matched = rules.find(([pattern]) => pattern.test(output));
+  const sourceForCommand = observed === "jarvis-managed-bundle" || observed === "jarvis-break-glass-hotfix"
+    ? observed
+    : selectedRuntimeSource;
+  return {
+    code: matched?.[1] ?? "runtime-provenance-rejected",
+    reason: matched?.[2] ?? "selected Jarvis runtime provenance proof failed",
+    observedRuntimeSource: observed,
+    expectedRuntimeSource: selectedRuntimeSource,
+    nextCommand: `bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --runtime-source ${sourceForCommand} --expected-commit ${expectedCommit}`,
+  };
 }
 
 function gatewayPid() {
@@ -486,11 +536,26 @@ let lockRelease = "not-acquired";
 try {
   workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-telegram-proof-"));
   actions.push("provenance-gate");
-  const provenance = run("bash", [gate, "--expected-commit", expectedCommit], {
+  const provenance = run("bash", [
+    gate,
+    "--runtime-source", selectedRuntimeSource,
+    "--expected-commit", expectedCommit,
+  ], {
     env: managedChildEnv(),
   });
-  if (provenance.status !== 0) throw new Error("managed Jarvis provenance gate failed");
-  provenanceIdentity = parseProvenance(provenance.stdout);
+  if (provenance.status !== 0) {
+    provenanceFailure = classifyProvenanceFailure(provenance);
+    throw new Error(`${provenanceFailure.reason}; observed runtimeSource=${provenanceFailure.observedRuntimeSource}, expected runtimeSource=${selectedRuntimeSource}; next command: ${provenanceFailure.nextCommand}`);
+  }
+  try {
+    provenanceIdentity = parseProvenance(provenance.stdout);
+  } catch (error) {
+    provenanceFailure = classifyProvenanceFailure({
+      stdout: provenance.stdout,
+      stderr: error instanceof Error ? error.message : String(error),
+    });
+    throw new Error(`${provenanceFailure.reason}; observed runtimeSource=${provenanceFailure.observedRuntimeSource}, expected runtimeSource=${selectedRuntimeSource}; next command: ${provenanceFailure.nextCommand}`);
+  }
 
   acquireLock();
   actions.push("lock-acquired");
@@ -649,10 +714,16 @@ const cleanupComplete = !topicCreationUncertain
 const result = proofPassed && cleanupComplete ? "passed" : cleanupComplete ? "failed" : "cleanup-incomplete";
 const finishedAt = Date.now();
 const evidence = {
-  schema: "openclaw.jarvis-telegram-runtime-proof.v1",
+  schema: "openclaw.jarvis-telegram-runtime-proof.v2",
   result,
   reason: failureReason || null,
   expectedCommit,
+  runtimeSource: {
+    selected: selectedRuntimeSource,
+    observed: provenanceIdentity?.runtimeSource ?? provenanceFailure?.observedRuntimeSource ?? null,
+    autoFallback: false,
+  },
+  guidance: provenanceFailure ?? null,
   target: { selector: "OPENCLAW_JARVIS_LAB_CHAT_ID", chatId: labChat },
   timing: {
     startedAt: new Date(startedAt).toISOString(),

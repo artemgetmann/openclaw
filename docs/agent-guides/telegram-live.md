@@ -28,12 +28,27 @@ and more reliable default.
 - Never replace tester lanes with the daily bot, and never let multiple agents
   use the daily bot concurrently.
 
-For an approved managed-Jarvis canary, preview the zero-mutation plan first:
+For an approved daily-Jarvis canary, select the deployed source and preview the
+zero-mutation plan first. Managed bundle remains the strict default:
 
 ```bash
 bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
   --expected-commit <deployed-commit>
 ```
+
+After `scripts/ship-jarvis-hotfix.sh`, use the explicit protected source instead:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --runtime-source jarvis-break-glass-hotfix \
+  --expected-commit <deployed-commit>
+```
+
+Never retry a managed-source rejection by warming a tester lane. Packaged
+releases use `jarvis-managed-bundle`; protected break-glass deployments use
+`jarvis-break-glass-hotfix`; isolated worktree bots use
+`telegram-live-runtime.sh ensure`. The canary never auto-falls back between
+sources.
 
 Run `--execute` only with fresh approval after the expected commit is deployed.
 The harness targets `ai.jarvis.gateway`, acquires the machine-wide canary lock,

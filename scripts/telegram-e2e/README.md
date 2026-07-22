@@ -31,13 +31,28 @@ answer your messages and waste an hour on fake regressions.
   post-deployment acceptance canary. Its disposable Jarvis Lab topic does not
   isolate the gateway, bot token, polling cursor, config, or provider quota.
 
-Preview the managed canary without runtime, network, lock, filesystem, topic,
-message, or session mutation:
+Preview the packaged managed canary without runtime, network, lock, filesystem,
+topic, message, or session mutation. This strict default never accepts a
+protected hotfix:
 
 ```bash
 bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
   --expected-commit <deployed-commit>
 ```
+
+After `scripts/ship-jarvis-hotfix.sh`, preview the protected-hotfix canary:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --runtime-source jarvis-break-glass-hotfix \
+  --expected-commit <deployed-commit>
+```
+
+The protected lane verifies the full protection/compatibility/backup receipt,
+`ai.jarvis.gateway`, Jarvis Application Support paths, PID/listener ownership,
+and deep RPC health before it acquires the canary lock or touches Telegram.
+There is no source auto-fallback. Tester-lane warm-up is only for isolated
+worktree bots.
 
 Use `--execute` only after fresh approval. The harness records runtime,
 transport, message, and cleanup evidence; deletes only its exact topic and
