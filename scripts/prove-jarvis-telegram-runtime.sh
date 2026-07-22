@@ -179,6 +179,13 @@ function managedChildEnv() {
     OPENCLAW_PROFILE: "consumer",
     OPENCLAW_LAUNCHD_LABEL: label,
     OPENCLAW_GATEWAY_PORT: "18789",
+    // Receipt selectors are test seams in the reusable runtime prover, but the
+    // daily canary must always bind them to canonical installed Jarvis state.
+    // Never let an operator shell redirect provenance to alternate fixtures.
+    OPENCLAW_JARVIS_INSTALLED_MANIFEST: path.join(stateDir, ".consumer-bundled-runtime.json"),
+    OPENCLAW_JARVIS_PROTECTION_MARKER: path.join(stateDir, ".consumer-bundled-runtime.protection.json"),
+    OPENCLAW_INSTALLED_JARVIS_APP_PATH: "/Applications/Jarvis.app",
+    OPENCLAW_JARVIS_APP_MANIFEST: "/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json",
     OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION: operatorSession,
     OPENCLAW_TELEGRAM_USER_LOCK_PATH: operatorLockPath,
   };
