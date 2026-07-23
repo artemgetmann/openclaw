@@ -123,15 +123,24 @@ export function createFollowupRunner(params: {
   /**
    * Sends followup payloads, routing to the originating channel if set.
    *
-   * When originatingChannel/originatingTo are set on the queued run,
-   * replies are routed directly to that provider instead of using the
-   * session's current dispatcher. This ensures replies go back to
-   * where the message originated.
+   * A live same-channel dispatcher owns channel-specific reply lifecycle
+   * semantics such as Telegram's mutable progress bubble and retained Work log.
+   * Cross-channel delivery and restart recovery have no matching live
+   * dispatcher, so those paths still route directly to the recorded origin.
    */
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const provider = resolveOriginMessageProvider({
+      provider: queued.run.messageProvider,
+    });
+    const origin = resolveOriginMessageProvider({
+      originatingChannel,
+    });
+    const canUseSameChannelDispatcher = Boolean(
+      opts?.onBlockReply && shouldRouteToOriginating && origin && origin === provider,
+    );
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
@@ -166,8 +175,13 @@ export function createFollowupRunner(params: {
       }
       await typingSignals.signalTextDelta(payload.text);
 
-      // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      if (canUseSameChannelDispatcher && opts?.onBlockReply) {
+        // Queued same-channel replies must re-enter the original transport
+        // dispatcher. Direct outbound routing would turn every phase-aware
+        // commentary payload into a separate durable message, bypassing
+        // Telegram's one-message progress controller and Work log finalization.
+        await opts.onBlockReply(payload);
+      } else if (shouldRouteToOriginating) {
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -186,12 +200,6 @@ export function createFollowupRunner(params: {
           // handler and delivers to the correct destination.  For true
           // cross-channel routing (origin !== provider), falling back
           // would send to the wrong channel, so we drop the payload.
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
           if (opts?.onBlockReply && origin && origin === provider) {
             await opts.onBlockReply(payload);
           } else if (shouldThrowProcessingFailure(queued)) {
