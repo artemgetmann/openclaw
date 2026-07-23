@@ -478,6 +478,9 @@ describe("screen record CLI params", () => {
     expect(skill).toMatch(/media-editor.+proof-inspection recipe/i);
     expect(skill).toMatch(/custom bundled\s+skill allowlist/i);
     expect(skill).toMatch(/ffprobe -v error/i);
+    expect(skill).toMatch(/Clean-Scene Preflight/i);
+    expect(skill).toMatch(/inspect full-resolution frames/i);
+    expect(skill).toMatch(/Do not send a visibly flawed video with a disclaimer/i);
     expect(mediaSkill).toMatch(/ffprobe -v error/i);
     expect(mediaSkill).toMatch(/blackdetect=d=0\.2:pix_th=0\.10/i);
     expect(mediaSkill).toMatch(/review-contact\.png/i);
