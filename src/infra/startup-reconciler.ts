@@ -185,6 +185,14 @@ function hashSkillDirectory(skillDir: string): string | undefined {
   }
 }
 
+function hashFile(filePath: string): string | undefined {
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
 function readManifest(manifestPath: string): CapabilitiesManifest | undefined {
   try {
     const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as unknown;
@@ -245,6 +253,7 @@ function pathCandidatesForBin(params: {
     .map((dir) => dir.trim())
     .filter(Boolean);
   const managedBinDir = path.resolve(params.managedBinDir);
+  const packagedMacArch = process.arch === "x64" ? "x86_64" : process.arch;
 
   // Packaged/runtime-local candidates come first. PATH candidates are read-only
   // sources only; the reconciler never runs package-manager install/update
@@ -252,6 +261,9 @@ function pathCandidatesForBin(params: {
   return uniquePaths([
     path.join(params.packageRoot, "bin", params.bin),
     path.join(params.packageRoot, "tools", params.bin),
+    // Signed vendor CLIs stay architecture-specific because combining their
+    // slices with lipo would invalidate the signature Keychain ACLs depend on.
+    path.join(params.packageRoot, "tools", params.bin, `darwin-${packagedMacArch}`, params.bin),
     path.join(params.packageRoot, "tools", params.bin, "bin", params.bin),
     path.join(params.packageRoot, "node_modules", ".bin", params.bin),
     ...pathDirs
@@ -449,7 +461,38 @@ async function reconcileManagedTools(params: {
             runVersionCommand: params.runVersionCommand,
           })
         : {};
-      if (managedProbe.version && compareVersions(managedProbe.version, recommendedVersion) >= 0) {
+      const candidates = pathCandidatesForBin({
+        bin,
+        packageRoot: params.packageRoot,
+        managedBinDir: params.managedBinDir,
+        env: params.env,
+      });
+      const packageRoot = path.resolve(params.packageRoot);
+      const packagedCandidate = candidates.find((candidate) => {
+        const relative = path.relative(packageRoot, path.resolve(candidate));
+        return (
+          relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+        );
+      });
+      const packagedProbe = packagedCandidate
+        ? probeVersion({
+            command: versionCommand,
+            candidatePath: packagedCandidate,
+            versionRegex,
+            env: params.env,
+            runVersionCommand: params.runVersionCommand,
+          })
+        : {};
+      const sameVersionPackagedGogDiffers =
+        skillName === "gog" &&
+        packagedCandidate !== undefined &&
+        packagedProbe.version === managedProbe.version &&
+        hashFile(packagedCandidate) !== hashFile(managedPath);
+      if (
+        managedProbe.version &&
+        compareVersions(managedProbe.version, recommendedVersion) >= 0 &&
+        !sameVersionPackagedGogDiffers
+      ) {
         results.push({
           skillName,
           displayName,
@@ -468,12 +511,13 @@ async function reconcileManagedTools(params: {
             version: string;
           }
         | undefined;
-      for (const candidate of pathCandidatesForBin({
-        bin,
-        packageRoot: params.packageRoot,
-        managedBinDir: params.managedBinDir,
-        env: params.env,
-      })) {
+      if (sameVersionPackagedGogDiffers && packagedCandidate && packagedProbe.version) {
+        // A version-only check cannot distinguish the old Jarvis-resigned Gog
+        // from the vendor-signed payload. Repair same-version byte drift so an
+        // app update heals existing installs without touching Keychain items.
+        selected = { path: packagedCandidate, version: packagedProbe.version };
+      }
+      for (const candidate of selected ? [] : candidates) {
         const sourceProbe = probeVersion({
           command: versionCommand,
           candidatePath: candidate,

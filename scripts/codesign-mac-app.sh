@@ -278,6 +278,10 @@ verify_team_ids() {
   while IFS= read -r -d '' f; do
     [[ -f "$f" ]] || continue
     if /usr/bin/file "$f" | /usr/bin/grep -q "Mach-O"; then
+      if openclaw_runtime_payload_is_vendor_signed_gog "$f"; then
+        openclaw_verify_vendor_signed_gog "$f"
+        continue
+      fi
       local team
       team="$(team_id_for "$f" || true)"
       if [[ -z "$team" ]]; then
@@ -367,6 +371,11 @@ if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" ]]; then
 else
   while IFS= read -r -d '' runtime_file; do
     if openclaw_file_is_macho "$runtime_file"; then
+      if openclaw_runtime_payload_is_vendor_signed_gog "$runtime_file"; then
+        echo "Preserving verified Gog vendor signature: $runtime_file"
+        openclaw_verify_vendor_signed_gog "$runtime_file"
+        continue
+      fi
       echo "Signing runtime payload: $runtime_file"
       sign_plain_item "$runtime_file"
     fi

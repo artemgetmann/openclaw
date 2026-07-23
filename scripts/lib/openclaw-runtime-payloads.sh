@@ -82,3 +82,70 @@ openclaw_runtime_node_should_be_macho() {
       ;;
   esac
 }
+
+openclaw_runtime_payload_is_vendor_signed_gog() {
+  local file_path="$1"
+
+  # Gog stores OAuth tokens in Keychain. Keychain ACLs bind to the executable's
+  # designated requirement, so replacing Gog's upstream signature with the
+  # Jarvis signature causes repeated prompts. Keep this exception path-specific:
+  # no other runtime executable may bypass the normal Jarvis signing sweep.
+  case "$file_path" in
+    */openclaw/tools/gog/darwin-arm64/gog|*/openclaw/tools/gog/darwin-x86_64/gog)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openclaw_verify_vendor_signed_gog() {
+  local file_path="$1"
+  local codesign_bin="${2:-/usr/bin/codesign}"
+  local lipo_bin="${3:-/usr/bin/lipo}"
+  local expected_arch=""
+  local actual_archs=""
+  local details=""
+  local identifier=""
+  local team_identifier=""
+
+  case "$file_path" in
+    */darwin-arm64/gog)
+      expected_arch="arm64"
+      ;;
+    */darwin-x86_64/gog)
+      expected_arch="x86_64"
+      ;;
+    *)
+      echo "ERROR: refusing unrecognized vendor-signed Gog path: $file_path" >&2
+      return 1
+      ;;
+  esac
+
+  if ! "$codesign_bin" --verify --strict "$file_path" >/dev/null 2>&1; then
+    echo "ERROR: bundled Gog failed strict vendor signature verification: $file_path" >&2
+    return 1
+  fi
+  if ! details="$("$codesign_bin" -dv --verbose=4 "$file_path" 2>&1)"; then
+    echo "ERROR: bundled Gog signature details are unreadable: $file_path" >&2
+    return 1
+  fi
+
+  identifier="$(printf '%s\n' "$details" | sed -n 's/^Identifier=//p' | head -n 1)"
+  team_identifier="$(printf '%s\n' "$details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
+  if [[ "$identifier" != "com.steipete.gogcli.gog" || "$team_identifier" != "Y5PE65HELJ" ]]; then
+    echo "ERROR: bundled Gog has an unexpected signing identity: $file_path" >&2
+    echo "Expected: Identifier=com.steipete.gogcli.gog TeamIdentifier=Y5PE65HELJ" >&2
+    echo "Actual: Identifier=${identifier:-<missing>} TeamIdentifier=${team_identifier:-<missing>}" >&2
+    return 1
+  fi
+
+  actual_archs="$("$lipo_bin" -archs "$file_path" 2>/dev/null || true)"
+  if [[ "$actual_archs" != "$expected_arch" ]]; then
+    echo "ERROR: bundled Gog architecture mismatch: $file_path" >&2
+    echo "Expected: $expected_arch" >&2
+    echo "Actual: ${actual_archs:-<missing>}" >&2
+    return 1
+  fi
+}
