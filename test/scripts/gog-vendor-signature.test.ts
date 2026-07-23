@@ -4,11 +4,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
+// GitHub's Windows runners expose Git Bash through PATH rather than /bin/bash.
+const bashBin = process.platform === "win32" ? "bash" : "/bin/bash";
 
 describe("packaged Gog signing identity", () => {
   it("fails closed unless the preserved vendor signature has the reviewed identity", () => {
     const output = execFileSync(
-      "/bin/bash",
+      bashBin,
       [path.join(root, "scripts", "test-gog-vendor-signature.sh")],
       { encoding: "utf8" },
     );
