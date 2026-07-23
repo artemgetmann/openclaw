@@ -1,0 +1,217 @@
+import { describe, expect, it } from "vitest";
+import type { HeartbeatAttentionStateEntry } from "../config/sessions/types.js";
+import {
+  buildHeartbeatAttentionPrompt,
+  buildHeartbeatAttentionState,
+  buildHeartbeatPagerText,
+  groupHeartbeatTopicItems,
+  parseHeartbeatAttentionEnvelope,
+  selectHeartbeatAttentionItems,
+} from "./heartbeat-attention.js";
+
+const envelope = (items: unknown[]) =>
+  `<heartbeat_attention>\n${JSON.stringify({ items })}\n</heartbeat_attention>`;
+
+describe("heartbeat attention envelope", () => {
+  it("parses pager and trusted Telegram topic destinations", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope([
+        {
+          key: "ten-call-2026-07-14",
+          fingerprint: "confirmed-11:00-bali",
+          title: "Ten call at 11:00",
+          text: "The call starts in 45 minutes.",
+          urgency: "urgent",
+          category: "commitment",
+          destination: { kind: "pager" },
+        },
+        {
+          key: "empower-final-settlement",
+          fingerprint: "monitor-expired-no-reply",
+          title: "Empower needs a decision",
+          text: "Choose whether to continue the settlement escalation.",
+          urgency: "normal",
+          category: "build",
+          destination: {
+            kind: "telegram_topic",
+            chatId: "-1003783709877",
+            threadId: 3030,
+          },
+        },
+      ]),
+    );
+
+    expect(parsed).toMatchObject({
+      items: [
+        {
+          key: "ten-call-2026-07-14",
+          destination: { kind: "pager" },
+        },
+        {
+          key: "empower-final-settlement",
+          destination: {
+            kind: "telegram_topic",
+            chatId: "-1003783709877",
+            threadId: 3030,
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects guessed or malformed Telegram destinations", () => {
+    expect(
+      parseHeartbeatAttentionEnvelope(
+        envelope([
+          {
+            key: "bad-route",
+            fingerprint: "same",
+            title: "Bad route",
+            text: "Do not send this.",
+            urgency: "normal",
+            category: "build",
+            destination: {
+              kind: "telegram_topic",
+              chatId: "@guessed-chat",
+              threadId: "not-a-topic",
+            },
+          },
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it("suppresses unchanged items before enforcing the three-item attention budget", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope([
+        {
+          key: "unchanged",
+          fingerprint: "same-facts",
+          title: "Already seen",
+          text: "Nothing changed.",
+          urgency: "normal",
+          category: "build",
+          destination: { kind: "pager" },
+        },
+        ...Array.from({ length: 4 }, (_, index) => ({
+          key: `fresh-${index + 1}`,
+          fingerprint: `facts-${index + 1}`,
+          title: `Fresh ${index + 1}`,
+          text: `Fresh item ${index + 1}.`,
+          urgency: "normal",
+          category: "build",
+          destination: { kind: "pager" },
+        })),
+      ]),
+    );
+    const previous: HeartbeatAttentionStateEntry[] = [
+      {
+        key: "unchanged",
+        fingerprint: "same-facts",
+        title: "Already seen",
+        deliveredAt: 1,
+        urgency: "normal",
+        destination: "pager",
+      },
+    ];
+
+    expect(parsed).not.toBeNull();
+    const selected = selectHeartbeatAttentionItems({
+      items: parsed?.items ?? [],
+      previous,
+      maxItems: 3,
+    });
+
+    expect(selected.suppressedKeys).toEqual(["unchanged"]);
+    expect(selected.items.map((item) => item.key)).toEqual(["fresh-1", "fresh-2", "fresh-3"]);
+  });
+
+  it("groups same-topic items and builds one compact cross-topic pager", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope([
+        {
+          key: "empower",
+          fingerprint: "expired",
+          title: "Empower",
+          text: "Settlement monitor expired.",
+          urgency: "normal",
+          category: "build",
+          destination: {
+            kind: "telegram_topic",
+            chatId: "-1003783709877",
+            threadId: 3030,
+          },
+        },
+        {
+          key: "dld",
+          fingerprint: "case-closed",
+          title: "RDC/DLD",
+          text: "The reopened request was closed again.",
+          urgency: "normal",
+          category: "build",
+          destination: {
+            kind: "telegram_topic",
+            chatId: "-1003783709877",
+            threadId: 3188,
+          },
+        },
+        {
+          key: "ten-call",
+          fingerprint: "starts-11",
+          title: "Ten call",
+          text: "Starts at 11:00 Bali.",
+          urgency: "urgent",
+          category: "commitment",
+          destination: { kind: "pager" },
+        },
+      ]),
+    );
+    const items = parsed?.items ?? [];
+    const groups = groupHeartbeatTopicItems(items);
+    const pager = buildHeartbeatPagerText(items);
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.threadId)).toEqual([3030, 3188]);
+    expect(pager).toContain("Ten call");
+    expect(pager).toContain("https://t.me/c/3783709877/3030");
+    expect(pager).toContain("https://t.me/c/3783709877/3188");
+    expect(pager).not.toContain("Settlement monitor expired.");
+  });
+
+  it("stores only delivered item state and tells the model to reuse stable facts", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope([
+        {
+          key: "empower",
+          fingerprint: "expired",
+          title: "Empower",
+          text: "Settlement monitor expired.",
+          urgency: "normal",
+          category: "build",
+          destination: { kind: "pager" },
+        },
+      ]),
+    );
+    const state = buildHeartbeatAttentionState({
+      previous: [],
+      delivered: parsed?.items ?? [],
+      deliveredAt: 10,
+    });
+    const prompt = buildHeartbeatAttentionPrompt(state);
+
+    expect(state).toEqual([
+      {
+        key: "empower",
+        fingerprint: "expired",
+        title: "Empower",
+        deliveredAt: 10,
+        urgency: "normal",
+        destination: "pager",
+      },
+    ]);
+    expect(prompt).toContain("maximum of 3");
+    expect(prompt).toContain("key=empower");
+    expect(prompt).toContain("fingerprint=expired");
+    expect(prompt).toContain("Do not change a fingerprint merely because wording changed");
+  });
+});

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -103,7 +104,11 @@ describe("runHeartbeatOnce", () => {
             sourceThreadId: 928,
             sourceAccountId: "default",
           });
-          return { text: "Still waiting for the passport photo." };
+          return {
+            text: `<heartbeat_attention>
+{"items":[{"key":"passport-photo","fingerprint":"still-missing","title":"Passport photo needed","text":"Still waiting for the passport photo.","urgency":"normal","category":"personal","destination":{"kind":"telegram_topic","chatId":"-1003841603622","threadId":928}}]}
+</heartbeat_attention>`,
+          };
         });
 
         const sendTelegram = vi.fn().mockResolvedValue({
@@ -125,6 +130,211 @@ describe("runHeartbeatOnce", () => {
           "-1003841603622",
           "Still waiting for the passport photo.",
           expect.objectContaining({ messageThreadId: 928, accountId: "default" }),
+        );
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("fans out mixed heartbeat items to silent task topics and one compact DM pager", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+        });
+
+        replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
+          expect(ctx.Body).toContain("Heartbeat attention delivery contract:");
+          expect(ctx.Body).toContain("Return a maximum of 3 items.");
+          return {
+            text: `<heartbeat_attention>
+{"items":[
+{"key":"ten-call","fingerprint":"confirmed-11:00","title":"Ten call","text":"Starts at 11:00 Bali.","urgency":"urgent","category":"commitment","destination":{"kind":"pager"}},
+{"key":"empower","fingerprint":"monitor-expired","title":"Empower","text":"Choose whether to continue the settlement escalation.","urgency":"normal","category":"build","destination":{"kind":"telegram_topic","chatId":"-1003783709877","threadId":3030}},
+{"key":"dld","fingerprint":"case-closed-again","title":"RDC/DLD","text":"Choose whether to reopen or escalate.","urgency":"normal","category":"build","destination":{"kind":"telegram_topic","chatId":"-1003783709877","threadId":3188}}
+]}
+</heartbeat_attention>`,
+          };
+        });
+
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "123456",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 10_000,
+          },
+        });
+
+        expect(sendTelegram).toHaveBeenCalledTimes(3);
+        expect(sendTelegram).toHaveBeenNthCalledWith(
+          1,
+          "-1003783709877",
+          "Choose whether to continue the settlement escalation.",
+          expect.objectContaining({ messageThreadId: 3030, silent: true }),
+        );
+        expect(sendTelegram).toHaveBeenNthCalledWith(
+          2,
+          "-1003783709877",
+          "Choose whether to reopen or escalate.",
+          expect.objectContaining({ messageThreadId: 3188, silent: true }),
+        );
+        expect(sendTelegram).toHaveBeenNthCalledWith(
+          3,
+          "123456",
+          expect.stringContaining("Ten call"),
+          expect.not.objectContaining({ silent: true }),
+        );
+        expect(sendTelegram.mock.calls[2]?.[1]).toContain("https://t.me/c/3783709877/3030");
+        expect(sendTelegram.mock.calls[2]?.[1]).toContain("https://t.me/c/3783709877/3188");
+
+        const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+          string,
+          { heartbeatAttentionState?: Array<{ key?: string }> }
+        >;
+        const mainEntry = Object.values(store)[0];
+        expect(mainEntry?.heartbeatAttentionState?.map((entry) => entry.key)).toEqual([
+          "ten-call",
+          "empower",
+          "dld",
+        ]);
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("suppresses unchanged typed items without emitting a shorter repeat", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+          heartbeatAttentionState: [
+            {
+              key: "empower",
+              fingerprint: "monitor-expired",
+              title: "Empower",
+              deliveredAt: 1,
+              urgency: "normal",
+              destination: "telegram:-1003783709877:topic:3030",
+            },
+          ],
+        });
+
+        replySpy.mockResolvedValue({
+          text: `<heartbeat_attention>
+{"items":[{"key":"empower","fingerprint":"monitor-expired","title":"Empower, still waiting","text":"No reply yet.","urgency":"normal","category":"build","destination":{"kind":"telegram_topic","chatId":"-1003783709877","threadId":3030}}]}
+</heartbeat_attention>`,
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "123456",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 10_000,
+          },
+        });
+
+        expect(sendTelegram).not.toHaveBeenCalled();
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("fails malformed typed output back to the configured DM pager, not the source topic", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+          origin: {
+            provider: "telegram",
+            to: "telegram:group:-1003841603622",
+            accountId: "default",
+            threadId: 928,
+          },
+        });
+        replySpy.mockResolvedValue({
+          text: "<heartbeat_attention>{bad json}</heartbeat_attention>",
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "123456",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 10_000,
+          },
+        });
+
+        expect(sendTelegram).toHaveBeenCalledTimes(1);
+        expect(sendTelegram).toHaveBeenCalledWith(
+          "123456",
+          "<heartbeat_attention>{bad json}</heartbeat_attention>",
+          expect.not.objectContaining({ messageThreadId: 928 }),
         );
       },
       { prefix: "openclaw-hb-" },

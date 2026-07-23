@@ -23,7 +23,13 @@ read_when:
 
 # - Prefer net-new action-needed items. If you already surfaced the same unresolved blocker recently,
 
-# do not resend the full alert unless something materially changed; use a shorter nudge if needed.
+# do not resend it unless something materially changed or its urgency escalated.
+
+#
+
+# - Keep an attention budget: surface at most three items that need my decision, approval, reply,
+
+# or awareness now. Continue safe work yourself instead of turning it into a notification.
 
 #
 
