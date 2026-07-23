@@ -11,6 +11,7 @@ import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
+import { isJarvisConsumerConfig } from "../../config/jarvis-consumer-model-migration.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -127,6 +128,7 @@ export async function resolveCommandsSystemPromptBundle(
     heartbeatPrompt: undefined,
     ttsHint,
     acpEnabled: params.cfg?.acp?.enabled !== false,
+    jarvisBrowserPolicy: isJarvisConsumerConfig((params.cfg ?? {}) as Record<string, unknown>),
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,

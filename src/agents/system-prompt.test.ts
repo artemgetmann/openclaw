@@ -173,12 +173,10 @@ describe("buildAgentSystemPrompt", () => {
       "If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it before any generic discovery.",
     );
     expect(prompt).toContain(
-      "do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step",
+      "do not claim the skill is unavailable; say the active catalog is incomplete",
     );
     expect(prompt).toContain("<name>telegram-user</name>");
-    expect(prompt.indexOf("<name>telegram-user</name>")).toBeLessThan(
-      prompt.indexOf("openclaw skills list"),
-    );
+    expect(prompt).not.toContain("openclaw skills list");
   });
 
   it("separates Telegram status updates from Telegram-as-me topic handoffs", () => {
@@ -405,11 +403,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Before sending or claiming any user-facing screenshot, screen recording, or other media proof",
     );
-    expect(prompt).toContain("For a standalone local audio file the user wants transcribed");
-    expect(prompt).toContain("media transcribe --file <path> --json");
+    expect(prompt).toContain("For audio transcription");
+    expect(prompt).toContain("openclaw media transcribe --file <path> --json");
+    expect(prompt).toContain("`media` is a subcommand, not a standalone binary to probe");
     expect(prompt).toContain(
-      "channel-specific voice-note retrieval belongs in the matching channel skill",
+      "the user approved the fallback after being warned it can be slow and compute-intensive",
     );
+    expect(prompt).toContain("stop and ask before starting local transcription");
+    expect(prompt).toContain("channel-specific retrieval belongs in the matching skill");
     expect(prompt).not.toContain("wacli-recent-reply.sh");
     expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
     expect(prompt).not.toContain("do not inspect Telethon internals");
@@ -469,6 +470,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
+  });
+
+  it("removes the isolated browser fallback from the Jarvis system prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/jarvis",
+      toolNames: ["browser"],
+      jarvisBrowserPolicy: true,
+    });
+
+    expect(prompt).toContain("use the selected Chrome account for normal work");
+    expect(prompt).toContain("without offering another browser or exposing internal profile names");
+    expect(prompt).not.toContain('profile="openclaw"');
+    expect(prompt).not.toContain("clean openclaw");
+  });
+
+  it("keeps the isolated browser guidance for generic OpenClaw", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["browser"],
+    });
+
+    expect(prompt).toContain('profile="openclaw"');
+    expect(prompt).toContain("clean openclaw");
   });
 
   it("describes image_generate when the tool is available", () => {

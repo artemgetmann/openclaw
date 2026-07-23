@@ -47,9 +47,9 @@ struct BrowserSetupCardContent: View {
     private var header: some View {
         if self.presentation == .settings {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Choose Your Main Chrome Account")
+                Text(BrowserSetupCopy.title)
                     .font(.headline)
-                Text("Jarvis will use this Chrome browser, so you don’t have to log in everywhere again.")
+                Text(BrowserSetupCopy.subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -144,10 +144,14 @@ struct BrowserSetupCardContent: View {
     private func readyState(profile: ChromeProfileCandidate) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
-                title: "Chrome connected",
-                body: "\(AppFlavor.current.appName) will use \(profile.displayName) when browser tasks need your signed-in sites.")
+                title: "Separate Chrome copy",
+                body: BrowserSetupCopy.separateCopyBody)
 
             self.profileCard(profile, selected: true, action: nil)
+
+            self.callout(
+                title: "Your current Chrome (optional)",
+                body: BrowserSetupCopy.currentChromeBody)
 
             HStack(spacing: 10) {
                 Button("Choose Another Account") {

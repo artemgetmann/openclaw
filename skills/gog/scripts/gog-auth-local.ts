@@ -677,10 +677,10 @@ async function commandStart(flags: Map<string, string | boolean>) {
 
   // The detached Node process supervises status only. On macOS it acquires the
   // actual auth-operation lock inside runWorker, so supervisor death cannot
-  // release ownership while gog is still alive.
+  // release ownership while gog is still alive. Keep this package-safe: the
+  // consumer runtime has Node 22+ but intentionally has no dev-only tsx loader.
   const workerArgs = [
-    "--import",
-    "tsx",
+    "--experimental-strip-types",
     __filename,
     "worker",
     "--session",

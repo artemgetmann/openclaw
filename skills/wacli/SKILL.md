@@ -13,6 +13,7 @@ metadata:
             "bins":
               [
                 "wacli",
+                "openclaw",
                 "./scripts/wacli-live.sh",
                 "./scripts/wacli-health.sh",
                 "./scripts/wacli-auth-local.sh",
@@ -89,6 +90,14 @@ Automation Rule
   thread movement, inbound or outbound, changes or duplicates the reply, stop
   and update the reply or ask the user before sending. This is mandatory even if
   the user already approved an older draft.
+
+Voice notes and audio
+
+- When a WhatsApp message contains a voice note or audio attachment, download
+  it with
+  `wacli media download --chat <jid> --id <message-id> --output <directory> --json`,
+  then hand the downloaded file to the generic transcription route:
+  `openclaw media transcribe --file /path/to/downloaded-audio.oga --json`
 
 Time-aware WhatsApp context
 

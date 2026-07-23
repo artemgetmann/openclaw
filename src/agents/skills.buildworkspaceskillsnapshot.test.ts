@@ -198,6 +198,27 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt.length).toBeLessThan(2000);
   });
 
+  it("keeps a compact name and location catalog when full descriptions overflow", async () => {
+    const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 100,
+            maxSkillsPromptChars: 4_000,
+          },
+        },
+      },
+    });
+
+    expect(snapshot.prompt).toContain("⚠️ Skills catalog compacted");
+    for (let index = 0; index < 8; index += 1) {
+      expect(snapshot.prompt).toContain(`<name>skill-${String(index).padStart(2, "0")}</name>`);
+    }
+    expect(snapshot.prompt.match(new RegExp("x".repeat(800), "g"))).toHaveLength(2);
+  });
+
   it("keeps workspace skills ahead of bundled skills when prompt limits truncate", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const bundledDir = path.join(workspaceDir, ".bundled");

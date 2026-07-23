@@ -46,18 +46,11 @@ openclaw_jarvis_release_lock_owner_is_live() {
 }
 
 openclaw_jarvis_release_lock_default_path() {
-  local root="$1"
-  local common_dir common_physical identity
-
-  common_dir="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)" || return 1
-  [[ "$common_dir" == /* ]] || common_dir="$root/$common_dir"
-  common_physical="$(cd "$common_dir" && pwd -P)" || return 1
-  identity="$(printf '%s' "$common_physical" | /usr/bin/cksum | /usr/bin/awk '{ print $1 "-" $2 }')"
-
-  # Git common-dir makes worktrees of this repository contend together, while
-  # unrelated clones get different paths. Use one fixed, user-specific base:
-  # TMPDIR differs between launchd, automation, and interactive shells.
-  printf '/tmp/openclaw-jarvis-release-locks-%s/%s.lock\n' "$(id -u)" "$identity"
+  # A canonical Jarvis release mutates machine-wide distribution state, so
+  # separate clones must contend just as worktrees do. Keep the historical root
+  # argument for caller compatibility, but deliberately exclude it from the
+  # identity. TMPDIR also differs between launchd and interactive shells.
+  printf '/tmp/openclaw-jarvis-release-locks-%s/canonical-jarvis-release.lock\n' "$(id -u)"
 }
 
 openclaw_jarvis_release_lock_after_mkdir() {

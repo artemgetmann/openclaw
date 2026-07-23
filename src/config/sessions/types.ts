@@ -437,6 +437,10 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Runtime eligibility note preserved when the prompt is reranked on later turns. */
+  remoteNote?: string;
+  /** Skills whose configured/product priority must stay ahead of relevance sorting. */
+  protectedSkillNames?: string[];
   resolvedSkills?: Skill[];
   version?: number;
 };

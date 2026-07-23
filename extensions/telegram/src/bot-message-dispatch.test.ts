@@ -1054,6 +1054,61 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     ).toBe(false);
   });
 
+  it("starts fresh visible progress below an interleaved tool screenshot", async () => {
+    const progressBeforeMedia = createSequencedDraftStream(9101);
+    const progressAfterMedia = createSequencedDraftStream(9201);
+    createTelegramDraftStream
+      .mockReturnValueOnce(progressBeforeMedia)
+      .mockReturnValueOnce(progressAfterMedia);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const commentaryChannelData = { openclaw: { assistantPhase: "commentary" } };
+      await dispatcherOptions.deliver(
+        { text: "Opening the checkout.", channelData: commentaryChannelData },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver(
+        { mediaUrls: ["file:///tmp/checkout-proof.png"] },
+        { kind: "tool" },
+      );
+      await dispatcherOptions.deliver(
+        { text: "Checking the passenger details.", channelData: commentaryChannelData },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver(
+        {
+          text: "Passenger details are ready.",
+          channelData: { openclaw: { assistantPhase: "final_answer" } },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "progress-around-tool-media",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    expect(progressBeforeMedia.materialize).toHaveBeenCalledTimes(1);
+    expect(progressBeforeMedia.update).toHaveBeenCalledWith(
+      expect.stringContaining("Opening the checkout."),
+    );
+    expect(progressAfterMedia.update).toHaveBeenCalledWith(
+      expect.stringContaining("Checking the passenger details."),
+    );
+    expect(progressBeforeMedia.materialize.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      progressAfterMedia.update.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(

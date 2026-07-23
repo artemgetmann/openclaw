@@ -612,6 +612,34 @@ struct TelegramSetupBootstrapTests {
                         "futureFlag": true,
                     ],
                 ],
+                "tools": [
+                    "media": [
+                        "audio": [
+                            "enabled": true,
+                            // Reproduce the pre-managed package seed that used
+                            // to survive activation and bypass the backend.
+                            "models": [
+                                [
+                                    "type": "provider",
+                                    "provider": "openai",
+                                    "model": "gpt-4o-mini-transcribe",
+                                    "apiKey": "${OPENAI_NON_MODEL_API_KEY}",
+                                ],
+                                [
+                                    "type": "provider",
+                                    "provider": "deepgram",
+                                    "model": "nova-3",
+                                ],
+                                [
+                                    "type": "provider",
+                                    "provider": "openai",
+                                    "model": "gpt-4o-mini-transcribe",
+                                    "baseUrl": "https://speech.example.test",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
                 "secrets": [
                     "providers": [
                         "jarvis-keychain": [
@@ -700,8 +728,14 @@ struct TelegramSetupBootstrapTests {
             #expect(managedServices["mode"] as? String == "managed")
             #expect(managedServices["futureFlag"] as? Bool == true)
             #expect(audio["enabled"] as? Bool == true)
+            #expect(audioModels.count == 3)
             #expect(audioModels.first?["provider"] as? String == "jarvis-managed-openai")
             #expect(audioModels.first?["model"] as? String == "gpt-4o-mini-transcribe")
+            #expect(audioModels.first?["apiKey"] == nil)
+            #expect(audioModels[1]["provider"] as? String == "deepgram")
+            #expect(audioModels[1]["model"] as? String == "nova-3")
+            #expect(audioModels[2]["provider"] as? String == "openai")
+            #expect(audioModels[2]["baseUrl"] as? String == "https://speech.example.test")
             #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
             #expect(backend["accountAccessToken"] == nil)
             #expect(providers["jarvis-keychain"] == nil)

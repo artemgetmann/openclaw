@@ -111,11 +111,16 @@ consumer dependency expectations. Use
 `OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT=1` only when that drift is intentional
 for a local smoke build.
 
-The Google Workspace CLI is app-managed: fresh packages include a universal
-`openclaw/tools/gog` payload at the skill's recommended version, and gateway
-startup copies it into Jarvis-owned state when the managed copy is missing or
-older. This gives clean installs and app updates the same pinned CLI without
-mutating Homebrew. Its MIT license notice ships beside the binary as
+The Google Workspace CLI is app-managed: fresh packages include the official
+vendor-signed arm64 and x86_64 payloads under `openclaw/tools/gog`, and gateway
+startup copies the host architecture into Jarvis-owned state when the managed
+copy is missing, older, or differs from the same-version packaged binary. The
+architecture slices remain separate because combining or re-signing them would
+change the code identity macOS Keychain token ACLs expect. Packaging and final
+app verification fail closed unless both binaries have the reviewed Gog
+identifier, Team ID, architecture, and valid signature. This gives clean
+installs and app updates the same pinned CLI without mutating Homebrew or
+Keychain. Its MIT license notice ships beside the binaries as
 `openclaw/tools/gog.LICENSE`. Heavier optional tools such as `summarize` remain
 package-manager-managed; their recommended versions are visible in skill
 status, but Jarvis does not silently install or upgrade their global
@@ -356,9 +361,9 @@ notary, publish, or verify work.
 Follow the launcher's printed next steps, then run the release commands from the
 release lane.
 
-Mutating release phases also acquire one fail-fast lock shared by this
-repository's worktrees. If a live owner holds it, use an explicit chat/session
-handoff and let that owner finish or exit. Never improvise a `ps`-scanning
+Mutating release phases also acquire one fail-fast, user-scoped machine lock
+shared by every clone and worktree. If a live owner holds it, use an explicit
+chat/session handoff and let that owner finish or exit. Never improvise a `ps`-scanning
 `SIGSTOP`/`SIGKILL` guard: the canonical lock reports owner PID/context,
 safely reclaims dead owners, and never signals a process. The wrapper's true
 read-only path, `jarvis-public-release.sh --dry-run`, exits before delegated

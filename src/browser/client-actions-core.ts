@@ -9,6 +9,10 @@ import { fetchBrowserJson } from "./client-fetch.js";
 // Interaction-driven routes often wait on navigation, DOM stabilization, or page
 // scripts. A 20s cap is too aggressive for travel and commerce flows.
 const BROWSER_INTERACTION_TIMEOUT_MS = 45_000;
+// The action timeout belongs to the browser operation itself. Keep a small,
+// explicit allowance for request delivery and response serialization without
+// turning a short caller deadline into the old 45s minimum transport wait.
+const BROWSER_ACTION_TRANSPORT_SLACK_MS = 10_000;
 
 export type BrowserFormField = {
   ref?: string;
@@ -166,7 +170,9 @@ export type BrowserActResponse = {
 
 function readActTimeoutMs(req: BrowserActRequest): number | undefined {
   const timeoutMs = (req as { timeoutMs?: unknown }).timeoutMs;
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : undefined;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
 }
 
 export type BrowserDownloadPayload = {
@@ -317,8 +323,12 @@ export async function browserAct(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    // Keep the transport timeout above any server-side action timeout override.
-    timeoutMs: Math.max(BROWSER_INTERACTION_TIMEOUT_MS, timeoutMs ?? 0),
+    // Keep the transport deadline just above the server-side action timeout.
+    // A requested 10s action must not silently become a 45s transport wait.
+    timeoutMs:
+      timeoutMs === undefined
+        ? BROWSER_INTERACTION_TIMEOUT_MS
+        : timeoutMs + BROWSER_ACTION_TRANSPORT_SLACK_MS,
   });
 }
 

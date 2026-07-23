@@ -315,7 +315,7 @@ async function fetchHttpJson<T>(
   }
 }
 
-export async function fetchBrowserJson<T>(
+async function fetchBrowserJsonWithinDeadline<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
@@ -424,6 +424,52 @@ export async function fetchBrowserJson<T>(
       throw enhanceDispatcherPathError(url, err, timeoutMs);
     }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
+  }
+}
+
+export async function fetchBrowserJson<T>(
+  url: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const timeoutMs = init?.timeoutMs ?? 5000;
+  const deadlineCtrl = new AbortController();
+  const timeoutError = new Error("timed out");
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, deadlineCtrl.signal])
+    : deadlineCtrl.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // Start the deadline before service startup or fetch dispatch. The inner
+  // paths still propagate this signal for cooperative cancellation, while the
+  // race remains the hard bound if startup, fetch, or a browser route ignores it.
+  const deadlinePromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      // Settle the deadline first, then notify cooperative work. Promise.race
+      // keeps observing the work promise, so a later route rejection is handled.
+      reject(timeoutError);
+      deadlineCtrl.abort(timeoutError);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  const workPromise = fetchBrowserJsonWithinDeadline<T>(url, {
+    ...init,
+    timeoutMs,
+    signal,
+  });
+
+  try {
+    return await Promise.race([workPromise, deadlinePromise]);
+  } catch (err) {
+    if (err !== timeoutError) {
+      throw err;
+    }
+    throw isAbsoluteHttp(url)
+      ? enhanceBrowserFetchError(url, err, timeoutMs)
+      : enhanceDispatcherPathError(url, err, timeoutMs);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 

@@ -158,6 +158,59 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
+  it("bounds the entire dispatcher call when browser-control startup stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.startBrowserControlServiceFromConfig.mockImplementationOnce(
+        () => new Promise(() => {}),
+      );
+
+      const request = fetchBrowserJson<{ ok: boolean }>("/act", {
+        method: "POST",
+        body: JSON.stringify({ kind: "press", ref: "1_153", key: "Enter" }),
+        timeoutMs: 10_000,
+      });
+      const assertion = expect(request).rejects.toThrow(
+        "Browser operation timed out inside the OpenClaw browser control service after 10000ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles on time and observes a late dispatcher rejection", async () => {
+    vi.useFakeTimers();
+    try {
+      let rejectDispatch: ((reason?: unknown) => void) | undefined;
+      mocks.dispatch.mockImplementationOnce(
+        () =>
+          new Promise<BrowserDispatchResponse>((_resolve, reject) => {
+            rejectDispatch = reject;
+          }),
+      );
+
+      const request = fetchBrowserJson<{ ok: boolean }>("/act", { timeoutMs: 100 });
+      const assertion = expect(request).rejects.toThrow(
+        "Browser operation timed out inside the OpenClaw browser control service after 100ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+      await assertion;
+
+      // The route may finish after the caller deadline if Chrome ignored abort.
+      // Its rejection must remain observed rather than becoming unhandled.
+      rejectDispatch?.(new Error("late Chrome MCP rejection"));
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves retryable chrome attach guidance without restart or no-retry hints", async () => {
     mocks.dispatch.mockRejectedValueOnce(
       new Error(

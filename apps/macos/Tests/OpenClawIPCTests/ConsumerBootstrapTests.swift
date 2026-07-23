@@ -24,6 +24,95 @@ struct ConsumerBootstrapTests {
         #expect(customBrowser?["defaultProfile"] as? String == "company-browser")
     }
 
+    @Test func `consumer migrates app owned legacy browser profiles on launch`() {
+        var root: [String: Any] = [
+            "browser": [
+                "defaultProfile": "user",
+                "profiles": [
+                    "openclaw": [
+                        "cdpPort": 18_800,
+                        "color": "#FF4500",
+                    ],
+                    "user": [
+                        "cdpPort": 18_801,
+                        "driver": "openclaw",
+                        "cloneFromUserProfile": true,
+                        "sourceChromeDir": "/Applications/Chrome Beta",
+                        "sourceProfileName": "Profile 4",
+                        "color": "#00AA00",
+                    ],
+                ],
+            ],
+        ]
+
+        let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+        #expect(changed)
+        let browser = root["browser"] as? [String: Any]
+        #expect(browser?["defaultProfile"] as? String == "signed-in")
+        let profiles = browser?["profiles"] as? [String: Any]
+        #expect(profiles?["openclaw"] == nil)
+        #expect(profiles?["user"] == nil)
+        let signedIn = profiles?["signed-in"] as? [String: Any]
+        #expect(signedIn?["cdpPort"] as? Int == 18_801)
+        #expect(signedIn?["driver"] as? String == "existing-session")
+        #expect(signedIn?["cloneFromUserProfile"] as? Bool == true)
+        #expect(signedIn?["sourceChromeDir"] as? String == "/Applications/Chrome Beta")
+        #expect(signedIn?["sourceProfileName"] as? String == "Profile 4")
+        #expect(signedIn?["profileDirectory"] as? String == "Default")
+        #expect(signedIn?["color"] as? String == "#1F9D55")
+    }
+
+    @Test func `consumer retires isolated default without deleting custom profile config`() {
+        var root: [String: Any] = [
+            "browser": [
+                "defaultProfile": "openclaw",
+                "profiles": [
+                    "openclaw": [
+                        "cdpUrl": "http://127.0.0.1:9333",
+                        "color": "#123456",
+                    ],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+        let browser = root["browser"] as? [String: Any]
+        #expect(browser?["defaultProfile"] as? String == "signed-in")
+        let profiles = browser?["profiles"] as? [String: Any]
+        let preserved = profiles?["openclaw"] as? [String: Any]
+        #expect(preserved?["cdpUrl"] as? String == "http://127.0.0.1:9333")
+        #expect(preserved?["color"] as? String == "#123456")
+    }
+
+    @Test func `consumer preserves schema valid custom profile named user`() {
+        var root: [String: Any] = [
+            "browser": [
+                "defaultProfile": "user",
+                "profiles": [
+                    "user": [
+                        "cdpPort": 19_901,
+                        "driver": "existing-session",
+                        "cloneFromUserProfile": true,
+                        "sourceProfileName": "Profile 9",
+                        "profileDirectory": "Default",
+                        "color": "#0066CC",
+                    ],
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+        let browser = root["browser"] as? [String: Any]
+        #expect(browser?["defaultProfile"] as? String == "user")
+        let profiles = browser?["profiles"] as? [String: Any]
+        let preserved = profiles?["user"] as? [String: Any]
+        #expect(preserved?["sourceProfileName"] as? String == "Profile 9")
+        #expect(preserved?["color"] as? String == "#0066CC")
+    }
+
     @Test func `consumer defaults enable Telegram inbound debounce without overwriting explicit opt out`() {
         var missingRoot: [String: Any] = [
             "messages": [

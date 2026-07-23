@@ -1987,6 +1987,25 @@ export const dispatchTelegramMessage = async ({
     }
     return result.delivered;
   };
+  const sendToolMediaAfterProgress = async (
+    payload: ReplyPayload,
+    classification: {
+      reason?: TelegramDurableSendReason;
+      callsite?: string;
+      laneName?: LaneName;
+      infoKind?: string;
+      forceLegacyTextTransport?: boolean;
+    },
+  ) => {
+    // Browser screenshots are durable Telegram messages, so they land after
+    // the mutable progress bubble. Freeze that progress segment first; later
+    // commentary then opens a fresh bubble below the screenshot instead of
+    // silently editing an older, off-screen message.
+    await retainProgressControllerAsWorkLog(
+      `${classification.callsite ?? "tool-media"}-before-envelope`,
+    );
+    return await sendPayload(payload, classification);
+  };
   const sendToolPayload = async (payload: ReplyPayload) => {
     const monitorReceiptDisclosure = readMonitorReceiptDisclosure(payload.channelData);
     if (monitorReceiptDisclosure) {
@@ -2684,6 +2703,8 @@ export const dispatchTelegramMessage = async ({
             };
             if (deliveryKind === "final") {
               await sendFinalPayloadThenCleanupProgress(payloadToSend, classification);
+            } else if (deliveryKind === "tool" && hasMedia) {
+              await sendToolMediaAfterProgress(payloadToSend, classification);
             } else {
               await sendPayload(payloadToSend, classification);
             }
