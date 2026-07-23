@@ -900,9 +900,16 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel === "telegram" &&
     Boolean(delivery.to);
   const sourcePrompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
+  const heartbeatSessionStore = useAttentionEnvelope
+    ? Object.fromEntries(
+        Object.entries(loadSessionStore(storePath)).filter(
+          ([candidateSessionKey]) => resolveAgentIdFromSessionKey(candidateSessionKey) === agentId,
+        ),
+      )
+    : {};
   const trustedHeartbeatTopics = useAttentionEnvelope
     ? resolveTrustedHeartbeatTopicRoutes(
-        loadSessionStore(storePath),
+        heartbeatSessionStore,
         sourceReceipt?.sourceAccountId ?? delivery.accountId,
       )
     : [];
@@ -1259,7 +1266,7 @@ export async function runHeartbeatOnce(opts: {
       // notification, while every task still lands in its durable workbench with full context.
       for (const group of topicGroups) {
         const topicAccountId = sourceReceipt?.sourceAccountId ?? delivery.accountId;
-        await deliverOutboundPayloads({
+        const topicDeliveryResults = await deliverOutboundPayloads({
           cfg,
           channel: "telegram",
           to: group.chatId,
@@ -1270,13 +1277,16 @@ export async function runHeartbeatOnce(opts: {
           silent: needsPager,
           deps: opts.deps,
         });
+        if (topicDeliveryResults.length === 0) {
+          throw new Error("heartbeat topic delivery produced no message");
+        }
       }
 
       const pagerText = needsPager
         ? withResponsePrefix(buildHeartbeatPagerText(selected.items))
         : "";
       if (needsPager) {
-        await deliverOutboundPayloads({
+        const pagerDeliveryResults = await deliverOutboundPayloads({
           cfg,
           channel: "telegram",
           to: delivery.to,
@@ -1286,6 +1296,9 @@ export async function runHeartbeatOnce(opts: {
           payloads: [{ text: pagerText }],
           deps: opts.deps,
         });
+        if (pagerDeliveryResults.length === 0) {
+          throw new Error("heartbeat pager delivery produced no message");
+        }
       }
 
       const singleTopic = !needsPager ? topicGroups[0] : undefined;

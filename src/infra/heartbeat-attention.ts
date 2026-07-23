@@ -263,7 +263,13 @@ export function selectHeartbeatAttentionItems(params: {
     return true;
   });
   const maxItems = Math.max(1, Math.min(3, params.maxItems ?? 3));
-  return { items: changed.slice(0, maxItems), suppressedKeys };
+  // The model is asked for three items, but parsing accepts a small oversized envelope so one
+  // imperfect response does not discard every alert. Preserve model order within each urgency
+  // tier while ensuring an urgent fourth item cannot be starved behind normal work.
+  const ranked = changed.toSorted(
+    (a, b) => Number(b.urgency === "urgent") - Number(a.urgency === "urgent"),
+  );
+  return { items: ranked.slice(0, maxItems), suppressedKeys };
 }
 
 function renderTopicGroup(items: HeartbeatAttentionItem[]): string {

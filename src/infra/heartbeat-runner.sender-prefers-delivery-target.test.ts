@@ -186,11 +186,23 @@ describe("runHeartbeatOnce", () => {
             threadId: 3188,
           },
         });
+        await addHeartbeatSessionStoreEntry(storePath, "agent:other:telegram:topic:9999", {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "-1003783709877",
+          origin: {
+            provider: "telegram",
+            to: "-1003783709877",
+            accountId: "default",
+            threadId: 9999,
+          },
+        });
 
         replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
           expect(ctx.Body).toContain("Heartbeat attention delivery contract:");
           expect(ctx.Body).toContain("Return a maximum of 3 items.");
           expect(ctx.Body).toContain("chatId=-1003783709877 | threadId=3030");
+          expect(ctx.Body).not.toContain("threadId=9999");
           return {
             text: `<heartbeat_attention>
 {"items":[

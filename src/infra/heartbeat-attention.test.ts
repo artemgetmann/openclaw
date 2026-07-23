@@ -276,6 +276,28 @@ describe("heartbeat attention envelope", () => {
     expect(selected.suppressedKeys).toEqual([]);
   });
 
+  it("prioritizes urgent attention before enforcing the three-item budget", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope(
+        Array.from({ length: 4 }, (_, index) => ({
+          key: `ranked-${index + 1}`,
+          fingerprint: `facts-${index + 1}`,
+          title: `Ranked ${index + 1}`,
+          text: `Item ${index + 1}.`,
+          urgency: index === 3 ? "urgent" : "normal",
+          category: "other",
+          destination: { kind: "pager" },
+        })),
+      ),
+    );
+    const selected = selectHeartbeatAttentionItems({
+      items: parsed?.items ?? [],
+      previous: [],
+    });
+
+    expect(selected.items.map((item) => item.key)).toEqual(["ranked-4", "ranked-1", "ranked-2"]);
+  });
+
   it("does not repeat unchanged facts when an old topic route temporarily falls back to DM", () => {
     const parsed = parseHeartbeatAttentionEnvelope(
       envelope([
