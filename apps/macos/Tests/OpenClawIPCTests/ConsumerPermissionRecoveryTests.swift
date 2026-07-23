@@ -267,6 +267,24 @@ struct ConsumerPermissionRecoveryTests {
         #expect(ConsumerPermissionAccessoryPanelCopy.followUp == "Then turn it on.")
     }
 
+    @Test func `accessory panel follows its localized pane without requiring title access`() {
+        let localizedTitle = "Accesibilidad"
+        #expect(ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: localizedTitle,
+            expectedTitle: localizedTitle))
+        #expect(!ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: "Privacidad y seguridad",
+            expectedTitle: localizedTitle))
+        #expect(ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: nil,
+            expectedTitle: localizedTitle))
+        #expect(ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: nil,
+            expectedTitle: nil))
+        #expect(ConsumerPermissionAccessoryPanelPane.normalizedTitle("  Accessibility  ") == "Accessibility")
+        #expect(ConsumerPermissionAccessoryPanelPane.normalizedTitle("   ") == nil)
+    }
+
     @Test func `accessory panel copy names the exact screen recording list`() {
         #expect(ConsumerPermissionAccessoryPanelCopy.title(for: .screenRecording) == "Screen & System Audio Recording")
         #expect(ConsumerPermissionAccessoryPanelCopy.instruction(for: .screenRecording) == "Drag Jarvis into this list")

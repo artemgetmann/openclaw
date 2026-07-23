@@ -14,6 +14,9 @@ final class ConsumerPermissionAccessoryPanelController {
         // second onboarding card competing for attention.
         static let panelSize = CGSize(width: 500, height: 112)
         static let trackingInterval: TimeInterval = 0.15
+        /// Deep links switch an already-open Settings window asynchronously.
+        /// Wait briefly before treating its current title as the requested pane.
+        static let paneSettleDelay: TimeInterval = 0.45
     }
 
     private var panel: NSPanel?
@@ -21,11 +24,17 @@ final class ConsumerPermissionAccessoryPanelController {
     private var trackingTimer: Timer?
     private var workspaceObserver: NSObjectProtocol?
     private var orderedWindowNumber: Int?
+    private var expectedSettingsWindowTitle: String?
+    private var presentationNotBefore = Date.distantPast
+    private var hasPresentedPanel = false
 
     func show(for capability: Capability) {
         guard ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability) else { return }
 
         self.capability = capability
+        self.expectedSettingsWindowTitle = nil
+        self.presentationNotBefore = Date().addingTimeInterval(Layout.paneSettleDelay)
+        self.hasPresentedPanel = false
         let panel = self.panel ?? self.makePanel()
         self.panel = panel
         // The same controller can move from Accessibility to Screen Recording
@@ -52,6 +61,9 @@ final class ConsumerPermissionAccessoryPanelController {
         self.panel?.orderOut(nil)
         self.capability = nil
         self.orderedWindowNumber = nil
+        self.expectedSettingsWindowTitle = nil
+        self.presentationNotBefore = .distantPast
+        self.hasPresentedPanel = false
     }
 
     private func makePanel() -> NSPanel {
@@ -98,8 +110,40 @@ final class ConsumerPermissionAccessoryPanelController {
 
     private func updateVisibilityAndPosition() {
         guard let panel, self.capability != nil else { return }
-        guard self.isSystemSettingsFrontmost, let context = self.systemSettingsWindowContext() else {
+        guard self.isSystemSettingsFrontmost else {
+            // Once the helper has been shown, leaving Settings ends this help
+            // session. A later visit should require a fresh click in Jarvis,
+            // rather than resurrecting stale instructions over another pane.
             panel.orderOut(nil)
+            self.orderedWindowNumber = nil
+            if self.hasPresentedPanel {
+                self.hide()
+            }
+            return
+        }
+        guard Date() >= self.presentationNotBefore else {
+            panel.orderOut(nil)
+            return
+        }
+        guard let context = self.systemSettingsWindowContext() else {
+            panel.orderOut(nil)
+            self.orderedWindowNumber = nil
+            return
+        }
+
+        let observedTitle = ConsumerPermissionAccessoryPanelPane.normalizedTitle(context.windowTitle)
+        if self.expectedSettingsWindowTitle == nil {
+            // Capture the localized title reached by the deep link. Hard-coded
+            // English titles would break on non-English Macs, while the title
+            // may be absent entirely until Screen Recording is granted.
+            self.expectedSettingsWindowTitle = observedTitle
+        }
+        guard ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: observedTitle,
+            expectedTitle: self.expectedSettingsWindowTitle)
+        else {
+            panel.orderOut(nil)
+            self.orderedWindowNumber = nil
             return
         }
 
@@ -117,6 +161,7 @@ final class ConsumerPermissionAccessoryPanelController {
         if self.orderedWindowNumber != context.windowNumber || !panel.isVisible {
             panel.order(.above, relativeTo: context.windowNumber)
             self.orderedWindowNumber = context.windowNumber
+            self.hasPresentedPanel = true
         }
     }
 
@@ -140,11 +185,9 @@ final class ConsumerPermissionAccessoryPanelController {
             return nil
         }
 
-        // Settings can temporarily add normal-layer dialogs. Use the largest
-        // normal window so the panel stays attached to the Settings workspace,
-        // rather than jumping under a sheet or confirmation dialog. CGWindow
-        // gives us enough cross-process geometry for this; querying AppKit
-        // windows would itself require the permission we are helping grant.
+        // Settings can temporarily add normal-layer dialogs. Use its largest
+        // normal window so the helper stays attached to the actual Settings
+        // workspace rather than jumping under a confirmation dialog.
         var largestWindow: (context: SystemSettingsWindowContext, area: CGFloat)?
         for info in infos {
             guard
@@ -163,7 +206,8 @@ final class ConsumerPermissionAccessoryPanelController {
                 screens: NSScreen.screens)
             let context = SystemSettingsWindowContext(
                 frame: frame,
-                windowNumber: windowNumber)
+                windowNumber: windowNumber,
+                windowTitle: info[kCGWindowName as String] as? String)
             let area = frame.width * frame.height
             if largestWindow.map({ area > $0.area }) ?? true {
                 largestWindow = (context, area)
@@ -175,6 +219,26 @@ final class ConsumerPermissionAccessoryPanelController {
     private struct SystemSettingsWindowContext {
         let frame: CGRect
         let windowNumber: Int
+        let windowTitle: String?
+    }
+}
+
+/// Compares an observed Settings title with the localized title captured after
+/// the deep link settles. CGWindow omits titles before Screen Recording access
+/// on some Macs, so missing metadata must remain a valid fallback.
+enum ConsumerPermissionAccessoryPanelPane {
+    static func normalizedTitle(_ title: String?) -> String? {
+        guard let title else { return nil }
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    static func matches(observedTitle: String?, expectedTitle: String?) -> Bool {
+        guard let observedTitle, let expectedTitle else {
+            // Never make the helper itself depend on Screen Recording access.
+            return true
+        }
+        return observedTitle.caseInsensitiveCompare(expectedTitle) == .orderedSame
     }
 }
 
