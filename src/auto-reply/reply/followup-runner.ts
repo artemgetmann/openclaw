@@ -221,13 +221,10 @@ export function createFollowupRunner(params: {
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          if (opts?.onBlockReply && origin && origin === provider) {
+          // A failed explicit route may use the live dispatcher only under the
+          // same complete-route proof as the primary path. Channel equality
+          // alone is unsafe when a queue spans several conversations.
+          if (canUseSameChannelDispatcher && opts?.onBlockReply) {
             await opts.onBlockReply(payload);
           } else if (shouldThrowProcessingFailure(queued)) {
             throw new Error(`Followup reply routing failed: ${errorMsg}`);

@@ -573,6 +573,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("does not reuse a same-channel dispatcher bound to another destination", async () => {
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "private reply" }] },
       queued: {
