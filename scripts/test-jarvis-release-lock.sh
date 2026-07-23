@@ -225,7 +225,7 @@ test_interrupted_acquisition_cleans_ownerless_claim() {
   pass "interrupted acquisition cleans its ownerless claim"
 }
 
-test_repository_paths_are_isolated() {
+test_machine_wide_path_is_shared_across_clones() {
   local repo_one="$TMP_DIR/repo-one"
   local repo_two="$TMP_DIR/repo-two"
   local path_one path_one_other_tmp path_two
@@ -236,11 +236,49 @@ test_repository_paths_are_isolated() {
   path_one_other_tmp="$(TMPDIR="$TMP_DIR/alternate-tmp" openclaw_jarvis_release_lock_default_path "$repo_one")"
   path_two="$(openclaw_jarvis_release_lock_default_path "$repo_two")"
   [[ "$path_one" == "$path_one_other_tmp" ]] || fail "TMPDIR changed the repository lock path"
-  [[ "$path_one" != "$path_two" ]] || fail "unrelated repositories share a lock path"
+  [[ "$path_one" == "$path_two" ]] || fail "separate clones do not share the canonical release lock"
   [[ "$path_one" != "$repo_one"/* ]] || fail "lock path lives inside its repository"
   [[ "$path_two" != "$repo_two"/* ]] || fail "lock path lives inside its repository"
-  [[ "$path_one" == /tmp/openclaw-jarvis-release-locks-* ]] || fail "lock path does not use the stable user base"
-  pass "stable lock paths ignore TMPDIR and isolate repositories"
+  [[ "$path_one" == /tmp/openclaw-jarvis-release-locks-*/canonical-jarvis-release.lock ]] \
+    || fail "lock path does not use the stable machine-wide user path"
+  pass "stable lock path is shared across clones and ignores TMPDIR"
+}
+
+test_cross_clone_live_contention() {
+  local repo_one="$TMP_DIR/contention-repo-one"
+  local repo_two="$TMP_DIR/contention-repo-two"
+  local ready_path="$TMP_DIR/cross-clone.ready"
+  local release_path="$TMP_DIR/cross-clone.release"
+  local err_path="$TMP_DIR/cross-clone.err"
+  local holder_pid status
+
+  git init -q "$repo_one"
+  git init -q "$repo_two"
+  bash -c '
+    set -euo pipefail
+    source "$1/scripts/lib/jarvis-release-lock.sh"
+    openclaw_jarvis_release_lock_acquire "$2" "cross-clone-holder"
+    : >"$3"
+    while [[ ! -f "$4" ]]; do sleep 0.05; done
+  ' _ "$ROOT_DIR" "$repo_one" "$ready_path" "$release_path" >/dev/null &
+  holder_pid=$!
+  wait_for_file "$ready_path"
+
+  set +e
+  bash -c '
+    source "$1/scripts/lib/jarvis-release-lock.sh"
+    openclaw_jarvis_release_lock_acquire "$2" "cross-clone-contender"
+  ' _ "$ROOT_DIR" "$repo_two" >/dev/null 2>"$err_path"
+  status=$?
+  set -e
+
+  [[ "$status" -ne 0 ]] || fail "second clone acquired the canonical release lock"
+  grep -q "another Jarvis release owner is active" "$err_path" \
+    || fail "cross-clone contention did not identify the live owner"
+  kill -0 "$holder_pid" 2>/dev/null || fail "cross-clone contention harmed the owner"
+  : >"$release_path"
+  wait "$holder_pid"
+  pass "separate clones fail fast behind one live release owner"
 }
 
 test_pid_start_identity_controls_recovery() {
@@ -525,7 +563,8 @@ test_unknown_owner_fails_safe
 test_owner_safe_cleanup
 test_error_and_signal_cleanup
 test_interrupted_acquisition_cleans_ownerless_claim
-test_repository_paths_are_isolated
+test_machine_wide_path_is_shared_across_clones
+test_cross_clone_live_contention
 test_pid_start_identity_controls_recovery
 test_interrupted_transfer_preserves_parent
 test_child_survives_killed_parent_as_owner
