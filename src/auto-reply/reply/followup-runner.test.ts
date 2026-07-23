@@ -428,6 +428,36 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("preserves same-channel Telegram progress lifecycle for queued followups", async () => {
+    const commentaryChannelData = { openclaw: { assistantPhase: "commentary" } };
+    const finalChannelData = { openclaw: { assistantPhase: "final_answer" } };
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          { text: "Checking the live thread.", channelData: commentaryChannelData },
+          { text: "Preparing the approved send.", channelData: commentaryChannelData },
+          { text: "Sent with proof.", channelData: finalChannelData },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("telegram"),
+        originatingChannel: "telegram",
+        originatingTo: "-100123:topic:456",
+        originatingThreadId: "456",
+      } as FollowupRun,
+    });
+
+    // The Telegram dispatcher folds commentary into one mutable Work log and
+    // recognizes the explicit final boundary. Generic routeReply has no such
+    // lifecycle and was the source of one durable message per payload.
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
+      { text: "Checking the live thread.", channelData: commentaryChannelData },
+      { text: "Preparing the approved send.", channelData: commentaryChannelData },
+      { text: "Sent with proof.", channelData: finalChannelData },
+    ]);
+  });
+
   it("drops media URL from payload when messaging tool already sent it", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
@@ -511,11 +541,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("falls back to dispatcher when same-channel origin routing fails", async () => {
-    routeReplyMock.mockResolvedValueOnce({
-      ok: false,
-      error: "outbound adapter unavailable",
-    });
+  it("prefers the live dispatcher for same-channel origin routing", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
       queued: {
@@ -525,7 +551,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
   });
