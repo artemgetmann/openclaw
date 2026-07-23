@@ -1345,7 +1345,13 @@ prepare_bundled_consumer_runtime() {
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
   trap 'rm -rf "$deploy_root"' RETURN
   echo "📦 Staging bundled consumer runtime node_modules"
-  openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
+  # pnpm prepares git-hosted dependencies through npm before it writes the
+  # deployment. npm otherwise inherits the production-only request and omits
+  # package-local build tools, so a clean store cannot prepare @tloncorp/api.
+  # Include devDependencies only in npm's disposable preparation directory;
+  # pnpm's --prod flag still controls the dependencies copied into the app.
+  npm_config_include=dev \
+    openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
