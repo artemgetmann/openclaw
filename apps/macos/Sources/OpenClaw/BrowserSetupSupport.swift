@@ -26,6 +26,26 @@ struct ChromeProfileCandidate: Equatable, Identifiable {
     }
 }
 
+enum BrowserSetupCopy {
+    static let title = "Choose Your Main Chrome Account"
+
+    static var subtitle: String {
+        "\(AppFlavor.current.appName) normally uses a separate copy of this Chrome account, with its sign-ins and extensions. If Chrome asks and you choose Allow, \(AppFlavor.current.appName) can also use your current window and open tabs."
+    }
+
+    static var separateCopyBody: String {
+        "\(AppFlavor.current.appName) browses in a separate copy of this Chrome account, with the same signed-in websites and extensions. Your current Chrome window and tabs stay separate."
+    }
+
+    static var currentChromeBody: String {
+        "When a task needs the tabs you already have open, Chrome may ask you to “Allow remote debugging.” If you approve, \(AppFlavor.current.appName) can use the exact Chrome window you’re working in, including all of its open tabs."
+    }
+
+    static func connectedStatusLine(profileName: String) -> String {
+        "Connected to \(profileName). \(AppFlavor.current.appName) normally browses in a separate copy with the same sign-ins and extensions."
+    }
+}
+
 enum BrowserRuntimeFailureTemplateKind: CaseIterable {
     case signedInTaskStopped
     case signInRequired
@@ -487,7 +507,7 @@ final class BrowserSetupModel {
     }
 
     private static func connectedStatusLine(for profile: ChromeProfileCandidate) -> String {
-        "Connected to \(profile.displayName). \(AppFlavor.current.appName) will use this Chrome account for browser tasks."
+        BrowserSetupCopy.connectedStatusLine(profileName: profile.displayName)
     }
 
     private static func isTransientReadinessFailure(_ message: String) -> Bool {

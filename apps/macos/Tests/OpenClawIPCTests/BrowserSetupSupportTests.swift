@@ -25,6 +25,15 @@ private final class BrowserVerificationContinuationBox: @unchecked Sendable {
 @Suite(.serialized)
 @MainActor
 struct BrowserSetupSupportTests {
+    @Test func `browser setup copy distinguishes separate and current Chrome`() {
+        #expect(BrowserSetupCopy.subtitle.contains("separate copy"))
+        #expect(BrowserSetupCopy.subtitle.contains("sign-ins and extensions"))
+        #expect(BrowserSetupCopy.subtitle.contains("current window and open tabs"))
+        #expect(BrowserSetupCopy.separateCopyBody.contains("current Chrome window and tabs stay separate"))
+        #expect(BrowserSetupCopy.currentChromeBody.contains("Allow remote debugging"))
+        #expect(BrowserSetupCopy.currentChromeBody.contains("all of its open tabs"))
+    }
+
     @Test func `refresh reports chrome missing when not installed`() async {
         let defaults = self.makeDefaults()
         var clearedRuntimeConfig = false
@@ -189,7 +198,7 @@ struct BrowserSetupSupportTests {
                 subtitle: nil,
                 lastUsedAt: nil,
                 isDefaultProfile: false)))
-            #expect(model.statusLine == "Connected to Artem. \(AppFlavor.current.appName) will use this Chrome account for browser tasks.")
+            #expect(model.statusLine == "Connected to Artem. \(AppFlavor.current.appName) normally browses in a separate copy with the same sign-ins and extensions.")
 
             pendingVerification.continuation?.resume(returning: nil)
             await refreshTask.value
