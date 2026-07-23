@@ -6,6 +6,9 @@ enum ConsumerBootstrap {
     // leaving other channels unchanged and preserving an explicit user opt-out.
     private static let telegramInboundDebounceMs = 1000
     private static let defaultBrowserProfile = "signed-in"
+    private static let legacyBrowserProfile = "user"
+    private static let retiredBrowserProfile = "openclaw"
+    private static let signedInBrowserColor = "#1F9D55"
 
     static func bootstrapIfNeeded() {
         guard AppFlavor.current.isConsumer else { return }
@@ -52,6 +55,11 @@ enum ConsumerBootstrap {
         // edits and recovered configs always win over bundled seed data.
         changed = self.applySeededDefaults(seededDefaults, to: &root) || changed
         changed = self.refreshPackagedBackendAccessToken(seededDefaults: seededDefaults, root: &root) || changed
+        // Upgrade the browser selection before filling missing defaults. Older
+        // Jarvis builds persisted both the legacy `user` clone and the isolated
+        // engine browser, so a missing-only write would leave existing users on
+        // the retired three-browser contract forever.
+        changed = self.migrateRetiredBrowserProfiles(in: &root) || changed
         changed = self.setDefaultValue(in: &root, path: ["gateway", "mode"], value: "local") || changed
         changed = self
             .setDefaultValue(in: &root, path: ["gateway", "port"], value: ConsumerRuntime.gatewayPort) || changed
@@ -73,6 +81,92 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["messages", "inbound", "byChannel", "telegram"],
             value: self.telegramInboundDebounceMs) || changed
+        return changed
+    }
+
+    private static func migrateRetiredBrowserProfiles(in root: inout [String: Any]) -> Bool {
+        guard var browser = root["browser"] as? [String: Any] else { return false }
+        var changed = false
+        var migratedLegacySelection = false
+        var profiles = browser["profiles"] as? [String: Any] ?? [:]
+
+        if let legacy = profiles[self.legacyBrowserProfile] as? [String: Any],
+           legacy["driver"] as? String == "openclaw",
+           legacy["cloneFromUserProfile"] as? Bool == true,
+           legacy["color"] as? String == "#00AA00",
+           let rawSource = legacy["sourceProfileName"] as? String
+        {
+            let source = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
+            let appOwnedKeys: Set<String> = [
+                "cdpPort",
+                "driver",
+                "cloneFromUserProfile",
+                "sourceChromeDir",
+                "sourceProfileName",
+                "profileDirectory",
+                "color",
+            ]
+
+            // Migrate only the shape written by old Jarvis onboarding. A
+            // literal custom profile named `user` may belong to an operator and
+            // must not be rewritten or removed.
+            if !source.isEmpty, Set(legacy.keys).isSubset(of: appOwnedKeys) {
+                if profiles[self.defaultBrowserProfile] == nil {
+                    var signedIn: [String: Any] = [
+                        "driver": "existing-session",
+                        "cloneFromUserProfile": true,
+                        "sourceProfileName": source,
+                        "profileDirectory": "Default",
+                        "color": self.signedInBrowserColor,
+                    ]
+                    if let cdpPort = legacy["cdpPort"] {
+                        signedIn["cdpPort"] = cdpPort
+                    }
+                    if let sourceChromeDir = legacy["sourceChromeDir"] {
+                        // Some Chrome channels and test installations use a
+                        // non-default data root. Preserve it or the migrated
+                        // profile could clone the wrong account.
+                        signedIn["sourceChromeDir"] = sourceChromeDir
+                    }
+                    profiles[self.defaultBrowserProfile] = signedIn
+                }
+                profiles.removeValue(forKey: self.legacyBrowserProfile)
+                migratedLegacySelection = true
+                changed = true
+            }
+        }
+
+        if let retired = profiles[self.retiredBrowserProfile] as? [String: Any] {
+            let appOwnedKeys: Set<String> = ["cdpPort", "color", "driver"]
+            // Remove only the default profile declaration Jarvis used to own.
+            // Browser data remains on disk until the separately tracked,
+            // owner-confirmed cleanup proves it is safe to quarantine. Keep the
+            // gate in docs/jarvis/browser-profile-retirement.md until done.
+            let driver = retired["driver"] as? String
+            if retired["color"] as? String == "#FF4500",
+               driver == nil || driver == "openclaw",
+               Set(retired.keys).isSubset(of: appOwnedKeys)
+            {
+                profiles.removeValue(forKey: self.retiredBrowserProfile)
+                changed = true
+            }
+        }
+
+        let currentDefault = (browser["defaultProfile"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if currentDefault == self.retiredBrowserProfile ||
+            (currentDefault == self.legacyBrowserProfile && migratedLegacySelection)
+        {
+            browser["defaultProfile"] = self.defaultBrowserProfile
+            changed = true
+        }
+
+        if profiles.isEmpty {
+            browser.removeValue(forKey: "profiles")
+        } else {
+            browser["profiles"] = profiles
+        }
+        root["browser"] = browser
         return changed
     }
 

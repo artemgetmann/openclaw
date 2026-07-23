@@ -189,7 +189,7 @@ struct BrowserSetupSupportTests {
                 subtitle: nil,
                 lastUsedAt: nil,
                 isDefaultProfile: false)))
-            #expect(model.statusLine == "Connected to Artem. \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed.")
+            #expect(model.statusLine == "Connected to Artem. \(AppFlavor.current.appName) will use this Chrome account for browser tasks.")
 
             pendingVerification.continuation?.resume(returning: nil)
             await refreshTask.value

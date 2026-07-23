@@ -474,6 +474,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("removes the isolated browser fallback from the Jarvis system prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/jarvis",
+      toolNames: ["browser"],
+      jarvisBrowserPolicy: true,
+    });
+
+    expect(prompt).toContain("use the selected Chrome account for normal work");
+    expect(prompt).toContain("without offering another browser or exposing internal profile names");
+    expect(prompt).not.toContain('profile="openclaw"');
+    expect(prompt).not.toContain("clean openclaw");
+  });
+
+  it("keeps the isolated browser guidance for generic OpenClaw", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["browser"],
+    });
+
+    expect(prompt).toContain('profile="openclaw"');
+    expect(prompt).toContain("clean openclaw");
+  });
+
   it("describes image_generate when the tool is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

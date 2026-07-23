@@ -28,6 +28,7 @@ import {
   untrackSessionBrowserTab,
 } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
+import { isJarvisConsumerConfig } from "../../config/jarvis-consumer-model-migration.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { displayPath } from "../../utils.js";
@@ -55,6 +56,7 @@ const browserFallbackStateBySession = new Map<
 >();
 const BROWSER_FALLBACK_APPROVAL_WINDOW_MS = 30 * 60 * 1000;
 const GLOBAL_BROWSER_SESSION_KEY = "__global__";
+const JARVIS_BROWSER_PROFILE_NAMES = new Set(["signed-in", "user-live"]);
 
 function normalizeBrowserSessionKey(raw?: string): string | undefined {
   const trimmed = raw?.trim().toLowerCase();
@@ -137,6 +139,43 @@ function resolveConfiguredBrowserProfile(profileName?: string): string | undefin
     return resolveProfile(resolved, normalized)?.name ?? normalized;
   }
   return resolved.defaultProfile;
+}
+
+function usesJarvisBrowserPolicy(): boolean {
+  // Jarvis configs already carry an explicit backend or managed-services
+  // marker. Reuse that established product boundary so generic OpenClaw keeps
+  // its isolated browser while packaged Jarvis exposes only its two Chrome
+  // lanes.
+  return isJarvisConsumerConfig(loadConfig() as Record<string, unknown>);
+}
+
+function enforceJarvisBrowserPolicy(profileName?: string): string | undefined {
+  if (!usesJarvisBrowserPolicy()) {
+    return profileName;
+  }
+  // Omitted profiles mean "normal Jarvis browser work", regardless of a
+  // stale or custom engine default left by an older installation.
+  const actualProfile = profileName ? resolveConfiguredBrowserProfile(profileName) : "signed-in";
+  if (actualProfile && JARVIS_BROWSER_PROFILE_NAMES.has(actualProfile)) {
+    // Return the resolved profile so profile-less calls cannot reach a sandbox
+    // or browser node and inherit that remote runtime's isolated default.
+    return actualProfile;
+  }
+  throw new Error(
+    "Jarvis uses the selected Chrome account for normal browser work and the user's live Chrome session only when current tabs or extensions are required. Continue with those browser paths, repair the selected Chrome account if it is unavailable, and do not ask the user to choose or name an internal browser profile.",
+  );
+}
+
+function filterJarvisBrowserProfiles<T extends { name?: unknown }>(profiles: T[]): T[] {
+  if (!usesJarvisBrowserPolicy()) {
+    return profiles;
+  }
+  // Profile discovery is model-visible. Filtering here prevents retired or
+  // custom engine lanes from reappearing as consumer choices even though the
+  // generic browser server still supports them.
+  return profiles.filter(
+    (profile) => typeof profile.name === "string" && JARVIS_BROWSER_PROFILE_NAMES.has(profile.name),
+  );
 }
 
 function isFallbackApprovalFresh(state: { openclawApprovedAt?: number }, nowMs: number): boolean {
@@ -593,16 +632,26 @@ export function createBrowserTool(opts?: {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+  const jarvisBrowserPolicy = usesJarvisBrowserPolicy();
+  const browserChoiceHints = jarvisBrowserPolicy
+    ? [
+        'Jarvis browser choice: use profile="signed-in" for normal browser work; it launches a clone of the Chrome account selected during setup.',
+        'Use profile="user-live" only when the task explicitly requires the user\'s current Chrome tabs, session, or extensions.',
+        "If the selected Chrome account is unavailable, repair that browser path or explain the blocker in plain language. Do not offer another browser, ask the user to choose a browser profile, or expose internal profile names. This product policy overrides older skill text that names other browser profiles.",
+      ]
+    : [
+        'Browser choice: default serious web work to profile="signed-in"; it launches a cloned signed-in Chrome profile and controls it through Chrome DevTools MCP.',
+        'Use profile="openclaw" for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat profile="openclaw" as a last-resort fallback only after profile="signed-in" and any explicitly required profile="user-live" lane are unavailable or proven unsuitable, and only when session state does not matter.',
+        'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
+        'Do not silently fall back to profile="openclaw" after profile="signed-in" or profile="user-live" fails. Ask the user whether to keep repairing the signed-in/live lane or use clean OpenClaw; if the user approves clean OpenClaw, retry with fallbackApproved=true.',
+      ];
   return {
     label: "Browser",
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/download/actions).",
-      'Browser choice: default serious web work to profile="signed-in"; it launches a cloned signed-in Chrome profile and controls it through Chrome DevTools MCP.',
-      'Use profile="openclaw" for clean public browsing and isolated research. For logged-in, hostile, social posting, or account-bound flows, treat profile="openclaw" as a last-resort fallback only after profile="signed-in" and any explicitly required profile="user-live" lane are unavailable or proven unsuitable, and only when session state does not matter.',
-      'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
+      ...browserChoiceHints,
       'Legacy profile="user" aliases to profile="signed-in" unless the operator configured a custom profile literally named "user".',
-      'Do not silently fall back to profile="openclaw" after profile="signed-in" or profile="user-live" fails. Ask the user whether to keep repairing the signed-in/live lane or use clean OpenClaw; if the user approves clean OpenClaw, retry with fallbackApproved=true.',
       'profile="user-live" attaches to the user\'s real Chrome session through Chrome DevTools MCP and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
       'Do not send act kind="batch" or unsupported MCP launch args for profile="signed-in", profile="user-live", or other existing-session profiles; send individual actions sequentially.',
@@ -634,11 +683,13 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const explicitProfile = readStringParam(params, "profile");
-      const profile = resolveEffectiveBrowserProfile({
+      const resolvedProfile = resolveEffectiveBrowserProfile({
         action,
         explicitProfile,
         agentSessionKey: opts?.agentSessionKey,
       });
+      const profile =
+        action === "profiles" ? resolvedProfile : enforceJarvisBrowserPolicy(resolvedProfile);
       if (shouldEnforceBrowserFallbackApproval(action)) {
         enforceBrowserFallbackApproval({
           profile,
@@ -803,9 +854,24 @@ export function createBrowserTool(opts?: {
                 method: "GET",
                 path: "/profiles",
               });
+              if (
+                usesJarvisBrowserPolicy() &&
+                result &&
+                typeof result === "object" &&
+                Array.isArray((result as { profiles?: unknown }).profiles)
+              ) {
+                return jsonResult({
+                  ...(result as Record<string, unknown>),
+                  profiles: filterJarvisBrowserProfiles(
+                    (result as { profiles: Array<{ name?: unknown }> }).profiles,
+                  ),
+                });
+              }
               return jsonResult(result);
             }
-            return jsonResult({ profiles: await browserProfiles(baseUrl) });
+            return jsonResult({
+              profiles: filterJarvisBrowserProfiles(await browserProfiles(baseUrl)),
+            });
           case "tabs":
             browserBackendAttempted = true;
             return await executeTabsAction({ baseUrl, profile, proxyRequest });

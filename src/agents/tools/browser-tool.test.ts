@@ -136,7 +136,12 @@ const gatewayMocks = vi.hoisted(() => ({
 vi.mock("./gateway.js", () => gatewayMocks);
 
 const configMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({ browser: {} })),
+  loadConfig: vi.fn(
+    (): {
+      browser: Record<string, unknown>;
+      jarvis?: Record<string, unknown>;
+    } => ({ browser: {} }),
+  ),
 }));
 vi.mock("../../config/config.js", () => configMocks);
 
@@ -987,6 +992,139 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserSnapshot).toHaveBeenLastCalledWith(
       undefined,
       expect.objectContaining({ profile: "signed-in" }),
+    );
+  });
+});
+
+describe("browser tool Jarvis profile policy", () => {
+  registerBrowserToolAfterEachReset();
+
+  function enableJarvisBrowserPolicy() {
+    configMocks.loadConfig.mockReturnValue({
+      browser: { defaultProfile: "signed-in" },
+      jarvis: {
+        backend: {
+          baseUrl: "https://jarvis.example",
+        },
+      },
+    });
+    setResolvedBrowserProfiles(
+      {
+        openclaw: {
+          driver: "openclaw",
+          attachOnly: false,
+          color: "#FF4500",
+          cdpPort: 18800,
+        },
+        "signed-in": {
+          driver: "existing-session",
+          attachOnly: false,
+          color: "#1F9D55",
+          cdpPort: 18801,
+          cloneFromUserProfile: true,
+        },
+        "user-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          color: "#2D7FF9",
+        },
+      },
+      "signed-in",
+    );
+  }
+
+  it("removes the isolated browser from Jarvis tool guidance", () => {
+    enableJarvisBrowserPolicy();
+
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain('use profile="signed-in" for normal browser work');
+    expect(tool.description).toContain(
+      "This product policy overrides older skill text that names other browser profiles.",
+    );
+    expect(tool.description).not.toContain('Use profile="openclaw"');
+    expect(tool.description).not.toContain("clean public browsing");
+  });
+
+  it("rejects the retired isolated browser for Jarvis", async () => {
+    enableJarvisBrowserPolicy();
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "status",
+        profile: "openclaw",
+      }),
+    ).rejects.toThrow(/Jarvis uses the selected Chrome account/);
+
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("forwards the selected profile when a Jarvis call omits it", async () => {
+    enableJarvisBrowserPolicy();
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "status",
+    });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "signed-in" }),
+    );
+  });
+
+  it("ignores an unsupported legacy default when a Jarvis call omits its profile", async () => {
+    enableJarvisBrowserPolicy();
+    configMocks.loadConfig.mockReturnValue({
+      browser: { defaultProfile: "company-browser" },
+      jarvis: {
+        backend: {
+          baseUrl: "https://jarvis.example",
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "status",
+    });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "signed-in" }),
+    );
+  });
+
+  it("shows only the two supported Chrome lanes to Jarvis", async () => {
+    enableJarvisBrowserPolicy();
+    browserClientMocks.browserProfiles.mockResolvedValueOnce([
+      { name: "openclaw" },
+      { name: "signed-in" },
+      { name: "user-live" },
+      { name: "custom-test" },
+    ]);
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", { action: "profiles" });
+
+    expect(result?.details).toEqual({
+      profiles: [{ name: "signed-in" }, { name: "user-live" }],
+    });
+  });
+
+  it("keeps the isolated browser available to generic OpenClaw", async () => {
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain('Use profile="openclaw"');
+    await tool.execute?.("call-1", {
+      action: "status",
+      profile: "openclaw",
+    });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
     );
   });
 });
