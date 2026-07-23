@@ -28,6 +28,8 @@ export type HeartbeatAttentionItem = {
   urgency: HeartbeatAttentionUrgency;
   category: HeartbeatAttentionCategory;
   destination: HeartbeatAttentionDestination;
+  /** Internal marker: an untrusted model-selected topic was replaced with the safe pager. */
+  destinationFallback?: true;
 };
 
 export type HeartbeatAttentionEnvelope = {
@@ -181,7 +183,9 @@ function readTelegramChatId(value: unknown): string | undefined {
  */
 export function resolveTrustedHeartbeatTopicRoutes(
   store: Record<string, SessionEntry>,
+  accountId?: string,
 ): TrustedHeartbeatTopicRoute[] {
+  const expectedAccountId = accountId?.trim() || "default";
   const routes = new Map<string, TrustedHeartbeatTopicRoute>();
   for (const entry of Object.values(store)) {
     const channel =
@@ -190,6 +194,14 @@ export function resolveTrustedHeartbeatTopicRoutes(
       entry.deliveryContext?.channel ??
       entry.lastChannel;
     if (channel?.toLowerCase() !== "telegram") {
+      continue;
+    }
+    const routeAccountId =
+      entry.origin?.accountId ??
+      entry.deliveryContext?.accountId ??
+      entry.lastAccountId ??
+      "default";
+    if (routeAccountId.trim() !== expectedAccountId) {
       continue;
     }
     const chatId = readTelegramChatId(
@@ -220,7 +232,7 @@ export function constrainHeartbeatAttentionRoutes(params: {
     ) {
       return item;
     }
-    return { ...item, destination: { kind: "pager" } };
+    return { ...item, destination: { kind: "pager" }, destinationFallback: true };
   });
 }
 
@@ -240,7 +252,10 @@ export function selectHeartbeatAttentionItems(params: {
   const changed = params.items.filter((item) => {
     const previous = previousByKey.get(item.key);
     const unchanged =
-      previous?.fingerprint === item.fingerprint && previous.urgency === item.urgency;
+      previous?.fingerprint === item.fingerprint &&
+      previous.urgency === item.urgency &&
+      (item.destinationFallback === true ||
+        previous.destination === destinationLabel(item.destination));
     if (unchanged) {
       suppressedKeys.push(item.key);
       return false;
@@ -335,10 +350,29 @@ export function buildHeartbeatAttentionPrompt(
   const stateLines = (previous ?? [])
     .toSorted((a, b) => b.deliveredAt - a.deliveredAt)
     .slice(0, 12)
-    .map(
-      (entry) =>
-        `- key=${entry.key} | fingerprint=${entry.fingerprint} | urgency=${entry.urgency} | title=${entry.title}`,
-    );
+    .map((entry) => {
+      // Session state is local, but it may predate the current parser. Re-validate every field
+      // at the prompt boundary instead of assuming all persisted data was sanitized on write.
+      const key = readTrimmedString(
+        entry.key,
+        MAX_KEY_CHARS,
+        /^[a-z0-9][a-z0-9._:-]{2,119}$/,
+        true,
+      );
+      const fingerprint = readTrimmedString(
+        entry.fingerprint,
+        MAX_FINGERPRINT_CHARS,
+        undefined,
+        true,
+      );
+      const title = readTrimmedString(entry.title, MAX_TITLE_CHARS, undefined, true);
+      const urgency =
+        entry.urgency === "normal" || entry.urgency === "urgent" ? entry.urgency : undefined;
+      return key && fingerprint && title && urgency
+        ? `- key=${key} | fingerprint=${fingerprint} | urgency=${urgency} | title=${title}`
+        : undefined;
+    })
+    .filter((line): line is string => Boolean(line));
   const priorState =
     stateLines.length > 0
       ? [

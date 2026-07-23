@@ -398,6 +398,17 @@ describe("runHeartbeatOnce", () => {
             },
           ],
         });
+        await addHeartbeatSessionStoreEntry(storePath, "agent:main:telegram:topic:3030", {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "-1003783709877",
+          origin: {
+            provider: "telegram",
+            to: "-1003783709877",
+            accountId: "default",
+            threadId: 3030,
+          },
+        });
 
         replySpy.mockResolvedValue({
           text: `<heartbeat_attention>

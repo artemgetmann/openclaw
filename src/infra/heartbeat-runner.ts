@@ -901,7 +901,10 @@ export async function runHeartbeatOnce(opts: {
     Boolean(delivery.to);
   const sourcePrompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
   const trustedHeartbeatTopics = useAttentionEnvelope
-    ? resolveTrustedHeartbeatTopicRoutes(loadSessionStore(storePath))
+    ? resolveTrustedHeartbeatTopicRoutes(
+        loadSessionStore(storePath),
+        sourceReceipt?.sourceAccountId ?? delivery.accountId,
+      )
     : [];
   // Normal Telegram heartbeat sweeps use a typed envelope so one model turn can produce
   // several independently routed items. Cron, exec, and restart-continuation turns retain
@@ -1217,33 +1220,35 @@ export async function runHeartbeatOnce(opts: {
         recordText?: string;
         recordTo?: string;
       }) => {
-        const store = loadSessionStore(storePath);
-        const current = store[sessionKey];
-        if (!current) {
-          return;
-        }
-        store[sessionKey] = {
-          ...current,
-          ...(params.recordText
-            ? {
-                lastHeartbeatText: params.recordText,
-                lastHeartbeatSentAt: startedAt,
-                recentHeartbeats: recordRecentHeartbeat({
-                  previous: current.recentHeartbeats,
-                  sentAt: startedAt,
-                  channel: "telegram",
-                  to: params.recordTo,
-                  preview: params.recordText,
-                }),
-              }
-            : {}),
-          heartbeatAttentionState: buildHeartbeatAttentionState({
-            previous: current.heartbeatAttentionState,
-            delivered: params.delivered,
-            deliveredAt: startedAt,
-          }),
-        };
-        await saveSessionStore(storePath, store);
+        // Re-read and write under the session-store lock. Heartbeats can overlap with ordinary
+        // chat activity, and a stale load/save pair would otherwise clobber newer session state.
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (!current) {
+            return;
+          }
+          store[sessionKey] = {
+            ...current,
+            ...(params.recordText
+              ? {
+                  lastHeartbeatText: params.recordText,
+                  lastHeartbeatSentAt: startedAt,
+                  recentHeartbeats: recordRecentHeartbeat({
+                    previous: current.recentHeartbeats,
+                    sentAt: startedAt,
+                    channel: "telegram",
+                    to: params.recordTo,
+                    preview: params.recordText,
+                  }),
+                }
+              : {}),
+            heartbeatAttentionState: buildHeartbeatAttentionState({
+              previous: current.heartbeatAttentionState,
+              delivered: params.delivered,
+              deliveredAt: startedAt,
+            }),
+          };
+        });
       };
 
       // Topic details are silent whenever a compact DM pager also exists. The user gets one
