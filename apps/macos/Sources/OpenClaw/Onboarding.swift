@@ -29,7 +29,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chrome:
-            return "Choose Your Main Chrome Account"
+            return BrowserSetupCopy.title
         case .permissions:
             return "Allow Mac Access"
         case .aiAccess:
@@ -46,7 +46,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .chrome:
-            return "\(AppFlavor.current.appName) will use this Chrome browser, so you don’t have to log in everywhere again."
+            return BrowserSetupCopy.subtitle
         case .permissions:
             return "\(AppFlavor.current.appName) needs access to control apps and read the screen when a task requires it."
         case .aiAccess:

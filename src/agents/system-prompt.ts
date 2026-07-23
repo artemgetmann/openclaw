@@ -277,6 +277,8 @@ export function buildAgentSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Keep packaged Jarvis on its selected Chrome account plus explicit live Chrome only. */
+  jarvisBrowserPolicy?: boolean;
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -318,8 +320,9 @@ export function buildAgentSystemPrompt(params: {
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
-    browser:
-      'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks, and profile="user-live" only when actual live Chrome state is explicitly needed; after signed-in/user-live fails, ask before switching to clean openclaw and retry with fallbackApproved=true only after approval; before third-party external mutations, call browser action="contract" and verify the final artifact after commit',
+    browser: params.jarvisBrowserPolicy
+      ? 'Control browser; use the selected Chrome account for normal work and the live Chrome session only when current tabs or extensions are required; if the selected account is unavailable, repair it or explain the blocker without offering another browser or exposing internal profile names; before third-party external mutations, call browser action="contract" and verify the final artifact after commit'
+      : 'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks, and profile="user-live" only when actual live Chrome state is explicitly needed; after signed-in/user-live fails, ask before switching to clean openclaw and retry with fallbackApproved=true only after approval; before third-party external mutations, call browser action="contract" and verify the final artifact after commit',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
