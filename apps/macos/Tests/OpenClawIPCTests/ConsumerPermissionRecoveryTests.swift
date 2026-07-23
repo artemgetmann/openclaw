@@ -240,6 +240,24 @@ struct ConsumerPermissionRecoveryTests {
         #expect(frame.origin.y == 12)
     }
 
+    @Test func `accessory panel converts Quartz bounds through the primary display origin`() {
+        let primaryDisplayMaxY: CGFloat = 900
+
+        // Quartz Y is negative for a monitor above the primary display. AppKit
+        // should place that same window above the primary display's top edge.
+        let above = ConsumerPermissionAccessoryPanelLayout.appKitFrame(
+            fromQuartzBounds: CGRect(x: 100, y: -500, width: 600, height: 400),
+            primaryDisplayMaxY: primaryDisplayMaxY)
+        #expect(above == CGRect(x: 100, y: 1000, width: 600, height: 400))
+
+        // Quartz Y continues below the primary display for a monitor arranged
+        // underneath it. AppKit represents that display with negative Y.
+        let below = ConsumerPermissionAccessoryPanelLayout.appKitFrame(
+            fromQuartzBounds: CGRect(x: 100, y: 900, width: 600, height: 400),
+            primaryDisplayMaxY: primaryDisplayMaxY)
+        #expect(below == CGRect(x: 100, y: -400, width: 600, height: 400))
+    }
+
     @Test func `accessory panel copy names the exact accessibility list`() {
         #expect(ConsumerPermissionAccessoryPanelCopy.title(for: .accessibility) == "Accessibility")
         #expect(ConsumerPermissionAccessoryPanelCopy.instruction(for: .accessibility) == "Drag Jarvis into this list")

@@ -204,14 +204,23 @@ enum ConsumerPermissionAccessoryPanelLayout {
     }
 
     static func appKitFrame(fromQuartzBounds bounds: CGRect, screens: [NSScreen]) -> CGRect {
-        // Quartz reports window Y coordinates from the top of a display while
-        // AppKit panels use a bottom-left origin. Convert against the matching
-        // screen so the accessory remains attached on secondary displays.
-        let screen = screens.first(where: { $0.frame.intersects(bounds) }) ?? NSScreen.main
-        guard let screen else { return bounds }
-        return CGRect(
+        // Quartz uses the primary display's top-left as the global origin;
+        // AppKit uses that display's bottom-left. The transform must therefore
+        // use the primary display even when the window is on a monitor arranged
+        // above or below it. Comparing raw Quartz bounds with AppKit screen
+        // frames would mix coordinate spaces and can offset the panel by a
+        // complete display height.
+        let primaryScreen = screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main
+        guard let primaryScreen else { return bounds }
+        return self.appKitFrame(
+            fromQuartzBounds: bounds,
+            primaryDisplayMaxY: primaryScreen.frame.maxY)
+    }
+
+    static func appKitFrame(fromQuartzBounds bounds: CGRect, primaryDisplayMaxY: CGFloat) -> CGRect {
+        CGRect(
             x: bounds.minX,
-            y: screen.frame.maxY - bounds.maxY,
+            y: primaryDisplayMaxY - bounds.maxY,
             width: bounds.width,
             height: bounds.height)
     }
