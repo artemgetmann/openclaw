@@ -52,8 +52,10 @@ import {
   buildHeartbeatAttentionPrompt,
   buildHeartbeatAttentionState,
   buildHeartbeatPagerText,
+  constrainHeartbeatAttentionRoutes,
   groupHeartbeatTopicItems,
   parseHeartbeatAttentionEnvelope,
+  resolveTrustedHeartbeatTopicRoutes,
   selectHeartbeatAttentionItems,
 } from "./heartbeat-attention.js";
 import {
@@ -893,14 +895,22 @@ export async function runHeartbeatOnce(opts: {
     !isForcedRestartContinuation &&
     !hasExecCompletion &&
     !hasCronEvents &&
+    heartbeat?.includeReasoning !== true &&
+    alertVisibility.showAlerts &&
     delivery.channel === "telegram" &&
     Boolean(delivery.to);
   const sourcePrompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
+  const trustedHeartbeatTopics = useAttentionEnvelope
+    ? resolveTrustedHeartbeatTopicRoutes(loadSessionStore(storePath))
+    : [];
   // Normal Telegram heartbeat sweeps use a typed envelope so one model turn can produce
   // several independently routed items. Cron, exec, and restart-continuation turns retain
   // their existing free-text contracts because they represent one explicit unit of work.
   const prompt = useAttentionEnvelope
-    ? `${sourcePrompt}\n\n${buildHeartbeatAttentionPrompt(entry?.heartbeatAttentionState)}`
+    ? `${sourcePrompt}\n\n${buildHeartbeatAttentionPrompt(
+        entry?.heartbeatAttentionState,
+        trustedHeartbeatTopics,
+      )}`
     : sourcePrompt;
   const originContext = sourceReceipt
     ? {
@@ -1170,7 +1180,10 @@ export async function runHeartbeatOnce(opts: {
         : null;
     if (attentionEnvelope && delivery.channel === "telegram" && delivery.to) {
       const selected = selectHeartbeatAttentionItems({
-        items: attentionEnvelope.items,
+        items: constrainHeartbeatAttentionRoutes({
+          items: attentionEnvelope.items,
+          trustedTopics: trustedHeartbeatTopics,
+        }),
         previous: entry?.heartbeatAttentionState,
         maxItems: 3,
       });
@@ -1199,6 +1212,39 @@ export async function runHeartbeatOnce(opts: {
       const pagerItems = selected.items.filter((item) => item.destination.kind === "pager");
       const destinationCount = topicGroups.length + (pagerItems.length > 0 ? 1 : 0);
       const needsPager = pagerItems.length > 0 || destinationCount > 1;
+      const persistAttentionDelivery = async (params: {
+        delivered: typeof selected.items;
+        recordText?: string;
+        recordTo?: string;
+      }) => {
+        const store = loadSessionStore(storePath);
+        const current = store[sessionKey];
+        if (!current) {
+          return;
+        }
+        store[sessionKey] = {
+          ...current,
+          ...(params.recordText
+            ? {
+                lastHeartbeatText: params.recordText,
+                lastHeartbeatSentAt: startedAt,
+                recentHeartbeats: recordRecentHeartbeat({
+                  previous: current.recentHeartbeats,
+                  sentAt: startedAt,
+                  channel: "telegram",
+                  to: params.recordTo,
+                  preview: params.recordText,
+                }),
+              }
+            : {}),
+          heartbeatAttentionState: buildHeartbeatAttentionState({
+            previous: current.heartbeatAttentionState,
+            delivered: params.delivered,
+            deliveredAt: startedAt,
+          }),
+        };
+        await saveSessionStore(storePath, store);
+      };
 
       // Topic details are silent whenever a compact DM pager also exists. The user gets one
       // notification, while every task still lands in its durable workbench with full context.
@@ -1215,6 +1261,11 @@ export async function runHeartbeatOnce(opts: {
           silent: needsPager,
           deps: opts.deps,
         });
+        // Persist each successful topic independently. If a later send fails, the next sweep
+        // retries only the undelivered item instead of duplicating messages already posted.
+        if (needsPager) {
+          await persistAttentionDelivery({ delivered: group.items });
+        }
       }
 
       const pagerText = needsPager ? buildHeartbeatPagerText(selected.items) : "";
@@ -1234,28 +1285,11 @@ export async function runHeartbeatOnce(opts: {
       const singleTopic = !needsPager ? topicGroups[0] : undefined;
       const recordedText = pagerText || singleTopic?.text || "";
       const recordedTo = needsPager ? delivery.to : singleTopic?.chatId;
-      const store = loadSessionStore(storePath);
-      const current = store[sessionKey];
-      if (current) {
-        store[sessionKey] = {
-          ...current,
-          lastHeartbeatText: recordedText,
-          lastHeartbeatSentAt: startedAt,
-          heartbeatAttentionState: buildHeartbeatAttentionState({
-            previous: current.heartbeatAttentionState,
-            delivered: selected.items,
-            deliveredAt: startedAt,
-          }),
-          recentHeartbeats: recordRecentHeartbeat({
-            previous: current.recentHeartbeats,
-            sentAt: startedAt,
-            channel: "telegram",
-            to: recordedTo,
-            preview: recordedText,
-          }),
-        };
-        await saveSessionStore(storePath, store);
-      }
+      await persistAttentionDelivery({
+        delivered: selected.items,
+        recordText: recordedText,
+        recordTo: recordedTo,
+      });
 
       emitHeartbeatEvent({
         status: "sent",

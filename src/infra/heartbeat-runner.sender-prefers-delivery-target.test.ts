@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  addHeartbeatSessionStoreEntry,
+  seedMainSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -159,10 +163,33 @@ describe("runHeartbeatOnce", () => {
           lastProvider: "telegram",
           lastTo: "telegram:123456",
         });
+        await addHeartbeatSessionStoreEntry(storePath, "agent:main:telegram:topic:3030", {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "-1003783709877",
+          origin: {
+            provider: "telegram",
+            to: "-1003783709877",
+            accountId: "default",
+            threadId: 3030,
+          },
+        });
+        await addHeartbeatSessionStoreEntry(storePath, "agent:main:telegram:topic:3188", {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "-1003783709877",
+          origin: {
+            provider: "telegram",
+            to: "-1003783709877",
+            accountId: "default",
+            threadId: 3188,
+          },
+        });
 
         replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
           expect(ctx.Body).toContain("Heartbeat attention delivery contract:");
           expect(ctx.Body).toContain("Return a maximum of 3 items.");
+          expect(ctx.Body).toContain("chatId=-1003783709877 | threadId=3030");
           return {
             text: `<heartbeat_attention>
 {"items":[
@@ -220,6 +247,119 @@ describe("runHeartbeatOnce", () => {
           "empower",
           "dld",
         ]);
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("does not enter typed fan-out when Telegram alerts are hidden", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+              },
+            },
+          },
+          channels: {
+            telegram: {
+              botToken: "telegram-test",
+              heartbeat: { showOk: false, showAlerts: false, useIndicator: true },
+            },
+          },
+          session: { store: storePath },
+        };
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+        });
+        replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
+          expect(ctx.Body).not.toContain("Heartbeat attention delivery contract:");
+          return {
+            text: `<heartbeat_attention>
+{"items":[{"key":"hidden-alert","fingerprint":"new","title":"Hidden","text":"Do not send.","urgency":"normal","category":"other","destination":{"kind":"pager"}}]}
+</heartbeat_attention>`,
+          };
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "123456",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 10_000,
+          },
+        });
+
+        expect(sendTelegram).not.toHaveBeenCalled();
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("keeps the existing reasoning delivery path when reasoning is enabled", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+                includeReasoning: true,
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+        });
+        replySpy.mockImplementation(async (ctx: Record<string, unknown>) => {
+          expect(ctx.Body).not.toContain("Heartbeat attention delivery contract:");
+          return [{ text: "Reasoning:\n_Because it helps_" }, { text: "Final alert" }];
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "123456",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 10_000,
+          },
+        });
+
+        expect(sendTelegram).toHaveBeenNthCalledWith(
+          1,
+          "123456",
+          "Reasoning:\n_Because it helps_",
+          expect.any(Object),
+        );
+        expect(sendTelegram).toHaveBeenNthCalledWith(
+          2,
+          "123456",
+          "Final alert",
+          expect.any(Object),
+        );
       },
       { prefix: "openclaw-hb-" },
     );

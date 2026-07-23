@@ -39,6 +39,20 @@ export async function seedSessionStore(
   );
 }
 
+export async function addHeartbeatSessionStoreEntry(
+  storePath: string,
+  sessionKey: string,
+  session: HeartbeatSessionSeed,
+): Promise<void> {
+  const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+  store[sessionKey] = {
+    sessionId: session.sessionId ?? `sid-${sessionKey}`,
+    updatedAt: session.updatedAt ?? Date.now(),
+    ...session,
+  };
+  await fs.writeFile(storePath, JSON.stringify(store));
+}
+
 export async function seedMainSessionStore(
   storePath: string,
   cfg: OpenClawConfig,
