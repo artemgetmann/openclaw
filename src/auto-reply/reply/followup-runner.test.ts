@@ -451,7 +451,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     // recognizes the explicit final boundary. Generic routeReply has no such
     // lifecycle and was the source of one durable message per payload.
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
+    const deliveredPayloads = onBlockReply.mock.calls as unknown as Array<
+      [{ text?: string; channelData?: Record<string, unknown> }]
+    >;
+    expect(deliveredPayloads.map(([payload]) => payload)).toEqual([
       { text: "Checking the live thread.", channelData: commentaryChannelData },
       { text: "Preparing the approved send.", channelData: commentaryChannelData },
       { text: "Sent with proof.", channelData: finalChannelData },
