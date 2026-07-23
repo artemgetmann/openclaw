@@ -371,6 +371,12 @@ async function runReplyAgentWithFinalizationOwnership(
       storePath,
       defaultModel,
       agentCfgContextTokens,
+      liveReplyRoute: {
+        originatingChannel: followupRun.originatingChannel,
+        originatingTo: followupRun.originatingTo,
+        originatingAccountId: followupRun.originatingAccountId,
+        originatingThreadId: followupRun.originatingThreadId,
+      },
       // The same callback drains RAM-only and persisted items. Preserve legacy
       // best-effort behavior for the former, but reject failed durable work so
       // the queue cannot acknowledge its disk record as successfully processed.
