@@ -35,6 +35,11 @@ export async function createBotHandlerWithOptions(options: {
   proxyFetch?: typeof fetch;
   runtimeLog?: ReturnType<typeof vi.fn>;
   runtimeError?: ReturnType<typeof vi.fn>;
+  testTimings?: {
+    mediaGroupFlushMs?: number;
+    mediaBurstGraceMs?: number;
+    textFragmentGapMs?: number;
+  };
 }): Promise<{
   handler: (ctx: Record<string, unknown>) => Promise<void>;
   replySpy: ReturnType<typeof vi.fn>;
@@ -48,7 +53,7 @@ export async function createBotHandlerWithOptions(options: {
   const runtimeLog = options.runtimeLog ?? vi.fn();
   createTelegramBotRef({
     token: "tok",
-    testTimings: TELEGRAM_TEST_TIMINGS,
+    testTimings: options.testTimings ?? TELEGRAM_TEST_TIMINGS,
     ...(options.proxyFetch ? { proxyFetch: options.proxyFetch } : {}),
     runtime: {
       log: runtimeLog as (...data: unknown[]) => void,

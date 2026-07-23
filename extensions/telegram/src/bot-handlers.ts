@@ -173,7 +173,11 @@ export const registerTelegramHandlers = ({
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const DEFAULT_TEXT_BURST_MAX_GAP_MS = 350;
-  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
+  // Telegram's nominal text limit is 4,096 characters, but real client-side
+  // splits can land slightly below 4,000 after entity/Unicode accounting. Only
+  // near-limit chunks pay the 1.5s polling-skew grace; ordinary long messages
+  // retain the faster burst path.
+  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 3900;
   const TELEGRAM_TEXT_BURST_START_THRESHOLD_CHARS = 800;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
