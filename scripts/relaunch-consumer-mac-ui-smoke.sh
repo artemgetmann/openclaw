@@ -566,6 +566,7 @@ write_debug_app_wrapper() {
   local contents_dir="$app_path/Contents"
   local macos_dir="$contents_dir/MacOS"
   local frameworks_dir="$contents_dir/Frameworks"
+  local resources_dir="$contents_dir/Resources"
   local info_plist="$contents_dir/Info.plist"
   local bundle_id="ai.openclaw.consumer.mac.debug.ui-smoke.${normalized}"
   local display_name="Jarvis UI Smoke (${normalized})"
@@ -573,9 +574,14 @@ write_debug_app_wrapper() {
   local swift_compat_lib="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib"
 
   /bin/rm -rf "$app_path"
-  /bin/mkdir -p "$macos_dir" "$frameworks_dir"
+  /bin/mkdir -p "$macos_dir" "$frameworks_dir" "$resources_dir"
   /bin/cp "$binary_path" "$macos_dir/OpenClaw"
   /bin/chmod +x "$macos_dir/OpenClaw"
+
+  # The smoke wrapper must render the same brand asset as the packaged app.
+  # Without an explicit icon, AppKit substitutes its generic blank grid and
+  # makes permission/onboarding visual proof misleading.
+  /bin/cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/Jarvis.icns" "$resources_dir/Jarvis.icns"
 
   # Keep this wrapper tiny, but still app-shaped enough for SwiftUI,
   # UserNotifications, and Sparkle to resolve bundle/rpath state correctly.
@@ -601,6 +607,8 @@ write_debug_app_wrapper() {
   <string>OpenClaw</string>
   <key>CFBundleIdentifier</key>
   <string>${bundle_id}</string>
+  <key>CFBundleIconFile</key>
+  <string>Jarvis.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

@@ -48,6 +48,23 @@ When the screen appears locked or black:
 If Screen Recording permission is missing, fix permission first, relaunch the
 target/proof app, then repeat this still-screenshot preflight.
 
+### Clean-Scene Preflight
+
+Treat the visible desktop as part of the deliverable before recording:
+
+- Bring the exact review surface to the front and size it for readability.
+- Prefer an app or window target so unrelated desktop content and notifications
+  cannot enter the capture.
+- Close unrelated dialogs, authentication prompts, floating utilities, and
+  overlays through observed semantic UI elements. Do not hide them with a crop
+  after recording when they cover or distract from the requested flow.
+- Wait for transient banners and animations to clear before starting.
+- Never enter credentials or dismiss an authentication/security prompt merely
+  to clean up a recording; stop and ask the user when that action needs approval.
+
+Take another still screenshot after staging and inspect it. Start recording
+only when that exact scene is suitable to send to the user.
+
 ### Recording Target
 
 Record the target app or window, not the whole display:
@@ -169,6 +186,26 @@ ffmpeg -y -hide_banner -nostats \
   -vf "fps=1,scale=360:-1,tile=5x1" \
   -frames:v 1 ".artifacts/<run>/review-contact.png"
 ```
+
+### Final Visual Quality Gate
+
+Before sending the video, inspect the exact final file—not merely the raw
+recording or an earlier export:
+
+1. Inspect the contact sheet for the full sequence.
+2. Extract and inspect full-resolution frames from the start, the important
+   interaction, and the final state. A small contact sheet can hide clipped
+   copy, cursor mistakes, unreadable text, or unwanted overlays.
+3. Confirm the video starts after setup noise, ends after the result is clearly
+   visible, and contains no unrelated notifications, prompts, windows, private
+   content, black intervals, or confusing dead time.
+4. Confirm the target UI is large enough to review without zooming and that the
+   recording demonstrates the requested behavior rather than merely showing
+   the app open.
+
+If any check fails, fix the scene, capture, or edit and run the complete
+inspection again. Do not send a visibly flawed video with a disclaimer when a
+clean re-recording is possible.
 
 ## Pair With Structured Proof
 
