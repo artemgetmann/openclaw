@@ -1,10 +1,19 @@
-import { JSDOM } from "jsdom";
+import { createRequire } from "node:module";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
+
+// jsdom does not ship TypeScript declarations. Keep this test dependency local
+// and describe only the constructor surface exercised by the browser fixture.
+const { JSDOM } = createRequire(import.meta.url)("jsdom") as {
+  JSDOM: new (
+    html?: string,
+    options?: { runScripts?: "outside-only" },
+  ) => { window: Window & typeof globalThis };
+};
 
 const routeState = vi.hoisted(() => ({
   profileCtx: {
@@ -33,9 +42,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
     path: "/tmp/openclaw/downloads/report.pdf",
   })),
   fillChromeMcpElement: vi.fn(async () => {}),
-  evaluateChromeMcpScript: vi.fn(
-    async (_params: { profileName: string; targetId: string; fn: string }) => true,
-  ),
+  evaluateChromeMcpScript: vi.fn<
+    (_params: { profileName: string; targetId: string; fn: string }) => Promise<unknown>
+  >(async (_params: { profileName: string; targetId: string; fn: string }) => true),
   insertTextViaCdp: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   pressChromeMcpKey: vi.fn(async () => {}),
