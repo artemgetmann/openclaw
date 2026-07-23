@@ -1529,6 +1529,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      userPrompt: params.prompt,
     });
     logPreLockStage("skills-prompt-resolved");
 
