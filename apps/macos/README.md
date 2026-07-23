@@ -60,12 +60,43 @@ For onboarding copy/layout GUI proof, use the native UI smoke instead:
 bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>
 ```
 
+To open one consumer onboarding page directly, pass `--consumer-step`. For
+example, this opens the isolated permissions page without replaying the earlier
+Chrome step:
+
+```bash
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id> --consumer-step permissions
+```
+
+Valid step identifiers are `chrome`, `permissions`, `aiAccess`,
+`accountActivation`, `telegram`, and `telegramGroup`. This debug-only override
+is for focused UI checks: it starts the consumer setup shell at the requested
+page instead of requiring earlier onboarding prerequisites. The smoke lane is
+isolated and visual-only by default (`--no-launchd`), so it does not touch the
+shared gateway or prove a full onboarding/runtime flow.
+
 That script builds `apps/macos` with SwiftPM and launches the debug binary from
 the current worktree through a tiny debug `.app` wrapper. It does not install
 into `/Applications`, does not run release packaging, does not bundle a
 DMG/zip/runtime archive/npm tarball/bundled Node, and does not restart the
 default gateway. Reserve `rebuild-relaunch` and full packaging for cases where
 the release artifact or installer path is the thing being proven.
+
+For a focused packaged-app visual proof, keep the same direct-step override,
+but launch the verified app from `dist/` instead of replaying all onboarding
+pages. Record only after the target app or System Settings pane is frontmost.
+Prefer macOS's bounded native capture for a clean static-UI clip:
+
+```bash
+screencapture -v -V6 -D1 -x /tmp/jarvis-permissions-proof.mov
+```
+
+Before sharing the result, inspect representative full-resolution frames and a
+contact sheet, run `ffprobe`, and run FFmpeg `blackdetect`. Crop to the relevant
+app/System Settings window when desktop notifications or unrelated windows are
+outside the review surface. If a floating `Transcribe` window appears, it is a
+Shortcuts overlay rather than Jarvis; close it through an observed accessibility
+element before recording instead of hiding it in the final proof.
 
 For the stable side-by-side Jarvis Consumer release-candidate app, use the
 dedicated RC wrapper. Both modes preserve `/Applications/Jarvis Consumer.app`,

@@ -35,10 +35,7 @@ struct GlowingOpenClawIcon: View {
                 .scaleEffect(self.breathe ? 1.08 : 0.96)
                 .opacity(0.84)
 
-            Image(nsImage: Self.onboardingIconImage())
-                .resizable()
-                .frame(width: self.size, height: self.size)
-                .clipShape(RoundedRectangle(cornerRadius: self.size * 0.22, style: .continuous))
+            ProductAppIconView(size: self.size)
                 .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
                 .scaleEffect(self.breathe ? 1.02 : 1.0)
         }
@@ -61,18 +58,5 @@ struct GlowingOpenClawIcon: View {
         withAnimation(Animation.easeInOut(duration: 3.6).repeatForever(autoreverses: true)) {
             self.breathe = true
         }
-    }
-
-    private static func onboardingIconImage() -> NSImage {
-        // UI-smoke launches through a tiny debug wrapper, so NSApp can expose
-        // the generic macOS placeholder instead of the product icon. Prefer the
-        // bundled Jarvis asset for first-run setup where brand recognition matters.
-        if AppFlavor.current.isConsumer,
-           let url = Bundle.main.url(forResource: "Jarvis", withExtension: "icns"),
-           let image = NSImage(contentsOf: url)
-        {
-            return image
-        }
-        return NSApp.applicationIconImage
     }
 }
