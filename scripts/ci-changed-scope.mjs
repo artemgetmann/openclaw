@@ -12,7 +12,8 @@ const MACOS_PROTOCOL_GEN_RE =
   /^(apps\/macos\/Sources\/OpenClawProtocol\/|apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\/)/;
 const BROWSER_AGENT_SCOPE_RE =
   /^(src\/browser\/|src\/agents\/tools\/browser-tool\.(ts|schema\.ts|test\.ts)$|docs\/agent-guides\/browser-agent-e2e\.md$)/;
-const MACOS_NATIVE_RE = /^(apps\/macos\/|apps\/ios\/|apps\/shared\/|Swabble\/)/;
+const MACOS_NATIVE_RE =
+  /^(apps\/macos\/|apps\/ios\/|apps\/shared\/|Swabble\/|scripts\/(codesign-mac-app|package-mac-app|verify-consumer-mac-app|verify-gog-release-artifacts)\.sh$|scripts\/lib\/(consumer-gog-runtime|openclaw-runtime-payloads)\.sh$)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;

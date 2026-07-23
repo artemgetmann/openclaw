@@ -300,10 +300,11 @@ NODE
 assert_app_managed_cli_payloads() {
   local runtime_root="$1"
   local manifest_path="$runtime_root/capabilities.manifest.json"
-  local gog_path="$runtime_root/tools/gog"
+  local gog_arm64_path="$runtime_root/tools/gog/darwin-arm64/gog"
+  local gog_x86_64_path="$runtime_root/tools/gog/darwin-x86_64/gog"
+  local gog_host_path=""
   local gog_license_path="$runtime_root/tools/gog.LICENSE"
   local gog_version=""
-  local gog_archs=""
 
   gog_version="$(
     "$OPENCLAW_NODE_BIN" --input-type=module - "$manifest_path" <<'NODE'
@@ -320,21 +321,34 @@ process.stdout.write(gog.recommendedVersion);
 NODE
   )"
 
-  if [[ ! -x "$gog_path" ]]; then
-    echo "ERROR: bundled runtime is missing app-managed Google Workspace CLI: $gog_path" >&2
+  if [[ ! -x "$gog_arm64_path" || ! -x "$gog_x86_64_path" ]]; then
+    echo "ERROR: bundled runtime is missing an architecture-specific app-managed Google Workspace CLI." >&2
+    echo "Expected executables: $gog_arm64_path and $gog_x86_64_path" >&2
     exit 1
   fi
   if [[ ! -s "$gog_license_path" ]]; then
     echo "ERROR: bundled runtime is missing the Gog MIT license notice: $gog_license_path" >&2
     exit 1
   fi
-  if [[ "$("$gog_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
+  case "$(uname -m)" in
+    arm64)
+      gog_host_path="$gog_arm64_path"
+      ;;
+    x86_64)
+      gog_host_path="$gog_x86_64_path"
+      ;;
+    *)
+      echo "ERROR: unsupported macOS architecture while verifying Gog: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$("$gog_host_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
     echo "ERROR: bundled Google Workspace CLI does not match recommended version $gog_version" >&2
     exit 1
   fi
-  gog_archs="$(/usr/bin/lipo -archs "$gog_path" 2>/dev/null || true)"
-  if [[ "$gog_archs" != *"arm64"* || "$gog_archs" != *"x86_64"* ]]; then
-    echo "ERROR: bundled Google Workspace CLI is not universal: ${gog_archs:-unknown}" >&2
+  if ! openclaw_verify_vendor_signed_gog "$gog_arm64_path" \
+    || ! openclaw_verify_vendor_signed_gog "$gog_x86_64_path"; then
+    echo "ERROR: bundled Google Workspace CLI vendor identity is invalid." >&2
     exit 1
   fi
 }
@@ -480,6 +494,14 @@ while IFS= read -r -d '' runtime_file; do
     if ! codesign --verify --strict "$runtime_file" >/dev/null; then
       echo "ERROR: runtime payload failed codesign verification: $runtime_file" >&2
       exit 1
+    fi
+
+    # Gog intentionally keeps its upstream identity because macOS Keychain
+    # binds token ACLs to that designated requirement. This is a narrow,
+    # fail-closed exception to the normal same-team runtime rule.
+    if openclaw_runtime_payload_is_vendor_signed_gog "$runtime_file"; then
+      openclaw_verify_vendor_signed_gog "$runtime_file"
+      continue
     fi
 
     # Release builds need the bundled runtime payloads to come from the same

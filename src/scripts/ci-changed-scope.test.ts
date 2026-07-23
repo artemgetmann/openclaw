@@ -84,6 +84,15 @@ describe("detectChangedScope", () => {
       runCiScopeTests: false,
       runBrowserAgent: false,
     });
+    expect(detectChangedScope(["scripts/lib/consumer-gog-runtime.sh"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
+    });
   });
 
   it("does not force native lanes for generated protocol model-only changes", () => {
