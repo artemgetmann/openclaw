@@ -44,7 +44,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "Constraints: never read more than one skill up front; only read after selecting.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
-    "- When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+    "- Use <available_skills> as the active agent catalog. When it is compacted, match against its names and exact locations even when descriptions are absent. If it is truncated or an explicitly named skill is absent, do not claim the skill is unavailable; say the active catalog is incomplete instead of querying a different agent's inventory.",
     "",
   ];
 }
