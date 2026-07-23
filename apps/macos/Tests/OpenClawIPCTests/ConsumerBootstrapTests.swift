@@ -3,6 +3,31 @@ import Testing
 
 @Suite(.serialized)
 struct ConsumerBootstrapTests {
+    @Test func `consumer starts typing after acceptance without overwriting explicit mode`() {
+        var missingRoot: [String: Any] = [:]
+
+        let filled = ConsumerBootstrap.applyMissingConfigDefaults(to: &missingRoot)
+
+        #expect(filled)
+        let agents = missingRoot["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        #expect(defaults?["typingMode"] as? String == "instant")
+
+        var customRoot: [String: Any] = [
+            "agents": [
+                "defaults": [
+                    "typingMode": "message",
+                ],
+            ],
+        ]
+
+        _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &customRoot)
+
+        let customAgents = customRoot["agents"] as? [String: Any]
+        let customDefaults = customAgents?["defaults"] as? [String: Any]
+        #expect(customDefaults?["typingMode"] as? String == "message")
+    }
+
     @Test func `consumer defaults to signed in browser without overwriting explicit profile`() {
         var missingRoot: [String: Any] = [:]
 

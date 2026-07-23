@@ -551,6 +551,7 @@ function prependClaudeCliResumeRuntimeInstructions(params: {
 function buildBridgeSafeClaudeCliSkillsPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
+  userPrompt?: string;
 }): string {
   // Keep the bridge-safe prompt small, but still make the OpenClaw skill
   // contract explicit. Claude CLI has its own native skill registry; these
@@ -559,6 +560,7 @@ function buildBridgeSafeClaudeCliSkillsPrompt(params: {
   const skillsPrompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
     config: params.config,
     eligibility: { remote: getRemoteSkillEligibility() },
+    userPrompt: params.userPrompt,
   }).trim();
   if (!skillsPrompt) {
     return "";
@@ -573,7 +575,7 @@ function buildBridgeSafeClaudeCliSkillsPrompt(params: {
     "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
     "When running `openclaw ...` from this runtime, preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_LOG_DIR, OPENCLAW_PROFILE, and OPENCLAW_LAUNCHD_LABEL environment. If a diagnostic reports ~/.openclaw while runtime metadata shows an app-owned state dir, rerun with the active runtime env before claiming setup is missing.",
     skillsPrompt,
-    "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+    "Use <available_skills> as the active agent catalog. When it is compacted, match against its names and exact locations even when descriptions are absent. If it is truncated or an explicitly named skill is absent, do not claim the skill is unavailable; say the active catalog is incomplete instead of querying a different agent's inventory.",
   ].join("\n");
 }
 
@@ -599,7 +601,7 @@ function prependClaudeCliResumedSkillsReminder(params: {
     "Do not say an OpenClaw skill is missing until you have checked <available_skills> below.",
     skillsPrompt,
     "When running `openclaw ...`, preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_LOG_DIR, OPENCLAW_PROFILE, and OPENCLAW_LAUNCHD_LABEL environment. If a command unexpectedly checks ~/.openclaw, that is a wrong-runtime probe until rerun with the active app-owned env.",
-    "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+    "Use <available_skills> as the active agent catalog. When it is compacted, match against its names and exact locations even when descriptions are absent. If it is truncated or an explicitly named skill is absent, do not claim the skill is unavailable; say the active catalog is incomplete instead of querying a different agent's inventory.",
     "Current user message:",
     params.prompt,
   ].join("\n\n");
@@ -1091,6 +1093,7 @@ export async function runCliAgent(params: {
     ? buildBridgeSafeClaudeCliSkillsPrompt({
         workspaceDir,
         config: params.config,
+        userPrompt: params.prompt,
       })
     : "";
   const systemPrompt = useBridgeSafeClaudeCliPrompt

@@ -661,9 +661,7 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPrompt).toContain(
         "preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH",
       );
-      expect(systemPrompt).toContain(
-        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
-      );
+      expect(systemPrompt).toContain("Use <available_skills> as the active agent catalog");
       expect(systemPrompt).toContain("<available_skills>");
       expect(systemPrompt).toContain("reddit");
       expect(systemPrompt).toContain("User Reddit skill");
@@ -745,9 +743,7 @@ describe("runCliAgent with process supervisor", () => {
       expect(promptArg).toContain(
         "preserve the active OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH",
       );
-      expect(promptArg).toContain(
-        "When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
-      );
+      expect(promptArg).toContain("Use <available_skills> as the active agent catalog");
       expect(promptArg).toContain("<available_skills>");
       expect(promptArg).toContain("<name>reddit</name>");
       expect(promptArg).toContain("Read and summarize Reddit posts and comments from a Reddit URL");
@@ -809,11 +805,9 @@ describe("runCliAgent with process supervisor", () => {
         "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file before any generic discovery.",
       );
       expect(systemPrompt).toContain(
-        "do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step",
+        "do not claim the skill is unavailable; say the active catalog is incomplete",
       );
-      expect(systemPrompt.indexOf("<name>telegram-user</name>")).toBeLessThan(
-        systemPrompt.indexOf("openclaw skills list"),
-      );
+      expect(systemPrompt).not.toContain("openclaw skills list");
       expect(result.meta.systemPromptReport?.skills.entries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -883,9 +877,7 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPrompt).toContain(
         "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file before any generic discovery.",
       );
-      expect(systemPrompt.indexOf("<name>telegram-chat-management</name>")).toBeLessThan(
-        systemPrompt.indexOf("openclaw skills list"),
-      );
+      expect(systemPrompt).not.toContain("openclaw skills list");
       expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toEqual(
         expect.arrayContaining(["telegram-chat-management", "telegram-user"]),
       );

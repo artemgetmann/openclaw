@@ -173,12 +173,10 @@ describe("buildAgentSystemPrompt", () => {
       "If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it before any generic discovery.",
     );
     expect(prompt).toContain(
-      "do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step",
+      "do not claim the skill is unavailable; say the active catalog is incomplete",
     );
     expect(prompt).toContain("<name>telegram-user</name>");
-    expect(prompt.indexOf("<name>telegram-user</name>")).toBeLessThan(
-      prompt.indexOf("openclaw skills list"),
-    );
+    expect(prompt).not.toContain("openclaw skills list");
   });
 
   it("separates Telegram status updates from Telegram-as-me topic handoffs", () => {
