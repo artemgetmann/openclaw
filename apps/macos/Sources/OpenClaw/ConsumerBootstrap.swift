@@ -5,6 +5,7 @@ enum ConsumerBootstrap {
     // A short Telegram-only debounce turns that burst into one agent turn while
     // leaving other channels unchanged and preserving an explicit user opt-out.
     private static let telegramInboundDebounceMs = 1000
+    private static let defaultTypingMode = "instant"
     private static let defaultBrowserProfile = "signed-in"
     private static let legacyBrowserProfile = "user"
     private static let retiredBrowserProfile = "openclaw"
@@ -81,6 +82,14 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["messages", "inbound", "byChannel", "telegram"],
             value: self.telegramInboundDebounceMs) || changed
+        // Reaching this config means Jarvis has already accepted the inbound
+        // message. Start the honest activity signal at that boundary instead
+        // of waiting for the model's first visible token in Telegram topics.
+        // Missing-only semantics preserve explicit operator preferences.
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "typingMode"],
+            value: self.defaultTypingMode) || changed
         return changed
     }
 
