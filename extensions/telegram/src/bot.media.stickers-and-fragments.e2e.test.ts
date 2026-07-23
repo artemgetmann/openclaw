@@ -317,7 +317,8 @@ describe("telegram text fragments", () => {
     "keeps a 3967-character Telegram split open across polling-cycle skew",
     async () => {
       // This reproduces the July 21 incident: the first client chunk was 3,967
-      // characters, so the old 350ms burst timer fired before later updates.
+      // characters. Classifying it as near-limit gives only genuine split
+      // candidates the longer polling-skew window.
       const { handler, replySpy } = await createBotHandlerWithOptions({
         testTimings: {
           mediaGroupFlushMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
@@ -341,8 +342,8 @@ describe("telegram text fragments", () => {
           getFile: async () => ({}),
         });
 
-        // Cross the old 350ms deadline while remaining inside the hardened
-        // 1.5s burst window. No agent turn may start yet.
+        // Cross the fast 350ms deadline while remaining inside the near-limit
+        // 1.5s fragment window. No agent turn may start yet.
         await vi.advanceTimersByTimeAsync(500);
         expect(replySpy).not.toHaveBeenCalled();
 
@@ -376,6 +377,41 @@ describe("telegram text fragments", () => {
         for (const part of parts) {
           expect(payload.RawBody).toContain(part.slice(0, 32));
         }
+      } finally {
+        setTimeoutSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the fast burst window for ordinary long text",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({
+        testTimings: {
+          mediaGroupFlushMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+          mediaBurstGraceMs: TELEGRAM_TEST_TIMINGS.mediaBurstGraceMs,
+        },
+      });
+      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 27,
+            date: 1736380800,
+            text: "A".repeat(1200),
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        expect(setTimeoutSpy.mock.calls.some((call) => call[1] === 350)).toBe(true);
+        expect(setTimeoutSpy.mock.calls.some((call) => call[1] === 1500)).toBe(false);
       } finally {
         setTimeoutSpy.mockRestore();
         vi.useRealTimers();
