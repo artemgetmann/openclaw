@@ -114,7 +114,16 @@ export function createTypingController(params: {
 
   const typingLoop = createTypingKeepaliveLoop({
     intervalMs: typingIntervalMs,
-    onTick: triggerTyping,
+    onTick: async () => {
+      await triggerTyping();
+      // A successful channel refresh proves that this controller still owns a
+      // healthy, active run. Renew the local safety lease too; otherwise the
+      // channel keepalive continues working for two minutes and then this
+      // controller silently seals itself while the model is still running.
+      if (!sealed && !runComplete) {
+        refreshTypingTtl();
+      }
+    },
   });
 
   const ensureStart = async () => {
