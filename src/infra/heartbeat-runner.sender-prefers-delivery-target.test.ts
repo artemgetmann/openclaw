@@ -79,6 +79,7 @@ describe("runHeartbeatOnce", () => {
             },
           },
           channels: { telegram: { botToken: "telegram-test" } },
+          messages: { responsePrefix: "🤖" },
           session: { store: storePath },
         };
 
@@ -132,7 +133,7 @@ describe("runHeartbeatOnce", () => {
         expect(replySpy).toHaveBeenCalledTimes(1);
         expect(sendTelegram).toHaveBeenCalledWith(
           "-1003841603622",
-          "Still waiting for the passport photo.",
+          "🤖 Still waiting for the passport photo.",
           expect.objectContaining({ messageThreadId: 928, accountId: "default" }),
         );
       },
@@ -247,6 +248,76 @@ describe("runHeartbeatOnce", () => {
           "empower",
           "dld",
         ]);
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
+
+  it("keeps fan-out items pending when the DM pager fails", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+                to: "telegram:123456",
+              },
+            },
+          },
+          channels: { telegram: { botToken: "telegram-test" } },
+          session: { store: storePath },
+        };
+        const mainSessionKey = await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "telegram:123456",
+        });
+        for (const threadId of [3030, 3188]) {
+          await addHeartbeatSessionStoreEntry(storePath, `agent:main:telegram:topic:${threadId}`, {
+            lastChannel: "telegram",
+            lastProvider: "telegram",
+            lastTo: "-1003783709877",
+            origin: {
+              provider: "telegram",
+              to: "-1003783709877",
+              accountId: "default",
+              threadId,
+            },
+          });
+        }
+        replySpy.mockResolvedValue({
+          text: `<heartbeat_attention>
+{"items":[
+{"key":"empower","fingerprint":"expired","title":"Empower","text":"Settlement decision needed.","urgency":"normal","category":"build","destination":{"kind":"telegram_topic","chatId":"-1003783709877","threadId":3030}},
+{"key":"dld","fingerprint":"closed","title":"RDC/DLD","text":"Escalation decision needed.","urgency":"normal","category":"build","destination":{"kind":"telegram_topic","chatId":"-1003783709877","threadId":3188}}
+]}
+</heartbeat_attention>`,
+        });
+        const sendTelegram = vi
+          .fn()
+          .mockResolvedValueOnce({ messageId: "topic-1", chatId: "-1003783709877" })
+          .mockResolvedValueOnce({ messageId: "topic-2", chatId: "-1003783709877" })
+          .mockRejectedValueOnce(new Error("pager unavailable"));
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: {
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => 10_000,
+          },
+        });
+
+        expect(result.status).toBe("failed");
+        expect(sendTelegram).toHaveBeenCalledTimes(3);
+        const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+          string,
+          { heartbeatAttentionState?: unknown }
+        >;
+        expect(store[mainSessionKey]?.heartbeatAttentionState).toBeUndefined();
       },
       { prefix: "openclaw-hb-" },
     );

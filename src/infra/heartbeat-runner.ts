@@ -1215,6 +1215,10 @@ export async function runHeartbeatOnce(opts: {
       const pagerItems = selected.items.filter((item) => item.destination.kind === "pager");
       const destinationCount = topicGroups.length + (pagerItems.length > 0 ? 1 : 0);
       const needsPager = pagerItems.length > 0 || destinationCount > 1;
+      const withResponsePrefix = (text: string): string =>
+        responsePrefix && text && !text.startsWith(responsePrefix)
+          ? `${responsePrefix} ${text}`
+          : text;
       const persistAttentionDelivery = async (params: {
         delivered: typeof selected.items;
         recordText?: string;
@@ -1262,18 +1266,15 @@ export async function runHeartbeatOnce(opts: {
           accountId: topicAccountId,
           session: outboundSession,
           threadId: group.threadId,
-          payloads: [{ text: group.text }],
+          payloads: [{ text: withResponsePrefix(group.text) }],
           silent: needsPager,
           deps: opts.deps,
         });
-        // Persist each successful topic independently. If a later send fails, the next sweep
-        // retries only the undelivered item instead of duplicating messages already posted.
-        if (needsPager) {
-          await persistAttentionDelivery({ delivered: group.items });
-        }
       }
 
-      const pagerText = needsPager ? buildHeartbeatPagerText(selected.items) : "";
+      const pagerText = needsPager
+        ? withResponsePrefix(buildHeartbeatPagerText(selected.items))
+        : "";
       if (needsPager) {
         await deliverOutboundPayloads({
           cfg,
@@ -1288,7 +1289,7 @@ export async function runHeartbeatOnce(opts: {
       }
 
       const singleTopic = !needsPager ? topicGroups[0] : undefined;
-      const recordedText = pagerText || singleTopic?.text || "";
+      const recordedText = pagerText || withResponsePrefix(singleTopic?.text ?? "");
       const recordedTo = needsPager ? delivery.to : singleTopic?.chatId;
       await persistAttentionDelivery({
         delivered: selected.items,
