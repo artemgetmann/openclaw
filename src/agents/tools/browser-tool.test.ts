@@ -1044,6 +1044,9 @@ describe("browser tool Jarvis profile policy", () => {
     );
     expect(tool.description).not.toContain('Use profile="openclaw"');
     expect(tool.description).not.toContain("clean public browsing");
+    expect(tool.description).not.toContain('Legacy profile="user"');
+    expect(tool.description).not.toContain("Custom profiles can still target");
+    expect(tool.parameters.properties).not.toHaveProperty("fallbackApproved");
   });
 
   it("rejects the retired isolated browser for Jarvis", async () => {
@@ -1117,6 +1120,7 @@ describe("browser tool Jarvis profile policy", () => {
     const tool = createBrowserTool();
 
     expect(tool.description).toContain('Use profile="openclaw"');
+    expect(tool.parameters.properties).toHaveProperty("fallbackApproved");
     await tool.execute?.("call-1", {
       action: "status",
       profile: "openclaw",

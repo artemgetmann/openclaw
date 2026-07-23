@@ -178,6 +178,20 @@ function filterJarvisBrowserProfiles<T extends { name?: unknown }>(profiles: T[]
   );
 }
 
+function browserToolSchemaForPolicy(jarvisBrowserPolicy: boolean): typeof BrowserToolSchema {
+  if (!jarvisBrowserPolicy) {
+    return BrowserToolSchema;
+  }
+  // The isolated-browser approval flag has no valid Jarvis execution path.
+  // Remove it from the model-visible schema instead of relying only on the
+  // runtime policy to reject an obsolete argument.
+  const { fallbackApproved: _fallbackApproved, ...properties } = BrowserToolSchema.properties;
+  return {
+    ...BrowserToolSchema,
+    properties,
+  } as typeof BrowserToolSchema;
+}
+
 function isFallbackApprovalFresh(state: { openclawApprovedAt?: number }, nowMs: number): boolean {
   return (
     typeof state.openclawApprovedAt === "number" &&
@@ -645,20 +659,25 @@ export function createBrowserTool(opts?: {
         'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
         'Do not silently fall back to profile="openclaw" after profile="signed-in" or profile="user-live" fails. Ask the user whether to keep repairing the signed-in/live lane or use clean OpenClaw; if the user approves clean OpenClaw, retry with fallbackApproved=true.',
       ];
+  const genericProfileCompatibilityHints = jarvisBrowserPolicy
+    ? []
+    : [
+        'Legacy profile="user" aliases to profile="signed-in" unless the operator configured a custom profile literally named "user".',
+        "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or legacy/fallback flows when the default lanes are insufficient.",
+      ];
   return {
     label: "Browser",
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/download/actions).",
       ...browserChoiceHints,
-      'Legacy profile="user" aliases to profile="signed-in" unless the operator configured a custom profile literally named "user".',
+      ...genericProfileCompatibilityHints,
       'profile="user-live" attaches to the user\'s real Chrome session through Chrome DevTools MCP and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
       'Do not send act kind="batch" or unsupported MCP launch args for profile="signed-in", profile="user-live", or other existing-session profiles; send individual actions sequentially.',
       'For existing-session profiles, use ref from the latest snapshot for element actions. Avoid slowly=true; the host bridge normalizes it to regular fill behavior. Avoid loadState="networkidle"; use loadState="load", URL/text waits, or a short timeMs wait. Do not assume dialog or scrollIntoView timeoutMs changes behavior; harmless timeout fields are normalized when present.',
       "If an existing-session action reports a stale Element uid or missing snapshot after retry, immediately take a fresh snapshot on the same targetId and retry with the new ref.",
       "If multiple Chrome profiles may exist, pin the signed-in lane with sourceProfileName or use a named custom existing-session profile instead of guessing.",
-      "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or legacy/fallback flows when the default lanes are insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -678,7 +697,7 @@ export function createBrowserTool(opts?: {
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),
-    parameters: BrowserToolSchema,
+    parameters: browserToolSchemaForPolicy(jarvisBrowserPolicy),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
