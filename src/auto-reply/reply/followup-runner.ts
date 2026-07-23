@@ -39,6 +39,11 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { createTypingSignaler } from "./typing-mode.js";
 import { createTypingController, type TypingController } from "./typing.js";
 
+type LiveReplyRoute = Pick<
+  FollowupRun,
+  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+>;
+
 /**
  * Build the process-start callback used for disk-backed followups.
  *
@@ -84,6 +89,13 @@ export function createFollowupRunner(params: {
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
+  /**
+   * Exact destination captured by the live transport dispatcher.
+   *
+   * Queue keys can span multiple conversations, so channel equality alone is
+   * never enough to prove that this callback is safe for a queued reply.
+   */
+  liveReplyRoute?: LiveReplyRoute;
   /** Preserve legacy behavior for RAM-only work; durable drains opt into rejection. */
   failureMode?: "absorb" | "throw-durable";
 }): (queued: FollowupRun) => Promise<void> {
@@ -97,6 +109,7 @@ export function createFollowupRunner(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    liveReplyRoute,
     failureMode = "absorb",
   } = params;
   const resolveDurableIds = (queued: FollowupRun): string[] =>
@@ -138,8 +151,22 @@ export function createFollowupRunner(params: {
     const origin = resolveOriginMessageProvider({
       originatingChannel,
     });
+    const liveOrigin = resolveOriginMessageProvider({
+      originatingChannel: liveReplyRoute?.originatingChannel,
+    });
+    const routePartMatches = (
+      queuedPart: string | number | undefined,
+      livePart: string | number | undefined,
+    ) => String(queuedPart ?? "") === String(livePart ?? "");
     const canUseSameChannelDispatcher = Boolean(
-      opts?.onBlockReply && shouldRouteToOriginating && origin && origin === provider,
+      opts?.onBlockReply &&
+      shouldRouteToOriginating &&
+      origin &&
+      origin === provider &&
+      origin === liveOrigin &&
+      routePartMatches(originatingTo, liveReplyRoute?.originatingTo) &&
+      routePartMatches(queued.originatingAccountId, liveReplyRoute?.originatingAccountId) &&
+      routePartMatches(queued.originatingThreadId, liveReplyRoute?.originatingThreadId),
     );
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
@@ -194,13 +221,10 @@ export function createFollowupRunner(params: {
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          if (opts?.onBlockReply && origin && origin === provider) {
+          // A failed explicit route may use the live dispatcher only under the
+          // same complete-route proof as the primary path. Channel equality
+          // alone is unsafe when a queue spans several conversations.
+          if (canUseSameChannelDispatcher && opts?.onBlockReply) {
             await opts.onBlockReply(payload);
           } else if (shouldThrowProcessingFailure(queued)) {
             throw new Error(`Followup reply routing failed: ${errorMsg}`);

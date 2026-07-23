@@ -313,6 +313,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      liveReplyRoute: Pick<
+        FollowupRun,
+        "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+      >;
     }> = {},
   ) {
     return createFollowupRunner({
@@ -324,6 +328,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       sessionStore: overrides.sessionStore,
       sessionKey: overrides.sessionKey,
       storePath: overrides.storePath,
+      liveReplyRoute: overrides.liveReplyRoute,
     });
   }
 
@@ -335,6 +340,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      liveReplyRoute: Pick<
+        FollowupRun,
+        "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+      >;
     }>;
   }) {
     const onBlockReply = createAsyncReplySpy();
@@ -342,8 +351,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
       ...params.agentResult,
     });
-    const runner = createMessagingDedupeRunner(onBlockReply, params.runnerOverrides);
-    await runner(params.queued ?? baseQueuedRun());
+    const queued = params.queued ?? baseQueuedRun();
+    const runner = createMessagingDedupeRunner(onBlockReply, {
+      liveReplyRoute: queued,
+      ...params.runnerOverrides,
+    });
+    await runner(queued);
     return { onBlockReply };
   }
 
@@ -557,6 +570,38 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("does not reuse a same-channel dispatcher bound to another destination", async () => {
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "private reply" }] },
+      queued: {
+        ...baseQueuedRun("telegram"),
+        originatingChannel: "telegram",
+        originatingTo: "chat:queued",
+        originatingAccountId: "work",
+        originatingThreadId: "42",
+      } as FollowupRun,
+      runnerOverrides: {
+        liveReplyRoute: {
+          originatingChannel: "telegram",
+          originatingTo: "chat:dispatcher",
+          originatingAccountId: "work",
+          originatingThreadId: "42",
+        },
+      },
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "chat:queued",
+        accountId: "work",
+        threadId: "42",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("routes followups with originating account/thread metadata", async () => {
