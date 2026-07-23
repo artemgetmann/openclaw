@@ -361,9 +361,9 @@ notary, publish, or verify work.
 Follow the launcher's printed next steps, then run the release commands from the
 release lane.
 
-Mutating release phases also acquire one fail-fast lock shared by this
-repository's worktrees. If a live owner holds it, use an explicit chat/session
-handoff and let that owner finish or exit. Never improvise a `ps`-scanning
+Mutating release phases also acquire one fail-fast, user-scoped machine lock
+shared by every clone and worktree. If a live owner holds it, use an explicit
+chat/session handoff and let that owner finish or exit. Never improvise a `ps`-scanning
 `SIGSTOP`/`SIGKILL` guard: the canonical lock reports owner PID/context,
 safely reclaims dead owners, and never signals a process. The wrapper's true
 read-only path, `jarvis-public-release.sh --dry-run`, exits before delegated
