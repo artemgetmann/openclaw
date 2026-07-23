@@ -999,7 +999,7 @@ describe("runHeartbeatOnce", () => {
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
       expect(calledCtx.Body).toContain("Recent delivered heartbeat alerts (most recent first):");
       expect(calledCtx.Body).toContain("Follow up on Emirates KYC blocker.");
-      expect(calledCtx.Body).toContain("prefer a shorter nudge");
+      expect(calledCtx.Body).toContain("Changed wording is not a material change");
     } finally {
       replySpy.mockRestore();
     }

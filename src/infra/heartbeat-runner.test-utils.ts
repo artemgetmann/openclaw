@@ -7,7 +7,7 @@ import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import type { SessionOrigin } from "../config/sessions/types.js";
+import type { HeartbeatAttentionStateEntry, SessionOrigin } from "../config/sessions/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -19,6 +19,7 @@ export type HeartbeatSessionSeed = {
   lastProvider: string;
   lastTo: string;
   origin?: SessionOrigin;
+  heartbeatAttentionState?: HeartbeatAttentionStateEntry[];
 };
 
 export async function seedSessionStore(
@@ -36,6 +37,20 @@ export async function seedSessionStore(
       },
     }),
   );
+}
+
+export async function addHeartbeatSessionStoreEntry(
+  storePath: string,
+  sessionKey: string,
+  session: HeartbeatSessionSeed,
+): Promise<void> {
+  const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+  store[sessionKey] = {
+    sessionId: session.sessionId ?? `sid-${sessionKey}`,
+    updatedAt: session.updatedAt ?? Date.now(),
+    ...session,
+  };
+  await fs.writeFile(storePath, JSON.stringify(store));
 }
 
 export async function seedMainSessionStore(
