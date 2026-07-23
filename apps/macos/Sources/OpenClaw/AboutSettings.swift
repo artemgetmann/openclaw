@@ -11,16 +11,12 @@ struct AboutSettings: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            let appIcon = NSApplication.shared.applicationIconImage ?? CritterIconRenderer.makeIcon(blink: 0)
             Button {
                 if let url = URL(string: self.primaryIconURL) {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .frame(width: 160, height: 160)
-                    .cornerRadius(24)
+                ProductAppIconView(size: 160)
                     .shadow(color: self.iconHover ? .accentColor.opacity(0.25) : .clear, radius: 10)
                     .scaleEffect(self.iconHover ? 1.05 : 1.0)
             }
