@@ -47,7 +47,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { isWithinActiveHours, resolveHeartbeatWeekendMode } from "./heartbeat-active-hours.js";
 import {
   buildHeartbeatAttentionPrompt,
   buildHeartbeatAttentionState,
@@ -65,7 +65,7 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
-import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
+import { isHeartbeatEventDrivenReason, resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
@@ -743,6 +743,7 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const isEventDrivenWake = isHeartbeatEventDrivenReason(opts.reason);
   // Inspect only the explicit in-memory target before ordinary policy gates.
   // Normal disabled heartbeats retain their old cheap exit and never touch the
   // session store or HEARTBEAT.md merely to decide they are disabled.
@@ -764,8 +765,19 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isForcedRestartContinuation && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  const weekendMode = resolveHeartbeatWeekendMode(cfg, heartbeat, startedAt);
+  // Explicit event sources are already scoped work (cron, monitor/webhook, notification, or
+  // exec completion). They bypass the ambient schedule, but they still respect an explicitly
+  // disabled heartbeat. An interval run has no such urgency proof and stays inside the window.
+  if (
+    !isForcedRestartContinuation &&
+    !isEventDrivenWake &&
+    !isWithinActiveHours(cfg, heartbeat, startedAt)
+  ) {
     return { status: "skipped", reason: "quiet-hours" };
+  }
+  if (!isForcedRestartContinuation && !isEventDrivenWake && weekendMode === "off") {
+    return { status: "skipped", reason: "weekend" };
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
@@ -803,7 +815,8 @@ export async function runHeartbeatOnce(opts: {
   // Restart continuation must reuse the original transcript: that is where the
   // interrupted task and its safety state live. An isolated heartbeat session
   // would neither drain the tagged event nor have enough context to resume it.
-  const useIsolatedSession = heartbeat?.isolatedSession === true && !hasRestartContinuation;
+  const useIsolatedSession =
+    heartbeat?.isolatedSession === true && !hasRestartContinuation && !isEventDrivenWake;
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
@@ -900,6 +913,10 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel === "telegram" &&
     Boolean(delivery.to);
   const sourcePrompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
+  const scheduleAwarePrompt =
+    !useAttentionEnvelope && !isEventDrivenWake && weekendMode === "urgent-only"
+      ? `${sourcePrompt}\n\nWeekend urgent-only mode is active. Surface only urgent/time-sensitive attention; routine work waits until the next weekday sweep.`
+      : sourcePrompt;
   const heartbeatSessionStore = useAttentionEnvelope
     ? Object.fromEntries(
         Object.entries(loadSessionStore(storePath)).filter(
@@ -917,11 +934,14 @@ export async function runHeartbeatOnce(opts: {
   // several independently routed items. Cron, exec, and restart-continuation turns retain
   // their existing free-text contracts because they represent one explicit unit of work.
   const prompt = useAttentionEnvelope
-    ? `${sourcePrompt}\n\n${buildHeartbeatAttentionPrompt(
+    ? `${scheduleAwarePrompt}\n\n${buildHeartbeatAttentionPrompt(
         entry?.heartbeatAttentionState,
         trustedHeartbeatTopics,
+        {
+          urgentOnly: !isEventDrivenWake && weekendMode === "urgent-only",
+        },
       )}`
-    : sourcePrompt;
+    : scheduleAwarePrompt;
   const originContext = sourceReceipt
     ? {
         channel: sourceReceipt.sourceChannel,
@@ -1042,7 +1062,7 @@ export async function runHeartbeatOnce(opts: {
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
-      heartbeat?.lightContext === true ? "lightweight" : undefined;
+      heartbeat?.lightContext === true && !isEventDrivenWake ? "lightweight" : undefined;
     let agentRunStarted = false;
     const replyOpts = heartbeatModelOverride
       ? {
@@ -1196,6 +1216,7 @@ export async function runHeartbeatOnce(opts: {
         }),
         previous: entry?.heartbeatAttentionState,
         maxItems: 3,
+        urgentOnly: !isEventDrivenWake && weekendMode === "urgent-only",
       });
       if (selected.items.length === 0) {
         await restoreHeartbeatUpdatedAt({

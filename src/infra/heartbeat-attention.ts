@@ -246,10 +246,14 @@ export function selectHeartbeatAttentionItems(params: {
   items: HeartbeatAttentionItem[];
   previous: HeartbeatAttentionStateEntry[] | undefined;
   maxItems?: number;
+  urgentOnly?: boolean;
 }): { items: HeartbeatAttentionItem[]; suppressedKeys: string[] } {
   const previousByKey = new Map((params.previous ?? []).map((entry) => [entry.key, entry]));
   const suppressedKeys: string[] = [];
-  const changed = params.items.filter((item) => {
+  const eligible = params.urgentOnly
+    ? params.items.filter((item) => item.urgency === "urgent")
+    : params.items;
+  const changed = eligible.filter((item) => {
     const previous = previousByKey.get(item.key);
     const unchanged =
       previous?.fingerprint === item.fingerprint &&
@@ -263,9 +267,9 @@ export function selectHeartbeatAttentionItems(params: {
     return true;
   });
   const maxItems = Math.max(1, Math.min(3, params.maxItems ?? 3));
-  // The model is asked for three items, but parsing accepts a small oversized envelope so one
-  // imperfect response does not discard every alert. Preserve model order within each urgency
-  // tier while ensuring an urgent fourth item cannot be starved behind normal work.
+  // Discovery may return more candidates than one delivery can show. Persisted suppression
+  // rotates unchanged delivered items out on the next sweep, so lower-ranked candidates are
+  // eventually surfaced without raising the per-message attention budget.
   const ranked = changed.toSorted(
     (a, b) => Number(b.urgency === "urgent") - Number(a.urgency === "urgent"),
   );
@@ -352,6 +356,7 @@ export function buildHeartbeatAttentionState(params: {
 export function buildHeartbeatAttentionPrompt(
   previous: HeartbeatAttentionStateEntry[] | undefined,
   trustedTopics: TrustedHeartbeatTopicRoute[] = [],
+  options: { urgentOnly?: boolean } = {},
 ): string {
   const stateLines = (previous ?? [])
     .toSorted((a, b) => b.deliveredAt - a.deliveredAt)
@@ -403,7 +408,13 @@ export function buildHeartbeatAttentionPrompt(
     "Heartbeat attention delivery contract:",
     `If nothing genuinely needs attention, reply exactly HEARTBEAT_OK. Otherwise reply only with ${ATTENTION_OPEN}, one JSON object, and ${ATTENTION_CLOSE}.`,
     'The JSON shape is {"items":[{"key":"stable-lowercase-id","fingerprint":"stable-material-facts","title":"short title","text":"actionable detail","urgency":"normal|urgent","category":"commitment|build|outreach|personal|other","destination":{"kind":"pager"} OR {"kind":"telegram_topic","chatId":"-100...","threadId":123}}]}.',
-    "Return a maximum of 3 items. Include only items that need the user's decision, approval, reply, or awareness now.",
+    "Return up to 9 ranked candidates that need the user's decision, approval, reply, or awareness now; the runtime delivers at most 3 per sweep.",
+    "Include lower-ranked valid candidates after the top three so unchanged delivered items rotate out and do not starve the remaining attention queue.",
+    ...(options.urgentOnly
+      ? [
+          "Weekend urgent-only mode is active. Return only urgent/time-sensitive candidates; routine work waits until the next weekday sweep.",
+        ]
+      : []),
     "Do not emit FYI updates, cleanup notes, unchanged blockers, or work the agent can safely continue itself.",
     "A key identifies the same real-world obligation across runs. A fingerprint identifies its material state. Do not change a fingerprint merely because wording changed.",
     "Use telegram_topic only when tools or trusted source context provide the exact Telegram supergroup chat id and topic/thread id. Never guess routing metadata. Otherwise use pager.",

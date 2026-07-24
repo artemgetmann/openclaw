@@ -393,8 +393,8 @@ export async function scanStatusJsonFast(opts: {
               {
                 agentId: resolveDefaultAgentIdFast(cfg),
                 enabled: true,
-                every: "1d",
-                everyMs: 86_400_000,
+                every: "1h",
+                everyMs: 3_600_000,
               },
             ],
           },
@@ -476,7 +476,7 @@ export async function scanStatusJsonFast(opts: {
         agents:
           summary.heartbeat.agents.length > 0
             ? summary.heartbeat.agents
-            : [{ agentId: agentStatus.defaultId, enabled: true, every: "1d", everyMs: 86_400_000 }],
+            : [{ agentId: agentStatus.defaultId, enabled: true, every: "1h", everyMs: 3_600_000 }],
       },
       sessions: {
         ...summary.sessions,

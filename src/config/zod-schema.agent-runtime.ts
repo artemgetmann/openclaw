@@ -23,6 +23,9 @@ export const HeartbeatSchema = z
       })
       .strict()
       .optional(),
+    weekendMode: z
+      .union([z.literal("normal"), z.literal("urgent-only"), z.literal("off")])
+      .optional(),
     model: z.string().optional(),
     session: z.string().optional(),
     includeReasoning: z.boolean().optional(),

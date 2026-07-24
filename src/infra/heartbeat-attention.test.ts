@@ -240,6 +240,78 @@ describe("heartbeat attention envelope", () => {
     expect(selected.items.map((item) => item.key)).toEqual(["fresh-1", "fresh-2", "fresh-3"]);
   });
 
+  it("rotates stable overflow into the next delivery instead of starving item four", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope(
+        Array.from({ length: 4 }, (_, index) => ({
+          key: `candidate-${index + 1}`,
+          fingerprint: `facts-${index + 1}`,
+          title: `Candidate ${index + 1}`,
+          text: `Candidate ${index + 1} needs attention.`,
+          urgency: "normal",
+          category: "other",
+          destination: { kind: "pager" },
+        })),
+      ),
+    );
+    const first = selectHeartbeatAttentionItems({
+      items: parsed?.items ?? [],
+      previous: [],
+    });
+    const deliveredState = buildHeartbeatAttentionState({
+      previous: [],
+      delivered: first.items,
+      deliveredAt: 10,
+    });
+    const second = selectHeartbeatAttentionItems({
+      items: parsed?.items ?? [],
+      previous: deliveredState,
+    });
+
+    expect(first.items.map((item) => item.key)).toEqual([
+      "candidate-1",
+      "candidate-2",
+      "candidate-3",
+    ]);
+    expect(second.items.map((item) => item.key)).toEqual(["candidate-4"]);
+  });
+
+  it("filters routine weekend candidates while preserving urgent attention", () => {
+    const parsed = parseHeartbeatAttentionEnvelope(
+      envelope([
+        {
+          key: "routine",
+          fingerprint: "routine-facts",
+          title: "Routine follow-up",
+          text: "This can wait until Monday.",
+          urgency: "normal",
+          category: "outreach",
+          destination: { kind: "pager" },
+        },
+        {
+          key: "urgent",
+          fingerprint: "urgent-facts",
+          title: "Flight check-in closes",
+          text: "Check-in closes in 40 minutes.",
+          urgency: "urgent",
+          category: "commitment",
+          destination: { kind: "pager" },
+        },
+      ]),
+    );
+
+    const selected = selectHeartbeatAttentionItems({
+      items: parsed?.items ?? [],
+      previous: [],
+      urgentOnly: true,
+    });
+
+    expect(selected.items.map((item) => item.key)).toEqual(["urgent"]);
+    expect(buildHeartbeatAttentionPrompt([], [], { urgentOnly: true })).toContain(
+      "Weekend urgent-only mode is active",
+    );
+  });
+
   it("re-delivers an unchanged item when its task destination is corrected", () => {
     const parsed = parseHeartbeatAttentionEnvelope(
       envelope([
@@ -421,7 +493,8 @@ describe("heartbeat attention envelope", () => {
         destination: "pager",
       },
     ]);
-    expect(prompt).toContain("maximum of 3");
+    expect(prompt).toContain("Return up to 9 ranked candidates");
+    expect(prompt).toContain("runtime delivers at most 3");
     expect(prompt).toContain("key=empower");
     expect(prompt).toContain("fingerprint=expired");
     expect(prompt).toContain("Do not change a fingerprint merely because wording changed");

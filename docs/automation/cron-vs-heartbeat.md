@@ -13,30 +13,31 @@ Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps 
 
 ## Quick Decision Guide
 
-| Use Case                                               | Recommended         | Why                                              |
-| ------------------------------------------------------ | ------------------- | ------------------------------------------------ |
-| Check inbox every 30 min                               | Heartbeat           | Broad sweep; batches with other checks           |
-| Monitor calendar for upcoming events                   | Heartbeat           | Good periodic awareness case                     |
-| Background project health check                        | Heartbeat           | Fits heartbeat-style broad status sweeps         |
-| Watch this inbox/thread/person until something happens | Cron                | Explicit scoped monitor; needs a stop rule       |
-| Send daily report at 9am sharp                         | Cron (isolated)     | Exact timing needed                              |
-| Remind me in 20 minutes                                | Cron (main, `--at`) | One-shot with precise timing                     |
-| Run weekly deep analysis                               | Cron (isolated)     | Standalone task, can use different model         |
-| Keep a general eye on my world and surface big changes | Heartbeat           | Broad ambient awareness, low-frequency is enough |
-| Do one daily broad sweep and only alert if it matters  | Heartbeat           | Conservative periodic awareness                  |
+| Use Case                                               | Recommended         | Why                                               |
+| ------------------------------------------------------ | ------------------- | ------------------------------------------------- |
+| Check inbox every 30 min                               | Heartbeat           | Broad sweep; batches with other checks            |
+| Monitor calendar for upcoming events                   | Heartbeat           | Good periodic awareness case                      |
+| Background project health check                        | Heartbeat           | Fits heartbeat-style broad status sweeps          |
+| Watch this inbox/thread/person until something happens | Cron                | Explicit scoped monitor; needs a stop rule        |
+| Send daily report at 9am sharp                         | Cron (isolated)     | Exact timing needed                               |
+| Remind me in 20 minutes                                | Cron (main, `--at`) | One-shot with precise timing                      |
+| Run weekly deep analysis                               | Cron (isolated)     | Standalone task, can use different model          |
+| Keep a general eye on my world and surface big changes | Heartbeat           | Hourly discovery; silent unless attention changed |
+| Surface an urgent known event immediately              | Cron/monitor event  | Event wake bypasses ambient cadence               |
 
 ## Heartbeat: Ambient Awareness
 
-Heartbeats run in the **main session** at a regular interval (default: 30 min). They are for broad periodic sweeps and ambient awareness that surface what looks important without turning every request into a dedicated forever-monitor.
+Heartbeats run a lightweight isolated ambient sweep every hour by default. They
+surface what looks important without turning every request into a dedicated
+forever-monitor. Explicit event wakes retain the main session context.
 
 ### When to use heartbeat
 
 - **Broad awareness**: “Keep a general eye on my world and only surface something important.”
 - **Multiple periodic checks**: Inbox, calendar, notifications, and project status can be batched into one heartbeat when the user wants a broad sweep instead of a scoped watch.
-- **Low-frequency sweeps**: A daily cadence is the safest default starting point, but 30-minute heartbeat sweeps are still valid when the user explicitly wants that tradeoff.
+- **Hourly discovery, quiet delivery**: cadence controls when Jarvis checks; stable dedupe and `HEARTBEAT_OK` silence control when it messages.
 - **Small stable checklist**: `HEARTBEAT.md` should stay tiny, durable, and approval-oriented.
-- **Context-aware judgment**: The agent can use main-session context to decide whether something is worth surfacing.
-- **Conversational continuity**: Heartbeat runs share the same main-session context, so they can make follow-up judgments without needing isolated monitor jobs for everything.
+- **Context-aware event handling**: explicit cron, monitor/webhook, notification, and completion wakes retain main-session context.
 
 ### When not to use heartbeat
 
@@ -46,8 +47,7 @@ Heartbeats run in the **main session** at a regular interval (default: 30 min). 
 
 ### Heartbeat advantages
 
-- **Broad context**: The agent sees the main session and can judge importance.
-- **Low overhead**: A conservative heartbeat is cheaper than a pile of isolated jobs.
+- **Bounded context cost**: ambient sweeps default to lightweight isolated context.
 - **Batches multiple checks**: One agent turn can review inbox, calendar, notifications, and project status together.
 - **Context-aware**: The agent knows what you've been working on and can prioritize accordingly.
 - **Smart suppression**: If nothing needs attention, the agent replies `HEARTBEAT_OK` and no message is delivered.
@@ -78,9 +78,10 @@ Other valid heartbeat items, when the user wants them:
   agents: {
     defaults: {
       heartbeat: {
-        every: "30m", // interval
+        every: "1h", // default interval
         target: "last", // explicit alert delivery target (default is "none")
-        activeHours: { start: "08:00", end: "22:00" }, // optional
+        activeHours: { start: "09:00", end: "20:00", timezone: "user" },
+        weekendMode: "urgent-only",
       },
     },
   },
@@ -178,9 +179,9 @@ Is the goal broad ambient awareness rather than a scoped monitor?
   YES -> Continue...
   NO  -> Use cron
 
-Would a conservative low-frequency sweep be enough?
+Is hourly ambient discovery enough?
   YES -> Use heartbeat (add a tiny stable item to HEARTBEAT.md)
-  NO  -> Use cron
+  NO  -> Use an event source or bounded cron/monitor
 
 Is this a one-shot reminder?
   YES -> Use cron with --at
@@ -191,7 +192,7 @@ Is this a one-shot reminder?
 
 The most efficient setup uses **both**:
 
-1. **Heartbeat** handles broad ambient awareness on a conservative cadence.
+1. **Heartbeat** checks broad ambient awareness hourly and stays silent unless attention changed.
 2. **Cron** handles reminders, precise schedules, and explicit monitors with clear boundaries.
 
 ### Example: Efficient automation setup
@@ -312,7 +313,7 @@ openclaw cron add \
 - Keep `HEARTBEAT.md` small to minimize token overhead.
 - Use heartbeat for broad ambient awareness, not as a bucket for every recurring monitor idea.
 - Use cron when the job needs a cadence, stop condition, or expiry/TTL.
-- 30-minute heartbeats are valid if the user explicitly wants that cadence; daily is just the safer default example.
+- Tell Jarvis preferences naturally, such as “don’t nudge me before 11” or “urgent only on weekends”; it confirms and persists the typed setting.
 - Use `target: "none"` on heartbeat if you only want internal processing.
 - Use isolated cron with a cheaper model for routine tasks.
 
