@@ -549,6 +549,7 @@ export function resolveTelegramUserSessionSelection(params: {
 
 type TelegramUserBackendSelection = {
   envFilePath: string;
+  envFileSource: TelegramUserBackendMeta["env_file_source"];
   loadedEnv: Record<string, string>;
   sessionPath: string;
   sessionSelection: {
@@ -577,6 +578,14 @@ async function resolveTelegramUserBackendSelection(
     { checkSessionAmbiguity: false },
   );
   const envFilePath = explicitEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
+  // Preserve why this credential file won. A session sourced from USERBOT_SESSION
+  // inside a monitor-bound env file is still monitor-owned even though the
+  // session selector itself reports "env-file".
+  const envFileSource: TelegramUserBackendMeta["env_file_source"] = explicitEnvFile
+    ? "explicit"
+    : binding?.envFile
+      ? "monitor-binding"
+      : "runtime-default";
   const loadedEnv = await loadScopedEnvFile(envFilePath);
   const sessionSelection = resolveTelegramUserSessionSelection({
     explicitSession: options.session,
@@ -587,14 +596,25 @@ async function resolveTelegramUserBackendSelection(
     env: runtimeEnv,
     loadedEnv,
   });
-  return { envFilePath, loadedEnv, sessionPath: sessionSelection.sessionPath, sessionSelection };
+  return {
+    envFilePath,
+    envFileSource,
+    loadedEnv,
+    sessionPath: sessionSelection.sessionPath,
+    sessionSelection,
+  };
 }
 
 export async function resolveTelegramUserBackendSelectors(
   options: TelegramUserBackendOptions,
-): Promise<{ envFilePath: string; sessionPath: string }> {
-  const { envFilePath, sessionPath } = await resolveTelegramUserBackendSelection(options);
-  return { envFilePath, sessionPath };
+): Promise<{
+  envFilePath: string;
+  envFileSource: TelegramUserBackendMeta["env_file_source"];
+  sessionPath: string;
+}> {
+  const { envFilePath, envFileSource, sessionPath } =
+    await resolveTelegramUserBackendSelection(options);
+  return { envFilePath, envFileSource, sessionPath };
 }
 
 export function resolveTelegramUserLockSelection(params: {
@@ -625,7 +645,7 @@ async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<Bac
   // Credential values and USERBOT_SESSION must come from one file snapshot.
   // Re-reading after selector resolution could pair credentials from a replaced
   // env file with the previous account's resolved session path.
-  const { envFilePath, loadedEnv, sessionPath, sessionSelection } =
+  const { envFilePath, envFileSource, loadedEnv, sessionPath, sessionSelection } =
     await resolveTelegramUserBackendSelection(options);
   const lockSelection = resolveTelegramUserLockSelection({
     env: process.env,
@@ -643,6 +663,7 @@ async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<Bac
       api_hash_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_HASH"),
       api_id_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_ID"),
       env_file: envFilePath,
+      env_file_source: envFileSource,
       lock_scope: lockSelection.scope,
       session_source: sessionSelection.source,
       session_path: sessionPath,

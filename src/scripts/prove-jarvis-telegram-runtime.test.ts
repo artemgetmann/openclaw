@@ -27,7 +27,14 @@ function fixture(
     hostileBackendMeta?: boolean;
     inexactReply?: boolean;
     lockOwnerWriteFailure?: "empty" | "partial";
-    precheckSessionSource?: "env-file" | "machine-default" | "monitor-binding" | "state-default";
+    precheckEnvFileSource?: "monitor-binding" | "runtime-default";
+    precheckSessionSource?:
+      | "env-file"
+      | "machine-default"
+      | "monitor-binding"
+      | "process-env"
+      | "state-default";
+    useCustomBoundEnvFile?: boolean;
   } = {},
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-managed-proof-test-"));
@@ -44,7 +51,9 @@ function fixture(
   const runtimeState = path.join(root, "runtime-state.json");
   const lock = path.join(root, "machine-lock");
   const packagedSession = path.join(stateDir, "telegram-user", "userbot.session");
-  const packagedEnvFile = path.join(stateDir, "telegram-user", ".env.local");
+  const packagedEnvFile = options.useCustomBoundEnvFile
+    ? path.join(stateDir, "telegram-user", "monitor.env")
+    : path.join(stateDir, "telegram-user", ".env.local");
   const staleLegacySession = path.join(home, ".openclaw", "telegram-user", "userbot.session");
   fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
   fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
@@ -119,6 +128,7 @@ const operatorEnvFile = ${JSON.stringify(packagedEnvFile)};
 const managedConfig = ${JSON.stringify(path.join(stateDir, "openclaw.json"))};
 const backendMeta = (explicit) => ({
   env_file:operatorEnvFile,
+  env_file_source:explicit ? "explicit" : ${JSON.stringify(options.precheckEnvFileSource ?? "runtime-default")},
   session_path:${options.hostileBackendMeta ? JSON.stringify(path.join(root, "hostile-meta.session")) : "operatorSession"},
   session_source:explicit ? "explicit" : ${JSON.stringify(options.precheckSessionSource ?? "monitor-binding")},
   lock_scope:${options.hostileBackendMeta ? '"explicit"' : '"machine"'},
@@ -402,6 +412,7 @@ describe("prove-jarvis-telegram-runtime", () => {
           "telegram-user",
           ".env.local",
         ),
+        envFileSource: "runtime-default",
         sessionPath: path.join(
           testFixture.home,
           "Library",
@@ -470,6 +481,34 @@ describe("prove-jarvis-telegram-runtime", () => {
       expect(args).toContain("--env-file");
     }
   });
+
+  it.each([
+    ["env-file session", "env-file"],
+    ["state-default session", "state-default"],
+  ] as const)(
+    "accepts a monitor-bound custom env file with a %s and pins it before mutations",
+    (_label, precheckSessionSource) => {
+      const testFixture = fixture({
+        precheckEnvFileSource: "monitor-binding",
+        precheckSessionSource,
+        useCustomBoundEnvFile: true,
+      });
+      const result = execute(testFixture);
+      const evidence = JSON.parse(result.stdout);
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(evidence.operatorSession.verifiedBackend).toMatchObject({
+        envFileSource: "monitor-binding",
+        sessionSource: precheckSessionSource,
+      });
+      for (const args of callsFor(testFixture).filter(
+        (args) => args[0] === "telegram-user" && args[1] !== "precheck",
+      )) {
+        expect(args).toContain("--session");
+        expect(args).toContain("--env-file");
+      }
+    },
+  );
 
   it("rejects malformed short runtime commit provenance", () => {
     const testFixture = fixture({ gateRuntimeCommit: "3" });
@@ -618,7 +657,7 @@ describe("prove-jarvis-telegram-runtime", () => {
     expect(calls.filter((args) => args[1] === "topic-create")).toEqual([]);
   });
 
-  it.each(["machine-default", "env-file"] as const)(
+  it.each(["machine-default", "process-env"] as const)(
     "rejects legacy %s session ownership before topic mutation",
     (precheckSessionSource) => {
       const testFixture = fixture({ precheckSessionSource });
@@ -632,6 +671,7 @@ describe("prove-jarvis-telegram-runtime", () => {
       );
       expect(calls.filter((args) => args[1] === "precheck")).toHaveLength(1);
       expect(calls.filter((args) => args[1] === "topic-create")).toEqual([]);
+      expect(fs.existsSync(testFixture.lock)).toBe(false);
     },
   );
 
