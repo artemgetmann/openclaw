@@ -262,6 +262,12 @@ unique prompt token, bot username, token fingerprint, message IDs, and the
 relevant send path lines, including `sendRichMessage ok` when rich Telegram
 rendering is under test.
 
+Consumer model-choice changes are the exception: after the changed runtime is
+deployed, release acceptance requires opening Telegram `/model` and recording
+the visible model labels plus the selected callback result. Unit tests prove
+the shared registry contract; they do not prove that the deployed bot is using
+the new picker.
+
 For the daily managed Jarvis bot, use the separate serialized canary lane only
 after merge, deployment, and fresh approval:
 

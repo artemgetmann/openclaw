@@ -149,6 +149,22 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
     ]);
   });
 
+  it("pins the bundled Open Computer Use artifact to the merged handshake fix", () => {
+    const output = execFileSync(process.execPath, [manifestScript, path.join(root, "skills")], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+    const artifact = parsed.packagedArtifacts.find(
+      (candidate: { id?: string }) => candidate.id === "open-computer-use",
+    );
+
+    expect(artifact).toMatchObject({
+      skillName: "jarvis-computer-use",
+      sourceRepo: "https://github.com/artemgetmann/open-codex-computer-use.git",
+      sourceRef: "658d72ad5cfbab60bfb477a8b54fcac9dd659121",
+    });
+  });
+
   it("rejects unsafe release artifact paths", () => {
     const skillsRoot = makeTempRoot();
     writeSkill({

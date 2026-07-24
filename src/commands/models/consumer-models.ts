@@ -3,6 +3,10 @@ import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { modelKey, parseModelRef } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import {
+  CONSUMER_CHATGPT_MODEL_REGISTRY,
+  formatConsumerChatGptModelId,
+} from "../../consumer/model-registry.js";
 import { resolveModelsReadiness, type ModelsReadinessResult } from "./readiness.js";
 import { applyDefaultModelPrimaryUpdate, loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
@@ -42,19 +46,18 @@ export type ApplyConsumerModelResult = {
   readiness: ModelsReadinessResult;
 };
 
+const CONSUMER_CHATGPT_MODEL_SHORTLIST: readonly ConsumerModelDefinition[] =
+  CONSUMER_CHATGPT_MODEL_REGISTRY.flatMap((choice) =>
+    choice.refs.map((ref) => ({
+      id: formatConsumerChatGptModelId(ref),
+      title: choice.label,
+      detail: ref.detail,
+      family: ref.provider,
+    })),
+  );
+
 const CONSUMER_MODEL_SHORTLIST: readonly ConsumerModelDefinition[] = [
-  {
-    id: "openai-codex/gpt-5.6-sol",
-    title: "GPT-5.6 Sol",
-    detail: "Primary ChatGPT / Codex path for consumer managed AI.",
-    family: "openai-codex",
-  },
-  {
-    id: "openai/gpt-5.6-sol",
-    title: "GPT-5.6 Sol",
-    detail: "Direct OpenAI API path when you are using an API key.",
-    family: "openai",
-  },
+  ...CONSUMER_CHATGPT_MODEL_SHORTLIST,
   {
     id: "anthropic/claude-sonnet-4-6",
     title: "Claude Sonnet 4.6",
