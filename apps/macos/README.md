@@ -614,7 +614,7 @@ accepted and existing `dist/Jarvis.app`, `dist/Jarvis.zip`, and
 as a fresh-install/sendable release:
 
 ```bash
-bash scripts/preflight-consumer-mac-release.sh
+bash scripts/preflight-consumer-mac-release.sh --host-context
 bash scripts/jarvis-public-release.sh \
   --authorize \
   --urgent-sparkle \
@@ -637,7 +637,7 @@ accepted and existing `dist/Jarvis.dmg`, `dist/Jarvis.zip`, and
 `dist/jarvis-appcast.xml` are present:
 
 ```bash
-bash scripts/preflight-consumer-mac-release.sh
+bash scripts/preflight-consumer-mac-release.sh --host-context
 bash scripts/jarvis-public-release.sh \
   --authorize \
   --publish-release-assets \

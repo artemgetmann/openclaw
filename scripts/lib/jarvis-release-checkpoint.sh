@@ -119,6 +119,11 @@ openclaw_jarvis_release_checkpoint_verify_notarized() {
     OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE="staple"
     return 1
   }
+  OPENCLAW_MACOS_GATEKEEPER_SPCTL_BIN="$spctl_bin" \
+    openclaw_macos_gatekeeper_require || {
+      OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE="gatekeeper-indeterminate"
+      return 2
+    }
   case "$artifact_kind" in
     app)
       "$spctl_bin" -a -vv "$artifact_path" >/dev/null 2>&1 || {

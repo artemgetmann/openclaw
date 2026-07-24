@@ -515,6 +515,8 @@ verify_dmg_gatekeeper() {
     return 0
   fi
 
+  openclaw_macos_gatekeeper_require || return 2
+
   # `notarytool` proves Apple's service accepted the artifact; `spctl` proves
   # the exact local DMG now carries a Gatekeeper-accepted signature/staple.
   local spctl_output
@@ -1278,6 +1280,12 @@ create_local_release_assets_only() {
 report_local_release_assets_next_phase() {
   local dmg_receipt
   local next_phase="submit-dmg-notarization"
+
+  # A restricted trust view cannot safely recommend a DMG resubmission.
+  OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN:-/usr/bin/codesign}" \
+    openclaw_macos_host_trust_require || return 2
+  OPENCLAW_MACOS_GATEKEEPER_SPCTL_BIN="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN:-/usr/sbin/spctl}" \
+    openclaw_macos_gatekeeper_require || return 2
 
   dmg_receipt="$(dmg_notary_receipt_path)"
   if openclaw_jarvis_release_checkpoint_validate \

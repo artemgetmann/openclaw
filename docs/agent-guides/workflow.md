@@ -150,7 +150,7 @@ ready, and exactly what should happen next.
 
 - `ALLOW_COLD_RELEASE_LANE=1` is an emergency override for the prewarm proof
   only. It does not allow public Jarvis packaging from any other worktree.
-- Use `bash scripts/preflight-consumer-mac-release.sh` for the read-only
+- Use `bash scripts/preflight-consumer-mac-release.sh --host-context` for the read-only
   consumer macOS release credential check before a notarized Jarvis lane.
 - The default notarization path is App Store Connect API-key auth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` from

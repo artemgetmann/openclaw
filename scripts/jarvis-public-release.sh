@@ -321,6 +321,11 @@ select_checkpoint_safe_phase() {
     printf '%s\n' "host-trust-indeterminate"
     return 0
   fi
+  if ! OPENCLAW_MACOS_GATEKEEPER_SPCTL_BIN="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN:-/usr/sbin/spctl}" \
+    openclaw_macos_gatekeeper_require; then
+    printf '%s\n' "host-trust-indeterminate"
+    return 0
+  fi
 
   # Resume state flows only from strict artifact checkpoints. The manifest is
   # intentionally absent from this decision: Accepted text plus file existence
