@@ -561,15 +561,32 @@ type TelegramUserBackendSelection = {
 async function resolveTelegramUserBackendSelection(
   options: TelegramUserBackendOptions,
 ): Promise<TelegramUserBackendSelection> {
-  const explicitEnvFile = normalizeTelegramUserMonitorSelector(options.envFile);
   // Service installation canonicalizes consumer profiles into their app-owned
   // state roots. Backend calls must use the same identity or they silently read
   // a different binding file from the raw shell profile state.
   const runtimeEnv = resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv;
+  // Detached tester gateways may execute the Telegram-user skill through an
+  // installed OpenClaw runtime. The managed child-process selectors pin that
+  // invocation to the owning worktree independently of the installed tooling
+  // root. A direct CLI option remains the highest-precedence override.
+  const callerEnvFile = normalizeTelegramUserMonitorSelector(options.envFile);
+  const managedEnvFile = normalizeTelegramUserMonitorSelector(
+    runtimeEnv.OPENCLAW_TELEGRAM_USER_ENV_FILE,
+  );
+  const selectedEnvFile = callerEnvFile ?? managedEnvFile;
+  const callerSession = normalizeTelegramUserMonitorSelector(options.session);
+  const managedSession = normalizeTelegramUserMonitorSelector(
+    runtimeEnv.OPENCLAW_TELEGRAM_USER_SESSION,
+  );
+  const selectedSession =
+    callerSession ??
+    // A caller-selected env file is a complete credential context. Its own
+    // USERBOT_SESSION must beat an ambient managed lane selector.
+    (callerEnvFile ? undefined : managedSession);
   // An explicit env file is a complete credential context. Do not even read a
   // damaged persisted binding first: it cannot influence this invocation and
   // must not make an explicit recovery command unusable.
-  const binding = explicitEnvFile ? null : await readTelegramUserMonitorBinding(runtimeEnv);
+  const binding = selectedEnvFile ? null : await readTelegramUserMonitorBinding(runtimeEnv);
   // Env-file discovery is independent from session ownership. Delay the
   // implicit-session ambiguity check until after --session/binding/env selectors
   // have had a chance to win in resolveTelegramUserSessionSelection.
@@ -577,23 +594,23 @@ async function resolveTelegramUserBackendSelection(
     runtimeEnv,
     { checkSessionAmbiguity: false },
   );
-  const envFilePath = explicitEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
+  const envFilePath = selectedEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
   // Preserve why this credential file won. A session sourced from USERBOT_SESSION
   // inside a monitor-bound env file is still monitor-owned even though the
   // session selector itself reports "env-file".
-  const envFileSource: TelegramUserBackendMeta["env_file_source"] = explicitEnvFile
+  const envFileSource: TelegramUserBackendMeta["env_file_source"] = selectedEnvFile
     ? "explicit"
     : binding?.envFile
       ? "monitor-binding"
       : "runtime-default";
   const loadedEnv = await loadScopedEnvFile(envFilePath);
   const sessionSelection = resolveTelegramUserSessionSelection({
-    explicitSession: options.session,
+    explicitSession: selectedSession,
     // An explicit env file selects a complete credential context. Its
     // USERBOT_SESSION (or the normal fallback) must not inherit a stale session
     // from a different monitor-service binding.
-    boundSession: explicitEnvFile ? undefined : binding?.session,
-    env: runtimeEnv,
+    boundSession: selectedEnvFile ? undefined : binding?.session,
+    env: callerEnvFile ? { ...runtimeEnv, OPENCLAW_TELEGRAM_USER_SESSION: undefined } : runtimeEnv,
     loadedEnv,
   });
   return {

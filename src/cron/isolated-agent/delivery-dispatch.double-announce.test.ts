@@ -92,6 +92,7 @@ function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
   runSessionId?: string;
+  runStartedAt?: number;
   deliveryPayloads?: Array<{ text?: string; channelData?: Record<string, unknown> }>;
 }) {
   const resolvedDelivery = makeResolvedDelivery();
@@ -108,7 +109,7 @@ function makeBaseParams(overrides: {
     agentId: "main",
     agentSessionKey: "agent:main",
     runSessionId: overrides.runSessionId ?? "run-123",
-    runStartedAt: Date.now(),
+    runStartedAt: overrides.runStartedAt ?? Date.now(),
     runEndedAt: Date.now(),
     timeoutMs: 30_000,
     resolvedDelivery,
@@ -322,6 +323,32 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.delivered).toBe(true);
     expect(second.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers distinct wakes for one durable session while deduping replay of one wake", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const firstWake = makeBaseParams({
+      runSessionId: "durable-monitor-session",
+      runStartedAt: 1_000,
+      synthesizedText: "First monitor wake.",
+    });
+    const secondWake = makeBaseParams({
+      runSessionId: "durable-monitor-session",
+      runStartedAt: 2_000,
+      synthesizedText: "Second monitor wake.",
+    });
+
+    const first = await dispatchCronDelivery(firstWake);
+    const second = await dispatchCronDelivery(secondWake);
+    const replay = await dispatchCronDelivery(secondWake);
+
+    expect(first.delivered).toBe(true);
+    expect(second.delivered).toBe(true);
+    expect(replay.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
   it("prunes the completed-delivery cache back to the entry cap", async () => {
