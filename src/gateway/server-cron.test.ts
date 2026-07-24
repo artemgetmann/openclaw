@@ -401,12 +401,6 @@ describe("buildGatewayCronService", () => {
         instructions,
         sourceType: "whatsapp",
         sourceTarget: watchedTarget,
-        watchDelivery: {
-          mode: "announce",
-          channel: "whatsapp",
-          to: watchedTarget.target,
-          accountId: watchedTarget.accountId,
-        },
         cadence,
         expiryAt,
         actionPolicy: "notify_draft",
@@ -790,7 +784,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("routes auto_send monitor wakes through the shared runtime seam with a watched message target", async () => {
+  it("keeps legacy WhatsApp auto_send wakes cron-owned after a safe CLI send", async () => {
     const cfg = createCronConfig("server-cron-monitor-auto-send");
     loadConfigMock.mockReturnValue(cfg);
 
@@ -842,25 +836,20 @@ describe("buildGatewayCronService", () => {
       expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:monitor:monitor-auto-send",
-          deliveryContract: "shared",
-          deliveryPromptMode: "reply",
-          messageToolTarget: {
-            channel: "whatsapp",
-            to: "74333133234289@lid",
-            accountId: undefined,
-            requireExplicitTarget: false,
-          },
+          deliveryContract: "cron-owned",
+          deliveryPromptMode: "summary",
           job: expect.objectContaining({
             delivery: expect.objectContaining({
               mode: "announce",
-              channel: "whatsapp",
-              to: "74333133234289@lid",
+              channel: "telegram",
+              to: "user-1",
             }),
           }),
-          message: expect.stringContaining(
-            "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
-          ),
+          message: expect.stringContaining("use the wacli skill/CLI"),
         }),
+      );
+      expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).not.toHaveProperty(
+        "messageToolTarget",
       );
       expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
         expect.objectContaining({

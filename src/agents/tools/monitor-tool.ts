@@ -153,7 +153,7 @@ Key behavior:
 For monitor creation:
 - instructions should capture the actual monitoring task in plain language.
 - if there is an active goal, monitor.create will bind it automatically and use supported event adapters as wake triggers; pass goal only when carrying an explicit snapshot. Let the gateway derive that binding instead of supplying a schedule-only trigger; for sourceType=telegram-user, the supported event adapter is the local listener.
-- sourceType/sourceTarget identify what is being checked. For a Telegram-as-me watch, use sourceType=telegram-user and put the exact Telegram chat id or handle in sourceTarget.chat; omit watchDelivery because that source target already resolves the watched conversation.
+- sourceType/sourceTarget identify what is being checked. For a Telegram-as-me watch, use sourceType=telegram-user and put the exact Telegram chat id or handle in sourceTarget.chat; omit watchDelivery because that source target already resolves the watched conversation. For a WhatsApp-as-me watch, use sourceType=whatsapp and put the exact JID or phone target in sourceTarget.target; wacli owns reads and safe sends, so omit watchDelivery there too.
 - Jarvis must disclose the purpose/source, exact check cadence, no-change notice cadence, expiry, stop condition, and autonomy/action level when creating a monitor. monitor.create returns the normalized stored disclosure; use that returned contract instead of paraphrasing hidden defaults.
 - cadence is the cron schedule object for repeated wakes. Poll cadence is independent from notification cadence.
 - successful unchanged checks 1-2 are silent, check 3 produces one useful notice, then unchanged reminders are limited to once per 12 hours until a material change resets the sequence.

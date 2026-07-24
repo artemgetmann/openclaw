@@ -77,4 +77,22 @@ describe("monitor bootstrap contract", () => {
     expect(prompt).toContain("notificationEvent set to unchanged");
     expect(prompt).toContain("deadline_passed");
   });
+
+  it("guides WhatsApp auto_send monitors through one safe wacli send", () => {
+    const prompt = buildMonitorBootstrapPrompt({
+      instructions: "Coordinate the exact allowed dinner time with this friend.",
+      sourceType: "whatsapp",
+      sourceTarget: { target: "74333133234289@lid" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "auto_send",
+      watchDeliveryConfigured: true,
+      originSessionKey: "agent:main:telegram:direct:user-1",
+    });
+
+    expect(prompt).toContain("WhatsApp-as-me watched-surface delivery is authorized");
+    expect(prompt).toContain("use the wacli skill/CLI");
+    expect(prompt).toContain("safe-send helper");
+    expect(prompt).toContain("After a successful WhatsApp-as-me send");
+    expect(prompt).toContain("return exactly NO_REPLY");
+  });
 });
