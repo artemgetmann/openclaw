@@ -5,8 +5,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   readCompletedTelegramSafeReuseFence,
+  readTelegramSafeReuseFenceState,
   resolveTelegramSafeReuseFenceRequest,
   writeCompletedTelegramSafeReuseFence,
+  writePendingTelegramSafeReuseFence,
 } from "./safe-reuse-fence-store.js";
 
 describe("Telegram safe-reuse fence receipt", () => {
@@ -129,6 +131,40 @@ describe("Telegram safe-reuse fence receipt", () => {
         env,
       }),
     ).resolves.toEqual({ lastUpdateId: 900 });
+  });
+
+  it("returns a pending tail even when its cutoff was not persisted before the crash", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "tg-safe-reuse-pending-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    await writePendingTelegramSafeReuseFence({
+      accountId: "default",
+      botToken: "12345:first",
+      generation: "generation-123",
+      lastUpdateId: 900,
+      env,
+    });
+
+    // Pending is a write-ahead record, not proof that the cutoff is active.
+    // Recovery must receive its exact tail and make the cutoff durable before
+    // replacing this record with a completion receipt.
+    await expect(
+      readTelegramSafeReuseFenceState({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        env,
+      }),
+    ).resolves.toEqual({ phase: "pending", lastUpdateId: 900 });
+    await expect(
+      readCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        env,
+      }),
+    ).resolves.toBeNull();
   });
 
   it("preserves a completed generation when ACP intentionally ignores the cursor", async () => {

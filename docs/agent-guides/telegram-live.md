@@ -143,6 +143,9 @@ erasure.
   dispatch. Its receipt is scoped to token hash, account, and reservation
   generation, so old pending updates cannot reach another full-parity tester
   runtime while same-scenario restarts do not repeatedly discard new messages.
+  The observed tail is recorded as pending before cutoff persistence; a crash
+  during completion replays that exact cutoff without rereading Telegram's
+  mutable tail.
   Safe-reuse generations fail closed in webhook mode until an equivalent
   pre-dispatch webhook fence exists.
 - Worktree tester baselines strip inherited Telegram secrets on purpose. If the

@@ -111,7 +111,12 @@ type TelegramPollingSessionOpts = {
   persistUpdateId: (updateId: number) => Promise<void>;
   safeReuseFence?: {
     generation: string;
-    resolveCompletion: () => Promise<{ recreateBot: boolean } | null>;
+    resolveState: () => Promise<{
+      phase: "pending" | "complete";
+      lastUpdateId: number | null;
+      recreateBot: boolean;
+    } | null>;
+    markPending: (lastUpdateId: number | null) => Promise<void>;
     persistCutoff: (lastUpdateId: number | null) => Promise<void>;
     markComplete: (lastUpdateId: number | null) => Promise<void>;
   };
@@ -359,10 +364,23 @@ export class TelegramPollingSession {
       if (this.#safeReuseFenceCompleted) {
         return "ready";
       }
-      const completion = await fence.resolveCompletion();
-      if (completion) {
+      const state = await fence.resolveState();
+      if (state?.phase === "complete") {
         this.#safeReuseFenceCompleted = true;
-        return completion.recreateBot ? "recreate" : "ready";
+        return state.recreateBot ? "recreate" : "ready";
+      }
+      if (state?.phase === "pending") {
+        // The prior process already consumed Telegram's negative-offset tail
+        // but died before committing the completion receipt. Finish that exact
+        // recorded transaction; rereading the mutable tail here could advance
+        // the cutoff past messages sent by the current scenario.
+        await fence.persistCutoff(state.lastUpdateId);
+        await fence.markComplete(state.lastUpdateId);
+        this.#safeReuseFenceCompleted = true;
+        this.opts.log(
+          `[telegram] Recovered pending safe-reuse backlog fence for reservation generation ${fence.generation}.`,
+        );
+        return "recreate";
       }
       const updates = await withTelegramApiErrorLogging({
         operation: "getUpdates",
@@ -387,11 +405,14 @@ export class TelegramPollingSession {
         lastUpdateId =
           lastUpdateId === null ? Number(updateId) : Math.max(lastUpdateId, Number(updateId));
       }
+      // Write the observed tail before changing the local cutoff. This is the
+      // transaction's recovery point: any later crash can replay the recorded
+      // cutoff without another destructive negative-offset Telegram read.
+      await fence.markPending(lastUpdateId);
       await fence.persistCutoff(lastUpdateId);
       // The durable receipt is written only after Telegram acknowledges the
-      // negative-offset tail read and the local cutoff is durable. A crash
-      // before this line repeats the transport-only fence; a crash afterward
-      // resumes the same scenario without dropping newer messages.
+      // negative-offset tail read and the local cutoff is durable. The pending
+      // receipt above makes the gap between those two durable writes recoverable.
       await fence.markComplete(lastUpdateId);
       this.#safeReuseFenceCompleted = true;
       this.opts.log(

@@ -12,14 +12,28 @@ const SAFE_REUSE_ACCOUNT_ID_ENV = "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID";
 const TESTER_RESERVATION_ROOT_ENV = "OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT";
 const TESTER_SCENARIO_ID_ENV = "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID";
 
-type TelegramSafeReuseFenceReceipt = {
+type TelegramSafeReuseFenceReceiptBase = {
   version: 1;
   generation: string;
   tokenHash: string;
   accountId: string;
-  completedAt: string;
   lastUpdateId: number | null;
 };
+
+type TelegramSafeReuseFenceReceipt =
+  | (TelegramSafeReuseFenceReceiptBase & {
+      phase: "pending";
+      pendingAt: string;
+    })
+  | (TelegramSafeReuseFenceReceiptBase & {
+      phase: "complete";
+      completedAt: string;
+    });
+
+export type TelegramSafeReuseFenceState = Pick<
+  TelegramSafeReuseFenceReceipt,
+  "lastUpdateId" | "phase"
+>;
 
 function normalizeAccountId(accountId?: string): string {
   const value = accountId?.trim() || "default";
@@ -104,34 +118,57 @@ export function resolveTelegramSafeReuseFenceRequest(params: {
 
 function parseReceipt(raw: string): TelegramSafeReuseFenceReceipt | null {
   try {
-    const parsed = JSON.parse(raw) as Partial<TelegramSafeReuseFenceReceipt>;
+    const parsed = JSON.parse(raw) as Partial<TelegramSafeReuseFenceReceipt> & {
+      completedAt?: unknown;
+      pendingAt?: unknown;
+      phase?: unknown;
+    };
+    // Receipts written before the pending transaction existed had no explicit
+    // phase. They were complete by construction, so preserve their restart
+    // semantics while requiring all newly written receipts to name the phase.
+    const phase = parsed.phase === undefined ? "complete" : parsed.phase;
+    const phaseTimestamp =
+      phase === "pending"
+        ? parsed.pendingAt
+        : phase === "complete"
+          ? parsed.completedAt
+          : undefined;
     if (
       parsed.version !== STORE_VERSION ||
       typeof parsed.generation !== "string" ||
       typeof parsed.tokenHash !== "string" ||
       !/^[a-f0-9]{64}$/u.test(parsed.tokenHash) ||
       typeof parsed.accountId !== "string" ||
-      typeof parsed.completedAt !== "string" ||
-      !Number.isFinite(Date.parse(parsed.completedAt)) ||
+      typeof phaseTimestamp !== "string" ||
+      !Number.isFinite(Date.parse(phaseTimestamp)) ||
       (parsed.lastUpdateId !== null &&
         (!Number.isSafeInteger(parsed.lastUpdateId) || Number(parsed.lastUpdateId) < 0))
     ) {
       return null;
     }
-    return parsed as TelegramSafeReuseFenceReceipt;
+    return {
+      version: STORE_VERSION,
+      generation: parsed.generation,
+      tokenHash: parsed.tokenHash,
+      accountId: parsed.accountId,
+      lastUpdateId: parsed.lastUpdateId ?? null,
+      ...(phase === "pending"
+        ? { phase, pendingAt: phaseTimestamp }
+        : { phase, completedAt: phaseTimestamp }),
+    } as TelegramSafeReuseFenceReceipt;
   } catch {
     return null;
   }
 }
 
-export async function readCompletedTelegramSafeReuseFence(params: {
+export async function readTelegramSafeReuseFenceState(params: {
   accountId?: string;
   botToken: string;
   generation: string;
   persistedLastUpdateId: number | null;
   persistedOffsetIgnored?: boolean;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ lastUpdateId: number | null } | null> {
+}): Promise<TelegramSafeReuseFenceState | null> {
   const tokenHash = hashToken(params.botToken);
   const accountId = normalizeAccountId(params.accountId);
   try {
@@ -154,12 +191,19 @@ export async function readCompletedTelegramSafeReuseFence(params: {
     if (!matchesOwner) {
       return null;
     }
+    // Pending is a write-ahead record of the exact Telegram tail already read.
+    // It is recoverable even if the process died before writing the cutoff:
+    // the caller must persist this recorded cutoff and complete the transaction
+    // without issuing another negative-offset read.
+    if (receipt.phase === "pending") {
+      return { phase: "pending", lastUpdateId: receipt.lastUpdateId };
+    }
     // ACP continuity validation deliberately disables the local skip cursor so
     // a fresh post-restart probe can be ingested. Return the reservation
     // fence's own cutoff so the caller can restore that minimum safety boundary
     // in memory without restoring later ordinary progress offsets.
     if (params.persistedOffsetIgnored) {
-      return { lastUpdateId: receipt.lastUpdateId };
+      return { phase: "complete", lastUpdateId: receipt.lastUpdateId };
     }
     // A non-empty tail is safe only while its durable cutoff is still active.
     // Missing or rewound state must repeat the transport-only fence instead of
@@ -168,7 +212,7 @@ export async function readCompletedTelegramSafeReuseFence(params: {
       receipt.lastUpdateId === null ||
       (params.persistedLastUpdateId !== null &&
         params.persistedLastUpdateId >= receipt.lastUpdateId);
-    return cutoffIsActive ? { lastUpdateId: receipt.lastUpdateId } : null;
+    return cutoffIsActive ? { phase: "complete", lastUpdateId: receipt.lastUpdateId } : null;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -177,14 +221,14 @@ export async function readCompletedTelegramSafeReuseFence(params: {
   }
 }
 
-export async function writeCompletedTelegramSafeReuseFence(params: {
-  accountId?: string;
-  botToken: string;
-  generation: string;
-  lastUpdateId: number | null;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const tokenHash = hashToken(params.botToken);
+export async function readCompletedTelegramSafeReuseFence(
+  params: Parameters<typeof readTelegramSafeReuseFenceState>[0],
+): Promise<{ lastUpdateId: number | null } | null> {
+  const state = await readTelegramSafeReuseFenceState(params);
+  return state?.phase === "complete" ? { lastUpdateId: state.lastUpdateId } : null;
+}
+
+function validateFenceWrite(params: { generation: string; lastUpdateId: number | null }): void {
   if (!isValidGeneration(params.generation)) {
     throw new Error("Cannot persist Telegram safe-reuse fence for malformed bot identity.");
   }
@@ -194,12 +238,25 @@ export async function writeCompletedTelegramSafeReuseFence(params: {
   ) {
     throw new Error("Cannot persist Telegram safe-reuse fence with an invalid update id.");
   }
+}
+
+async function writeTelegramSafeReuseFenceReceipt(params: {
+  accountId?: string;
+  botToken: string;
+  generation: string;
+  lastUpdateId: number | null;
+  phase: "pending" | "complete";
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  validateFenceWrite(params);
+  const tokenHash = hashToken(params.botToken);
   const accountId = normalizeAccountId(params.accountId);
   const filePath = receiptPath({
     accountId: params.accountId,
     tokenHash,
     env: params.env ?? process.env,
   });
+  const timestamp = new Date().toISOString();
   await writeJsonAtomic(
     filePath,
     {
@@ -207,8 +264,10 @@ export async function writeCompletedTelegramSafeReuseFence(params: {
       generation: params.generation,
       tokenHash,
       accountId,
-      completedAt: new Date().toISOString(),
       lastUpdateId: params.lastUpdateId,
+      ...(params.phase === "pending"
+        ? { phase: "pending", pendingAt: timestamp }
+        : { phase: "complete", completedAt: timestamp }),
     } satisfies TelegramSafeReuseFenceReceipt,
     {
       mode: 0o600,
@@ -216,4 +275,24 @@ export async function writeCompletedTelegramSafeReuseFence(params: {
       ensureDirMode: 0o700,
     },
   );
+}
+
+export async function writePendingTelegramSafeReuseFence(params: {
+  accountId?: string;
+  botToken: string;
+  generation: string;
+  lastUpdateId: number | null;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  await writeTelegramSafeReuseFenceReceipt({ ...params, phase: "pending" });
+}
+
+export async function writeCompletedTelegramSafeReuseFence(params: {
+  accountId?: string;
+  botToken: string;
+  generation: string;
+  lastUpdateId: number | null;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  await writeTelegramSafeReuseFenceReceipt({ ...params, phase: "complete" });
 }

@@ -587,11 +587,13 @@ New reservation generations also run a transport-only backlog fence before
 the runner or any model dispatch starts. Telegram's negative offset forgets earlier queued
 updates; the returned tail ID is persisted as the local skip cutoff, and a
 receipt scoped to token hash, account, and reservation generation prevents
-repeated fencing on same-scenario restart. Webhook startup fails closed while this fence is
-required because no equivalent webhook cutoff exists yet. This changes
-ownership/cursor safety only: the tester
-runtime still inherits the main runtime's browser, email, WhatsApp, messaging,
-plugin, and tool capabilities.
+repeated fencing on same-scenario restart. The tail ID is first written as
+pending, so a crash during cutoff/receipt completion replays that recorded
+cutoff without rereading Telegram's mutable tail. Webhook startup fails closed
+while this fence is required because no equivalent webhook cutoff exists yet.
+This changes ownership/cursor safety only: the tester runtime still inherits the
+main runtime's browser, email, WhatsApp, messaging, plugin, and tool
+capabilities.
 
 ### Tester parity note (important)
 
