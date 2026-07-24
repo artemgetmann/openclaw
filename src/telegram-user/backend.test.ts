@@ -407,4 +407,65 @@ describe("telegram-user backend defaults", () => {
       sessionPath: path.join(stateDir, "flag.session"),
     });
   });
+
+  it("turns a killed backend send into an explicit unknown-delivery timeout", async () => {
+    const { parseTelegramUserBackendExecError } = await import("./backend.js");
+    const processError = Object.assign(new Error("Command failed"), {
+      killed: true,
+      signal: "SIGTERM",
+      stderr: "",
+    });
+
+    const parsed = parseTelegramUserBackendExecError(processError, {
+      command: "send",
+      env: {} as NodeJS.ProcessEnv,
+      meta: {
+        api_hash_source: "missing",
+        api_id_source: "missing",
+        env_file: "/tmp/telegram.env",
+        lock_scope: "machine",
+        session_path: "/tmp/telegram.session",
+        session_source: "explicit",
+      },
+      timeoutMs: 60_000,
+    });
+
+    expect(parsed.message).toContain("E_BACKEND_TIMEOUT");
+    expect(parsed.message).toContain("delivery state is unknown");
+    expect(parsed.message).toContain("read the target chat before retrying");
+  });
+
+  it("treats every mutating backend timeout as indeterminate", async () => {
+    const { parseTelegramUserBackendExecError } = await import("./backend.js");
+    const processError = Object.assign(new Error("Command failed"), {
+      killed: true,
+      signal: "SIGTERM",
+      stderr: "",
+    });
+    const meta = {
+      api_hash_source: "missing" as const,
+      api_id_source: "missing" as const,
+      env_file: "/tmp/telegram.env",
+      lock_scope: "machine" as const,
+      session_path: "/tmp/telegram.session",
+      session_source: "explicit" as const,
+    };
+
+    const topicCreate = parseTelegramUserBackendExecError(processError, {
+      command: "topic-create",
+      env: {} as NodeJS.ProcessEnv,
+      meta,
+      timeoutMs: 60_000,
+    });
+    const read = parseTelegramUserBackendExecError(processError, {
+      command: "read",
+      env: {} as NodeJS.ProcessEnv,
+      meta,
+      timeoutMs: 60_000,
+    });
+
+    expect(topicCreate.message).toContain("state is unknown");
+    expect(topicCreate.message).toContain("Inspect current state before retrying");
+    expect(read.message).toContain("may be retried");
+  });
 });
