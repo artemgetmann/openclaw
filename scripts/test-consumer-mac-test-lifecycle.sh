@@ -64,6 +64,7 @@ make_test_app() {
 }
 
 export OPENCLAW_CONSUMER_TEST_REGISTRY_PATH="$TMP_DIR/registry/current.tsv"
+export OPENCLAW_CONSUMER_PARALLEL_TEST_REGISTRY_DIR="$TMP_DIR/registry/parallel"
 
 PRODUCTION_APP="/Applications/Jarvis.app"
 OLD_APP="$TMP_DIR/Jarvis (old-proof).app"
@@ -168,6 +169,16 @@ if consumer_mac_test_prepare_parallel_launch "parallel-c" "$PARALLEL_C" 0 >/dev/
 fi
 unset OPENCLAW_CONSUMER_PARALLEL_TEST_MAX
 pass "allows bounded parallel testers with unique isolated instances"
+
+/bin/rm -f "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH"
+TEST_PROCESS_LINES=()
+TEST_KILLED_PIDS=()
+TEST_QUARANTINED_INSTANCES=()
+consumer_mac_test_record_parallel_launch "parallel-a" "$PARALLEL_A"
+consumer_mac_test_prepare_launch "new-proof" "$NEW_APP" 1 >/dev/null
+[[ "${TEST_QUARANTINED_INSTANCES[*]}" == "parallel-a" ]] || fail "normal launch should retire a gateway-only parallel receipt"
+[[ ! -e "$OPENCLAW_CONSUMER_PARALLEL_TEST_REGISTRY_DIR/parallel-a.tsv" ]] || fail "normal launch should remove the retired parallel receipt"
+pass "normal launch cleans abandoned parallel app and gateway receipts"
 
 consumer_mac_test_record_launch "new-proof" "$NEW_APP"
 grep -F $'instance_id\tnew-proof' "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH" >/dev/null || fail "registry should record current instance"
