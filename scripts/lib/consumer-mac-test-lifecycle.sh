@@ -179,37 +179,56 @@ consumer_mac_test_pid_alive() {
 
 consumer_mac_test_acquire_lock() {
   local lock_path=""
-  local owner_path=""
+  local candidate_path=""
+  local reap_path=""
   local owner_pid=""
   local attempt=0
   local missing_owner_attempts=0
   local max_attempts="${OPENCLAW_CONSUMER_TEST_LOCK_ATTEMPTS:-600}"
 
   lock_path="$(consumer_mac_test_lock_path)"
-  owner_path="${lock_path}/owner-pid"
-  /bin/mkdir -p "$(dirname "$lock_path")"
+  candidate_path="${lock_path}.candidate.$$"
+  reap_path="${lock_path}.reap"
+  if ! /bin/mkdir -p "$(dirname "$lock_path")"; then
+    echo "ERROR: could not create Jarvis tester lock directory: $(dirname "$lock_path")" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$$" >"$candidate_path"; then
+    echo "ERROR: could not create Jarvis tester lock candidate: $candidate_path" >&2
+    return 1
+  fi
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    if /bin/mkdir "$lock_path" 2>/dev/null; then
-      printf '%s\n' "$$" >"$owner_path"
+    # Publish a complete owner token atomically. The reaper is also a hard link,
+    # so only one contender can claim authority to unlink a dead owner's inode.
+    if [[ ! -e "$reap_path" ]] && /bin/ln "$candidate_path" "$lock_path" 2>/dev/null; then
       CONSUMER_MAC_TEST_LOCK_OWNED="$lock_path"
+      /bin/rm -f "$candidate_path"
       return 0
     fi
 
-    owner_pid="$(head -n 1 "$owner_path" 2>/dev/null || true)"
+    owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
     if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
       missing_owner_attempts=0
       if ! consumer_mac_test_pid_alive "$owner_pid"; then
-        /bin/rm -f "$owner_path"
-        /bin/rmdir "$lock_path" 2>/dev/null || true
+        if /bin/ln "$lock_path" "$reap_path" 2>/dev/null; then
+          owner_pid="$(head -n 1 "$reap_path" 2>/dev/null || true)"
+          if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! consumer_mac_test_pid_alive "$owner_pid"; then
+            /bin/rm -f "$lock_path"
+          fi
+          /bin/rm -f "$reap_path"
+        fi
         continue
       fi
     else
-      # A live acquirer writes the owner immediately after mkdir. Give that
-      # tiny window several retries; only then retire an ownerless crash relic.
+      # New locks cannot be ownerless because the token is complete before its
+      # atomic publication. Retry briefly before reaping legacy/corrupt state.
       missing_owner_attempts=$((missing_owner_attempts + 1))
       if [[ "$missing_owner_attempts" -ge 5 ]]; then
-        /bin/rmdir "$lock_path" 2>/dev/null || true
+        if /bin/ln "$lock_path" "$reap_path" 2>/dev/null; then
+          /bin/rm -f "$lock_path"
+          /bin/rm -f "$reap_path"
+        fi
         missing_owner_attempts=0
         continue
       fi
@@ -217,21 +236,19 @@ consumer_mac_test_acquire_lock() {
     /bin/sleep 0.1
   done
 
+  /bin/rm -f "$candidate_path"
   echo "ERROR: timed out waiting for the Jarvis macOS tester slot lock: $lock_path" >&2
   return 1
 }
 
 consumer_mac_test_release_lock() {
   local lock_path="${CONSUMER_MAC_TEST_LOCK_OWNED:-}"
-  local owner_path=""
   local owner_pid=""
 
   [[ -n "$lock_path" ]] || return 0
-  owner_path="${lock_path}/owner-pid"
-  owner_pid="$(head -n 1 "$owner_path" 2>/dev/null || true)"
+  owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
   if [[ "$owner_pid" == "$$" ]]; then
-    /bin/rm -f "$owner_path"
-    /bin/rmdir "$lock_path" 2>/dev/null || true
+    /bin/rm -f "$lock_path"
   fi
   CONSUMER_MAC_TEST_LOCK_OWNED=""
 }

@@ -221,6 +221,13 @@ if [[ -z "$APP_PATH" ]]; then
   APP_PATH="$(consumer_instance_app_path "$ROOT_DIR" "$NORMALIZED_INSTANCE_ID")"
 fi
 
+# Normalize the positional path before any tester-slot mutation. Registry and
+# process matching need one absolute identity, and a relative `--replace` must
+# not retire the old owner only to fail while recording the new one.
+if [[ -d "$APP_PATH" ]]; then
+  APP_PATH="$(cd "$APP_PATH" && pwd -P)"
+fi
+
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
 if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2

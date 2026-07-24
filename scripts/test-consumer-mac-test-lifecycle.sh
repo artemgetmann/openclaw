@@ -134,10 +134,37 @@ pass "records the current tester owner atomically"
 
 CONSUMER_MAC_TEST_LOCK_OWNED=""
 consumer_mac_test_acquire_lock
-[[ -d "$(consumer_mac_test_lock_path)" ]] || fail "acquire should create the tester-slot lock"
+[[ -f "$(consumer_mac_test_lock_path)" ]] || fail "acquire should create the tester-slot lock"
 consumer_mac_test_release_lock
 [[ ! -e "$(consumer_mac_test_lock_path)" ]] || fail "release should remove the tester-slot lock"
 pass "serializes tester-slot acquisition"
+
+STALE_LOCK_PATH="$(consumer_mac_test_lock_path)"
+CRITICAL_DIR="$TMP_DIR/critical-section"
+printf '999999\n' >"$STALE_LOCK_PATH"
+run_lock_worker() {
+  ROOT_DIR="$ROOT_DIR" \
+    OPENCLAW_CONSUMER_TEST_REGISTRY_PATH="$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH" \
+    CRITICAL_DIR="$CRITICAL_DIR" \
+    bash -c '
+      set -euo pipefail
+      source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+      source "$ROOT_DIR/scripts/lib/consumer-mac-test-lifecycle.sh"
+      consumer_mac_test_acquire_lock
+      trap consumer_mac_test_release_lock EXIT
+      /bin/mkdir "$CRITICAL_DIR"
+      /bin/sleep 0.2
+      /bin/rmdir "$CRITICAL_DIR"
+    '
+}
+run_lock_worker &
+FIRST_LOCK_WORKER=$!
+run_lock_worker &
+SECOND_LOCK_WORKER=$!
+wait "$FIRST_LOCK_WORKER"
+wait "$SECOND_LOCK_WORKER"
+[[ ! -e "$STALE_LOCK_PATH" ]] || fail "concurrent stale-lock recovery should release the final lock"
+pass "reclaims a stale lock without concurrent ownership"
 
 TEST_PROCESS_LINES=("505 $OLD_APP/Contents/MacOS/OpenClaw")
 if consumer_mac_test_begin_launch "new-proof" "$NEW_APP" 0 >/dev/null 2>&1; then
