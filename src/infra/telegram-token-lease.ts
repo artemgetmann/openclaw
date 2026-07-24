@@ -5,6 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
+import {
+  hasTelegramTesterScenarioReservationState,
+  resolveTelegramTesterScenarioReservationPath,
+  TelegramTesterScenarioReservationConflictError,
+  validateTelegramTesterScenarioReservation,
+  withTelegramTesterScenarioReservationGuard,
+} from "./telegram-tester-scenario-reservation.js";
 
 type TelegramTokenLeasePayload = {
   version: 1;
@@ -238,18 +245,23 @@ async function releaseHeldLease(leasePath: string, held: HeldLease): Promise<voi
   await held.releasePromise;
 }
 
-export async function acquireTelegramTokenLease(params: {
+type AcquireTelegramTokenLeaseParams = {
   token: string;
   accountId?: string | null;
   configPath?: string | null;
   worktree?: string | null;
   leaseRoot?: string;
-}): Promise<TelegramTokenLease> {
-  const token = params.token.trim();
-  if (!token) {
-    throw new Error("Telegram bot token required for lease acquisition.");
-  }
+  scenarioId?: string | null;
+  scenarioGeneration?: string | null;
+  scenarioTokenHash?: string | null;
+  reservationRoot?: string;
+};
 
+async function acquireTelegramTokenLeaseAfterReservationValidation(
+  params: AcquireTelegramTokenLeaseParams,
+  token: string,
+  worktree: string,
+): Promise<TelegramTokenLease> {
   registerExitCleanupOnce();
 
   const leasePath = buildLeasePath({ token, leaseRoot: params.leaseRoot });
@@ -265,7 +277,7 @@ export async function acquireTelegramTokenLease(params: {
     botId: parseBotId(token),
     accountId: params.accountId?.trim() || null,
     configPath: params.configPath?.trim() || process.env.OPENCLAW_CONFIG_PATH?.trim() || null,
-    worktree: params.worktree?.trim() || process.cwd(),
+    worktree,
   };
 
   const held = HELD_LEASES.get(leasePath);
@@ -353,4 +365,120 @@ export async function acquireTelegramTokenLease(params: {
       });
     }
   }
+}
+
+export async function acquireTelegramTokenLease(
+  params: AcquireTelegramTokenLeaseParams,
+): Promise<TelegramTokenLease> {
+  const token = params.token.trim();
+  if (!token) {
+    throw new Error("Telegram bot token required for lease acquisition.");
+  }
+
+  const worktree =
+    params.worktree?.trim() ||
+    process.env.OPENCLAW_TELEGRAM_TESTER_WORKTREE?.trim() ||
+    process.cwd();
+  const reservationRoot =
+    params.reservationRoot ??
+    process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT?.trim() ??
+    undefined;
+  const scenarioId =
+    params.scenarioId ?? process.env.OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID?.trim() ?? null;
+  const scenarioGeneration =
+    params.scenarioGeneration ??
+    process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION?.trim() ??
+    null;
+  const scenarioTokenHash =
+    params.scenarioTokenHash ?? process.env.OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH?.trim() ?? null;
+  const expectedTokenHash = hashTelegramToken(token);
+  const hasAnyTesterMetadata = Boolean(scenarioId || scenarioGeneration || scenarioTokenHash);
+  const hasValidScopedTokenHash = /^[a-f0-9]{64}$/u.test(scenarioTokenHash ?? "");
+  const metadataTargetsToken = hasValidScopedTokenHash && scenarioTokenHash === expectedTokenHash;
+  if (
+    hasAnyTesterMetadata &&
+    !(
+      (hasValidScopedTokenHash && scenarioTokenHash !== expectedTokenHash) ||
+      (metadataTargetsToken && scenarioId && scenarioGeneration)
+    )
+  ) {
+    // Scenario metadata is process-global while a gateway may host multiple
+    // Telegram accounts. A valid hash scopes it to exactly one token; partial
+    // or malformed metadata cannot be attributed safely and fails closed.
+    throw new TelegramTesterScenarioReservationConflictError({
+      reservationPath: resolveTelegramTesterScenarioReservationPath({
+        token,
+        reservationRoot,
+      }),
+      reason: "tester_runtime_owner_metadata_malformed",
+    });
+  }
+  const hasTesterMetadata = Boolean(metadataTargetsToken && scenarioId && scenarioGeneration);
+  const hasTesterState =
+    hasTesterMetadata ||
+    (await hasTelegramTesterScenarioReservationState({
+      token,
+      reservationRoot,
+    }));
+
+  // Ordinary production/shared Telegram tokens have no tester reservation
+  // state. Keep their existing lease lifecycle untouched; only a tester token
+  // with metadata, a reservation, or a crash-persistent reservation lock
+  // enters the stricter scenario-owned path.
+  if (!hasTesterState) {
+    const lease = await acquireTelegramTokenLeaseAfterReservationValidation(
+      params,
+      token,
+      worktree,
+    );
+    if (
+      await hasTelegramTesterScenarioReservationState({
+        token,
+        reservationRoot,
+      })
+    ) {
+      // Assignment may have raced the initially unreserved token. Roll back
+      // before returning to the poller; assign performs its own lease recheck
+      // while holding the reservation lock, so either it observed this lease
+      // and refused, or this post-check observes its new reservation/lock.
+      await lease.release();
+      throw new TelegramTesterScenarioReservationConflictError({
+        reservationPath: resolveTelegramTesterScenarioReservationPath({
+          token,
+          reservationRoot,
+        }),
+        reason: "reservation_state_changed_during_lease_acquisition",
+      });
+    }
+    return lease;
+  }
+
+  // Reservation validation and process-lease creation share the same
+  // per-token lock as assign/release. That closes both bypass and TOCTOU races:
+  // direct runtimes cannot start under another scenario, and assignment cannot
+  // claim an unreserved token between validation and lease creation.
+  return await withTelegramTesterScenarioReservationGuard({
+    token,
+    reservationRoot,
+    fn: async () => {
+      const reservationState = await validateTelegramTesterScenarioReservation({
+        token,
+        scenarioId,
+        generation: scenarioGeneration,
+        tokenHash: scenarioTokenHash,
+        worktree,
+        reservationRoot,
+      });
+      if (reservationState !== "owned") {
+        throw new TelegramTesterScenarioReservationConflictError({
+          reservationPath: resolveTelegramTesterScenarioReservationPath({
+            token,
+            reservationRoot,
+          }),
+          reason: "tester_metadata_without_durable_reservation",
+        });
+      }
+      return await acquireTelegramTokenLeaseAfterReservationValidation(params, token, worktree);
+    },
+  });
 }

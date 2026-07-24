@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { acquireTelegramTesterScenarioReservation } from "../../scripts/lib/telegram-tester-scenario-reservations.mjs";
 
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "telegram-live-runtime.sh");
@@ -55,6 +57,53 @@ describe("telegram-live-runtime.sh", () => {
     expect(stdout).toContain("config_diff_allowed_only=true");
     expect(stdout).toContain("browser_sidecar_enabled=true");
     expect(stdout).not.toContain("token_claim_path=");
+  });
+
+  it("releases the exact reservation generation and local claim as one safe boundary", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-release-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const envLocalPath = path.join(tempDir, ".env.local");
+    const reservationRoot = path.join(tempDir, "reservations");
+    const token = "12345:release-test";
+    const scenarioId = "release-scenario";
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+    const reservation = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId,
+      worktreePath: tempDir,
+      reservationRoot,
+    });
+    writeFileSync(
+      envLocalPath,
+      [
+        `TELEGRAM_BOT_TOKEN=${token}`,
+        `OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}`,
+        `OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=${String(reservation.generation)}`,
+        `OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH=${crypto.createHash("sha256").update(token).digest("hex")}`,
+        `OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=${String(reservation.generation)}`,
+        "KEEP_ME=yes",
+        "",
+      ].join("\n"),
+    );
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; REPO_ROOT=${JSON.stringify(tempDir)}; WORKTREE=${JSON.stringify(tempDir)}; SCENARIO_RESERVATION_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-tester-scenario-reservations.mjs"))}; OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT=${JSON.stringify(reservationRoot)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(path.join(tempDir, "state"))}; RUNTIME_PORT=24567; }; resolve_runtime_owner() { RUNTIME_PID=""; RUNTIME_OWNERSHIP=ok; }; stop_owned_runtime() { RUNTIME_STOP_RESULT=not-running; }; remove_runtime_state_dir() { :; }; release_command`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toContain("release_token_cleared=yes");
+    expect(stdout).toContain(`release_scenario_id=${scenarioId}`);
+    expect(readFileSync(envLocalPath, "utf8")).toBe("KEEP_ME=yes\n");
   });
 
   it("accepts the exact tester profile marker after gateway cwd changes", () => {

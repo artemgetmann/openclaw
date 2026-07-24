@@ -20,7 +20,16 @@ import {
 } from "./network-errors.js";
 import { TelegramPollingSession } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
+import {
+  hasCompletedTelegramSafeReuseFence,
+  resolveTelegramSafeReuseFenceRequest,
+  writeCompletedTelegramSafeReuseFence,
+} from "./safe-reuse-fence-store.js";
+import {
+  deleteTelegramUpdateOffset,
+  readTelegramUpdateOffset,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -201,6 +210,40 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         );
       }
     };
+    const persistSafeReuseCutoff = async (updateId: number | null) => {
+      // Unlike normal best-effort progress persistence, a safe-reuse receipt
+      // is a promise that pre-claim backlog cannot dispatch after restart.
+      // Therefore the offset reset/write must succeed before the receipt is
+      // allowed to become durable.
+      if (updateId === null) {
+        await deleteTelegramUpdateOffset({ accountId: account.accountId });
+        lastUpdateId = null;
+        return;
+      }
+      const normalizedUpdateId = normalizePersistedUpdateId(updateId);
+      if (normalizedUpdateId === null) {
+        throw new Error(`Telegram safe-reuse cutoff is invalid: ${String(updateId)}`);
+      }
+      await writeTelegramUpdateOffset({
+        accountId: account.accountId,
+        updateId: normalizedUpdateId,
+        botToken: token,
+      });
+      lastUpdateId = normalizedUpdateId;
+    };
+
+    const safeReuseRequest = resolveTelegramSafeReuseFenceRequest({
+      botToken: token,
+      accountId: account.accountId,
+    });
+    if (opts.useWebhook && safeReuseRequest) {
+      // The tester safe-reuse contract currently fences Bot API polling only.
+      // Starting a webhook here would bypass the pre-dispatch cutoff and could
+      // deliver the previous scenario's pending updates to the model.
+      throw new Error(
+        "Telegram safe-reuse backlog fencing is unavailable in webhook mode; refusing startup.",
+      );
+    }
 
     if (opts.useWebhook) {
       await startTelegramWebhook({
@@ -264,6 +307,28 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       runnerOptions: createTelegramRunnerOptions(cfg),
       getLastUpdateId: () => lastUpdateId,
       persistUpdateId,
+      safeReuseFence: (() => {
+        if (!safeReuseRequest) {
+          return undefined;
+        }
+        return {
+          generation: safeReuseRequest.generation,
+          persistCutoff: persistSafeReuseCutoff,
+          isComplete: () =>
+            hasCompletedTelegramSafeReuseFence({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+            }),
+          markComplete: (lastUpdateId: number | null) =>
+            writeCompletedTelegramSafeReuseFence({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+              lastUpdateId,
+            }),
+        };
+      })(),
       log,
       proxyFetchFactory,
       setStatus: opts.setStatus,

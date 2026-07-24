@@ -452,11 +452,13 @@ function normalizeLeaseEntries(values) {
     const token = String(value.token ?? "").trim();
     const worktreePath = String(value.worktreePath ?? "").trim();
     const pid = Number.parseInt(String(value.pid ?? ""), 10);
-    if (!token || !worktreePath || !Number.isFinite(pid) || pid <= 0) {
+    const blockingReason = String(value.blockingReason ?? "").trim() || null;
+    const hasValidPid = Number.isFinite(pid) && pid > 0;
+    if (!token || !worktreePath || (!hasValidPid && !blockingReason)) {
       continue;
     }
 
-    const key = `${token}\u0000${worktreePath}\u0000${pid}`;
+    const key = `${token}\u0000${worktreePath}\u0000${hasValidPid ? pid : "unknown"}`;
     if (seen.has(key)) {
       continue;
     }
@@ -464,8 +466,9 @@ function normalizeLeaseEntries(values) {
     out.push({
       token,
       worktreePath,
-      pid,
+      pid: hasValidPid ? pid : null,
       accountId: String(value.accountId ?? "").trim() || null,
+      blockingReason,
     });
   }
 
@@ -1429,13 +1432,47 @@ function isPidAlive(pid) {
   }
 }
 
+function getProcessStartTime(pid) {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const commEndIndex = stat.lastIndexOf(")");
+    if (commEndIndex < 0) {
+      return null;
+    }
+    const fields = stat
+      .slice(commEndIndex + 1)
+      .trimStart()
+      .split(/\s+/u);
+    const starttime = Number(fields[19]);
+    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
+  } catch {
+    return null;
+  }
+}
+
 export function collectActiveTelegramTokenLeaseEntries(params) {
   const tokens = normalizeTokenList(params?.tokens ?? []);
   const currentWorktreePath =
     params?.currentWorktreePath && String(params.currentWorktreePath).trim().length > 0
-      ? path.resolve(String(params.currentWorktreePath))
+      ? canonicalizePath(String(params.currentWorktreePath))
       : null;
   const out = [];
+  const isPidAliveFn = params?.isPidAliveFn ?? isPidAlive;
+  const getProcessStartTimeFn = params?.getProcessStartTimeFn ?? getProcessStartTime;
+  const platform = String(params?.platform ?? process.platform);
+
+  const blockAmbiguousLease = (token, leasePath, reason, parsed = null) => {
+    out.push({
+      token,
+      worktreePath: `[ambiguous Telegram token lease: ${leasePath}]`,
+      pid: Number.isInteger(parsed?.pid) && parsed.pid > 0 ? parsed.pid : null,
+      accountId: null,
+      blockingReason: reason,
+    });
+  };
 
   for (const token of tokens) {
     const leasePath = buildTelegramTokenLeasePath({
@@ -1450,17 +1487,48 @@ export function collectActiveTelegramTokenLeaseEntries(params) {
     try {
       parsed = JSON.parse(fs.readFileSync(leasePath, "utf8"));
     } catch {
+      // A malformed lease is unknown ownership, not evidence that the bot is
+      // available. Preserve a blocking entry for explicit operator recovery.
+      blockAmbiguousLease(token, leasePath, "malformed_lease");
       continue;
     }
 
     const pid = Number.parseInt(String(parsed?.pid ?? ""), 10);
     const worktreePath =
       typeof parsed?.worktree === "string" && parsed.worktree.trim()
-        ? path.resolve(parsed.worktree.trim())
+        ? canonicalizePath(parsed.worktree.trim())
         : "";
-    if (!Number.isFinite(pid) || pid <= 0 || !worktreePath || !isPidAlive(pid)) {
+    if (!Number.isFinite(pid) || pid <= 0 || !worktreePath) {
+      blockAmbiguousLease(token, leasePath, "malformed_lease", parsed);
       continue;
     }
+    if (!isPidAliveFn(pid)) {
+      continue;
+    }
+    const storedStarttime =
+      typeof parsed?.starttime === "number" && Number.isInteger(parsed.starttime)
+        ? parsed.starttime
+        : null;
+    const activeStarttime = getProcessStartTimeFn(pid);
+    if (storedStarttime !== null) {
+      if (activeStarttime === null) {
+        blockAmbiguousLease(token, leasePath, "process_starttime_unavailable", parsed);
+        continue;
+      }
+      if (activeStarttime !== storedStarttime) {
+        // The PID now belongs to a different process. This lease is stale, so
+        // it must not pin a tester bot forever.
+        continue;
+      }
+    } else if (platform === "linux" && activeStarttime !== null) {
+      // Current Linux leases always carry starttime. Missing identity data is
+      // ambiguous legacy/corrupt state and must fail closed.
+      blockAmbiguousLease(token, leasePath, "process_starttime_missing", parsed);
+      continue;
+    }
+    // macOS temp/worktree paths can alternate between /var and /private/var.
+    // Compare canonical paths so this lane's own live lease does not look
+    // foreign and force an unnecessary second bot assignment.
     if (currentWorktreePath && worktreePath === currentWorktreePath) {
       continue;
     }

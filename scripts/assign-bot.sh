@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
+SCENARIO_RESERVATION_MODULE="${SCRIPT_DIR}/lib/telegram-tester-scenario-reservations.mjs"
 # Reserved-token detection must look at the canonical shared runtime config,
 # not the sanitized per-worktree baseline. Otherwise isolated tester lanes can
 # stop seeing production/shared bot reservations and accidentally claim them.
@@ -108,20 +109,26 @@ fi
 
 selection="$(
   HELPER_MODULE="$HELPER_MODULE" \
+  SCENARIO_RESERVATION_MODULE="$SCENARIO_RESERVATION_MODULE" \
   BASE_CONFIG_PATH="$RESERVED_CONFIG_PATH" \
   CURRENT_WORKTREE="$(pwd -P)" \
+  REQUESTED_SCENARIO_ID="${OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID:-}" \
+  RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-}" \
+  RESERVATION_TTL_MS="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_TTL_MS:-}" \
   node --input-type=module - <<'NODE'
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const helperPath = process.env.HELPER_MODULE;
+const reservationModulePath = process.env.SCENARIO_RESERVATION_MODULE;
 const baseConfigPath = process.env.BASE_CONFIG_PATH ?? "";
 const currentWorktree = process.env.CURRENT_WORKTREE ?? "";
 
-if (!helperPath) {
-  throw new Error("Missing helper module path.");
+if (!helperPath || !reservationModulePath) {
+  throw new Error("Missing tester-bot helper module path.");
 }
 
 const {
@@ -130,6 +137,9 @@ const {
   collectActiveTelegramTokenLeaseEntries,
   summarizeTelegramTesterTokenPool,
 } = await import(pathToFileURL(helperPath).href);
+const { acquireTelegramTesterScenarioReservation } = await import(
+  pathToFileURL(reservationModulePath).href
+);
 
 const envBotsPath = path.join(currentWorktree, ".env.bots");
 const envLocalPath = path.join(currentWorktree, ".env.local");
@@ -174,7 +184,34 @@ const readLastEnvValue = (filePath, key) => {
   return token;
 };
 
-const currentToken = fs.existsSync(envLocalPath) ? readLastEnvValue(envLocalPath, "TELEGRAM_BOT_TOKEN") : "";
+const currentToken = fs.existsSync(envLocalPath)
+  ? readLastEnvValue(envLocalPath, "TELEGRAM_BOT_TOKEN")
+  : "";
+const storedScenarioId = fs.existsSync(envLocalPath)
+  ? readLastEnvValue(envLocalPath, "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID")
+  : "";
+const storedReservationGeneration = fs.existsSync(envLocalPath)
+  ? readLastEnvValue(envLocalPath, "OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION")
+  : "";
+const storedReservationTokenHash = fs.existsSync(envLocalPath)
+  ? readLastEnvValue(envLocalPath, "OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH")
+  : "";
+const requestedScenarioId = String(process.env.REQUESTED_SCENARIO_ID ?? "").trim();
+// A path-derived default can resurrect an old scenario when a deleted
+// worktree is later recreated at the same location. Generate a fresh run
+// incarnation once, then persist it in .env.local for process restarts.
+const defaultScenarioId = `tg-scenario-${crypto.randomUUID()}`;
+const scenarioId = requestedScenarioId || storedScenarioId || defaultScenarioId;
+
+// Changing scenario identity while a bot is still assigned would silently
+// transfer unfinished work inside one worktree. Require the same explicit
+// release boundary used for cross-worktree ownership.
+if (currentToken && storedScenarioId && requestedScenarioId && storedScenarioId !== requestedScenarioId) {
+  console.log("ok=no");
+  console.log("reason=scenario_change_requires_release");
+  console.log(`scenarioId=${storedScenarioId}`);
+  process.exit(0);
+}
 
 const claimedEntries = [];
 const worktreeList = execFileSync("git", ["worktree", "list", "--porcelain"], {
@@ -222,11 +259,64 @@ const summary = summarizeTelegramTesterTokenPool({
   reservedTokens,
   currentToken,
 });
-const selection = summary.selection;
+const activeClaimTokens = new Set(summary.claimedTokens);
+const reservedTokenSet = new Set(summary.reservedTokens);
+const candidates = [...new Set([currentToken, ...poolTokens].filter(Boolean))];
+const parsedTtlMs = Number.parseInt(String(process.env.RESERVATION_TTL_MS ?? ""), 10);
+let selection = null;
+let lastReservationReason = "";
 
-if (!selection.ok || !selection.selectedToken) {
+// Token selection and durable reservation happen under the reservation
+// module's per-token lock. Keeping those operations together closes the race
+// where two simultaneous assigners both observe an unclaimed pool entry.
+for (const candidate of candidates) {
+  if (
+    !poolTokens.includes(candidate) ||
+    activeClaimTokens.has(candidate) ||
+    reservedTokenSet.has(candidate)
+  ) {
+    continue;
+  }
+  const reservation = await acquireTelegramTesterScenarioReservation({
+    token: candidate,
+    scenarioId,
+    worktreePath: currentWorktree,
+    reservationRoot: process.env.RESERVATION_ROOT,
+    ttlMs: Number.isFinite(parsedTtlMs) && parsedTtlMs > 0 ? parsedTtlMs : undefined,
+    expectedGeneration: candidate === currentToken ? storedReservationGeneration : undefined,
+    expectedTokenHash: candidate === currentToken ? storedReservationTokenHash : undefined,
+    requireExpectedOwner: candidate === currentToken,
+    // The initial pool summary is diagnostic only. Re-read the per-token PID
+    // lease inside the reservation lock so a just-started runtime wins the
+    // race and assignment cannot reserve underneath it.
+    hasActivePollingLease: () =>
+      collectActiveTelegramTokenLeaseEntries({
+        tokens: [candidate],
+      }),
+  });
+  if (!reservation.ok) {
+    lastReservationReason = reservation.reason;
+    if (candidate === currentToken && reservation.reason === "owner_generation_mismatch") {
+      break;
+    }
+    continue;
+  }
+  selection = {
+    ok: true,
+    action: candidate === currentToken ? "retain" : "assign",
+    reason: reservation.reason,
+    selectedToken: candidate,
+    scenarioId,
+    reservationGeneration: reservation.generation,
+    safeReuseRequired: reservation.safeReuseRequired,
+  };
+  break;
+}
+
+if (!selection?.ok || !selection.selectedToken) {
   console.log("ok=no");
-  console.log(`reason=${selection.reason}`);
+  console.log(`reason=${lastReservationReason || summary.selection.reason}`);
+  console.log(`scenarioId=${scenarioId}`);
   console.log(`currentTokenStatus=${summary.currentTokenStatus}`);
   console.log(`claimedCount=${summary.claimedCount}`);
   console.log(`poolCount=${summary.poolCount}`);
@@ -250,6 +340,12 @@ console.log(`action=${selection.action}`);
 console.log(`reason=${selection.reason}`);
 console.log(`selectedToken=${selection.selectedToken}`);
 console.log(`selectedIndex=${selectedIndex >= 0 ? selectedIndex + 1 : 0}`);
+console.log(`scenarioId=${selection.scenarioId}`);
+console.log(`reservationGeneration=${selection.reservationGeneration}`);
+console.log(
+  `reservationTokenHash=${crypto.createHash("sha256").update(selection.selectedToken).digest("hex")}`,
+);
+console.log(`safeReuseRequired=${selection.safeReuseRequired ? "yes" : "no"}`);
 console.log(`claimedCount=${summary.claimedCount}`);
 console.log(`poolCount=${summary.poolCount}`);
 console.log(`reservedCount=${summary.reservedCount}`);
@@ -273,6 +369,10 @@ pool_count=${#bot_tokens[@]}
 reserved_count=0
 claimable_count=0
 current_token_status="absent"
+scenario_id=""
+reservation_generation=""
+reservation_token_hash=""
+safe_reuse_required="no"
 claimed_worktrees=()
 stale_claim_tokens=()
 stale_claim_worktrees=()
@@ -292,6 +392,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     reservedCount) reserved_count="$value" ;;
     claimableCount) claimable_count="$value" ;;
     currentTokenStatus) current_token_status="$value" ;;
+    scenarioId) scenario_id="$value" ;;
+    reservationGeneration) reservation_generation="$value" ;;
+    reservationTokenHash) reservation_token_hash="$value" ;;
+    safeReuseRequired) safe_reuse_required="$value" ;;
     claimedWorktree) claimed_worktrees+=("$value") ;;
     staleClaimToken) stale_claim_tokens+=("$value") ;;
     staleClaimWorktree) stale_claim_worktrees+=("$value") ;;
@@ -300,7 +404,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   esac
 done <<< "$selection"
 
-if [[ "$selection_ok" != "yes" || -z "$selected_token" ]]; then
+if [[ "$selection_ok" != "yes" || -z "$selected_token" || -z "$scenario_id" || -z "$reservation_generation" || ! "$reservation_token_hash" =~ ^[a-f0-9]{64}$ ]]; then
   echo "Error: no eligible tester bot tokens available." >&2
   echo "Reason: ${selection_reason:-unknown}" >&2
   echo "Claimed: ${claimed_count} / Pool: ${pool_count} / Reserved by main runtime: ${reserved_count}" >&2
@@ -362,7 +466,13 @@ for idx in "${!stale_claim_tokens[@]}"; do
   echo "Reclaim runtime port: ${stale_runtime_port}" >&2
 done
 
-printf 'TELEGRAM_BOT_TOKEN=%s\n' "$selected_token" > ".env.local"
+{
+  printf 'TELEGRAM_BOT_TOKEN=%s\n' "$selected_token"
+  printf 'OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=%s\n' "$scenario_id"
+  printf 'OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=%s\n' "$reservation_generation"
+  printf 'OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH=%s\n' "$reservation_token_hash"
+  printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=%s\n' "$reservation_generation"
+} > ".env.local"
 
 if [[ "$selection_action" == "retain" ]]; then
   echo "Retained Telegram bot token #$selected_index for worktree: $(pwd -P)"
@@ -370,4 +480,7 @@ else
   echo "Assigned Telegram bot token #$selected_index to worktree: $(pwd -P)"
 fi
 echo "Selection reason: ${selection_reason}"
+echo "Scenario ID: ${scenario_id}"
+echo "Reservation generation: ${reservation_generation}"
+echo "Safe reuse fence required: ${safe_reuse_required}"
 echo "Token fingerprint: $(mask_token "$selected_token")"

@@ -99,6 +99,39 @@ erasure.
 - One active Telegram runtime lane equals one exclusive tester bot token. Do
   not share a bot token across two live runtimes; Telegram long-polling is
   single-owner and the loser will produce fake failures.
+- Tester tokens also carry a durable scenario reservation above the live PID
+  polling lease. For a multi-step scripted flow, pin the scenario explicitly:
+
+  ```bash
+  OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=<stable-run-id> \
+    bash scripts/telegram-live-runtime.sh ensure
+  ```
+
+  Reusing that ID from the same worktree resumes the same bot across gateway
+  or subprocess restarts. A different worktree/scenario cannot take it merely
+  because the poller exited. Without an explicit ID, the first assignment
+  creates a fresh UUID-backed run ID and persists it in `.env.local`; process
+  restarts resume it, while a newly recreated worktree at the same path cannot
+  impersonate the old run.
+
+- End the ownership lifecycle only through
+  `bash scripts/telegram-live-runtime.sh release`. Release validates the exact
+  token, scenario, canonical worktree, and reservation generation; clears the
+  local claim while holding the reservation lock; then makes the bot
+  claimable. Do not hand-edit `.env.local` or reservation files.
+- Reservations renew on `ensure` and expire after seven days by default.
+  Expiry permits reuse only when the process-level polling lease is also
+  absent. Malformed reservation/lock state fails closed. A crash-persistent
+  lock is never auto-deleted because a read/remove recovery race can erase a
+  newer owner's lock. Stop and inspect its `owner.json`; recovery is an
+  explicit operator action after proving no owner or polling lease is active.
+- The first runtime for a new reservation generation performs a transport-only
+  negative-offset `getUpdates` fence before starting the runner or any model
+  dispatch. Its receipt is scoped to token hash, account, and reservation
+  generation, so old pending updates cannot reach another full-parity tester
+  runtime while same-scenario restarts do not repeatedly discard new messages.
+  Safe-reuse generations fail closed in webhook mode until an equivalent
+  pre-dispatch webhook fence exists.
 - Worktree tester baselines strip inherited Telegram secrets on purpose. If the
   source config had named Telegram accounts, the bootstrap writes non-secret
   strip metadata to the baseline `auth-sync.json`, and

@@ -109,6 +109,12 @@ type TelegramPollingSessionOpts = {
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
+  safeReuseFence?: {
+    generation: string;
+    isComplete: () => Promise<boolean>;
+    persistCutoff: (lastUpdateId: number | null) => Promise<void>;
+    markComplete: (lastUpdateId: number | null) => Promise<void>;
+  };
   log: (line: string) => void;
   setStatus?: (next: Partial<ChannelAccountSnapshot>) => void;
 };
@@ -137,6 +143,7 @@ export class TelegramPollingSession {
   #lastTimerGapMs: number | null = null;
   #lastTimerDelayMs: number | null = null;
   #watchdogEscalation: string | null = null;
+  #safeReuseFenceCompleted = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {}
 
@@ -213,6 +220,22 @@ export class TelegramPollingSession {
       }
       if (cleanupState === "exit") {
         return;
+      }
+
+      const fenceState = await this.#ensureSafeReuseFence(bot);
+      if (fenceState === "retry") {
+        continue;
+      }
+      if (fenceState === "exit") {
+        return;
+      }
+      if (fenceState === "recreate") {
+        // The first bot was deliberately transport-only: it consumed the
+        // server-side tail marker without installing the model-dispatch
+        // runner. Recreate after persisting the cutoff so even a repeated tail
+        // update is skipped by middleware before any agent turn can start.
+        await this.#disposeSetupBot(bot);
+        continue;
       }
 
       const state = await this.#runPollingCycle(bot);
@@ -324,6 +347,66 @@ export class TelegramPollingSession {
       );
       return shouldRetry ? "retry" : "exit";
     }
+  }
+
+  async #ensureSafeReuseFence(bot: TelegramBot): Promise<"ready" | "retry" | "exit" | "recreate"> {
+    const fence = this.opts.safeReuseFence;
+    if (!fence) {
+      return "ready";
+    }
+
+    try {
+      if (this.#safeReuseFenceCompleted || (await fence.isComplete())) {
+        this.#safeReuseFenceCompleted = true;
+        return "ready";
+      }
+      const updates = await withTelegramApiErrorLogging({
+        operation: "getUpdates",
+        runtime: this.opts.runtime,
+        fn: () =>
+          bot.api.getUpdates({
+            offset: -1,
+            limit: 1,
+            timeout: 0,
+          }),
+      });
+      if (!Array.isArray(updates)) {
+        throw new Error("Telegram safe-reuse fence returned a malformed update list.");
+      }
+
+      let lastUpdateId: number | null = null;
+      for (const update of updates) {
+        const updateId = (update as { update_id?: unknown }).update_id;
+        if (!Number.isSafeInteger(updateId) || Number(updateId) < 0) {
+          throw new Error("Telegram safe-reuse fence returned an invalid update id.");
+        }
+        lastUpdateId =
+          lastUpdateId === null ? Number(updateId) : Math.max(lastUpdateId, Number(updateId));
+      }
+      await fence.persistCutoff(lastUpdateId);
+      // The durable receipt is written only after Telegram acknowledges the
+      // negative-offset tail read and the local cutoff is durable. A crash
+      // before this line repeats the transport-only fence; a crash afterward
+      // resumes the same scenario without dropping newer messages.
+      await fence.markComplete(lastUpdateId);
+      this.#safeReuseFenceCompleted = true;
+      this.opts.log(
+        `[telegram] Completed safe-reuse backlog fence for reservation generation ${fence.generation}.`,
+      );
+      return "recreate";
+    } catch (err) {
+      await this.#disposeSetupBot(bot);
+      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+        err,
+        "Telegram safe-reuse backlog fence failed",
+      );
+      return shouldRetry ? "retry" : "exit";
+    }
+  }
+
+  async #disposeSetupBot(bot: TelegramBot): Promise<void> {
+    await Promise.resolve(bot.stop()).catch(() => {});
+    await waitForTelegramBotTransportClose(bot).catch(() => {});
   }
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {

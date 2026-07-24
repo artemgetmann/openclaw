@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
+SCENARIO_RESERVATION_MODULE="${SCRIPT_DIR}/lib/telegram-tester-scenario-reservations.mjs"
 BASELINE_HELPER_MODULE="${SCRIPT_DIR}/lib/worktree-tester-baseline.mjs"
 ASSIGN_BOT_SCRIPT="${SCRIPT_DIR}/assign-bot.sh"
 BOOTSTRAP_TELEGRAM_SCRIPT="${SCRIPT_DIR}/bootstrap-worktree-telegram.sh"
@@ -54,6 +55,9 @@ ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
 ASSIGNED_BOT_NAME="unknown"
 CURRENT_LANE_BOT="unknown"
+TESTER_SCENARIO_ID="unknown"
+TESTER_RESERVATION_GENERATION="unknown"
+TESTER_RESERVATION_TOKEN_HASH="unknown"
 RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
@@ -353,38 +357,6 @@ reset_acp_validation_runtime_state_if_needed() {
   rm -rf "$RUNTIME_STATE_DIR"
 }
 
-clear_env_assignment_file() {
-  local file_path="$1"
-  local key="$2"
-  local clear_lines
-
-  clear_lines="$(
-    HELPER_MODULE="$HELPER_MODULE" FILE_PATH="$file_path" TARGET_KEY="$key" node --input-type=module - <<'NODE'
-import fs from "node:fs";
-import { pathToFileURL } from "node:url";
-
-const helperPath = process.env.HELPER_MODULE;
-const filePath = process.env.FILE_PATH;
-const key = process.env.TARGET_KEY;
-
-if (!helperPath || !filePath || !key) {
-  process.exit(1);
-}
-
-const helpers = await import(pathToFileURL(helperPath).href);
-const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-const result = helpers.clearEnvAssignmentText({ key, content });
-
-fs.writeFileSync(filePath, result.content, "utf8");
-process.stdout.write(
-  `${result.removed ? "1" : "0"}\n${String(result.removedValue ?? "")}\n`,
-);
-NODE
-  )" || return 1
-
-  printf '%s' "$clear_lines"
-}
-
 resolve_profile() {
   if [[ ! -f "$HELPER_MODULE" ]]; then
     add_failure "helper_missing:${HELPER_MODULE}"
@@ -673,6 +645,20 @@ ensure_tester_bot_claim() {
     TOKEN_CLAIM_STATUS="fail"
     TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
     add_failure "telegram_token_missing_in_env_local"
+    return
+  fi
+  TESTER_SCENARIO_ID="$(read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID")"
+  TESTER_RESERVATION_GENERATION="$(
+    read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION"
+  )"
+  TESTER_RESERVATION_TOKEN_HASH="$(
+    read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH"
+  )"
+  if [[ -z "$TESTER_SCENARIO_ID" || -z "$TESTER_RESERVATION_GENERATION" ||
+    ! "$TESTER_RESERVATION_TOKEN_HASH" =~ ^[a-f0-9]{64}$ ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="scenario_reservation_metadata_missing"
+    add_failure "scenario_reservation_metadata_missing"
     return
   fi
 
@@ -1373,6 +1359,13 @@ start_isolated_runtime() {
     RUNTIME_PORT="$RUNTIME_PORT" \
     RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
     HELPER_MODULE="$HELPER_MODULE" \
+    OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION="$TESTER_RESERVATION_GENERATION" \
+    OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH="$TESTER_RESERVATION_TOKEN_HASH" \
+    OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID="$TESTER_SCENARIO_ID" \
+    OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION="$TESTER_RESERVATION_GENERATION" \
+    OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH="$TESTER_RESERVATION_TOKEN_HASH" \
+    OPENCLAW_TELEGRAM_TESTER_WORKTREE="$WORKTREE" \
+    OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-}" \
     OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" \
     OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-0}" \
     node --input-type=module - <<'NODE'
@@ -1387,13 +1380,20 @@ const runtimePort = process.env.RUNTIME_PORT;
 const profileId = process.env.PROFILE_ID;
 const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
 const helperPath = process.env.HELPER_MODULE;
+const safeReuseGeneration = process.env.OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION;
+const safeReuseTokenHash = process.env.OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH;
+const testerScenarioId = process.env.OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID;
+const testerReservationGeneration =
+  process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION;
+const testerTokenHash = process.env.OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH;
+const testerWorktree = process.env.OPENCLAW_TELEGRAM_TESTER_WORKTREE;
 const acpValidation = process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION ?? "";
 const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const enableCron = process.env.OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON === "1";
 const disableExternalCliAuthSync =
   process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "0";
 
-if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath || !profileId) {
+if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath || !profileId || !safeReuseGeneration || !safeReuseTokenHash || !testerScenarioId || !testerReservationGeneration || !testerTokenHash || !testerWorktree) {
   throw new Error("Missing detached runtime launch parameters.");
 }
 
@@ -1429,6 +1429,15 @@ const child = spawn(
         OPENCLAW_STATE_DIR: runtimeStateDir,
         OPENCLAW_CONFIG_PATH: runtimeConfigPath,
         OPENCLAW_GATEWAY_PORT: runtimePort,
+        OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION: safeReuseGeneration,
+        OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH: safeReuseTokenHash,
+        OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID: "default",
+        OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: testerScenarioId,
+        OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION: testerReservationGeneration,
+        OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH: testerTokenHash,
+        OPENCLAW_TELEGRAM_TESTER_WORKTREE: testerWorktree,
+        OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:
+          process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT || "",
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         // Normal Telegram smoke lanes keep background jobs off so old cron
         // state cannot create fake chat activity. Goal/monitor proof can opt
@@ -1476,6 +1485,9 @@ emit_ensure_proof_lines() {
   echo "assigned_bot_id=${ASSIGNED_BOT_ID}"
   echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
   echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"
+  echo "tester_scenario_id=${TESTER_SCENARIO_ID}"
+  echo "tester_reservation_generation=${TESTER_RESERVATION_GENERATION}"
+  echo "tester_reservation_token_hash=${TESTER_RESERVATION_TOKEN_HASH}"
   echo "token_claim_count=${TOKEN_CLAIM_COUNT}"
   echo "model_auth_preflight=${MODEL_AUTH_PREFLIGHT_STATUS}"
   echo "model_auth_preflight_provider=${MODEL_AUTH_PREFLIGHT_PROVIDER}"
@@ -1658,9 +1670,15 @@ release_command() {
   local release_runtime_pid="${RUNTIME_PID:-}"
   local release_runtime_state_removed="no"
   local token_before=""
+  local scenario_before=""
+  local generation_before=""
 
   if [[ -f "$env_local" ]]; then
     token_before="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+    scenario_before="$(read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID")"
+    generation_before="$(
+      read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION"
+    )"
   fi
 
   if [[ -n "$token_before" ]]; then
@@ -1677,16 +1695,47 @@ release_command() {
   fi
 
   if [[ "$FAIL" -eq 0 && "$release_token_present_before" == "yes" ]]; then
-    local clear_lines=""
-    local removed=""
-    if ! clear_lines="$(clear_env_assignment_file "$env_local" "TELEGRAM_BOT_TOKEN")"; then
-      add_failure "release_token_clear_failed"
+    local release_lines=""
+    local release_ok=""
+    local release_reason=""
+    if [[ -z "$scenario_before" || -z "$generation_before" ]]; then
+      add_failure "release_scenario_reservation_metadata_missing"
+    elif ! release_lines="$(
+      TOKEN="$token_before" \
+      SCENARIO_ID="$scenario_before" \
+      GENERATION="$generation_before" \
+      WORKTREE="$WORKTREE" \
+      ENV_LOCAL_PATH="$env_local" \
+      RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-}" \
+      SCENARIO_RESERVATION_MODULE="$SCENARIO_RESERVATION_MODULE" \
+      node --input-type=module - <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const { releaseTelegramTesterScenarioReservation } = await import(
+  pathToFileURL(process.env.SCENARIO_RESERVATION_MODULE).href
+);
+const result = await releaseTelegramTesterScenarioReservation({
+  token: process.env.TOKEN,
+  scenarioId: process.env.SCENARIO_ID,
+  worktreePath: process.env.WORKTREE,
+  generation: process.env.GENERATION,
+  envLocalPath: process.env.ENV_LOCAL_PATH,
+  reservationRoot: process.env.RESERVATION_ROOT,
+});
+process.stdout.write(`${result.ok ? "ok" : "fail"}\n`);
+process.stdout.write(`${result.reason ?? "unknown"}\n`);
+NODE
+    )"; then
+      add_failure "release_scenario_reservation_command_failed"
     else
-      removed="$(printf '%s\n' "$clear_lines" | sed -n '1p')"
-      if [[ "$removed" == "1" ]] && [[ -z "$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")" ]]; then
+      release_ok="$(printf '%s\n' "$release_lines" | sed -n '1p')"
+      release_reason="$(printf '%s\n' "$release_lines" | sed -n '2p')"
+      if [[ "$release_ok" == "ok" ]] &&
+        [[ -z "$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")" ]] &&
+        [[ -z "$(read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID")" ]]; then
         release_token_cleared="yes"
       else
-        add_failure "release_token_clear_failed"
+        add_failure "release_scenario_reservation_failed:${release_reason}"
       fi
     fi
   fi
@@ -1709,6 +1758,8 @@ release_command() {
   echo "release_token_present_before=${release_token_present_before}"
   echo "release_token_cleared=${release_token_cleared}"
   echo "release_token_fingerprint=${release_token_fingerprint}"
+  echo "release_scenario_id=${scenario_before:-none}"
+  echo "release_reservation_generation=${generation_before:-none}"
 
   if [[ "$FAIL" -ne 0 ]]; then
     local reason
