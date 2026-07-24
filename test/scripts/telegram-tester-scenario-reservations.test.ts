@@ -1,10 +1,18 @@
 import crypto from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   acquireTelegramTesterScenarioReservation,
+  findTelegramTesterScenarioReservation,
   releaseTelegramTesterScenarioReservation,
   resolveTelegramTesterScenarioReservationPath,
 } from "../../scripts/lib/telegram-tester-scenario-reservations.mjs";
@@ -37,6 +45,63 @@ describe("Telegram tester scenario reservations", () => {
       action: "resumed",
       generation: first.generation,
       safeReuseRequired: false,
+    });
+  });
+
+  it("fails closed when a scenario reservation filename or fingerprint is not canonical", async () => {
+    const reservationRoot = mkdtempSync(path.join(os.tmpdir(), "tg-scenario-identity-"));
+    const scenarioId = "booking-acceptance-identity";
+    const worktreePath = "/tmp/worktree-identity";
+    const reservedToken = "222:reserved-token";
+    const otherToken = "111:other-token";
+    const acquired = await acquireTelegramTesterScenarioReservation({
+      token: reservedToken,
+      scenarioId,
+      worktreePath,
+      reservationRoot,
+    });
+    expect(acquired.ok).toBe(true);
+
+    const canonicalPath = resolveTelegramTesterScenarioReservationPath({
+      token: reservedToken,
+      reservationRoot,
+    });
+    const wrongPath = resolveTelegramTesterScenarioReservationPath({
+      token: otherToken,
+      reservationRoot,
+    });
+    renameSync(canonicalPath, wrongPath);
+
+    await expect(
+      findTelegramTesterScenarioReservation({
+        scenarioId,
+        worktreePath,
+        reservationRoot,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: "reservation_identity_mismatch_manual_recovery_required",
+      reservationPaths: [wrongPath],
+    });
+
+    // A canonical path is still not ownership proof when the fingerprint does
+    // not bind to the payload's full token hash.
+    renameSync(wrongPath, canonicalPath);
+    const mismatchedFingerprint = JSON.parse(readFileSync(canonicalPath, "utf8"));
+    mismatchedFingerprint.tokenFingerprint =
+      mismatchedFingerprint.tokenFingerprint === "000000000000" ? "111111111111" : "000000000000";
+    writeFileSync(canonicalPath, `${JSON.stringify(mismatchedFingerprint, null, 2)}\n`);
+
+    await expect(
+      findTelegramTesterScenarioReservation({
+        scenarioId,
+        worktreePath,
+        reservationRoot,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: "reservation_identity_mismatch_manual_recovery_required",
+      reservationPaths: [canonicalPath],
     });
   });
 

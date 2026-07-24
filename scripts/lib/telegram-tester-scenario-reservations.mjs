@@ -85,6 +85,20 @@ export async function findTelegramTesterScenarioReservation(params) {
       current.payload.scenarioId === scenarioId &&
       path.resolve(current.payload.worktreePath) === path.resolve(worktreePath)
     ) {
+      const canonicalName = `${current.payload.botId}-${current.payload.tokenHash}.json`;
+      const fingerprintMatchesHash =
+        current.payload.tokenFingerprint === current.payload.tokenHash.slice(0, 12);
+      if (name !== canonicalName || !fingerprintMatchesHash) {
+        // Discovery must not authenticate a parseable payload independently
+        // from its canonical token file. A renamed file or unrelated
+        // fingerprint could otherwise pin recovery to one token while acquire
+        // writes another canonical file, recreating duplicate ownership.
+        return {
+          ok: false,
+          reason: "reservation_identity_mismatch_manual_recovery_required",
+          reservationPaths: [reservationPath],
+        };
+      }
       matches.push({
         tokenHash: current.payload.tokenHash,
         generation: current.payload.generation,
