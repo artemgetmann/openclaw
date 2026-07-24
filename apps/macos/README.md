@@ -305,6 +305,21 @@ artifacts and receipts.
 bash scripts/preflight-consumer-mac-release.sh
 ```
 
+Release signature and Keychain conclusions require a valid Apple control sample
+in the same execution context. If the preflight or verifier reports
+`INDETERMINATE`, do not reject the artifact or recommend reboot, trust-service
+restart, or Keychain repair. Run the read-only control probe from an ordinary
+macOS Terminal outside Codex/container/process sandboxes, then rerun the
+original verification from that same Terminal:
+
+```bash
+bash scripts/probe-macos-host-trust.sh
+```
+
+The probe verifies `/bin/ls`, a macOS-owned signed binary. A failed control
+means the current process cannot distinguish sandbox-limited trust output from
+a host problem; it is not evidence of machine-wide trust corruption.
+
 Set release credentials with real values in your local shell, or put non-secret
 release settings and secret file pointers in the deterministic local env file:
 `~/Library/Application Support/OpenClaw/release.env`. Keep actual notary

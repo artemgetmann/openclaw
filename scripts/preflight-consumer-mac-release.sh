@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
+source "$ROOT_DIR/scripts/lib/macos-host-trust.sh"
 DEFAULT_SPARKLE_KEY="AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI="
 FAILED=0
 ASC_MISSING_VARS=()
@@ -227,6 +228,11 @@ check_sparkle_tools() {
 printf 'Consumer macOS release credential preflight\n'
 printf 'No secret values will be printed.\n\n'
 printf 'Release env file: %s\n\n' "$(openclaw_release_env_file)"
+
+# A restricted process can see zero signing identities and invalid Apple
+# signatures on a healthy Mac. Stop with a distinct indeterminate result before
+# presenting those context-local observations as missing host prerequisites.
+openclaw_macos_host_trust_require || exit 2
 
 check_developer_id
 check_notary_tooling

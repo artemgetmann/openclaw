@@ -8,10 +8,19 @@ set -euo pipefail
 MANIFEST_PATH="${1:-}"
 PACKAGE_ROOT="${2:-}"
 REQUIRE_SIGNED="${3:-}"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/macos-host-trust.sh"
 
 if [[ -z "$MANIFEST_PATH" || -z "$PACKAGE_ROOT" ]]; then
   echo "Usage: scripts/verify-consumer-packaged-artifacts.sh <capabilities-manifest> <openclaw-package-root> [--require-signed]" >&2
   exit 2
+fi
+
+if [[ "$REQUIRE_SIGNED" == "--require-signed" ]]; then
+  # Required native artifacts share the same Security.framework ambiguity as
+  # the outer app. Establish the Apple control sample before any artifact can
+  # be rejected for a signature failure.
+  openclaw_macos_host_trust_require || exit 2
 fi
 
 json_field() {

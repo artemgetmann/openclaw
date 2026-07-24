@@ -7,6 +7,11 @@
 OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE=""
 OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE=""
 
+# The checkpoint helper is sourced by release entry points and tests. Resolve
+# this sibling without assuming the caller's working directory.
+OPENCLAW_JARVIS_RELEASE_CHECKPOINT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_LIB_DIR/macos-host-trust.sh"
+
 openclaw_jarvis_release_checkpoint_value() {
   local metadata_path="$1"
   local key="$2"
@@ -58,6 +63,12 @@ openclaw_jarvis_release_checkpoint_verify_signature() {
   local artifact_path="$1"
   local artifact_kind="$2"
   local codesign_bin="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN:-/usr/bin/codesign}"
+
+  OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="$codesign_bin" \
+    openclaw_macos_host_trust_require || {
+      OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="host-trust-indeterminate"
+      return 2
+    }
 
   case "$artifact_kind" in
     app)

@@ -6,6 +6,7 @@ source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
+source "$ROOT_DIR/scripts/lib/macos-host-trust.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -82,6 +83,11 @@ if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2
   exit 1
 fi
+
+# All later codesign, TeamIdentifier, Authority, and Gatekeeper conclusions
+# depend on a usable host trust view. A failed Apple control sample is not an
+# artifact failure; report it as indeterminate before examining the bundle.
+openclaw_macos_host_trust_require || exit 2
 
 plist_print() {
   local key="$1"
