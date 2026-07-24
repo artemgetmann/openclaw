@@ -21,7 +21,7 @@ import {
 import { TelegramPollingSession } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
-  hasCompletedTelegramSafeReuseFence,
+  readCompletedTelegramSafeReuseFence,
   resolveTelegramSafeReuseFenceRequest,
   writeCompletedTelegramSafeReuseFence,
 } from "./safe-reuse-fence-store.js";
@@ -314,14 +314,30 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return {
           generation: safeReuseRequest.generation,
           persistCutoff: persistSafeReuseCutoff,
-          isComplete: () =>
-            hasCompletedTelegramSafeReuseFence({
+          resolveCompletion: async () => {
+            const completion = await readCompletedTelegramSafeReuseFence({
               accountId: account.accountId,
               botToken: token,
               generation: safeReuseRequest.generation,
               persistedLastUpdateId: lastUpdateId,
               persistedOffsetIgnored: ignorePersistedOffset,
-            }),
+            });
+            if (!completion) {
+              return null;
+            }
+            // ACP ignores ordinary progress offsets, but it must retain the
+            // reservation fence's minimum cutoff so the previous scenario's
+            // returned tail can never reach model dispatch.
+            if (ignorePersistedOffset && completion.lastUpdateId !== null) {
+              lastUpdateId = completion.lastUpdateId;
+            }
+            return {
+              // The first bot was constructed before the restored minimum
+              // cutoff was known. Recreate it so middleware receives the
+              // fence cutoff before any runner or model dispatch starts.
+              recreateBot: ignorePersistedOffset && completion.lastUpdateId !== null,
+            };
+          },
           markComplete: (lastUpdateId: number | null) =>
             writeCompletedTelegramSafeReuseFence({
               accountId: account.accountId,

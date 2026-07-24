@@ -93,14 +93,14 @@ function parseReceipt(raw: string): TelegramSafeReuseFenceReceipt | null {
   }
 }
 
-export async function hasCompletedTelegramSafeReuseFence(params: {
+export async function readCompletedTelegramSafeReuseFence(params: {
   accountId?: string;
   botToken: string;
   generation: string;
   persistedLastUpdateId: number | null;
   persistedOffsetIgnored?: boolean;
   env?: NodeJS.ProcessEnv;
-}): Promise<boolean> {
+}): Promise<{ lastUpdateId: number | null } | null> {
   const tokenHash = hashToken(params.botToken);
   const accountId = normalizeAccountId(params.accountId);
   try {
@@ -114,26 +114,26 @@ export async function hasCompletedTelegramSafeReuseFence(params: {
       receipt.tokenHash === tokenHash &&
       receipt.accountId === accountId;
     if (!matchesOwner) {
-      return false;
+      return null;
     }
     // ACP continuity validation deliberately disables the local skip cursor so
-    // a fresh post-restart probe can be ingested. The generation was already
-    // fenced before its first runner; repeating the destructive negative-tail
-    // fence on every intentional restart would discard that continuity probe.
+    // a fresh post-restart probe can be ingested. Return the reservation
+    // fence's own cutoff so the caller can restore that minimum safety boundary
+    // in memory without restoring later ordinary progress offsets.
     if (params.persistedOffsetIgnored) {
-      return true;
+      return { lastUpdateId: receipt.lastUpdateId };
     }
     // A non-empty tail is safe only while its durable cutoff is still active.
-    // Missing/ignored/rewound offset state must repeat the transport-only
-    // fence instead of trusting a receipt that can no longer suppress backlog.
-    return (
+    // Missing or rewound state must repeat the transport-only fence instead of
+    // trusting a receipt that can no longer suppress backlog.
+    const cutoffIsActive =
       receipt.lastUpdateId === null ||
       (params.persistedLastUpdateId !== null &&
-        params.persistedLastUpdateId >= receipt.lastUpdateId)
-    );
+        params.persistedLastUpdateId >= receipt.lastUpdateId);
+    return cutoffIsActive ? { lastUpdateId: receipt.lastUpdateId } : null;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+      return null;
     }
     throw err;
   }

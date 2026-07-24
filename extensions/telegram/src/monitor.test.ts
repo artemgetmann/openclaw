@@ -85,14 +85,15 @@ const { deleteTelegramUpdateOffsetSpy, readTelegramUpdateOffsetSpy, writeTelegra
   }));
 const {
   resolveTelegramSafeReuseFenceRequestSpy,
-  hasCompletedTelegramSafeReuseFenceSpy,
+  readCompletedTelegramSafeReuseFenceSpy,
   writeCompletedTelegramSafeReuseFenceSpy,
 } = vi.hoisted(() => ({
   resolveTelegramSafeReuseFenceRequestSpy: vi.fn(
     (_params: { botToken: string; accountId?: string }) => null as { generation: string } | null,
   ),
-  hasCompletedTelegramSafeReuseFenceSpy: vi.fn(
-    async (_params?: { persistedLastUpdateId?: number | null }) => false,
+  readCompletedTelegramSafeReuseFenceSpy: vi.fn(
+    async (_params?: { persistedLastUpdateId?: number | null }) =>
+      null as { lastUpdateId: number | null } | null,
   ),
   writeCompletedTelegramSafeReuseFenceSpy: vi.fn(async () => undefined),
 }));
@@ -336,7 +337,7 @@ vi.mock("./update-offset-store.js", () => ({
 
 vi.mock("./safe-reuse-fence-store.js", () => ({
   resolveTelegramSafeReuseFenceRequest: resolveTelegramSafeReuseFenceRequestSpy,
-  hasCompletedTelegramSafeReuseFence: hasCompletedTelegramSafeReuseFenceSpy,
+  readCompletedTelegramSafeReuseFence: readCompletedTelegramSafeReuseFenceSpy,
   writeCompletedTelegramSafeReuseFence: writeCompletedTelegramSafeReuseFenceSpy,
 }));
 
@@ -359,7 +360,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     readTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(null);
     writeTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(undefined);
     resolveTelegramSafeReuseFenceRequestSpy.mockReset().mockReturnValue(null);
-    hasCompletedTelegramSafeReuseFenceSpy.mockReset().mockResolvedValue(false);
+    readCompletedTelegramSafeReuseFenceSpy.mockReset().mockResolvedValue(null);
     writeCompletedTelegramSafeReuseFenceSpy.mockReset().mockResolvedValue(undefined);
     api.getUpdates.mockReset().mockResolvedValue([]);
     runSpy.mockReset().mockImplementation(() =>
@@ -882,7 +883,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
       generation: "generation-123",
     });
-    hasCompletedTelegramSafeReuseFenceSpy.mockResolvedValue(false);
+    readCompletedTelegramSafeReuseFenceSpy.mockResolvedValue(null);
     api.getUpdates.mockReset().mockImplementation(async () => {
       expect(runSpy).not.toHaveBeenCalled();
       order.push("tail-read");
@@ -932,7 +933,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
       generation: "generation-123",
     });
-    hasCompletedTelegramSafeReuseFenceSpy.mockResolvedValue(true);
+    readCompletedTelegramSafeReuseFenceSpy.mockResolvedValue({ lastUpdateId: 549076204 });
     readTelegramUpdateOffsetSpy.mockResolvedValue(549076204);
     const abort = new AbortController();
     mockRunOnceAndAbort(abort);
@@ -940,7 +941,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitorTelegramProvider({ token: "123456:ABC", abortSignal: abort.signal });
 
     expect(api.getUpdates).not.toHaveBeenCalled();
-    expect(hasCompletedTelegramSafeReuseFenceSpy).toHaveBeenCalledWith(
+    expect(readCompletedTelegramSafeReuseFenceSpy).toHaveBeenCalledWith(
       expect.objectContaining({ persistedLastUpdateId: 549076204 }),
     );
     expect(createTelegramBotCalls).toHaveLength(1);
@@ -954,9 +955,9 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
       generation: "generation-123",
     });
-    hasCompletedTelegramSafeReuseFenceSpy.mockImplementation(
+    readCompletedTelegramSafeReuseFenceSpy.mockImplementation(
       async ({ persistedLastUpdateId }: { persistedLastUpdateId?: number | null } = {}) =>
-        persistedLastUpdateId !== null,
+        typeof persistedLastUpdateId === "number" ? { lastUpdateId: persistedLastUpdateId } : null,
     );
     readTelegramUpdateOffsetSpy.mockResolvedValue(null);
     api.getUpdates.mockResolvedValue([{ update_id: 549076205 }]);
@@ -985,20 +986,26 @@ describe("monitorTelegramProvider (grammY)", () => {
       resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
         generation: "generation-123",
       });
-      hasCompletedTelegramSafeReuseFenceSpy.mockResolvedValue(true);
+      readCompletedTelegramSafeReuseFenceSpy.mockResolvedValue({
+        lastUpdateId: 549076204,
+      });
       readTelegramUpdateOffsetSpy.mockResolvedValue(549076204);
       const abort = new AbortController();
       mockRunOnceAndAbort(abort);
 
       await monitorTelegramProvider({ token: "123456:ABC", abortSignal: abort.signal });
 
-      expect(hasCompletedTelegramSafeReuseFenceSpy).toHaveBeenCalledWith(
+      expect(readCompletedTelegramSafeReuseFenceSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           persistedLastUpdateId: null,
           persistedOffsetIgnored: true,
         }),
       );
       expect(api.getUpdates).not.toHaveBeenCalled();
+      expect(createTelegramBotCalls).toHaveLength(2);
+      expect(createTelegramBotCalls.at(-1)?.updateOffset).toMatchObject({
+        lastUpdateId: 549076204,
+      });
       expect(runSpy).toHaveBeenCalledTimes(1);
     } finally {
       if (typeof previous === "string") {

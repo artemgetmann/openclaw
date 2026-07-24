@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  hasCompletedTelegramSafeReuseFence,
+  readCompletedTelegramSafeReuseFence,
   resolveTelegramSafeReuseFenceRequest,
   writeCompletedTelegramSafeReuseFence,
 } from "./safe-reuse-fence-store.js";
@@ -63,32 +63,32 @@ describe("Telegram safe-reuse fence receipt", () => {
     });
 
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-123",
         persistedLastUpdateId: 900,
         env,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ lastUpdateId: 900 });
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-456",
         persistedLastUpdateId: 900,
         env,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "67890:second",
         generation: "generation-123",
         persistedLastUpdateId: 900,
         env,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
   });
 
   it("requires the receipt cutoff to remain active", async () => {
@@ -103,32 +103,32 @@ describe("Telegram safe-reuse fence receipt", () => {
     });
 
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-123",
         persistedLastUpdateId: null,
         env,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-123",
         persistedLastUpdateId: 899,
         env,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-123",
         persistedLastUpdateId: 901,
         env,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ lastUpdateId: 900 });
   });
 
   it("preserves a completed generation when ACP intentionally ignores the cursor", async () => {
@@ -143,7 +143,7 @@ describe("Telegram safe-reuse fence receipt", () => {
     });
 
     await expect(
-      hasCompletedTelegramSafeReuseFence({
+      readCompletedTelegramSafeReuseFence({
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-123",
@@ -151,6 +151,6 @@ describe("Telegram safe-reuse fence receipt", () => {
         persistedOffsetIgnored: true,
         env,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ lastUpdateId: 900 });
   });
 });

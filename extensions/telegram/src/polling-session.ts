@@ -111,7 +111,7 @@ type TelegramPollingSessionOpts = {
   persistUpdateId: (updateId: number) => Promise<void>;
   safeReuseFence?: {
     generation: string;
-    isComplete: () => Promise<boolean>;
+    resolveCompletion: () => Promise<{ recreateBot: boolean } | null>;
     persistCutoff: (lastUpdateId: number | null) => Promise<void>;
     markComplete: (lastUpdateId: number | null) => Promise<void>;
   };
@@ -356,9 +356,13 @@ export class TelegramPollingSession {
     }
 
     try {
-      if (this.#safeReuseFenceCompleted || (await fence.isComplete())) {
-        this.#safeReuseFenceCompleted = true;
+      if (this.#safeReuseFenceCompleted) {
         return "ready";
+      }
+      const completion = await fence.resolveCompletion();
+      if (completion) {
+        this.#safeReuseFenceCompleted = true;
+        return completion.recreateBot ? "recreate" : "ready";
       }
       const updates = await withTelegramApiErrorLogging({
         operation: "getUpdates",
