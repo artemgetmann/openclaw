@@ -190,6 +190,12 @@ consumer_mac_test_release_lock
 [[ ! -e "${STALE_LOCK_PATH}.reap" ]] || fail "abandoned reaper token should be removed"
 pass "recovers an abandoned stale-lock reaper"
 
+printf '%s\t%s\n' "$$" "reused-pid-with-different-start-time" >"$STALE_LOCK_PATH"
+consumer_mac_test_acquire_lock
+consumer_mac_test_release_lock
+[[ ! -e "$STALE_LOCK_PATH" ]] || fail "PID reuse must not preserve a stale tester lock"
+pass "rejects stale lock ownership after PID reuse"
+
 TEST_PROCESS_LINES=("505 $OLD_APP/Contents/MacOS/OpenClaw")
 if consumer_mac_test_begin_launch "new-proof" "$NEW_APP" 0 >/dev/null 2>&1; then
   fail "begin launch should propagate a conflicting-slot refusal"

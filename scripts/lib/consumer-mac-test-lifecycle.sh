@@ -206,8 +206,30 @@ consumer_mac_test_wait_for_app_path() {
   return 1
 }
 
-consumer_mac_test_pid_alive() {
-  /bin/kill -0 "$1" >/dev/null 2>&1
+consumer_mac_test_process_start_identity() {
+  /bin/ps -p "$1" -o lstart= 2>/dev/null | /usr/bin/awk '{$1=$1; print}'
+}
+
+consumer_mac_test_lock_token_matches_process() {
+  local token_path="$1"
+  local expected_pid="$2"
+  local token_pid=""
+  local token_start=""
+  local actual_start=""
+
+  IFS=$'\t' read -r token_pid token_start <"$token_path" 2>/dev/null || return 1
+  [[ "$token_pid" == "$expected_pid" && -n "$token_start" ]] || return 1
+  actual_start="$(consumer_mac_test_process_start_identity "$expected_pid")"
+  [[ -n "$actual_start" && "$token_start" == "$actual_start" ]]
+}
+
+consumer_mac_test_lock_token_alive() {
+  local token_path="$1"
+  local token_pid=""
+
+  IFS=$'\t' read -r token_pid _ <"$token_path" 2>/dev/null || return 1
+  [[ "$token_pid" =~ ^[0-9]+$ ]] || return 1
+  consumer_mac_test_lock_token_matches_process "$token_path" "$token_pid"
 }
 
 consumer_mac_test_acquire_lock() {
@@ -215,11 +237,8 @@ consumer_mac_test_acquire_lock() {
   local candidate_path=""
   local reap_path=""
   local reap_candidate_path=""
-  local reaper_pid=""
-  local owner_pid=""
+  local owner_start=""
   local attempt=0
-  local missing_owner_attempts=0
-  local invalid_reaper_attempts=0
   local max_attempts="${OPENCLAW_CONSUMER_TEST_LOCK_ATTEMPTS:-600}"
 
   lock_path="$(consumer_mac_test_lock_path)"
@@ -230,11 +249,16 @@ consumer_mac_test_acquire_lock() {
     echo "ERROR: could not create Jarvis tester lock directory: $(dirname "$lock_path")" >&2
     return 1
   fi
-  if ! printf '%s\n' "$$" >"$candidate_path"; then
+  owner_start="$(consumer_mac_test_process_start_identity "$$")"
+  if [[ -z "$owner_start" ]]; then
+    echo "ERROR: could not resolve Jarvis tester lock process identity: $$" >&2
+    return 1
+  fi
+  if ! printf '%s\t%s\n' "$$" "$owner_start" >"$candidate_path"; then
     echo "ERROR: could not create Jarvis tester lock candidate: $candidate_path" >&2
     return 1
   fi
-  if ! printf '%s\n' "$$" >"$reap_candidate_path"; then
+  if ! printf '%s\t%s\n' "$$" "$owner_start" >"$reap_candidate_path"; then
     /bin/rm -f "$candidate_path"
     echo "ERROR: could not create Jarvis tester reaper candidate: $reap_candidate_path" >&2
     return 1
@@ -242,22 +266,11 @@ consumer_mac_test_acquire_lock() {
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     # Reaping has its own atomic owner token. If that owner crashes, another
-    # contender can prove the reaper PID is dead and recover the handoff.
+    # contender compares both PID and process start time before recovering it.
     if [[ -e "$reap_path" ]]; then
-      reaper_pid="$(head -n 1 "$reap_path" 2>/dev/null || true)"
-      if [[ "$reaper_pid" =~ ^[0-9]+$ ]]; then
-        invalid_reaper_attempts=0
-        if ! consumer_mac_test_pid_alive "$reaper_pid"; then
-          /bin/rm -f "$reap_path"
-          continue
-        fi
-      else
-        invalid_reaper_attempts=$((invalid_reaper_attempts + 1))
-        if [[ "$invalid_reaper_attempts" -ge 5 ]]; then
-          /bin/rm -f "$reap_path"
-          invalid_reaper_attempts=0
-          continue
-        fi
+      if ! consumer_mac_test_lock_token_alive "$reap_path"; then
+        /bin/rm -f "$reap_path"
+        continue
       fi
       /bin/sleep 0.1
       continue
@@ -270,34 +283,16 @@ consumer_mac_test_acquire_lock() {
       return 0
     fi
 
-    owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
-      missing_owner_attempts=0
-      if ! consumer_mac_test_pid_alive "$owner_pid"; then
-        if /bin/ln "$reap_candidate_path" "$reap_path" 2>/dev/null; then
-          owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
-          if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! consumer_mac_test_pid_alive "$owner_pid"; then
-            /bin/rm -f "$lock_path"
-          fi
-          /bin/rm -f "$reap_path"
+    if ! consumer_mac_test_lock_token_alive "$lock_path"; then
+      if /bin/ln "$reap_candidate_path" "$reap_path" 2>/dev/null; then
+        # Re-read after winning the reaper claim. A live owner that appeared in
+        # the meantime keeps its lock; only an unchanged stale token is removed.
+        if ! consumer_mac_test_lock_token_alive "$lock_path"; then
+          /bin/rm -f "$lock_path"
         fi
-        continue
+        /bin/rm -f "$reap_path"
       fi
-    else
-      # New locks cannot be ownerless because the token is complete before its
-      # atomic publication. Retry briefly before reaping legacy/corrupt state.
-      missing_owner_attempts=$((missing_owner_attempts + 1))
-      if [[ "$missing_owner_attempts" -ge 5 ]]; then
-        if /bin/ln "$reap_candidate_path" "$reap_path" 2>/dev/null; then
-          owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
-          if [[ ! "$owner_pid" =~ ^[0-9]+$ ]]; then
-            /bin/rm -f "$lock_path"
-          fi
-          /bin/rm -f "$reap_path"
-        fi
-        missing_owner_attempts=0
-        continue
-      fi
+      continue
     fi
     /bin/sleep 0.1
   done
@@ -309,11 +304,9 @@ consumer_mac_test_acquire_lock() {
 
 consumer_mac_test_release_lock() {
   local lock_path="${CONSUMER_MAC_TEST_LOCK_OWNED:-}"
-  local owner_pid=""
 
   [[ -n "$lock_path" ]] || return 0
-  owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
-  if [[ "$owner_pid" == "$$" ]]; then
+  if consumer_mac_test_lock_token_matches_process "$lock_path" "$$"; then
     /bin/rm -f "$lock_path"
   fi
   CONSUMER_MAC_TEST_LOCK_OWNED=""

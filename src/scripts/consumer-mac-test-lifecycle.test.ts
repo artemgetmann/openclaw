@@ -28,6 +28,7 @@ describe("consumer macOS tester lifecycle shell contract", () => {
     expect(result.stdout).toContain("PASS: serializes tester-slot acquisition");
     expect(result.stdout).toContain("PASS: reclaims a stale lock without concurrent ownership");
     expect(result.stdout).toContain("PASS: recovers an abandoned stale-lock reaper");
+    expect(result.stdout).toContain("PASS: rejects stale lock ownership after PID reuse");
     expect(result.stdout).toContain("PASS: releases the slot lock when preparation fails");
     expect(result.stdout).toContain(
       "PASS: fails closed when the previous gateway cannot be quarantined",
