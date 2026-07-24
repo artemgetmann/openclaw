@@ -313,6 +313,15 @@ select_checkpoint_safe_phase() {
   local app_state=""
   local dmg_state=""
 
+  # Automatic phase selection can cause a rebuild or resubmission. Never make
+  # that mutation decision when the current process cannot validate Apple's
+  # known-good control signature.
+  if ! OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN:-/usr/bin/codesign}" \
+    openclaw_macos_host_trust_require; then
+    printf '%s\n' "host-trust-indeterminate"
+    return 0
+  fi
+
   # Resume state flows only from strict artifact checkpoints. The manifest is
   # intentionally absent from this decision: Accepted text plus file existence
   # is operator context, not proof that those bytes belong to this commit.
@@ -596,6 +605,14 @@ if [[ "$FORCED_PHASE" == "auto" ]]; then
   SELECTED_PHASE="$(select_checkpoint_safe_phase)"
 else
   SELECTED_PHASE="$FORCED_PHASE"
+fi
+
+if [[ "$SELECTED_PHASE" == "host-trust-indeterminate" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "INDETERMINATE: release phase selection requires the host-trust probe to pass outside the sandbox." >&2
+    exit 2
+  fi
+  fail_before_execute 2 "INDETERMINATE: release phase selection requires the host-trust probe to pass outside the sandbox."
 fi
 
 if [[ "$FORCED_PHASE" == "auto" && ( "$SELECTED_PHASE" == "publish-assets-only" || "$SELECTED_PHASE" == "publish-sparkle-assets-only" ) && -n "$GITHUB_RELEASE_TAG" ]]; then

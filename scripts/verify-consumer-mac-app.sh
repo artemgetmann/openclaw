@@ -532,6 +532,10 @@ else
   "$OPENCLAW_NODE_BIN" "$ROOT_DIR/scripts/verify-public-package-secrets.mjs" "$APP_PATH" >/dev/null
 fi
 
+# Gatekeeper is independent from codesign. Establish its own macOS-owned control
+# before a candidate failure can become an artifact or distribution verdict.
+openclaw_macos_gatekeeper_require || exit 2
+
 # Gatekeeper verdict is useful demo-distribution signal, but a local Apple
 # Development build should still count as a valid bundle assembly result.
 set +e

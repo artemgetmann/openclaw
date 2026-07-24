@@ -287,6 +287,7 @@ openclaw_jarvis_release_checkpoint_validate() {
   local commit expected_commit checkpoint_app_context absolute_app_context app_version app_build embedded_commit app_cdhash
   local actual_version actual_build actual_embedded actual_app_cdhash
   local signature_verified notary_status submission_id staple_validated created_at
+  local signature_status
 
   OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE=""
   absolute_path="$(openclaw_jarvis_release_checkpoint_absolute_path "$artifact_path")" || {
@@ -365,13 +366,14 @@ openclaw_jarvis_release_checkpoint_validate() {
   actual_build="$(openclaw_jarvis_release_checkpoint_plist_value "$absolute_app_context" CFBundleVersion)" || return 1
   actual_embedded="$(openclaw_jarvis_release_checkpoint_plist_value "$absolute_app_context" OpenClawGitCommit)" || return 1
   openclaw_jarvis_release_checkpoint_verify_signature "$absolute_app_context" app || {
+    signature_status=$?
     # Preserve the three-state trust result. Rewriting an indeterminate control
     # failure as app-signature would recreate the exact false artifact verdict
     # this guard exists to prevent.
     if [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" != "host-trust-indeterminate" ]]; then
       OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="app-signature"
     fi
-    return 1
+    return "$signature_status"
   }
   actual_app_cdhash="$(openclaw_jarvis_release_checkpoint_app_cdhash "$absolute_app_context")" || {
     OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="app-signed-code-identity"
@@ -401,10 +403,11 @@ openclaw_jarvis_release_checkpoint_validate() {
         return 1
       }
       openclaw_jarvis_release_checkpoint_verify_signature "$absolute_path" "$artifact_kind" || {
+        signature_status=$?
         if [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" != "host-trust-indeterminate" ]]; then
           OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="signature"
         fi
-        return 1
+        return "$signature_status"
       }
       ;;
     zip|appcast)

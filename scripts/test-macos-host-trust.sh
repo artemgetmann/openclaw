@@ -90,7 +90,7 @@ preflight_output="$(
   OPENCLAW_RELEASE_ENV_FILE=0 \
   OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="$codesign_stub" \
   OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH="$control_path" \
-    /bin/bash "$ROOT_DIR/scripts/preflight-consumer-mac-release.sh" 2>&1
+    /bin/bash "$ROOT_DIR/scripts/preflight-consumer-mac-release.sh" --host-context 2>&1
 )"
 preflight_status=$?
 set -e
@@ -102,11 +102,65 @@ set -e
   || fail "release preflight converted restricted Keychain visibility into a missing identity"
 pass "release preflight stops before sandboxed Keychain conclusions"
 
+TEST_CONTROL_RESULT=pass
+export TEST_CONTROL_RESULT
+set +e
+unasserted_output="$(
+  OPENCLAW_RELEASE_ENV_FILE=0 \
+  OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="$codesign_stub" \
+  OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH="$control_path" \
+    /bin/bash "$ROOT_DIR/scripts/preflight-consumer-mac-release.sh" 2>&1
+)"
+unasserted_status=$?
+set -e
+[[ "$unasserted_status" -eq 2 && "$unasserted_output" == *"Keychain visibility was not asserted"* ]] \
+  || fail "preflight drew Keychain conclusions without explicit host context"
+pass "Keychain conclusions require explicit host-context assertion"
+
+# Gatekeeper can be blocked independently of codesign. Prove that its control
+# failure remains indeterminate instead of becoming a candidate rejection.
+gatekeeper_stub="$TMP_DIR/spctl"
+/usr/bin/printf '%s\n' '#!/usr/bin/env bash
+target="${@: -1}"
+if [[ "$target" == "${TEST_GATEKEEPER_CONTROL_PATH:?}" ]]; then
+  [[ "${TEST_GATEKEEPER_CONTROL_RESULT:-pass}" == "pass" ]] && exit 0
+  echo "assessment service unavailable" >&2
+  exit 1
+fi
+[[ "${TEST_GATEKEEPER_ARTIFACT_RESULT:-pass}" == "pass" ]]' >"$gatekeeper_stub"
+chmod +x "$gatekeeper_stub"
+gatekeeper_control="$TMP_DIR/Finder.app"
+mkdir -p "$gatekeeper_control"
+export TEST_GATEKEEPER_CONTROL_PATH="$gatekeeper_control"
+export OPENCLAW_MACOS_GATEKEEPER_SPCTL_BIN="$gatekeeper_stub"
+export OPENCLAW_MACOS_GATEKEEPER_CONTROL_PATH="$gatekeeper_control"
+TEST_GATEKEEPER_CONTROL_RESULT=fail
+export TEST_GATEKEEPER_CONTROL_RESULT
+set +e
+openclaw_macos_gatekeeper_require 2>"$TMP_DIR/gatekeeper.err"
+gatekeeper_status=$?
+set -e
+[[ "$gatekeeper_status" -eq 2 && "$OPENCLAW_MACOS_GATEKEEPER_STATE" == "indeterminate" ]] \
+  || fail "blocked Gatekeeper control was not indeterminate"
+pass "Gatekeeper uses an independent control"
+
+TEST_GATEKEEPER_CONTROL_RESULT=pass
+TEST_GATEKEEPER_ARTIFACT_RESULT=fail
+export TEST_GATEKEEPER_CONTROL_RESULT TEST_GATEKEEPER_ARTIFACT_RESULT
+openclaw_macos_gatekeeper_require \
+  || fail "trusted Gatekeeper control did not establish assessment context"
+if "$gatekeeper_stub" -a -vv "$artifact_path" >/dev/null 2>&1; then
+  fail "Gatekeeper candidate rejection passed after trusted control"
+fi
+pass "Gatekeeper candidate rejection remains fail-closed after its control"
+
 # Checkpoint reuse is another release-verdict boundary. It must expose the
 # distinct indeterminate reason so orchestration cannot rewrite it as a corrupt
 # or rejected artifact.
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
 export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$codesign_stub"
+TEST_CONTROL_RESULT=fail
+export TEST_CONTROL_RESULT
 set +e
 openclaw_jarvis_release_checkpoint_verify_signature "$artifact_path" app \
   >/dev/null 2>"$TMP_DIR/checkpoint.err"

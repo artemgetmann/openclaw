@@ -302,7 +302,8 @@ artifacts and receipts.
 
 ```bash
 # Read-only. Reports missing/present state without printing secret values.
-bash scripts/preflight-consumer-mac-release.sh
+# --host-context explicitly asserts this is an ordinary, unsandboxed Terminal.
+bash scripts/preflight-consumer-mac-release.sh --host-context
 ```
 
 Release signature and Keychain conclusions require a valid Apple control sample
@@ -318,7 +319,10 @@ bash scripts/probe-macos-host-trust.sh
 
 The probe verifies `/bin/ls`, a macOS-owned signed binary. A failed control
 means the current process cannot distinguish sandbox-limited trust output from
-a host problem; it is not evidence of machine-wide trust corruption.
+a host problem; it is not evidence of machine-wide trust corruption. Keychain
+visibility cannot be inferred from codesign, so the credential preflight also
+requires the explicit `--host-context` assertion. Gatekeeper uses its own
+macOS-owned Finder control before any app rejection becomes definitive.
 
 Set release credentials with real values in your local shell, or put non-secret
 release settings and secret file pointers in the deterministic local env file:

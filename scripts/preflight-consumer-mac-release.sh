@@ -16,6 +16,36 @@ FALLBACK_PROFILE_STATE="missing"
 FALLBACK_PROFILE_READY=0
 NOTARYTOOL_READY=0
 SPARKLE_APPCAST_READY=0
+HOST_CONTEXT_ASSERTED=0
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/preflight-consumer-mac-release.sh --host-context
+
+--host-context  Assert that this process is running in an ordinary macOS host
+                Terminal, outside Codex/container/process sandboxes. This is
+                required before drawing conclusions about login-Keychain
+                signing identities or stored notary profiles.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host-context)
+      HOST_CONTEXT_ASSERTED=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unexpected argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 mark_ok() {
   printf 'OK: %s\n' "$1"
@@ -233,6 +263,10 @@ printf 'Release env file: %s\n\n' "$(openclaw_release_env_file)"
 # signatures on a healthy Mac. Stop with a distinct indeterminate result before
 # presenting those context-local observations as missing host prerequisites.
 openclaw_macos_host_trust_require || exit 2
+if [[ "$HOST_CONTEXT_ASSERTED" == "1" ]]; then
+  export OPENCLAW_MACOS_HOST_CONTEXT_ASSERTED=1
+fi
+openclaw_macos_host_context_require || exit 2
 
 check_developer_id
 check_notary_tooling
