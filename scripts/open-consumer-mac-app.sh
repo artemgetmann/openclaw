@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/consumer-mac-test-lifecycle.sh"
 source "$ROOT_DIR/scripts/lib/worktree-guards.sh"
 source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 source "$ROOT_DIR/scripts/lib/macos-activation.sh"
@@ -30,75 +31,6 @@ Default Jarvis runtime warning:
   proof. Use scripts/prove-jarvis-runtime.sh for read-only bundled proof, or
   pass --instance <id> for isolated source-checkout debug lanes.
 EOF
-}
-
-terminate_matching_app_binary() {
-  local binary_path="$1"
-  local pids=()
-  while IFS= read -r pid; do
-    [[ -n "$pid" ]] || continue
-    pids+=("$pid")
-  done < <(/bin/ps -axo pid=,command= | /usr/bin/awk -v target="$binary_path" 'index($0, target) > 0 { print $1 }')
-
-  if [[ "${#pids[@]}" -eq 0 ]]; then
-    return
-  fi
-
-  /bin/kill "${pids[@]}" 2>/dev/null || true
-}
-
-terminate_matching_app_bundle_id() {
-  local bundle_id="$1"
-  local line=""
-  local pid=""
-  local command=""
-  local app_path=""
-  local info_plist=""
-  local candidate_bundle_id=""
-  local pids=()
-
-  # Stable TCC identity intentionally makes multiple isolated proof apps share
-  # one macOS bundle id so Screen Recording permission can be reused. In that
-  # mode, replacing only the exact app path is insufficient: an older debug
-  # Jarvis with the same bundle id can make the new app self-exit as a
-  # duplicate. Limit this scan to OpenClaw app binaries and the expected bundle
-  # id so --replace stays explicit and bounded.
-  while IFS= read -r line; do
-    [[ "$line" == *"/Contents/MacOS/OpenClaw"* ]] || continue
-
-    pid="$(printf '%s\n' "$line" | /usr/bin/awk '{ print $1 }')"
-    [[ -n "$pid" ]] || continue
-
-    command="${line#*"$pid"}"
-    command="${command#"${command%%[![:space:]]*}"}"
-    app_path="$(printf '%s\n' "$command" | /usr/bin/sed -n 's#^\(.*\.app\)/Contents/MacOS/OpenClaw.*#\1#p')"
-    [[ -n "$app_path" ]] || continue
-
-    info_plist="$app_path/Contents/Info.plist"
-    [[ -f "$info_plist" ]] || continue
-
-    candidate_bundle_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$info_plist" 2>/dev/null || true)"
-    [[ "$candidate_bundle_id" == "$bundle_id" ]] || continue
-    pids+=("$pid")
-  done < <(/bin/ps -axo pid=,command=)
-
-  if [[ "${#pids[@]}" -eq 0 ]]; then
-    return
-  fi
-
-  /bin/kill "${pids[@]}" 2>/dev/null || true
-  /bin/sleep 1
-
-  local alive=()
-  for pid in "${pids[@]}"; do
-    if /bin/ps -p "$pid" >/dev/null 2>&1; then
-      alive+=("$pid")
-    fi
-  done
-
-  if [[ "${#alive[@]}" -gt 0 ]]; then
-    /bin/kill -9 "${alive[@]}" 2>/dev/null || true
-  fi
 }
 
 bootout_conflicting_gateway_label() {
@@ -316,16 +248,16 @@ if [[ "$actual_name" != "$EXPECTED_NAME" || "$actual_bundle_id" != "$EXPECTED_BU
   exit 1
 fi
 
-if [[ "$REPLACE" == "1" ]]; then
-  if [[ -n "$NORMALIZED_INSTANCE_ID" ]] && consumer_instance_stable_tcc_identity_enabled; then
-    terminate_matching_app_bundle_id "$EXPECTED_BUNDLE_ID"
-  else
-    terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
-  fi
+# Debug apps share one machine-wide tester slot. `--replace` transfers that
+# slot by retiring the previous exact app and named gateway; without it, the
+# launcher refuses before adding another Jarvis icon. Production Jarvis is not
+# a debug bundle and is never selected by this helper.
+if consumer_mac_test_is_debug_bundle_id "$actual_bundle_id"; then
+  consumer_mac_test_begin_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" "$REPLACE"
+  trap 'cleanup_pending_launch_receipt; consumer_mac_test_release_lock' EXIT
 fi
 
 if [[ -n "${LAUNCH_RECEIPT}" ]]; then
-  trap cleanup_pending_launch_receipt EXIT
   prepare_launch_receipt
 fi
 
@@ -354,6 +286,9 @@ else
     /usr/bin/open -n "$APP_PATH"
 fi
 
+if consumer_mac_test_is_debug_bundle_id "$actual_bundle_id"; then
+  consumer_mac_test_wait_for_app_path "$APP_PATH"
+fi
 publish_launch_receipt
 
 if [[ "$REFRESH_GATEWAY" == "1" ]]; then
@@ -364,6 +299,7 @@ if [[ "$REFRESH_GATEWAY" == "1" ]]; then
 fi
 
 openclaw_activate_macos_app "$APP_PATH" "$actual_bundle_id"
+consumer_mac_test_release_lock
 
 echo "Opened consumer app:"
 echo "  path=$APP_PATH"

@@ -22,6 +22,13 @@ For linked worktrees, prefer the scoped launchers instead of relying on the shar
 - `bash scripts/dev-launch-mac.sh`
 - `bash scripts/open-consumer-mac-app.sh --instance <id>`
 - `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>`
+
+Local debug apps use one machine-wide tester slot. The normal rebuild and UI
+smoke wrappers pass `--replace`, so launching a new tester retires the previous
+exact debug app and its named gateway before opening another Dock app. A direct
+`open-consumer-mac-app.sh` call without `--replace` refuses when another tester
+owns the slot. The installed `/Applications/Jarvis.app` and
+`ai.jarvis.gateway` are never part of tester cleanup.
 - `pnpm openclaw:local gateway restart`
 
 ## Packaging flow

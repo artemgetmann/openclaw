@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/consumer-mac-test-lifecycle.sh"
 source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
@@ -811,6 +812,10 @@ if [[ "$OPEN_APP" == "0" ]]; then
   exit 0
 fi
 
+# UI smoke is an explicit replacement lane: transfer the single tester slot
+# before opening anything, including another worktree's stale debug app.
+consumer_mac_test_begin_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" 1
+trap consumer_mac_test_release_lock EXIT
 terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
 
 export OPENCLAW_APP_VARIANT=consumer
@@ -842,6 +847,8 @@ if [[ "$WITH_RUNTIME" == "1" ]]; then
 fi
 
 launch_smoke_app "$APP_PATH" "$LOG_PATH" "${OPEN_ENV_ARGS[@]}"
+consumer_mac_test_wait_for_app_path "$APP_PATH"
+consumer_mac_test_release_lock
 if [[ "$WITH_RUNTIME" == "1" ]]; then
   approve_latest_device_pairing_if_pending "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$GATEWAY_PORT" "$OPENCLAW_PROFILE" "$OPENCLAW_LAUNCHD_LABEL"
 fi
