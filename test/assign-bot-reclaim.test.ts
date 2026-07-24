@@ -1,6 +1,14 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +19,31 @@ const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.Process
     encoding: "utf8",
     env: env ? { ...process.env, ...env } : process.env,
   }).trim();
+
+const runAsync = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) =>
+  new Promise<string>((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      env: env ? { ...process.env, ...env } : process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+        return;
+      }
+      reject(new Error(`Command failed with exit ${String(code)}: ${stderr.trim()}`));
+    });
+  });
 
 const initRepo = (prefix: string) => {
   const root = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -108,6 +141,120 @@ describe("assign-bot stale claim reclaim", () => {
     const recoveredEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
     expect(recoveredEnv).toContain(`OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}`);
     expect(recoveredEnv).toContain("TELEGRAM_BOT_TOKEN=111:first");
+  });
+
+  it("serializes concurrent fresh assignments without leaking bot reservations", async () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-concurrent-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(
+      path.join(mainDir, ".env.bots"),
+      Array.from({ length: 8 }, (_, index) => `BOT_TOKEN=${index + 111}:token-${index + 1}`).join(
+        "\n",
+      ) + "\n",
+    );
+    writeFileSync(path.join(mainDir, ".env.local"), "KEEP_ME=yes\n");
+
+    const outputs = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        runAsync(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home }),
+      ),
+    );
+
+    expect(
+      outputs.filter((output) => output.includes("Assigned Telegram bot token #1")),
+    ).toHaveLength(1);
+    expect(
+      outputs.filter((output) => output.includes("Retained Telegram bot token #1")),
+    ).toHaveLength(7);
+    const scenarioIds = outputs.map((output) => output.match(/^Scenario ID: (.+)$/m)?.[1]);
+    const generations = outputs.map(
+      (output) => output.match(/^Reservation generation: (.+)$/m)?.[1],
+    );
+    expect(scenarioIds.every(Boolean)).toBe(true);
+    expect(generations.every(Boolean)).toBe(true);
+    expect(new Set(scenarioIds).size).toBe(1);
+    expect(new Set(generations).size).toBe(1);
+    const envContent = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    expect(envContent).toContain("KEEP_ME=yes");
+    expect(envContent).toContain("TELEGRAM_BOT_TOKEN=111:token-1");
+    expect(envContent).toContain(`OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioIds[0]}`);
+    expect(envContent).toContain(
+      `OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=${generations[0]}`,
+    );
+    const reservationRoot = path.join(home, ".openclaw", "telegram-tester-scenario-reservations");
+    const reservationFiles = readdirSync(reservationRoot).filter((name) => name.endsWith(".json"));
+    expect(reservationFiles).toHaveLength(1);
+    const reservationContent = readFileSync(
+      path.join(reservationRoot, reservationFiles[0]),
+      "utf8",
+    );
+    expect(reservationContent).toContain(`"scenarioId": "${scenarioIds[0]}"`);
+    expect(reservationContent).toContain(`"generation": "${generations[0]}"`);
+    expect(readdirSync(mainDir).filter((name) => name.includes("assignment.lock"))).toEqual([]);
+  });
+
+  it("fails closed on a crash-persistent worktree assignment lock", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-stale-lock-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:first\n");
+    const lockDir = path.join(mainDir, ".openclaw-telegram-tester-assignment.lock");
+    mkdirSync(lockDir);
+    writeFileSync(path.join(lockDir, "owner.pid"), "999999999\n");
+    writeFileSync(
+      path.join(lockDir, "owner.json"),
+      '{"version":1,"pid":999999999,"createdAt":"2026-07-24T00:00:00Z"}\n',
+    );
+
+    expect(() => run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home })).toThrow(
+      /stale tester-bot assignment lock requires manual recovery/,
+    );
+    expect(readFileSync(path.join(lockDir, "owner.pid"), "utf8")).toBe("999999999\n");
+    expect(
+      readdirSync(path.join(home, ".openclaw")).filter((name) =>
+        name.includes("telegram-tester-scenario-reservations"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("preserves unrelated local settings when assignment cannot claim a bot", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-preserve-failure-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    const leaseRoot = path.join(home, ".openclaw", "telegram-token-leases");
+    mkdirSync(leaseRoot, { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    const leasedToken = "111:leased";
+    const tokenHash = crypto.createHash("sha256").update(leasedToken).digest("hex");
+    writeFileSync(path.join(mainDir, ".env.bots"), `BOT_TOKEN=${leasedToken}\n`);
+    writeFileSync(
+      path.join(leaseRoot, `111-${tokenHash}.json`),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        starttime: null,
+        createdAt: new Date().toISOString(),
+        tokenHash,
+        tokenFingerprint: tokenHash.slice(0, 12),
+        botId: "111",
+        accountId: "default",
+        configPath: null,
+        worktree: path.join(root, "other-worktree"),
+      }),
+    );
+    writeFileSync(path.join(mainDir, ".env.local"), "KEEP_ME=yes\n");
+
+    expect(() => run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home })).toThrow();
+
+    const envContent = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    expect(envContent).toContain("KEEP_ME=yes");
+    expect(envContent).toMatch(/^OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=tg-scenario-.+$/m);
+    expect(envContent).not.toContain("TELEGRAM_BOT_TOKEN=");
   });
 
   it("does not adopt a durable reservation when the local generation is stale", () => {

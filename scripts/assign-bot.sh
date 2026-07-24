@@ -107,6 +107,58 @@ if (( ${#bot_tokens[@]} == 0 )); then
   exit 1
 fi
 
+# Assignment must be one transaction per worktree, not merely one transaction
+# per bot token. Otherwise concurrent fresh invocations can generate different
+# scenarios, reserve different bots under their independent token locks, and
+# leave all but the last local assignment unreachable until expiry.
+ASSIGNMENT_LOCK_DIR="$(pwd -P)/.openclaw-telegram-tester-assignment.lock"
+ASSIGNMENT_LOCK_OWNED="no"
+
+release_assignment_lock() {
+  if [[ "$ASSIGNMENT_LOCK_OWNED" != "yes" ]]; then
+    return
+  fi
+  # Only this process can own the directory while it exists. A contender waits
+  # for removal and never auto-deletes it, so cleanup cannot erase a successor.
+  rm -rf "$ASSIGNMENT_LOCK_DIR"
+  ASSIGNMENT_LOCK_OWNED="no"
+}
+
+acquire_assignment_lock() {
+  local deadline=$((SECONDS + 30))
+  local owner_pid=""
+
+  while ! mkdir "$ASSIGNMENT_LOCK_DIR" 2>/dev/null; do
+    owner_pid=""
+    if [[ -r "${ASSIGNMENT_LOCK_DIR}/owner.pid" ]]; then
+      IFS= read -r owner_pid < "${ASSIGNMENT_LOCK_DIR}/owner.pid" || true
+    fi
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+      # A crash-persistent lock is unknown ownership. Never unlink it from a
+      # waiter: a pathname check/delete race could remove a newly created lock.
+      echo "Error: stale tester-bot assignment lock requires manual recovery: ${ASSIGNMENT_LOCK_DIR}" >&2
+      echo "Recorded owner PID is not running: ${owner_pid}" >&2
+      exit 1
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "Error: timed out waiting for tester-bot assignment lock: ${ASSIGNMENT_LOCK_DIR}" >&2
+      echo "Inspect owner.json and confirm the owner is gone before manual recovery." >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+
+  ASSIGNMENT_LOCK_OWNED="yes"
+  printf '%s\n' "$$" > "${ASSIGNMENT_LOCK_DIR}/owner.pid"
+  printf '{"version":1,"pid":%s,"createdAt":"%s"}\n' \
+    "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${ASSIGNMENT_LOCK_DIR}/owner.json"
+}
+
+trap release_assignment_lock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+acquire_assignment_lock
+
 selection="$(
   HELPER_MODULE="$HELPER_MODULE" \
   SCENARIO_RESERVATION_MODULE="$SCENARIO_RESERVATION_MODULE" \
@@ -209,11 +261,17 @@ const scenarioId = requestedScenarioId || storedScenarioId || defaultScenarioId;
 // and leaving the bot stranded until the reservation expires.
 if (!currentToken && !storedScenarioId) {
   const intentPath = `${envLocalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(intentPath, `OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
+  const existingContent = fs.existsSync(envLocalPath) ? fs.readFileSync(envLocalPath, "utf8") : "";
+  const separator = existingContent && !existingContent.endsWith("\n") ? "\n" : "";
+  fs.writeFileSync(
+    intentPath,
+    `${existingContent}${separator}OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
   fs.renameSync(intentPath, envLocalPath);
   fs.chmodSync(envLocalPath, 0o600);
 }
@@ -500,15 +558,62 @@ for idx in "${!stale_claim_tokens[@]}"; do
   echo "Reclaim runtime port: ${stale_runtime_port}" >&2
 done
 
-{
-  printf 'TELEGRAM_BOT_TOKEN=%s\n' "$selected_token"
-  printf 'OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=%s\n' "$scenario_id"
-  printf 'OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=%s\n' "$reservation_generation"
-  printf 'OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH=%s\n' "$reservation_token_hash"
-  printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=%s\n' "$reservation_generation"
-  printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH=%s\n' "$reservation_token_hash"
-  printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID=default\n'
-} > ".env.local"
+# Publish the complete assignment atomically while retaining unrelated local
+# settings. Managed keys are replaced as one set so a crash cannot expose a
+# token paired with stale generation or safe-reuse scope metadata.
+ENV_LOCAL_PATH="$(pwd -P)/.env.local" \
+  SELECTED_TOKEN="$selected_token" \
+  SCENARIO_ID="$scenario_id" \
+  RESERVATION_GENERATION="$reservation_generation" \
+  RESERVATION_TOKEN_HASH="$reservation_token_hash" \
+  node --input-type=module - <<'NODE'
+import crypto from "node:crypto";
+import fs from "node:fs";
+
+const envLocalPath = process.env.ENV_LOCAL_PATH;
+const managedValues = new Map([
+  ["TELEGRAM_BOT_TOKEN", process.env.SELECTED_TOKEN],
+  ["OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID", process.env.SCENARIO_ID],
+  ["OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION", process.env.RESERVATION_GENERATION],
+  ["OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH", process.env.RESERVATION_TOKEN_HASH],
+  ["OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION", process.env.RESERVATION_GENERATION],
+  ["OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH", process.env.RESERVATION_TOKEN_HASH],
+  ["OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID", "default"],
+]);
+if (
+  !envLocalPath ||
+  Array.from(managedValues.values()).some((value) => typeof value !== "string" || !value)
+) {
+  throw new Error("Cannot publish incomplete tester-bot assignment metadata.");
+}
+
+const existingContent = fs.existsSync(envLocalPath) ? fs.readFileSync(envLocalPath, "utf8") : "";
+const managedKeys = new Set(managedValues.keys());
+const keptLines = existingContent.split(/\r?\n/gu).filter((line) => {
+  for (const key of managedKeys) {
+    if (new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=`).test(line)) {
+      return false;
+    }
+  }
+  return true;
+});
+while (keptLines.length > 0 && keptLines.at(-1) === "") {
+  keptLines.pop();
+}
+const nextLines = [
+  ...keptLines,
+  ...Array.from(managedValues, ([key, value]) => `${key}=${value}`),
+  "",
+];
+const tempPath = `${envLocalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+fs.writeFileSync(tempPath, nextLines.join("\n"), {
+  encoding: "utf8",
+  mode: 0o600,
+  flag: "wx",
+});
+fs.renameSync(tempPath, envLocalPath);
+fs.chmodSync(envLocalPath, 0o600);
+NODE
 
 if [[ "$selection_action" == "retain" ]]; then
   echo "Retained Telegram bot token #$selected_index for worktree: $(pwd -P)"
