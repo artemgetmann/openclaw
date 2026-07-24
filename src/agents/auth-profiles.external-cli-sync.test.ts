@@ -20,6 +20,7 @@ const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 
 describe("syncExternalCliCredentials", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.restoreAllMocks();
   });
 
@@ -112,5 +113,77 @@ describe("syncExternalCliCredentials", () => {
         spy.mockRestore();
       }
     }
+  });
+
+  it("does not replace a locally rotated Codex credential with stale CLI state", () => {
+    const sharedExpires = Date.now() + 60 * 60_000;
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "stale-cli-access",
+      refresh: "stale-cli-refresh",
+      expires: sharedExpires,
+      accountId: "acct_123",
+    });
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "jarvis-rotated-access",
+          refresh: "jarvis-rotated-refresh",
+          expires: sharedExpires,
+          accountId: "acct_123",
+        },
+      },
+    };
+
+    const mutated = syncExternalCliCredentials(store);
+
+    expect(mutated).toBe(false);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      access: "jarvis-rotated-access",
+      refresh: "jarvis-rotated-refresh",
+      expires: sharedExpires,
+      accountId: "acct_123",
+    });
+  });
+
+  it("does not recover a stale Codex profile from a different external account", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "other-account-access",
+      refresh: "other-account-refresh",
+      expires: Date.now() + 10 * 60_000,
+      accountId: "acct_other",
+    });
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "local-near-expiry-access",
+          refresh: "local-near-expiry-refresh",
+          expires: Date.now() + 60_000,
+          accountId: "acct_local",
+        },
+      },
+    };
+
+    const mutated = syncExternalCliCredentials(store);
+
+    expect(mutated).toBe(false);
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalled();
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      access: "local-near-expiry-access",
+      refresh: "local-near-expiry-refresh",
+      accountId: "acct_local",
+    });
   });
 });
