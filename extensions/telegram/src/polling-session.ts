@@ -98,6 +98,13 @@ type TelegramPollingOutcome =
   | "conflict"
   | "unhealthy";
 
+class TelegramSafeReuseManualRecoveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TelegramSafeReuseManualRecoveryError";
+  }
+}
+
 type TelegramPollingSessionOpts = {
   token: string;
   config: Parameters<typeof createTelegramBot>[0]["config"];
@@ -109,6 +116,18 @@ type TelegramPollingSessionOpts = {
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
+  safeReuseFence?: {
+    generation: string;
+    resolveState: () => Promise<{
+      phase: "reading" | "pending" | "complete";
+      lastUpdateId: number | null;
+      recreateBot: boolean;
+    } | null>;
+    markReading: () => Promise<void>;
+    markPending: (lastUpdateId: number | null) => Promise<void>;
+    persistCutoff: (lastUpdateId: number | null) => Promise<void>;
+    markComplete: (lastUpdateId: number | null) => Promise<void>;
+  };
   log: (line: string) => void;
   setStatus?: (next: Partial<ChannelAccountSnapshot>) => void;
 };
@@ -137,6 +156,7 @@ export class TelegramPollingSession {
   #lastTimerGapMs: number | null = null;
   #lastTimerDelayMs: number | null = null;
   #watchdogEscalation: string | null = null;
+  #safeReuseFenceCompleted = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {}
 
@@ -213,6 +233,22 @@ export class TelegramPollingSession {
       }
       if (cleanupState === "exit") {
         return;
+      }
+
+      const fenceState = await this.#ensureSafeReuseFence(bot);
+      if (fenceState === "retry") {
+        continue;
+      }
+      if (fenceState === "exit") {
+        return;
+      }
+      if (fenceState === "recreate") {
+        // The first bot was deliberately transport-only: it consumed the
+        // server-side tail marker without installing the model-dispatch
+        // runner. Recreate after persisting the cutoff so even a repeated tail
+        // update is skipped by middleware before any agent turn can start.
+        await this.#disposeSetupBot(bot);
+        continue;
       }
 
       const state = await this.#runPollingCycle(bot);
@@ -324,6 +360,112 @@ export class TelegramPollingSession {
       );
       return shouldRetry ? "retry" : "exit";
     }
+  }
+
+  async #ensureSafeReuseFence(bot: TelegramBot): Promise<"ready" | "retry" | "exit" | "recreate"> {
+    const fence = this.opts.safeReuseFence;
+    if (!fence) {
+      return "ready";
+    }
+
+    try {
+      if (this.#safeReuseFenceCompleted) {
+        return "ready";
+      }
+      const state = await fence.resolveState();
+      if (state?.phase === "complete") {
+        this.#safeReuseFenceCompleted = true;
+        return state.recreateBot ? "recreate" : "ready";
+      }
+      if (state?.phase === "reading") {
+        throw new TelegramSafeReuseManualRecoveryError(
+          `Telegram safe-reuse tail-read outcome is ambiguous for reservation generation ${fence.generation}. Manual recovery is required; refusing to issue getUpdates(offset: -1) again.`,
+        );
+      }
+      if (state?.phase === "pending") {
+        // The prior process already consumed Telegram's negative-offset tail
+        // but died before committing the completion receipt. Finish that exact
+        // recorded transaction; rereading the mutable tail here could advance
+        // the cutoff past messages sent by the current scenario.
+        await fence.persistCutoff(state.lastUpdateId);
+        await fence.markComplete(state.lastUpdateId);
+        this.#safeReuseFenceCompleted = true;
+        this.opts.log(
+          `[telegram] Recovered pending safe-reuse backlog fence for reservation generation ${fence.generation}.`,
+        );
+        return "recreate";
+      }
+      // Persist intent before the destructive tail read. If the response is
+      // lost after Telegram processes the request, the surviving marker makes
+      // that ambiguity durable and prevents any automatic second read.
+      await fence.markReading();
+      let updates: unknown;
+      try {
+        updates = await withTelegramApiErrorLogging({
+          operation: "getUpdates",
+          runtime: this.opts.runtime,
+          fn: () =>
+            bot.api.getUpdates({
+              offset: -1,
+              limit: 1,
+              timeout: 0,
+            }),
+        });
+      } catch (err) {
+        // Deliberately omit `cause`: the polling retry classifier walks network
+        // causes, but retrying this ambiguous operation could fence a valid
+        // same-scenario message that arrived after Telegram processed the first.
+        throw new TelegramSafeReuseManualRecoveryError(
+          `Telegram safe-reuse tail-read outcome is ambiguous for reservation generation ${fence.generation}: ${formatErrorMessage(err)}. Manual recovery is required; refusing to issue getUpdates(offset: -1) again.`,
+        );
+      }
+      if (!Array.isArray(updates)) {
+        throw new Error("Telegram safe-reuse fence returned a malformed update list.");
+      }
+
+      let lastUpdateId: number | null = null;
+      for (const update of updates) {
+        const updateId = (update as { update_id?: unknown }).update_id;
+        if (!Number.isSafeInteger(updateId) || Number(updateId) < 0) {
+          throw new Error("Telegram safe-reuse fence returned an invalid update id.");
+        }
+        lastUpdateId =
+          lastUpdateId === null ? Number(updateId) : Math.max(lastUpdateId, Number(updateId));
+      }
+      // Write the observed tail before changing the local cutoff. This is the
+      // transaction's recovery point: any later crash can replay the recorded
+      // cutoff without another destructive negative-offset Telegram read.
+      await fence.markPending(lastUpdateId);
+      await fence.persistCutoff(lastUpdateId);
+      // The durable receipt is written only after Telegram acknowledges the
+      // negative-offset tail read and the local cutoff is durable. The pending
+      // receipt above makes the gap between those two durable writes recoverable.
+      await fence.markComplete(lastUpdateId);
+      this.#safeReuseFenceCompleted = true;
+      this.opts.log(
+        `[telegram] Completed safe-reuse backlog fence for reservation generation ${fence.generation}.`,
+      );
+      return "recreate";
+    } catch (err) {
+      await this.#disposeSetupBot(bot);
+      // Message-based network classification is intentionally broad and can
+      // match words such as "timeout" inside this terminal diagnostic. The
+      // explicit type is the authority: an ambiguous destructive read must
+      // never enter the ordinary setup retry loop.
+      if (err instanceof TelegramSafeReuseManualRecoveryError) {
+        throw err;
+      }
+      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+        err,
+        "Telegram safe-reuse backlog fence failed",
+      );
+      return shouldRetry ? "retry" : "exit";
+    }
+  }
+
+  async #disposeSetupBot(bot: TelegramBot): Promise<void> {
+    await Promise.resolve(bot.stop()).catch(() => {});
+    await waitForTelegramBotTransportClose(bot).catch(() => {});
   }
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {

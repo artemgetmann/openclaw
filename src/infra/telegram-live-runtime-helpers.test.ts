@@ -938,9 +938,41 @@ describe("telegram live runtime helpers", () => {
       stateRoot: "/tmp/openclaw-telegram-live",
       acpValidation: "1",
     });
+    const ordinaryProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+      stateRoot: "/tmp/openclaw-telegram-live",
+    });
 
     expect(profile.runtimeStateDir).toMatch(
       /^\/tmp\/openclaw-telegram-live\/tg-live-[0-9a-f]{10}\/acp-validation$/,
+    );
+    expect(profile.commandLockDir).toBe(ordinaryProfile.commandLockDir);
+    expect(profile.commandLockDir).toMatch(
+      /\/Library\/Application Support\/OpenClaw\/telegram-live-worktrees\/command-locks\/tg-live-[0-9a-f]{10}\.command\.lock$/,
+    );
+  });
+
+  it("keeps lifecycle lock identity stable across default and custom state roots", () => {
+    const defaultProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+    });
+    const customProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+      stateRoot: "/tmp/custom-telegram-live-state",
+    });
+
+    expect(customProfile.runtimeStateDir).not.toBe(defaultProfile.runtimeStateDir);
+    expect(customProfile.commandLockDir).toBe(defaultProfile.commandLockDir);
+    expect(defaultProfile.commandLockDir).toBe(
+      path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "OpenClaw",
+        "telegram-live-worktrees",
+        "command-locks",
+        `${defaultProfile.profileId}.command.lock`,
+      ),
     );
   });
 

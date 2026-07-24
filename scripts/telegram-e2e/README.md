@@ -542,6 +542,61 @@ When a worktree is done with Telegram live testing, free its claim explicitly:
 scripts/telegram-live-runtime.sh release
 ```
 
+### Scenario reservation rule
+
+The PID lease prevents simultaneous polling. The scenario reservation prevents
+sequential transfer while a multi-step acceptance run is unfinished.
+
+Pin scripted runs to one stable ID:
+
+```bash
+OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=booking-acceptance-20260724 \
+  scripts/telegram-live-runtime.sh ensure
+```
+
+The same scenario and canonical worktree retain the same bot and reservation
+generation across subprocess or gateway restart. Other scenarios/worktrees
+must use another bot until the owner runs the canonical release command:
+
+```bash
+scripts/telegram-live-runtime.sh release
+```
+
+When no ID is supplied, first assignment generates and persists a fresh run
+UUID. Keeping `.env.local` resumes that run after a process restart; recreating
+a worktree at the same filesystem path without the old owner file creates a
+new run/generation and therefore requires a new backlog fence.
+
+Release validates the exact generation and clears `.env.local` ownership while
+the global reservation lock is held before deleting the reservation. Do not
+change scenario IDs or edit reservation state by hand. Old lanes with a token
+but no scenario generation require one explicit `release`, then `ensure`.
+The exact owner of an expired generation uses the same release-then-ensure
+boundary; only an unassigned scenario/worktree can reclaim expiry after proving
+the polling lease absent. Ensure, release, and handoff-main serialize on one
+worktree-profile lock even when ACP or a custom root uses a different runtime
+state directory.
+An interrupted assignment resumes the scenario/worktree's durable token
+reservation even if pool eligibility changes before retry. A different
+scenario override fails closed until that owner is recovered and released.
+Duplicate durable owners for that scenario/worktree fail closed.
+Crash-persistent locks are never auto-deleted: inspect their `owner.json` and
+recover manually only after proving no owner or polling lease is active.
+Malformed or ambiguous state fails closed.
+
+New reservation generations also run a transport-only backlog fence before
+the runner or any model dispatch starts. Telegram's negative offset forgets earlier queued
+updates; the returned tail ID is persisted as the local skip cutoff, and a
+receipt scoped to token hash, account, and reservation generation prevents
+repeated fencing on same-scenario restart. An in-progress marker is written
+before the tail request; an ambiguous response fails closed for manual recovery
+instead of repeating the destructive read. A successful tail ID is then written
+as pending, so a crash during cutoff/receipt completion replays that recorded
+cutoff. Webhook startup fails closed while this fence is required because no
+equivalent webhook cutoff exists yet. This changes ownership/cursor safety only:
+the tester runtime still inherits the main runtime's browser, email, WhatsApp,
+messaging, plugin, and tool capabilities.
+
 ### Tester parity note (important)
 
 The canonical worktree live runtime should behave like main except for explicit isolation fields: bot token, port, state dir, config path, logs, service/profile id, and staged upload path. `ensure` now fails closed when model, browser, plugin-slot, or tool parity drifts.

@@ -99,6 +99,57 @@ erasure.
 - One active Telegram runtime lane equals one exclusive tester bot token. Do
   not share a bot token across two live runtimes; Telegram long-polling is
   single-owner and the loser will produce fake failures.
+- Tester tokens also carry a durable scenario reservation above the live PID
+  polling lease. For a multi-step scripted flow, pin the scenario explicitly:
+
+  ```bash
+  OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=<stable-run-id> \
+    bash scripts/telegram-live-runtime.sh ensure
+  ```
+
+  Reusing that ID from the same worktree resumes the same bot across gateway
+  or subprocess restarts. A different worktree/scenario cannot take it merely
+  because the poller exited. Without an explicit ID, the first assignment
+  creates a fresh UUID-backed run ID and persists it in `.env.local`; process
+  restarts resume it, while a newly recreated worktree at the same path cannot
+  impersonate the old run.
+
+- End the ownership lifecycle only through
+  `bash scripts/telegram-live-runtime.sh release`. Release validates the exact
+  token, scenario, canonical worktree, and reservation generation; clears the
+  local claim while holding the reservation lock; then makes the bot
+  claimable. Do not hand-edit `.env.local` or reservation files.
+- A pre-reservation lane whose `.env.local` has a token but no scenario
+  generation must perform a one-time canonical `release`, then `ensure`.
+  Likewise, the exact owner of an expired generation must `release`, then
+  `ensure`; it cannot replace its generation in place. Ensure, release, and
+  handoff-main share one worktree-profile lifecycle lock across normal and ACP
+  modes and custom runtime-state roots, so the reset cannot race a restart.
+  Release preserves unrelated local env settings.
+- If assignment stops after publishing a reservation but before publishing the
+  local token credentials, rerunning `ensure` resumes that exact token even if
+  pool eligibility changed. A different scenario override is rejected until
+  the stored scenario is recovered and released. Multiple reservations for the
+  same scenario/worktree fail closed instead of choosing one by file order.
+- Reservations renew on `ensure` and expire after seven days by default.
+  An unassigned scenario/worktree may reclaim an expired reservation only when
+  the process-level polling lease is known absent; the exact prior owner uses
+  the explicit release boundary above. Malformed reservation/lock state fails
+  closed. A crash-persistent lock is never auto-deleted because a read/remove
+  recovery race can erase a newer owner's lock. Stop and inspect its
+  `owner.json`; recovery is an explicit operator action after proving no owner
+  or polling lease is active.
+- The first runtime for a new reservation generation performs a transport-only
+  negative-offset `getUpdates` fence before starting the runner or any model
+  dispatch. Its receipt is scoped to token hash, account, and reservation
+  generation, so old pending updates cannot reach another full-parity tester
+  runtime while same-scenario restarts do not repeatedly discard new messages.
+  An in-progress marker is durable before the tail request; an ambiguous
+  response fails closed for manual recovery instead of rereading Telegram's
+  mutable tail. A successful tail is then recorded as pending before cutoff
+  persistence, so a crash during completion replays that exact cutoff.
+  Safe-reuse generations fail closed in webhook mode until an equivalent
+  pre-dispatch webhook fence exists.
 - Worktree tester baselines strip inherited Telegram secrets on purpose. If the
   source config had named Telegram accounts, the bootstrap writes non-secret
   strip metadata to the baseline `auth-sync.json`, and
