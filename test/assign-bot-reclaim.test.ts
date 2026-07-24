@@ -143,6 +143,40 @@ describe("assign-bot stale claim reclaim", () => {
     expect(recoveredEnv).toContain("TELEGRAM_BOT_TOKEN=111:first");
   });
 
+  it("persists an explicit scenario override before interrupted reservation publication", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-override-recovery-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:first\nBOT_TOKEN=222:second\n");
+    writeFileSync(
+      path.join(mainDir, ".env.local"),
+      "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=old-scenario\nKEEP_ME=yes\n",
+    );
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "replacement-scenario",
+        OPENCLAW_TELEGRAM_TESTER_ASSIGN_ABORT_AFTER_RESERVATION: "1",
+      }),
+    ).toThrow();
+
+    const interruptedEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    expect(interruptedEnv).toContain("OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=replacement-scenario");
+    expect(interruptedEnv).not.toContain("OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=old-scenario");
+    expect(interruptedEnv).toContain("KEEP_ME=yes");
+    expect(interruptedEnv).not.toContain("TELEGRAM_BOT_TOKEN=");
+
+    const recoveredOutput = run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home });
+    expect(recoveredOutput).toContain("Assigned Telegram bot token #1");
+    expect(recoveredOutput).toContain("Scenario ID: replacement-scenario");
+    const recoveredEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    expect(recoveredEnv).toContain("OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=replacement-scenario");
+    expect(recoveredEnv).toContain("TELEGRAM_BOT_TOKEN=111:first");
+  });
+
   it("serializes concurrent fresh assignments without leaking bot reservations", async () => {
     const { root, mainDir } = initRepo("openclaw-assign-bot-concurrent-");
     installAssignBotFixture(mainDir);
@@ -405,6 +439,81 @@ describe("assign-bot stale claim reclaim", () => {
         "utf8",
       ),
     ).toContain('"requiresSafeReuseFence": false');
+  });
+
+  it("fails closed when an active legacy owner also has a foreign active-looking claim", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-legacy-claim-conflict-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    const leaseRoot = path.join(home, ".openclaw", "telegram-token-leases");
+    mkdirSync(leaseRoot, { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:live\nBOT_TOKEN=222:free\n");
+    const originalEnv = "TELEGRAM_BOT_TOKEN=111:live\nKEEP_ME=yes\n";
+    writeFileSync(path.join(mainDir, ".env.local"), originalEnv);
+    run(mainDir, "git", ["add", "."]);
+    run(mainDir, "git", ["commit", "-m", "fixture"]);
+
+    const copiedDir = path.join(root, "copied-legacy-lane");
+    run(mainDir, "git", ["worktree", "add", copiedDir, "-b", "codex/copied-legacy", "HEAD"]);
+    writeFileSync(path.join(copiedDir, ".env.local"), "TELEGRAM_BOT_TOKEN=111:live\n");
+
+    const leasedToken = "111:live";
+    const tokenHash = crypto.createHash("sha256").update(leasedToken).digest("hex");
+    writeFileSync(
+      path.join(leaseRoot, `111-${tokenHash}.json`),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        starttime: null,
+        createdAt: new Date().toISOString(),
+        tokenHash,
+        tokenFingerprint: tokenHash.slice(0, 12),
+        botId: "111",
+        accountId: "default",
+        configPath: null,
+        worktree: mainDir,
+      }),
+    );
+
+    const stubDir = path.join(root, "stubs");
+    mkdirSync(stubDir, { recursive: true });
+    writeFileSync(
+      path.join(stubDir, "lsof"),
+      `#!/usr/bin/env bash
+if [[ "$*" == *"-tiTCP:"* ]]; then
+  printf '4242\\n'
+  exit 0
+fi
+if [[ "$*" == *"-a -p 4242 -d cwd -Fn"* ]]; then
+  printf 'n${copiedDir}\\n'
+  exit 0
+fi
+exit 0
+`,
+      { encoding: "utf8", mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(stubDir, "ps"),
+      "#!/usr/bin/env bash\nprintf 'node dist/index.js gateway run --port 20123\\n'\n",
+      { encoding: "utf8", mode: 0o755 },
+    );
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        PATH: `${stubDir}:${process.env.PATH}`,
+        OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "new-scenario",
+      }),
+    ).toThrow();
+    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toBe(originalEnv);
+
+    const reservationRoot = path.join(home, ".openclaw", "telegram-tester-scenario-reservations");
+    const firstReservation = path.join(reservationRoot, `111-${tokenHash}.json`);
+    const secondHash = crypto.createHash("sha256").update("222:free").digest("hex");
+    const secondReservation = path.join(reservationRoot, `222-${secondHash}.json`);
+    expect(() => readFileSync(firstReservation, "utf8")).toThrow();
+    expect(() => readFileSync(secondReservation, "utf8")).toThrow();
   });
 
   it("keeps a malformed polling lease unavailable instead of assigning its token", () => {

@@ -259,13 +259,19 @@ const scenarioId = requestedScenarioId || storedScenarioId || defaultScenarioId;
 // reservation. If this process dies after the global write, the next invocation
 // can recover the same scenario instead of losing its only ownership credential
 // and leaving the bot stranded until the reservation expires.
-if (!storedScenarioId) {
+const persistScenarioIntent = () => {
   const intentPath = `${envLocalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   const existingContent = fs.existsSync(envLocalPath) ? fs.readFileSync(envLocalPath, "utf8") : "";
-  const separator = existingContent && !existingContent.endsWith("\n") ? "\n" : "";
+  const keptLines = existingContent.split(/\r?\n/gu).filter(
+    (line) =>
+      !/^[\t ]*(?:export[\t ]+)?OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID[\t ]*=/u.test(line),
+  );
+  while (keptLines.length > 0 && keptLines.at(-1) === "") {
+    keptLines.pop();
+  }
   fs.writeFileSync(
     intentPath,
-    `${existingContent}${separator}OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}\n`,
+    `${[...keptLines, `OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}`].join("\n")}\n`,
     {
       encoding: "utf8",
       mode: 0o600,
@@ -274,6 +280,9 @@ if (!storedScenarioId) {
   );
   fs.renameSync(intentPath, envLocalPath);
   fs.chmodSync(envLocalPath, 0o600);
+};
+if (!currentToken && storedScenarioId !== scenarioId) {
+  persistScenarioIntent();
 }
 
 // Changing scenario identity while a bot is still assigned would silently
@@ -351,15 +360,30 @@ for (const candidate of candidates) {
     candidate === currentToken &&
     Boolean(storedReservationGeneration) &&
     Boolean(storedReservationTokenHash);
+  if (isLegacyCurrentToken && activeClaimTokens.has(candidate)) {
+    // A live same-worktree legacy PID lease can prove the local runtime, but it
+    // cannot disprove a second worktree's active-looking claim. Stop without
+    // reserving either bot; rotating would leave the live runtime polling the
+    // old identity while .env.local advertises the new one.
+    lastReservationReason = "legacy_current_token_claim_conflict";
+    break;
+  }
   if (
     !poolTokens.includes(candidate) ||
-    // A copied .env.local is not reservation ownership. Let the exact current
-    // owner reach the locked reservation check; the in-lock PID lease re-read
-    // below still blocks any genuinely active foreign poller.
+    // A copied .env.local is not modern reservation ownership. Let the exact
+    // credentialed owner reach the locked PID lease check below; other claims
+    // remain unavailable.
     (activeClaimTokens.has(candidate) && !isCurrentReservationCandidate) ||
     reservedTokenSet.has(candidate)
   ) {
     continue;
+  }
+  if (isLegacyCurrentToken && !storedScenarioId) {
+    // Delay legacy intent publication until copied/active claim ambiguity has
+    // been ruled out above. The scenario still becomes durable before the
+    // global reservation write, but a fail-closed conflict leaves .env.local
+    // byte-for-byte unchanged.
+    persistScenarioIntent();
   }
   const reservation = await acquireTelegramTesterScenarioReservation({
     token: candidate,

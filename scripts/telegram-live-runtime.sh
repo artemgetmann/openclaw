@@ -78,6 +78,8 @@ TELEGRAM_SENDER_USER_ID="unknown"
 TELEGRAM_SENDER_ACCESS_STATUS="not-run"
 FAIL=0
 FAIL_REASONS=()
+PROFILE_COMMAND_LOCK_DIR=""
+PROFILE_COMMAND_LOCK_OWNED="no"
 
 repo_toolchain_path() {
   local toolchain_path="${REPO_ROOT}/node_modules/.bin"
@@ -1543,7 +1545,66 @@ emit_ensure_proof_lines() {
   done
 }
 
-ensure_command() {
+release_profile_command_lock() {
+  if [[ "$PROFILE_COMMAND_LOCK_OWNED" != "yes" || -z "$PROFILE_COMMAND_LOCK_DIR" ]]; then
+    return
+  fi
+  # The owner keeps the directory for the full command transaction. A waiter
+  # never deletes it, so this cleanup cannot erase a successor's lock.
+  rm -rf "$PROFILE_COMMAND_LOCK_DIR"
+  PROFILE_COMMAND_LOCK_OWNED="no"
+}
+
+acquire_profile_command_lock() {
+  local timeout_secs="${OPENCLAW_TELEGRAM_LIVE_COMMAND_LOCK_TIMEOUT_SECS:-300}"
+  if [[ ! "$timeout_secs" =~ ^[0-9]+$ ]]; then
+    timeout_secs=300
+  fi
+  local deadline=$((SECONDS + timeout_secs))
+  local owner_pid=""
+  if [[ -z "$RUNTIME_STATE_DIR" || "$RUNTIME_STATE_DIR" != /* ]]; then
+    echo "Error: refusing Telegram live command lock for invalid runtime state path." >&2
+    return 1
+  fi
+  PROFILE_COMMAND_LOCK_DIR="${RUNTIME_STATE_DIR}.command.lock"
+  mkdir -p -- "$(dirname "$PROFILE_COMMAND_LOCK_DIR")"
+
+  while ! mkdir "$PROFILE_COMMAND_LOCK_DIR" 2>/dev/null; do
+    owner_pid=""
+    if [[ -r "${PROFILE_COMMAND_LOCK_DIR}/owner.pid" ]]; then
+      IFS= read -r owner_pid < "${PROFILE_COMMAND_LOCK_DIR}/owner.pid" || true
+    fi
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+      echo "Error: stale Telegram live command lock requires manual recovery: ${PROFILE_COMMAND_LOCK_DIR}" >&2
+      echo "Recorded owner PID is not running: ${owner_pid}" >&2
+      return 1
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "Error: timed out waiting for Telegram live command lock: ${PROFILE_COMMAND_LOCK_DIR}" >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+
+  PROFILE_COMMAND_LOCK_OWNED="yes"
+  printf '%s\n' "$$" > "${PROFILE_COMMAND_LOCK_DIR}/owner.pid"
+  printf '{"version":1,"pid":%s,"createdAt":"%s"}\n' \
+    "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${PROFILE_COMMAND_LOCK_DIR}/owner.json"
+}
+
+with_profile_command_lock() (
+  # The lock lives beside, not inside, the removable runtime state directory.
+  # Running the command in a subshell gives EXIT/interrupt cleanup a bounded
+  # scope while preserving the command's stdout, stderr, and exit status.
+  resolve_profile
+  acquire_profile_command_lock || exit 1
+  trap release_profile_command_lock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  "$@"
+)
+
+ensure_command_unlocked() {
   resolve_profile
   resolve_base_config_path
 
@@ -1634,6 +1695,10 @@ ensure_command() {
   fi
 }
 
+ensure_command() {
+  with_profile_command_lock ensure_command_unlocked
+}
+
 emit_handoff_proof_lines() {
   echo "handoff_worktree=${WORKTREE}"
   echo "handoff_runtime_port=${RUNTIME_PORT:-}"
@@ -1641,7 +1706,7 @@ emit_handoff_proof_lines() {
   echo "handoff_runtime_stop=${RUNTIME_STOP_RESULT}"
 }
 
-handoff_main_command() {
+handoff_main_command_unlocked() {
   resolve_profile
   resolve_runtime_owner
   stop_owned_runtime
@@ -1688,7 +1753,11 @@ handoff_main_command() {
   fi
 }
 
-release_command() {
+handoff_main_command() {
+  with_profile_command_lock handoff_main_command_unlocked
+}
+
+release_command_unlocked() {
   resolve_profile
   resolve_runtime_owner
 
@@ -1832,6 +1901,10 @@ NODE
     done
     return 1
   fi
+}
+
+release_command() {
+  with_profile_command_lock release_command_unlocked
 }
 
 usage() {

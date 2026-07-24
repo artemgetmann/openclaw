@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -57,6 +57,82 @@ describe("telegram-live-runtime.sh", () => {
     expect(stdout).toContain("config_diff_allowed_only=true");
     expect(stdout).toContain("browser_sidecar_enabled=true");
     expect(stdout).not.toContain("token_claim_path=");
+  });
+
+  it("serializes ensure and release across one profile command transaction", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-lock-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const logPath = path.join(tempDir, "transactions.log");
+    const runtimeStateDir = path.join(tempDir, "state");
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; }; ensure_command_unlocked() { printf 'ensure-start\\n' >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start\\n' >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; ensure_command & ensure_pid=$!; sleep 0.05; release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toBe("ensure-start\nensure-end\nrelease-start\nrelease-end\n");
+  });
+
+  it("creates a missing profile lock parent before the first ensure", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-lock-parent-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const runtimeStateDir = path.join(tempDir, "missing", "nested", "state");
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; }; ensure_command_unlocked() { printf ok; }; ensure_command`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toBe("ok");
+    expect(existsSync(path.dirname(runtimeStateDir))).toBe(true);
+    expect(existsSync(`${runtimeStateDir}.command.lock`)).toBe(false);
+  });
+
+  it("routes every profile lifecycle mutator through the command lock", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-wrappers-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; with_profile_command_lock() { printf '%s\\n' "$1"; }; ensure_command; release_command; handoff_main_command`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toBe(
+      "ensure_command_unlocked\nrelease_command_unlocked\nhandoff_main_command_unlocked\n",
+    );
   });
 
   it("releases the exact reservation generation and local claim as one safe boundary", async () => {

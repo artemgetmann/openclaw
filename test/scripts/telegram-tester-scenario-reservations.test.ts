@@ -40,6 +40,61 @@ describe("Telegram tester scenario reservations", () => {
     });
   });
 
+  it("reclaims an expired same-owner generation instead of resuming it", async () => {
+    const reservationRoot = mkdtempSync(path.join(os.tmpdir(), "tg-scenario-expired-owner-"));
+    const nowMs = Date.parse("2026-07-24T00:00:00.000Z");
+    const first = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "booking-acceptance-expired",
+      worktreePath: "/tmp/worktree-expired",
+      reservationRoot,
+      nowMs,
+      ttlMs: 1_000,
+    });
+    expect(first.ok).toBe(true);
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+    const stillPolling = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "booking-acceptance-expired",
+      worktreePath: "/tmp/worktree-expired",
+      reservationRoot,
+      nowMs: nowMs + 2_000,
+      ttlMs: 1_000,
+      expectedGeneration: String(first.generation),
+      expectedTokenHash: tokenHash,
+      requireExpectedOwner: true,
+      hasActivePollingLease: () => [
+        {
+          token,
+          worktreePath: "/tmp/worktree-expired",
+          pid: 1234,
+        },
+      ],
+    });
+    expect(stillPolling).toMatchObject({ ok: false, reason: "expired_but_leased" });
+
+    const reclaimed = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "booking-acceptance-expired",
+      worktreePath: "/tmp/worktree-expired",
+      reservationRoot,
+      nowMs: nowMs + 2_000,
+      ttlMs: 1_000,
+      expectedGeneration: String(first.generation),
+      expectedTokenHash: tokenHash,
+      requireExpectedOwner: true,
+      hasActivePollingLease: false,
+    });
+    expect(reclaimed).toMatchObject({
+      ok: true,
+      action: "reclaimed_expired",
+      safeReuseRequired: true,
+      safeReuseEnabled: true,
+    });
+    expect(reclaimed.generation).not.toBe(first.generation);
+  });
+
   it("allows exactly one concurrent scenario to reserve a token", async () => {
     const reservationRoot = mkdtempSync(path.join(os.tmpdir(), "tg-scenario-race-"));
     const contenders = await Promise.all([
@@ -152,6 +207,24 @@ describe("Telegram tester scenario reservations", () => {
       ],
     });
     expect(foreign).toMatchObject({ ok: false, reason: "owner_generation_mismatch" });
+  });
+
+  it("does not mint a reservation from a dead legacy token claim", async () => {
+    const reservationRoot = mkdtempSync(path.join(os.tmpdir(), "tg-scenario-dead-legacy-"));
+    const acquired = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "dead-legacy-scenario",
+      worktreePath: "/tmp/worktree-dead-legacy",
+      reservationRoot,
+      requireExpectedOwner: true,
+      allowLegacyLeaseMigration: true,
+      hasActivePollingLease: false,
+    });
+
+    expect(acquired).toMatchObject({ ok: false, reason: "legacy_lease_not_active" });
+    expect(
+      existsSync(resolveTelegramTesterScenarioReservationPath({ token, reservationRoot })),
+    ).toBe(false);
   });
 
   it("resumes only when an active PID lease matches the durable scenario owner", async () => {

@@ -335,6 +335,7 @@ export async function acquireTelegramTesterScenarioReservation(params) {
     const expectedTokenHash = String(params?.expectedTokenHash ?? "").trim();
     const mayMigrateLegacyLease =
       params?.allowLegacyLeaseMigration === true && everyActiveLeaseMatchesOwner;
+    const expired = existing ? Date.parse(existing.expiresAt) <= nowMs : false;
     if (
       sameOwner &&
       params?.requireExpectedOwner === true &&
@@ -353,7 +354,7 @@ export async function acquireTelegramTesterScenarioReservation(params) {
         reservationPath,
       };
     }
-    if (sameOwner && (!hasActivePollingLease || everyActiveLeaseMatchesOwner)) {
+    if (sameOwner && !expired && (!hasActivePollingLease || everyActiveLeaseMatchesOwner)) {
       // A running process in this exact scenario/worktree may call ensure
       // again. A live PID lease is compatible only when both the durable
       // reservation and the current lease registry prove the same worktree.
@@ -412,8 +413,18 @@ export async function acquireTelegramTesterScenarioReservation(params) {
         reservationPath,
       };
     }
+    if (!existing && params?.allowLegacyLeaseMigration === true) {
+      // A legacy local token is not enough to mint durable ownership. Only the
+      // active same-worktree PID lease migration above is authoritative; a
+      // dead/copied legacy claim must stop instead of falling through to the
+      // ordinary unreserved-token creation path.
+      return {
+        ok: false,
+        reason: "legacy_lease_not_active",
+        reservationPath,
+      };
+    }
 
-    const expired = existing ? Date.parse(existing.expiresAt) <= nowMs : false;
     if (existing && !expired) {
       return {
         ok: false,
