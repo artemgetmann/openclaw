@@ -27,6 +27,7 @@ function fixture(
     hostileBackendMeta?: boolean;
     inexactReply?: boolean;
     lockOwnerWriteFailure?: "empty" | "partial";
+    precheckSessionSource?: "env-file" | "machine-default" | "monitor-binding" | "state-default";
   } = {},
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-managed-proof-test-"));
@@ -42,11 +43,21 @@ function fixture(
   const calls = path.join(root, "calls.jsonl");
   const runtimeState = path.join(root, "runtime-state.json");
   const lock = path.join(root, "machine-lock");
+  const packagedSession = path.join(stateDir, "telegram-user", "userbot.session");
+  const packagedEnvFile = path.join(stateDir, "telegram-user", ".env.local");
+  const staleLegacySession = path.join(home, ".openclaw", "telegram-user", "userbot.session");
   fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
   fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.mkdirSync(path.dirname(packagedSession), { recursive: true });
+  fs.mkdirSync(path.dirname(staleLegacySession), { recursive: true });
   fs.symlinkSync(process.execPath, nodeBin);
   fs.writeFileSync(logPath, "fixture-start\n");
+  // The harness must follow the packaged binding even when a stale legacy
+  // session exists. These files are inert fixtures; no credential bytes exist.
+  fs.writeFileSync(packagedSession, "ready-packaged-fixture\n");
+  fs.writeFileSync(packagedEnvFile, "TELEGRAM_API_ID=123\n");
+  fs.writeFileSync(staleLegacySession, "needs-reauth-legacy-fixture\n");
   fs.writeFileSync(
     runtimeState,
     JSON.stringify({ statusCalls: 0, topicDeleted: false, sessionDeleted: false }),
@@ -103,14 +114,16 @@ const calls = ${JSON.stringify(calls)};
 const statePath = ${JSON.stringify(runtimeState)};
 const logPath = ${JSON.stringify(logPath)};
 const mode = ${JSON.stringify(options.sessionMode ?? "one")};
-const operatorSession = ${JSON.stringify(path.join(home, ".openclaw", "telegram-user", "userbot.session"))};
-const operatorLock = operatorSession + ".openclaw.lock";
+const operatorSession = ${JSON.stringify(packagedSession)};
+const operatorEnvFile = ${JSON.stringify(packagedEnvFile)};
 const managedConfig = ${JSON.stringify(path.join(stateDir, "openclaw.json"))};
-const backendMeta = {
+const backendMeta = (explicit) => ({
+  env_file:operatorEnvFile,
   session_path:${options.hostileBackendMeta ? JSON.stringify(path.join(root, "hostile-meta.session")) : "operatorSession"},
-  lock_scope:"machine",
+  session_source:explicit ? "explicit" : ${JSON.stringify(options.precheckSessionSource ?? "monitor-binding")},
+  lock_scope:${options.hostileBackendMeta ? '"explicit"' : '"machine"'},
   backend:"fixture"
-};
+});
 fs.appendFileSync(calls, JSON.stringify(args) + "\\n");
 fs.appendFileSync(logPath, "proof fixture activity\\n");
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
@@ -128,8 +141,14 @@ for (const key of [
 if (process.env.OPENCLAW_GATEWAY_PORT !== "18789") process.exit(24);
 if (process.env.OPENCLAW_CONFIG_PATH !== managedConfig) process.exit(25);
 if (args[0] === "telegram-user") {
-  if (value("--session") !== operatorSession) process.exit(21);
-  if (process.env.OPENCLAW_TELEGRAM_USER_LOCK_PATH !== operatorLock) process.exit(22);
+  const isPrecheck = args[1] === "precheck";
+  if (isPrecheck && (args.includes("--session") || args.includes("--env-file"))) process.exit(21);
+  if (!isPrecheck && value("--session") !== operatorSession) process.exit(29);
+  if (!isPrecheck && value("--env-file") !== operatorEnvFile) process.exit(30);
+  if (process.env.USERBOT_SESSION !== undefined) process.exit(22);
+  if (process.env.OPENCLAW_TELEGRAM_USER_SESSION !== undefined) process.exit(26);
+  if (process.env.OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION !== undefined) process.exit(27);
+  if (process.env.OPENCLAW_TELEGRAM_USER_LOCK_PATH !== undefined) process.exit(28);
 }
 if (args[0] === "channels" && args[1] === "status") {
   state.statusCalls += 1;
@@ -147,7 +166,7 @@ if (args[0] === "channels" && args[1] === "status") {
     lastPollCompletedAt:now,lastInboundAt:now,lastOutboundAt:now
   }]}});
 } else if (args[0] === "telegram-user" && args[1] === "precheck") {
-  emit({ok:true,backend_meta:backendMeta});
+  emit({ok:true,backend_meta:backendMeta(false)});
 } else if (args[0] === "telegram-user" && args[1] === "topic-create") {
   if (${options.topicCreateFails === true}) process.exit(8);
   emit({
@@ -155,10 +174,10 @@ if (args[0] === "channels" && args[1] === "status") {
     topic_title:value("--title"),
     topic_anchor:100,
     message_id:${options.invalidTopicIds ? "101" : "100"},
-    backend_meta:backendMeta
+    backend_meta:backendMeta(true)
   });
 } else if (args[0] === "telegram-user" && args[1] === "send") {
-  emit({result:{message:{message_id:101,sender_id:7}},backend_meta:backendMeta});
+  emit({result:{message:{message_id:101,sender_id:7}},backend_meta:backendMeta(true)});
 } else if (args[0] === "telegram-user" && args[1] === "wait") {
   if (${options.waitFails === true}) process.exit(8);
   emit({
@@ -166,13 +185,13 @@ if (args[0] === "channels" && args[1] === "status") {
       message_id:102,sender_id:42,thread_anchor:100,
       text:${options.inexactReply ? '"prefix " + value("--contains") + " suffix"' : 'value("--contains")'}
     },
-    backend_meta:backendMeta
+    backend_meta:backendMeta(true)
   });
 } else if (args[0] === "telegram-user" && args[1] === "read") {
-  emit({messages:state.topicDeleted ? [] : [{message_id:102,text:value("--contains")}],backend_meta:backendMeta});
+  emit({messages:state.topicDeleted ? [] : [{message_id:102,text:value("--contains")}],backend_meta:backendMeta(true)});
 } else if (args[0] === "telegram-user" && args[1] === "topic-delete") {
   state.topicDeleted = true; save();
-  emit({deleted:true,chat_id:value("--chat"),topic_anchor:Number(value("--topic-anchor")),backend_meta:backendMeta});
+  emit({deleted:true,chat_id:value("--chat"),topic_anchor:Number(value("--topic-anchor")),backend_meta:backendMeta(true)});
 } else if (args[0] === "gateway" && args[1] === "call" && args[2] === "sessions.list") {
   const key = "agent:main:telegram:group:-1003783709877:topic:100";
   const sessions = state.sessionDeleted || mode === "zero" ? [] :
@@ -213,6 +232,7 @@ if (args[0] === "channels" && args[1] === "status") {
       CLAWDBOT_GATEWAY_TOKEN: "hostile-legacy-token",
       OPENCLAW_GATEWAY_PASSWORD: "hostile-current-password",
       CLAWDBOT_GATEWAY_PASSWORD: "hostile-legacy-password",
+      OPENCLAW_CONSUMER_INSTANCE_ID: "hostile-tester-lane",
       OPENCLAW_JARVIS_GATEWAY_LABEL: "ai.jarvis.gateway.hostile",
       OPENCLAW_JARVIS_INSTALLED_MANIFEST: path.join(root, "hostile-installed-manifest.json"),
       OPENCLAW_JARVIS_PROTECTION_MARKER: path.join(root, "hostile-protection-marker.json"),
@@ -310,7 +330,7 @@ describe("prove-jarvis-telegram-runtime", () => {
     const result = execute(testFixture, "389C051");
     const evidence = JSON.parse(result.stdout);
     const calls = callsFor(testFixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, `${result.stderr}\n${result.stdout}\n${JSON.stringify(calls)}`).toBe(0);
     expect(evidence.result).toBe("passed");
     expect(evidence.expectedCommit).toBe("389c051");
     expect(evidence.cleanup.topic).toBe("deleted");
@@ -342,21 +362,56 @@ describe("prove-jarvis-telegram-runtime", () => {
       }),
     );
     expect(calls.filter((args) => args[1] === "topic-create")).toHaveLength(1);
-    const expectedSession = path.join(
-      testFixture.home,
-      ".openclaw",
-      "telegram-user",
-      "userbot.session",
-    );
     for (const args of calls.filter((args) => args[0] === "telegram-user")) {
-      expect(args[args.indexOf("--session") + 1]).toBe(expectedSession);
+      if (args[1] === "precheck") {
+        expect(args).not.toContain("--session");
+        expect(args).not.toContain("--env-file");
+        continue;
+      }
+      expect(args[args.indexOf("--session") + 1]).toBe(
+        path.join(
+          testFixture.home,
+          "Library",
+          "Application Support",
+          "Jarvis",
+          ".jarvis",
+          "telegram-user",
+          "userbot.session",
+        ),
+      );
     }
     expect(evidence.operatorSession).toEqual({
-      source: "machine-canonical",
-      path: expectedSession,
-      lockPath: `${expectedSession}.openclaw.lock`,
+      source: "monitor-binding",
+      path: path.join(
+        testFixture.home,
+        "Library",
+        "Application Support",
+        "Jarvis",
+        ".jarvis",
+        "telegram-user",
+        "userbot.session",
+      ),
+      lockScope: "machine",
       verifiedBackend: {
-        sessionPath: expectedSession,
+        envFile: path.join(
+          testFixture.home,
+          "Library",
+          "Application Support",
+          "Jarvis",
+          ".jarvis",
+          "telegram-user",
+          ".env.local",
+        ),
+        sessionPath: path.join(
+          testFixture.home,
+          "Library",
+          "Application Support",
+          "Jarvis",
+          ".jarvis",
+          "telegram-user",
+          "userbot.session",
+        ),
+        sessionSource: "monitor-binding",
         lockScope: "machine",
         backend: "fixture",
       },
@@ -388,6 +443,42 @@ describe("prove-jarvis-telegram-runtime", () => {
     expect(fs.readFileSync(testFixture.gateArgs, "utf8")).toContain(
       "--runtime-source jarvis-break-glass-hotfix",
     );
+  });
+
+  it("accepts a full expected SHA when runtime provenance emits its short prefix", () => {
+    const fullCommit = "389c0513cf0123456789abcdef0123456789abcd";
+    const testFixture = fixture({ gateRuntimeCommit: fullCommit.slice(0, 10) });
+    const result = execute(testFixture, fullCommit);
+    const evidence = JSON.parse(result.stdout);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(evidence.expectedCommit).toBe(fullCommit);
+    expect(evidence.runtime.provenance.runtimeCommit).toBe(fullCommit.slice(0, 10));
+  });
+
+  it("accepts a packaged canonical fallback and pins it before mutations", () => {
+    const testFixture = fixture({ precheckSessionSource: "state-default" });
+    const result = execute(testFixture);
+    const evidence = JSON.parse(result.stdout);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(evidence.operatorSession.source).toBe("state-default");
+    for (const args of callsFor(testFixture).filter(
+      (args) => args[0] === "telegram-user" && args[1] !== "precheck",
+    )) {
+      expect(args).toContain("--session");
+      expect(args).toContain("--env-file");
+    }
+  });
+
+  it("rejects malformed short runtime commit provenance", () => {
+    const testFixture = fixture({ gateRuntimeCommit: "3" });
+    const result = execute(testFixture, "389c0513cf0123456789abcdef0123456789abcd");
+    const evidence = JSON.parse(result.stdout);
+
+    expect(result.status).toBe(1);
+    expect(evidence.runtime.provenance).toBeNull();
+    expect(evidence.telegram.topicCreationAttempted).toBe(false);
   });
 
   it.each([
@@ -526,6 +617,23 @@ describe("prove-jarvis-telegram-runtime", () => {
     expect(calls.filter((args) => args[1] === "precheck")).toHaveLength(1);
     expect(calls.filter((args) => args[1] === "topic-create")).toEqual([]);
   });
+
+  it.each(["machine-default", "env-file"] as const)(
+    "rejects legacy %s session ownership before topic mutation",
+    (precheckSessionSource) => {
+      const testFixture = fixture({ precheckSessionSource });
+      const result = execute(testFixture);
+      const evidence = JSON.parse(result.stdout);
+      const calls = callsFor(testFixture);
+
+      expect(result.status).toBe(1);
+      expect(evidence.reason).toContain(
+        "operator-precheck returned mismatched operator backend ownership",
+      );
+      expect(calls.filter((args) => args[1] === "precheck")).toHaveLength(1);
+      expect(calls.filter((args) => args[1] === "topic-create")).toEqual([]);
+    },
+  );
 
   it("rejects a reply that contains but does not exactly equal the nonce", () => {
     const testFixture = fixture({ inexactReply: true });
