@@ -124,8 +124,8 @@ erasure.
   Likewise, the exact owner of an expired generation must `release`, then
   `ensure`; it cannot replace its generation in place. Ensure, release, and
   handoff-main share one worktree-profile lifecycle lock across normal and ACP
-  modes, so the reset cannot race a restart. Release preserves unrelated local
-  env settings.
+  modes and custom runtime-state roots, so the reset cannot race a restart.
+  Release preserves unrelated local env settings.
 - Reservations renew on `ensure` and expire after seven days by default.
   An unassigned scenario/worktree may reclaim an expired reservation only when
   the process-level polling lease is known absent; the exact prior owner uses

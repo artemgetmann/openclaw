@@ -59,12 +59,30 @@ describe("telegram-live-runtime.sh", () => {
     expect(stdout).not.toContain("token_claim_path=");
   });
 
-  it("serializes ACP ensure and ordinary release across one stable profile lock", () => {
+  it("serializes custom-root ensure and default-root release across one stable profile lock", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-lock-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
     const logPath = path.join(tempDir, "transactions.log");
-    const profileDir = path.join(tempDir, "profile");
-    const commandLockDir = path.join(tempDir, "profile.command.lock");
+    const machineHome = path.join(tempDir, "home");
+    const customStateRoot = path.join(tempDir, "custom-state");
+    const worktreePath = path.join(tempDir, "worktree");
+    const profileId = `tg-live-${crypto
+      .createHash("sha256")
+      .update(worktreePath)
+      .digest("hex")
+      .slice(0, 10)}`;
+    const defaultStateRoot = path.join(
+      machineHome,
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      "telegram-live-worktrees",
+    );
+    const commandLockDir = path.join(
+      defaultStateRoot,
+      "command-locks",
+      `${profileId}.command.lock`,
+    );
     const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
     writeFileSync(sourcePath, scriptSource, "utf8");
 
@@ -74,7 +92,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; resolve_profile() { PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(commandLockDir)}; if [[ "\${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" == "1" ]]; then RUNTIME_STATE_DIR=${JSON.stringify(path.join(profileDir, "acp-validation"))}; else RUNTIME_STATE_DIR=${JSON.stringify(path.join(profileDir, ".openclaw"))}; fi; }; ensure_command_unlocked() { printf 'ensure-start\\n' >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start\\n' >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION=1 ensure_command & ensure_pid=$!; sleep 0.05; OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION=0 release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
+        `source ${JSON.stringify(sourcePath)}; export HOME=${JSON.stringify(machineHome)}; HELPER_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-live-runtime-helpers.mjs"))}; WORKTREE=${JSON.stringify(worktreePath)}; ensure_command_unlocked() { printf 'ensure-start:%s\\n' "$RUNTIME_STATE_DIR" >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start:%s\\n' "$RUNTIME_STATE_DIR" >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; OPENCLAW_TELEGRAM_LIVE_STATE_ROOT=${JSON.stringify(customStateRoot)} ensure_command & ensure_pid=$!; sleep 0.05; OPENCLAW_TELEGRAM_LIVE_STATE_ROOT= release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
       ],
       {
         cwd: process.cwd(),
@@ -82,7 +100,15 @@ describe("telegram-live-runtime.sh", () => {
       },
     );
 
-    expect(stdout).toBe("ensure-start\nensure-end\nrelease-start\nrelease-end\n");
+    expect(stdout).toBe(
+      [
+        `ensure-start:${path.join(customStateRoot, profileId)}`,
+        "ensure-end",
+        `release-start:${path.join(defaultStateRoot, profileId, ".openclaw")}`,
+        "release-end",
+        "",
+      ].join("\n"),
+    );
     expect(existsSync(commandLockDir)).toBe(false);
   });
 
