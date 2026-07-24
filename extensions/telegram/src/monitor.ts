@@ -25,6 +25,7 @@ import {
   resolveTelegramSafeReuseFenceRequest,
   writeCompletedTelegramSafeReuseFence,
   writePendingTelegramSafeReuseFence,
+  writeReadingTelegramSafeReuseFence,
 } from "./safe-reuse-fence-store.js";
 import {
   deleteTelegramUpdateOffset,
@@ -346,6 +347,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
                 state.phase === "complete" && ignorePersistedOffset && state.lastUpdateId !== null,
             };
           },
+          markReading: () =>
+            writeReadingTelegramSafeReuseFence({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+            }),
           markPending: (lastUpdateId: number | null) =>
             writePendingTelegramSafeReuseFence({
               accountId: account.accountId,

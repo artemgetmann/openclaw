@@ -22,6 +22,10 @@ type TelegramSafeReuseFenceReceiptBase = {
 
 type TelegramSafeReuseFenceReceipt =
   | (TelegramSafeReuseFenceReceiptBase & {
+      phase: "reading";
+      readingAt: string;
+    })
+  | (TelegramSafeReuseFenceReceiptBase & {
       phase: "pending";
       pendingAt: string;
     })
@@ -121,6 +125,7 @@ function parseReceipt(raw: string): TelegramSafeReuseFenceReceipt | null {
     const parsed = JSON.parse(raw) as Partial<TelegramSafeReuseFenceReceipt> & {
       completedAt?: unknown;
       pendingAt?: unknown;
+      readingAt?: unknown;
       phase?: unknown;
     };
     // Receipts written before the pending transaction existed had no explicit
@@ -128,11 +133,13 @@ function parseReceipt(raw: string): TelegramSafeReuseFenceReceipt | null {
     // semantics while requiring all newly written receipts to name the phase.
     const phase = parsed.phase === undefined ? "complete" : parsed.phase;
     const phaseTimestamp =
-      phase === "pending"
-        ? parsed.pendingAt
-        : phase === "complete"
-          ? parsed.completedAt
-          : undefined;
+      phase === "reading"
+        ? parsed.readingAt
+        : phase === "pending"
+          ? parsed.pendingAt
+          : phase === "complete"
+            ? parsed.completedAt
+            : undefined;
     if (
       parsed.version !== STORE_VERSION ||
       typeof parsed.generation !== "string" ||
@@ -152,9 +159,11 @@ function parseReceipt(raw: string): TelegramSafeReuseFenceReceipt | null {
       tokenHash: parsed.tokenHash,
       accountId: parsed.accountId,
       lastUpdateId: parsed.lastUpdateId ?? null,
-      ...(phase === "pending"
-        ? { phase, pendingAt: phaseTimestamp }
-        : { phase, completedAt: phaseTimestamp }),
+      ...(phase === "reading"
+        ? { phase, readingAt: phaseTimestamp }
+        : phase === "pending"
+          ? { phase, pendingAt: phaseTimestamp }
+          : { phase, completedAt: phaseTimestamp }),
     } as TelegramSafeReuseFenceReceipt;
   } catch {
     return null;
@@ -190,6 +199,12 @@ export async function readTelegramSafeReuseFenceState(params: {
       receipt.accountId === accountId;
     if (!matchesOwner) {
       return null;
+    }
+    // A reading marker deliberately carries no cutoff. Its presence means the
+    // request may have been processed by Telegram without a response reaching
+    // us, so callers must fail closed instead of sampling the mutable tail again.
+    if (receipt.phase === "reading") {
+      return { phase: "reading", lastUpdateId: null };
     }
     // Pending is a write-ahead record of the exact Telegram tail already read.
     // It is recoverable even if the process died before writing the cutoff:
@@ -245,7 +260,7 @@ async function writeTelegramSafeReuseFenceReceipt(params: {
   botToken: string;
   generation: string;
   lastUpdateId: number | null;
-  phase: "pending" | "complete";
+  phase: "reading" | "pending" | "complete";
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   validateFenceWrite(params);
@@ -265,9 +280,11 @@ async function writeTelegramSafeReuseFenceReceipt(params: {
       tokenHash,
       accountId,
       lastUpdateId: params.lastUpdateId,
-      ...(params.phase === "pending"
-        ? { phase: "pending", pendingAt: timestamp }
-        : { phase: "complete", completedAt: timestamp }),
+      ...(params.phase === "reading"
+        ? { phase: "reading", readingAt: timestamp }
+        : params.phase === "pending"
+          ? { phase: "pending", pendingAt: timestamp }
+          : { phase: "complete", completedAt: timestamp }),
     } satisfies TelegramSafeReuseFenceReceipt,
     {
       mode: 0o600,
@@ -275,6 +292,19 @@ async function writeTelegramSafeReuseFenceReceipt(params: {
       ensureDirMode: 0o700,
     },
   );
+}
+
+export async function writeReadingTelegramSafeReuseFence(params: {
+  accountId?: string;
+  botToken: string;
+  generation: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  await writeTelegramSafeReuseFenceReceipt({
+    ...params,
+    phase: "reading",
+    lastUpdateId: null,
+  });
 }
 
 export async function writePendingTelegramSafeReuseFence(params: {

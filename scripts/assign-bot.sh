@@ -192,6 +192,7 @@ const {
 const {
   acquireTelegramTesterScenarioReservation,
   findTelegramTesterScenarioReservation,
+  resolveTelegramTesterScenarioReservationPath,
 } = await import(pathToFileURL(reservationModulePath).href);
 
 const envBotsPath = path.join(currentWorktree, ".env.bots");
@@ -256,6 +257,29 @@ const requestedScenarioId = String(process.env.REQUESTED_SCENARIO_ID ?? "").trim
 const defaultScenarioId = `tg-scenario-${crypto.randomUUID()}`;
 const scenarioId = requestedScenarioId || storedScenarioId || defaultScenarioId;
 
+if (storedScenarioId && requestedScenarioId && storedScenarioId !== requestedScenarioId) {
+  let scenarioChangeReason = currentToken ? "scenario_change_requires_release" : "";
+  if (!scenarioChangeReason) {
+    const storedScenarioReservation = await findTelegramTesterScenarioReservation({
+      scenarioId: storedScenarioId,
+      worktreePath: currentWorktree,
+      reservationRoot: process.env.RESERVATION_ROOT,
+    });
+    if (!storedScenarioReservation.ok || storedScenarioReservation.reservation) {
+      // A scenario-only env file is the recovery credential for an assignment
+      // interrupted after its global reservation write. Replacing it before
+      // discovery would orphan that bot and let the override claim another.
+      scenarioChangeReason = "scenario_change_requires_recovery";
+    }
+  }
+  if (scenarioChangeReason) {
+    console.log("ok=no");
+    console.log(`reason=${scenarioChangeReason}`);
+    console.log(`scenarioId=${storedScenarioId}`);
+    process.exit(0);
+  }
+}
+
 // Persist a freshly generated run identity before acquiring any global bot
 // reservation. If this process dies after the global write, the next invocation
 // can recover the same scenario instead of losing its only ownership credential
@@ -284,16 +308,6 @@ const persistScenarioIntent = () => {
 };
 if (!currentToken && storedScenarioId !== scenarioId) {
   persistScenarioIntent();
-}
-
-// Changing scenario identity while a bot is still assigned would silently
-// transfer unfinished work inside one worktree. Require the same explicit
-// release boundary used for cross-worktree ownership.
-if (currentToken && storedScenarioId && requestedScenarioId && storedScenarioId !== requestedScenarioId) {
-  console.log("ok=no");
-  console.log("reason=scenario_change_requires_release");
-  console.log(`scenarioId=${storedScenarioId}`);
-  process.exit(0);
 }
 
 const claimedEntries = [];
@@ -362,6 +376,20 @@ if (!priorScenarioReservation.ok) {
     ) ?? "";
   if (!priorScenarioToken) {
     priorScenarioReason = "scenario_reservation_token_not_in_pool";
+  } else if (
+    path.resolve(priorScenarioReservation.reservation.reservationPath) !==
+    path.resolve(
+      resolveTelegramTesterScenarioReservationPath({
+        token: priorScenarioToken,
+        reservationRoot: process.env.RESERVATION_ROOT,
+      }),
+    )
+  ) {
+    // Token hash lookup identifies the actual pool credential, which is the
+    // only authoritative source for its Bot API ID. Bind the discovered file
+    // to that credential so a self-consistent forged botId + filename cannot
+    // make acquire write a second canonical reservation.
+    priorScenarioReason = "reservation_identity_mismatch_manual_recovery_required";
   } else if (currentToken && currentToken !== priorScenarioToken) {
     // A local token claim and a different durable scenario reservation are two
     // competing owners. Rotating either side would destroy evidence needed for
@@ -578,6 +606,9 @@ if [[ "$selection_ok" != "yes" || -z "$selected_token" || -z "$scenario_id" || -
     "${selection_reason:-}" == "expired_owner_release_required" ]]; then
     echo "Existing tester ownership requires an explicit reset." >&2
     echo "Run 'bash scripts/telegram-live-runtime.sh release', then rerun ensure." >&2
+  elif [[ "${selection_reason:-}" == "scenario_change_requires_recovery" ]]; then
+    echo "The stored scenario may own an interrupted tester reservation." >&2
+    echo "Rerun ensure without a scenario override to recover it, then release before changing scenarios." >&2
   else
     echo "Release an unused worktree with 'bash scripts/telegram-live-runtime.sh release' or add more tester-only bot tokens." >&2
   fi

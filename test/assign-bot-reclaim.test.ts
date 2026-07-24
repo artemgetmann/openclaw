@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -13,8 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  acquireTelegramTesterScenarioReservation,
   releaseLegacyTelegramTesterTokenAssignment,
   releaseTelegramTesterScenarioReservation,
+  resolveTelegramTesterScenarioReservationPath,
 } from "../scripts/lib/telegram-tester-scenario-reservations.mjs";
 
 const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) =>
@@ -216,6 +219,54 @@ describe("assign-bot stale claim reclaim", () => {
     ).toBe(interruptedGeneration);
   });
 
+  it("rejects a coupled forged bot id and reservation filename", async () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-forged-bot-id-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    const reservationRoot = path.join(home, ".openclaw", "telegram-tester-scenario-reservations");
+    const scenarioId = "forged-bot-id-scenario";
+    const reservedToken = "222:reserved";
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:first\nBOT_TOKEN=222:reserved\n");
+    writeFileSync(
+      path.join(mainDir, ".env.local"),
+      `OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}\n`,
+    );
+
+    const reservation = await acquireTelegramTesterScenarioReservation({
+      token: reservedToken,
+      scenarioId,
+      worktreePath: mainDir,
+      reservationRoot,
+    });
+    expect(reservation.ok).toBe(true);
+    const canonicalPath = resolveTelegramTesterScenarioReservationPath({
+      token: reservedToken,
+      reservationRoot,
+    });
+    const payload = JSON.parse(readFileSync(canonicalPath, "utf8"));
+    payload.botId = "111";
+    const forgedPath = path.join(reservationRoot, `111-${payload.tokenHash}.json`);
+    writeFileSync(canonicalPath, `${JSON.stringify(payload, null, 2)}\n`);
+    renameSync(canonicalPath, forgedPath);
+
+    // The filename and payload agree with each other, but the token hash maps
+    // to token 2 whose real Bot API ID requires the canonical 222-* path.
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+      }),
+    ).toThrow(/reservation_identity_mismatch_manual_recovery_required/);
+    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toBe(
+      `OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}\n`,
+    );
+    expect(readdirSync(reservationRoot).filter((name) => name.endsWith(".json"))).toEqual([
+      path.basename(forgedPath),
+    ]);
+    expect(() => readFileSync(canonicalPath, "utf8")).toThrow();
+  });
+
   it("persists an explicit scenario override before interrupted reservation publication", () => {
     const { root, mainDir } = initRepo("openclaw-assign-bot-override-recovery-");
     installAssignBotFixture(mainDir);
@@ -248,6 +299,50 @@ describe("assign-bot stale claim reclaim", () => {
     const recoveredEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
     expect(recoveredEnv).toContain("OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=replacement-scenario");
     expect(recoveredEnv).toContain("TELEGRAM_BOT_TOKEN=111:first");
+  });
+
+  it("preserves an interrupted scenario credential before accepting an override", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-interrupted-override-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    const reservationRoot = path.join(home, ".openclaw", "telegram-tester-scenario-reservations");
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:first\nBOT_TOKEN=222:second\n");
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "interrupted-scenario",
+        OPENCLAW_TELEGRAM_TESTER_ASSIGN_ABORT_AFTER_RESERVATION: "1",
+      }),
+    ).toThrow();
+    const interruptedEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    const interruptedFiles = readdirSync(reservationRoot).filter((name) => name.endsWith(".json"));
+    expect(interruptedEnv).toBe("OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=interrupted-scenario\n");
+    expect(interruptedFiles).toHaveLength(1);
+    const interruptedReservation = readFileSync(
+      path.join(reservationRoot, interruptedFiles[0]),
+      "utf8",
+    );
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "replacement-scenario",
+      }),
+    ).toThrow(/scenario_change_requires_recovery/);
+    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toBe(interruptedEnv);
+    expect(readdirSync(reservationRoot).filter((name) => name.endsWith(".json"))).toEqual(
+      interruptedFiles,
+    );
+    expect(readFileSync(path.join(reservationRoot, interruptedFiles[0]), "utf8")).toBe(
+      interruptedReservation,
+    );
+
+    const recoveredOutput = run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home });
+    expect(recoveredOutput).toContain("Assigned Telegram bot token #1");
+    expect(recoveredOutput).toContain("Scenario ID: interrupted-scenario");
   });
 
   it("requires release before replacing an expired exact-owner generation", async () => {

@@ -128,8 +128,9 @@ erasure.
   Release preserves unrelated local env settings.
 - If assignment stops after publishing a reservation but before publishing the
   local token credentials, rerunning `ensure` resumes that exact token even if
-  pool eligibility changed. Multiple reservations for the same
-  scenario/worktree fail closed instead of choosing one by file order.
+  pool eligibility changed. A different scenario override is rejected until
+  the stored scenario is recovered and released. Multiple reservations for the
+  same scenario/worktree fail closed instead of choosing one by file order.
 - Reservations renew on `ensure` and expire after seven days by default.
   An unassigned scenario/worktree may reclaim an expired reservation only when
   the process-level polling lease is known absent; the exact prior owner uses
@@ -143,9 +144,10 @@ erasure.
   dispatch. Its receipt is scoped to token hash, account, and reservation
   generation, so old pending updates cannot reach another full-parity tester
   runtime while same-scenario restarts do not repeatedly discard new messages.
-  The observed tail is recorded as pending before cutoff persistence; a crash
-  during completion replays that exact cutoff without rereading Telegram's
-  mutable tail.
+  An in-progress marker is durable before the tail request; an ambiguous
+  response fails closed for manual recovery instead of rereading Telegram's
+  mutable tail. A successful tail is then recorded as pending before cutoff
+  persistence, so a crash during completion replays that exact cutoff.
   Safe-reuse generations fail closed in webhook mode until an equivalent
   pre-dispatch webhook fence exists.
 - Worktree tester baselines strip inherited Telegram secrets on purpose. If the

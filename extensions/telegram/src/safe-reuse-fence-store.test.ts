@@ -9,6 +9,7 @@ import {
   resolveTelegramSafeReuseFenceRequest,
   writeCompletedTelegramSafeReuseFence,
   writePendingTelegramSafeReuseFence,
+  writeReadingTelegramSafeReuseFence,
 } from "./safe-reuse-fence-store.js";
 
 describe("Telegram safe-reuse fence receipt", () => {
@@ -156,6 +157,36 @@ describe("Telegram safe-reuse fence receipt", () => {
         env,
       }),
     ).resolves.toEqual({ phase: "pending", lastUpdateId: 900 });
+    await expect(
+      readCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        env,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps an ambiguous tail read distinct from recoverable pending state", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "tg-safe-reuse-reading-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    await writeReadingTelegramSafeReuseFence({
+      accountId: "default",
+      botToken: "12345:first",
+      generation: "generation-123",
+      env,
+    });
+
+    await expect(
+      readTelegramSafeReuseFenceState({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        env,
+      }),
+    ).resolves.toEqual({ phase: "reading", lastUpdateId: null });
     await expect(
       readCompletedTelegramSafeReuseFence({
         accountId: "default",

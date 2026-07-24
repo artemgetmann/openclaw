@@ -112,10 +112,11 @@ type TelegramPollingSessionOpts = {
   safeReuseFence?: {
     generation: string;
     resolveState: () => Promise<{
-      phase: "pending" | "complete";
+      phase: "reading" | "pending" | "complete";
       lastUpdateId: number | null;
       recreateBot: boolean;
     } | null>;
+    markReading: () => Promise<void>;
     markPending: (lastUpdateId: number | null) => Promise<void>;
     persistCutoff: (lastUpdateId: number | null) => Promise<void>;
     markComplete: (lastUpdateId: number | null) => Promise<void>;
@@ -369,6 +370,11 @@ export class TelegramPollingSession {
         this.#safeReuseFenceCompleted = true;
         return state.recreateBot ? "recreate" : "ready";
       }
+      if (state?.phase === "reading") {
+        throw new Error(
+          `Telegram safe-reuse tail-read outcome is ambiguous for reservation generation ${fence.generation}. Manual recovery is required; refusing to issue getUpdates(offset: -1) again.`,
+        );
+      }
       if (state?.phase === "pending") {
         // The prior process already consumed Telegram's negative-offset tail
         // but died before committing the completion receipt. Finish that exact
@@ -382,16 +388,30 @@ export class TelegramPollingSession {
         );
         return "recreate";
       }
-      const updates = await withTelegramApiErrorLogging({
-        operation: "getUpdates",
-        runtime: this.opts.runtime,
-        fn: () =>
-          bot.api.getUpdates({
-            offset: -1,
-            limit: 1,
-            timeout: 0,
-          }),
-      });
+      // Persist intent before the destructive tail read. If the response is
+      // lost after Telegram processes the request, the surviving marker makes
+      // that ambiguity durable and prevents any automatic second read.
+      await fence.markReading();
+      let updates: unknown;
+      try {
+        updates = await withTelegramApiErrorLogging({
+          operation: "getUpdates",
+          runtime: this.opts.runtime,
+          fn: () =>
+            bot.api.getUpdates({
+              offset: -1,
+              limit: 1,
+              timeout: 0,
+            }),
+        });
+      } catch (err) {
+        // Deliberately omit `cause`: the polling retry classifier walks network
+        // causes, but retrying this ambiguous operation could fence a valid
+        // same-scenario message that arrived after Telegram processed the first.
+        throw new Error(
+          `Telegram safe-reuse tail-read outcome is ambiguous for reservation generation ${fence.generation}: ${formatErrorMessage(err)}. Manual recovery is required; refusing to issue getUpdates(offset: -1) again.`,
+        );
+      }
       if (!Array.isArray(updates)) {
         throw new Error("Telegram safe-reuse fence returned a malformed update list.");
       }
