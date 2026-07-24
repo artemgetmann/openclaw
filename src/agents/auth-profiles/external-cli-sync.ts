@@ -39,9 +39,9 @@ function normalizeOAuthIdentity(value: unknown): string | undefined {
 }
 
 /**
- * External CLI state is an import/recovery source, not authority over an
- * established local profile. Refuse explicit local auth modes, provider
- * mismatches, and cross-account copies before comparing token freshness.
+ * Codex CLI state is an import/recovery source, not authority over an
+ * established local Codex profile. Refuse explicit local auth modes and
+ * cross-account copies before comparing token freshness.
  *
  * Missing identity on the existing OAuth credential stays compatible so old
  * profiles can still be upgraded with account metadata during safe migration.
@@ -54,6 +54,12 @@ function isSafeToSyncExternalOAuthCredential(
 ): boolean {
   if (incoming.provider !== provider) {
     return false;
+  }
+  // MiniMax keeps its existing expiry-based sync policy. Codex is the rotating
+  // credential source with a separate Jarvis-owned refresh path, so the
+  // ownership boundary applies only to that provider.
+  if (provider !== "openai-codex") {
+    return true;
   }
   if (!existing) {
     return true;
