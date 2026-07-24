@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models/Jarvis: make GPT-5.6 Sol the single normal consumer model, default Adaptive reasoning to Medium, migrate managed GPT-5.4/5.5 defaults within their provider family, and cap the consumer context at 272K tokens. (#1246) Thanks @artemgetmann.
+
 ### Fixes
 
 - Telegram/pairing: render pairing codes and approve commands as Telegram HTML code blocks so challenge messages are easier to copy correctly from chats. (#52784) Thanks @sumukhj1219.

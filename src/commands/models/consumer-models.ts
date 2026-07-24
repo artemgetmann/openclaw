@@ -44,39 +44,15 @@ export type ApplyConsumerModelResult = {
 
 const CONSUMER_MODEL_SHORTLIST: readonly ConsumerModelDefinition[] = [
   {
-    id: "openai-codex/gpt-5.5",
-    title: "GPT-5.5",
+    id: "openai-codex/gpt-5.6-sol",
+    title: "GPT-5.6 Sol",
     detail: "Primary ChatGPT / Codex path for consumer managed AI.",
     family: "openai-codex",
   },
   {
-    id: "openai-codex/gpt-5.4",
-    title: "GPT-5.4",
-    detail: "Practical Codex fallback when GPT-5.5 is not available.",
-    family: "openai-codex",
-  },
-  {
-    id: "openai-codex/gpt-5.3-codex-spark",
-    title: "GPT-5.3 Codex Spark",
-    detail: "Faster Codex variant when the OAuth catalog exposes Spark.",
-    family: "openai-codex",
-  },
-  {
-    id: "openai-codex/gpt-5.4-mini",
-    title: "GPT-5.4 Mini",
-    detail: "Smaller Codex option, shown only when the runtime catalog exposes it.",
-    family: "openai-codex",
-  },
-  {
-    id: "openai/gpt-5.4",
-    title: "GPT-5.4",
+    id: "openai/gpt-5.6-sol",
+    title: "GPT-5.6 Sol",
     detail: "Direct OpenAI API path when you are using an API key.",
-    family: "openai",
-  },
-  {
-    id: "openai/gpt-5-mini",
-    title: "GPT-5 Mini",
-    detail: "Smaller OpenAI API option when you want lower latency and cost.",
     family: "openai",
   },
   {

@@ -132,7 +132,7 @@ const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [
     methodLabel: "Continue with ChatGPT",
     methodDescription: "Use your ChatGPT subscription. Best early-tester path for coding tasks.",
     kind: "oauth",
-    defaultModel: "openai-codex/gpt-5.5",
+    defaultModel: "openai-codex/gpt-5.6-sol",
   },
   {
     id: "anthropic-claude-cli",
@@ -179,7 +179,7 @@ const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [
     methodLabel: "Bring your OpenAI API key",
     methodDescription: "Use direct OpenAI API billing.",
     kind: "api_key",
-    defaultModel: "openai/gpt-5.4",
+    defaultModel: "openai/gpt-5.6-sol",
     credentialLabel: "OpenAI API key",
     credentialHelp: "Paste an OpenAI API key from platform.openai.com.",
     credentialPlaceholder: "sk-...",
