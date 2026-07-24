@@ -1774,7 +1774,7 @@ describe("monitor gateway handlers", () => {
     );
   });
 
-  it("resolves watched-surface delivery for auto_send channel monitors", async () => {
+  it("keeps scoped WhatsApp auto_send delivery tool-mediated", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
 
     await monitorHandlers["monitor.create"]({
@@ -1804,12 +1804,7 @@ describe("monitor gateway handlers", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     const monitor = call?.[1] as { watchDelivery?: unknown } | undefined;
-    expect(monitor?.watchDelivery).toEqual({
-      mode: "announce",
-      channel: "whatsapp",
-      to: "74333133234289@lid",
-      accountId: "default",
-    });
+    expect(monitor?.watchDelivery).toBeUndefined();
     expect(seedMonitorSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         actionPolicy: "auto_send",

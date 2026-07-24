@@ -31,10 +31,17 @@ export type MonitorTelegramUserActionTarget = {
   accountId?: string;
 };
 
+export type MonitorWhatsAppCliActionTarget = {
+  kind: "whatsapp-cli";
+  target: string;
+  accountId?: string;
+};
+
 export type MonitorActionTarget =
   | MonitorMessageActionTarget
   | MonitorEmailReplyActionTarget
-  | MonitorTelegramUserActionTarget;
+  | MonitorTelegramUserActionTarget
+  | MonitorWhatsAppCliActionTarget;
 
 export type MonitorExecutionPlan = {
   actionTarget?: MonitorActionTarget;
@@ -129,6 +136,31 @@ function isTelegramUserSource(sourceType: string): boolean {
   return sourceType.trim().toLowerCase() === "telegram-user";
 }
 
+function isWhatsAppCliSource(sourceType: string): boolean {
+  return sourceType.trim().toLowerCase() === "whatsapp";
+}
+
+function resolveMonitorWhatsAppCliActionTarget(params: {
+  sourceType: string;
+  sourceTarget: MonitorSourceTarget;
+}): MonitorWhatsAppCliActionTarget | undefined {
+  if (!isWhatsAppCliSource(params.sourceType)) {
+    return undefined;
+  }
+  // Scoped WhatsApp monitors read and send through wacli. The similarly named
+  // built-in gateway channel is a separate transport and may not be installed.
+  const target = readSourceTargetTo(params.sourceTarget);
+  if (!target) {
+    return undefined;
+  }
+  const accountId = readOptionalString(params.sourceTarget.accountId);
+  return {
+    kind: "whatsapp-cli",
+    target,
+    ...(accountId ? { accountId } : {}),
+  };
+}
+
 function resolveMonitorTelegramUserActionTarget(params: {
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
@@ -157,6 +189,12 @@ export function resolveMonitorWatchDelivery(params: {
 }): CronDelivery | undefined {
   if (params.explicitWatchDelivery) {
     return params.explicitWatchDelivery;
+  }
+  if (isWhatsAppCliSource(params.sourceType)) {
+    // New wacli-backed monitors must not persist a generic gateway delivery
+    // tuple. Legacy tuples are still accepted above and corrected by the
+    // action-target resolver at execution time.
+    return undefined;
   }
 
   // Static monitor delivery inference is only safe for watched surfaces whose
@@ -187,6 +225,10 @@ export function resolveMonitorActionTarget(params: {
   sourceTarget: MonitorSourceTarget;
   explicitWatchDelivery?: CronDelivery;
 }): MonitorActionTarget | undefined {
+  const whatsAppCliTarget = resolveMonitorWhatsAppCliActionTarget(params);
+  if (whatsAppCliTarget) {
+    return whatsAppCliTarget;
+  }
   const telegramUserTarget = resolveMonitorTelegramUserActionTarget(params);
   if (telegramUserTarget) {
     return telegramUserTarget;
@@ -374,6 +416,20 @@ export function resolveMonitorExecutionPlan(params: {
     return {
       actionTarget,
       originDelivery,
+      fallbackDelivery: originDelivery,
+      deliveryPromptMode: "summary",
+      deliveryContract: "cron-owned",
+      watchDeliveryConfigured,
+      requireExplicitMessageTarget: false,
+    };
+  }
+
+  if (params.actionPolicy === "auto_send" && actionTarget?.kind === "whatsapp-cli") {
+    return {
+      actionTarget,
+      originDelivery,
+      // The wacli safe-send is the watched-surface action. Cron may only carry
+      // a user-facing exception or approval back to the origin chat.
       fallbackDelivery: originDelivery,
       deliveryPromptMode: "summary",
       deliveryContract: "cron-owned",

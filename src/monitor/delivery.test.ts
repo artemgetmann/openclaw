@@ -7,7 +7,7 @@ import {
 } from "./delivery.js";
 
 describe("resolveMonitorWatchDelivery", () => {
-  it("infers a watched-surface delivery target from deliverable channel source metadata", () => {
+  it("does not infer gateway delivery for tool-mediated WhatsApp monitors", () => {
     expect(
       resolveMonitorWatchDelivery({
         sourceType: "whatsapp",
@@ -16,12 +16,7 @@ describe("resolveMonitorWatchDelivery", () => {
           accountId: "default",
         },
       }),
-    ).toEqual({
-      mode: "announce",
-      channel: "whatsapp",
-      to: "74333133234289@lid",
-      accountId: "default",
-    });
+    ).toBeUndefined();
   });
 
   it("fails closed for gmail thread monitors because email replies need dynamic message metadata", () => {
@@ -54,6 +49,29 @@ describe("resolveMonitorActionTarget", () => {
     });
   });
 
+  it("treats WhatsApp chat metadata as a tool-mediated watched target", () => {
+    expect(
+      resolveMonitorActionTarget({
+        sourceType: "whatsapp",
+        sourceTarget: {
+          target: "74333133234289@lid",
+          accountId: "default",
+        },
+        // Legacy records can still carry this invalid gateway delivery tuple.
+        explicitWatchDelivery: {
+          mode: "announce",
+          channel: "whatsapp",
+          to: "74333133234289@lid",
+          accountId: "default",
+        },
+      }),
+    ).toEqual({
+      kind: "whatsapp-cli",
+      target: "74333133234289@lid",
+      accountId: "default",
+    });
+  });
+
   it("captures the future Gmail reply contract while still failing closed on transport", () => {
     expect(
       resolveMonitorActionTarget({
@@ -81,7 +99,7 @@ describe("resolveMonitorActionTarget", () => {
 });
 
 describe("resolveMonitorExecutionPlan", () => {
-  it("routes auto_send monitors through the shared runtime seam with a watched message target", () => {
+  it("keeps legacy WhatsApp auto_send monitors tool-mediated and cron-owned", () => {
     expect(
       resolveMonitorExecutionPlan({
         actionPolicy: "auto_send",
@@ -91,13 +109,17 @@ describe("resolveMonitorExecutionPlan", () => {
         watchDelivery: { mode: "announce", channel: "whatsapp", to: "74333133234289@lid" },
       }),
     ).toEqual({
-      actionTarget: { kind: "message", channel: "whatsapp", to: "74333133234289@lid" },
+      actionTarget: { kind: "whatsapp-cli", target: "74333133234289@lid" },
       originDelivery: { mode: "announce", channel: "telegram", to: "user-1", accountId: undefined },
-      fallbackDelivery: { mode: "announce", channel: "whatsapp", to: "74333133234289@lid" },
-      deliveryPromptMode: "reply",
-      deliveryContract: "shared",
+      fallbackDelivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+        accountId: undefined,
+      },
+      deliveryPromptMode: "summary",
+      deliveryContract: "cron-owned",
       watchDeliveryConfigured: true,
-      messageToolTarget: { kind: "message", channel: "whatsapp", to: "74333133234289@lid" },
       requireExplicitMessageTarget: false,
     });
   });
@@ -112,7 +134,7 @@ describe("resolveMonitorExecutionPlan", () => {
         watchDelivery: { mode: "announce", channel: "whatsapp", to: "74333133234289@lid" },
       }),
     ).toEqual({
-      actionTarget: { kind: "message", channel: "whatsapp", to: "74333133234289@lid" },
+      actionTarget: { kind: "whatsapp-cli", target: "74333133234289@lid" },
       originDelivery: { mode: "announce", channel: "telegram", to: "user-1", accountId: undefined },
       fallbackDelivery: {
         mode: "announce",
@@ -142,7 +164,7 @@ describe("resolveMonitorExecutionPlan", () => {
         },
       }),
     ).toEqual({
-      actionTarget: { kind: "message", channel: "whatsapp", to: "74333133234289@lid" },
+      actionTarget: { kind: "whatsapp-cli", target: "74333133234289@lid" },
       originDelivery: {
         mode: "announce",
         channel: "telegram",
