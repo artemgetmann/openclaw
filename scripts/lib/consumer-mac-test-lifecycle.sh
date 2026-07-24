@@ -40,6 +40,31 @@ consumer_mac_test_app_path_from_command() {
   printf '%s\n' "$1" | /usr/bin/sed -n 's#^\(.*\.app\)/Contents/MacOS/OpenClaw.*#\1#p'
 }
 
+consumer_mac_test_is_protected_app_path() {
+  local app_path="$1"
+  local resolved_path=""
+  local installed_path="/Applications/Jarvis.app"
+
+  [[ "$app_path" == "$installed_path" ]] && return 0
+  if [[ -d "$app_path" ]]; then
+    resolved_path="$(cd "$app_path" && pwd -P 2>/dev/null || true)"
+    [[ "$resolved_path" == "$installed_path" ]] && return 0
+  fi
+  return 1
+}
+
+consumer_mac_test_validate_launch_record() {
+  local instance_id="${1:-}"
+  local app_path="$2"
+
+  [[ -z "$instance_id" || "$instance_id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || return 1
+  [[ "$app_path" == /*.app && "$app_path" != *$'\n'* && "$app_path" != *$'\t'* ]] || return 1
+  if consumer_mac_test_is_protected_app_path "$app_path"; then
+    echo "ERROR: refusing to register installed production Jarvis as a tester: $app_path" >&2
+    return 1
+  fi
+}
+
 consumer_mac_test_app_record_from_line() {
   local line="$1"
   local pid=""
@@ -57,7 +82,7 @@ consumer_mac_test_app_record_from_line() {
   command="${command#"${command%%[![:space:]]*}"}"
   app_path="$(consumer_mac_test_app_path_from_command "$command")"
   [[ -n "$app_path" ]] || return 1
-  [[ "$app_path" != "/Applications/Jarvis.app" ]] || return 1
+  consumer_mac_test_is_protected_app_path "$app_path" && return 1
 
   info_plist="${app_path}/Contents/Info.plist"
   [[ -f "$info_plist" ]] || return 1
@@ -125,6 +150,14 @@ consumer_mac_test_terminate_app_path() {
   local pid=""
   local command=""
   local app_path=""
+
+  # A registry receipt can outlive the debug bundle it described. If that path
+  # is later replaced by, or resolves to, the installed production app, the
+  # stale receipt loses all authority to terminate it.
+  if consumer_mac_test_is_protected_app_path "$target_app"; then
+    echo "Preserving installed production Jarvis during tester handoff: $target_app"
+    return 0
+  fi
 
   # The registry remains authoritative after a worktree or app bundle is
   # deleted. Match its exact executable path without requiring Info.plist to
@@ -407,8 +440,7 @@ consumer_mac_test_record_launch() {
   local pending_path=""
   local previous_umask=""
 
-  [[ -z "$instance_id" || "$instance_id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || return 1
-  [[ "$app_path" == /*.app && "$app_path" != *$'\n'* && "$app_path" != *$'\t'* ]] || return 1
+  consumer_mac_test_validate_launch_record "$instance_id" "$app_path" || return 1
 
   registry_path="$(consumer_mac_test_registry_path)"
   registry_dir="$(dirname "$registry_path")"
@@ -443,6 +475,9 @@ consumer_mac_test_begin_launch() {
   local app_path="$2"
   local replace="${3:-0}"
 
+  # Validate before acquiring or transferring the slot. A bad target must not
+  # retire the previous tester and then fail while publishing its replacement.
+  consumer_mac_test_validate_launch_record "$instance_id" "$app_path" || return 1
   consumer_mac_test_acquire_lock
   if ! consumer_mac_test_prepare_launch "$instance_id" "$app_path" "$replace"; then
     consumer_mac_test_release_lock

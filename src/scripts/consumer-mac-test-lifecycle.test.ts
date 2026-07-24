@@ -17,6 +17,9 @@ describe("consumer macOS tester lifecycle shell contract", () => {
     expect(result.stdout).toContain("PASS: refuses a second tester without --replace");
     expect(result.stdout).toContain("PASS: replace retires exact previous tester app and gateway");
     expect(result.stdout).toContain("PASS: preserves production while retiring default debug app");
+    expect(result.stdout).toContain(
+      "PASS: rejects production paths before and during receipt cleanup",
+    );
     expect(result.stdout).toContain("PASS: registry prevents gateway-only tester leaks");
     expect(result.stdout).toContain(
       "PASS: registry retires a running app after its bundle disappears",

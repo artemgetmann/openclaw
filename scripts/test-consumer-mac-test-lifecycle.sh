@@ -102,6 +102,23 @@ pass "preserves production while retiring default debug app"
 
 TEST_KILLED_PIDS=()
 TEST_QUARANTINED_INSTANCES=()
+TEST_PROCESS_LINES=("101 /Applications/Jarvis.app/Contents/MacOS/OpenClaw")
+/bin/mkdir -p "$(dirname "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH")"
+{
+  printf 'instance_id\told-proof\n'
+  printf 'app_path\t/Applications/Jarvis.app\n'
+} >"$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH"
+consumer_mac_test_prepare_launch "new-proof" "$NEW_APP" 1 >/dev/null
+[[ "${#TEST_KILLED_PIDS[@]}" -eq 0 ]] || fail "poisoned registry must never terminate production Jarvis"
+[[ "${TEST_QUARANTINED_INSTANCES[*]}" == "old-proof" ]] || fail "poisoned app receipt should still retire its isolated gateway"
+if consumer_mac_test_begin_launch "bad-proof" "/Applications/Jarvis.app" 1 >/dev/null 2>&1; then
+  fail "installed production Jarvis must never be registered as a tester"
+fi
+[[ "${#TEST_KILLED_PIDS[@]}" -eq 0 ]] || fail "invalid production target must fail before any tester transfer"
+pass "rejects production paths before and during receipt cleanup"
+
+TEST_KILLED_PIDS=()
+TEST_QUARANTINED_INSTANCES=()
 TEST_PROCESS_LINES=()
 consumer_mac_test_record_launch "old-proof" "$OLD_APP"
 consumer_mac_test_prepare_launch "new-proof" "$NEW_APP" 1 >/dev/null
