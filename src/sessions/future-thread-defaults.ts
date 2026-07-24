@@ -102,6 +102,14 @@ function resolveHistoricalFutureThreadDefaults(params: {
     return snapshotFutureThreadDefaults(params.parentEntry);
   }
 
+  const finalBoundary = history.at(-1)?.afterThreadId;
+  if (finalBoundary != null && childThreadId > finalBoundary) {
+    // History protects older topic IDs from later parent changes. Once an ID
+    // is beyond the final recorded boundary, the parent entry is authoritative;
+    // replaying the last historical row here would make every new topic stale.
+    return snapshotFutureThreadDefaults(params.parentEntry);
+  }
+
   let match: FutureThreadDefaultsHistoryEntry | undefined;
   for (const entry of history) {
     if (entry.afterThreadId < childThreadId) {
