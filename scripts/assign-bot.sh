@@ -259,7 +259,7 @@ const scenarioId = requestedScenarioId || storedScenarioId || defaultScenarioId;
 // reservation. If this process dies after the global write, the next invocation
 // can recover the same scenario instead of losing its only ownership credential
 // and leaving the bot stranded until the reservation expires.
-if (!currentToken && !storedScenarioId) {
+if (!storedScenarioId) {
   const intentPath = `${envLocalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   const existingContent = fs.existsSync(envLocalPath) ? fs.readFileSync(envLocalPath, "utf8") : "";
   const separator = existingContent && !existingContent.endsWith("\n") ? "\n" : "";
@@ -343,6 +343,10 @@ let lastReservationReason = "";
 // module's per-token lock. Keeping those operations together closes the race
 // where two simultaneous assigners both observe an unclaimed pool entry.
 for (const candidate of candidates) {
+  const isLegacyCurrentToken =
+    candidate === currentToken &&
+    !storedReservationGeneration &&
+    !storedReservationTokenHash;
   const isCurrentReservationCandidate =
     candidate === currentToken &&
     Boolean(storedReservationGeneration) &&
@@ -366,6 +370,10 @@ for (const candidate of candidates) {
     expectedGeneration: candidate === currentToken ? storedReservationGeneration : undefined,
     expectedTokenHash: candidate === currentToken ? storedReservationTokenHash : undefined,
     requireExpectedOwner: candidate === currentToken,
+    // A pre-reservation lane can prove ownership with its still-live,
+    // same-worktree PID lease. This narrow migration exception does not allow
+    // a dead or foreign legacy claim to adopt a reservation.
+    allowLegacyLeaseMigration: isLegacyCurrentToken,
     // The initial pool summary is diagnostic only. Re-read the per-token PID
     // lease inside the reservation lock so a just-started runtime wins the
     // race and assignment cannot reserve underneath it.
@@ -393,6 +401,7 @@ for (const candidate of candidates) {
     scenarioId,
     reservationGeneration: reservation.generation,
     safeReuseRequired: reservation.safeReuseRequired,
+    safeReuseEnabled: reservation.safeReuseEnabled,
   };
   break;
 }
@@ -438,6 +447,7 @@ console.log(
   `reservationTokenHash=${crypto.createHash("sha256").update(selection.selectedToken).digest("hex")}`,
 );
 console.log(`safeReuseRequired=${selection.safeReuseRequired ? "yes" : "no"}`);
+console.log(`safeReuseEnabled=${selection.safeReuseEnabled ? "yes" : "no"}`);
 console.log(`claimedCount=${summary.claimedCount}`);
 console.log(`poolCount=${summary.poolCount}`);
 console.log(`reservedCount=${summary.reservedCount}`);
@@ -465,6 +475,7 @@ scenario_id=""
 reservation_generation=""
 reservation_token_hash=""
 safe_reuse_required="no"
+safe_reuse_enabled="no"
 claimed_worktrees=()
 stale_claim_tokens=()
 stale_claim_worktrees=()
@@ -488,6 +499,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     reservationGeneration) reservation_generation="$value" ;;
     reservationTokenHash) reservation_token_hash="$value" ;;
     safeReuseRequired) safe_reuse_required="$value" ;;
+    safeReuseEnabled) safe_reuse_enabled="$value" ;;
     claimedWorktree) claimed_worktrees+=("$value") ;;
     staleClaimToken) stale_claim_tokens+=("$value") ;;
     staleClaimWorktree) stale_claim_worktrees+=("$value") ;;
@@ -566,6 +578,7 @@ ENV_LOCAL_PATH="$(pwd -P)/.env.local" \
   SCENARIO_ID="$scenario_id" \
   RESERVATION_GENERATION="$reservation_generation" \
   RESERVATION_TOKEN_HASH="$reservation_token_hash" \
+  SAFE_REUSE_ENABLED="$safe_reuse_enabled" \
   node --input-type=module - <<'NODE'
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -576,10 +589,15 @@ const managedValues = new Map([
   ["OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID", process.env.SCENARIO_ID],
   ["OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION", process.env.RESERVATION_GENERATION],
   ["OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH", process.env.RESERVATION_TOKEN_HASH],
-  ["OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION", process.env.RESERVATION_GENERATION],
-  ["OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH", process.env.RESERVATION_TOKEN_HASH],
-  ["OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID", "default"],
 ]);
+if (process.env.SAFE_REUSE_ENABLED === "yes") {
+  managedValues.set(
+    "OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION",
+    process.env.RESERVATION_GENERATION,
+  );
+  managedValues.set("OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH", process.env.RESERVATION_TOKEN_HASH);
+  managedValues.set("OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID", "default");
+}
 if (
   !envLocalPath ||
   Array.from(managedValues.values()).some((value) => typeof value !== "string" || !value)
@@ -588,7 +606,15 @@ if (
 }
 
 const existingContent = fs.existsSync(envLocalPath) ? fs.readFileSync(envLocalPath, "utf8") : "";
-const managedKeys = new Set(managedValues.keys());
+// Remove every managed key first, including disabled safe-reuse scope. This
+// prevents a migrated legacy reservation from inheriting a stale fence request
+// left by an interrupted or copied assignment.
+const managedKeys = new Set([
+  ...managedValues.keys(),
+  "OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION",
+  "OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH",
+  "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID",
+]);
 const keptLines = existingContent.split(/\r?\n/gu).filter((line) => {
   for (const key of managedKeys) {
     if (new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=`).test(line)) {

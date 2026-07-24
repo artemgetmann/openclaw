@@ -89,6 +89,71 @@ describe("Telegram tester scenario reservations", () => {
     ).toBe(false);
   });
 
+  it("migrates and resumes an active legacy lease only for the same worktree", async () => {
+    const reservationRoot = mkdtempSync(path.join(os.tmpdir(), "tg-scenario-legacy-lease-"));
+    const liveSameWorktreeLease = [
+      {
+        token,
+        worktreePath: "/tmp/worktree-a",
+        pid: 1234,
+      },
+    ];
+
+    const migrated = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "legacy-scenario-a",
+      worktreePath: "/tmp/worktree-a",
+      reservationRoot,
+      requireExpectedOwner: true,
+      allowLegacyLeaseMigration: true,
+      hasActivePollingLease: () => liveSameWorktreeLease,
+    });
+    expect(migrated).toMatchObject({
+      ok: true,
+      action: "migrated_legacy_lease",
+      reason: "active_same_worktree_legacy_lease",
+      safeReuseRequired: false,
+      safeReuseEnabled: false,
+    });
+
+    // If publication is interrupted after the durable migration, the same
+    // still-live lease can recover its generated scenario without a bot
+    // rotation or a copied/dead owner bypass.
+    const resumed = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "legacy-scenario-a",
+      worktreePath: "/tmp/worktree-a",
+      reservationRoot,
+      requireExpectedOwner: true,
+      allowLegacyLeaseMigration: true,
+      hasActivePollingLease: () => liveSameWorktreeLease,
+    });
+    expect(resumed).toMatchObject({
+      ok: true,
+      action: "resumed",
+      generation: migrated.generation,
+      safeReuseRequired: false,
+      safeReuseEnabled: false,
+    });
+
+    const foreign = await acquireTelegramTesterScenarioReservation({
+      token,
+      scenarioId: "legacy-scenario-a",
+      worktreePath: "/tmp/worktree-a",
+      reservationRoot,
+      requireExpectedOwner: true,
+      allowLegacyLeaseMigration: true,
+      hasActivePollingLease: () => [
+        {
+          token,
+          worktreePath: "/tmp/worktree-b",
+          pid: 5678,
+        },
+      ],
+    });
+    expect(foreign).toMatchObject({ ok: false, reason: "owner_generation_mismatch" });
+  });
+
   it("resumes only when an active PID lease matches the durable scenario owner", async () => {
     const reservationRoot = mkdtempSync(path.join(os.tmpdir(), "tg-scenario-owned-lease-"));
     const first = await acquireTelegramTesterScenarioReservation({

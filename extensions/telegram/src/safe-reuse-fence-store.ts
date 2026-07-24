@@ -9,6 +9,8 @@ const STORE_VERSION = 1;
 const SAFE_REUSE_GENERATION_ENV = "OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION";
 const SAFE_REUSE_TOKEN_HASH_ENV = "OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH";
 const SAFE_REUSE_ACCOUNT_ID_ENV = "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID";
+const TESTER_RESERVATION_ROOT_ENV = "OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT";
+const TESTER_SCENARIO_ID_ENV = "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID";
 
 type TelegramSafeReuseFenceReceipt = {
   version: 1;
@@ -28,11 +30,40 @@ function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-function receiptPath(accountId: string | undefined, env: NodeJS.ProcessEnv): string {
+function receiptPath(params: {
+  accountId: string | undefined;
+  tokenHash: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const configuredTesterReservationRoot = String(
+    params.env[TESTER_RESERVATION_ROOT_ENV] ?? "",
+  ).trim();
+  const testerScenarioId = String(params.env[TESTER_SCENARIO_ID_ENV] ?? "").trim();
+  const testerReservationRoot =
+    configuredTesterReservationRoot ||
+    (testerScenarioId
+      ? path.join(
+          String(params.env.HOME ?? "").trim() || os.homedir(),
+          ".openclaw",
+          "telegram-tester-scenario-reservations",
+        )
+      : "");
+  if (testerReservationRoot) {
+    // ACP validation intentionally deletes its isolated runtime state. Keep
+    // tester reservation fence receipts beside the durable reservation, keyed
+    // by token, so that reset cannot make the same scenario consume `offset:
+    // -1` again. Per-token filenames also prevent parallel tester bots on the
+    // default account from overwriting one another's completion proof.
+    return path.join(
+      path.resolve(testerReservationRoot),
+      "safe-reuse-fences",
+      `${normalizeAccountId(params.accountId)}-${params.tokenHash}.json`,
+    );
+  }
   return path.join(
-    resolveStateDir(env, os.homedir),
+    resolveStateDir(params.env, os.homedir),
     "telegram",
-    `safe-reuse-fence-${normalizeAccountId(accountId)}.json`,
+    `safe-reuse-fence-${normalizeAccountId(params.accountId)}.json`,
   );
 }
 
@@ -104,7 +135,14 @@ export async function readCompletedTelegramSafeReuseFence(params: {
   const tokenHash = hashToken(params.botToken);
   const accountId = normalizeAccountId(params.accountId);
   try {
-    const raw = await fs.readFile(receiptPath(params.accountId, params.env ?? process.env), "utf8");
+    const raw = await fs.readFile(
+      receiptPath({
+        accountId: params.accountId,
+        tokenHash,
+        env: params.env ?? process.env,
+      }),
+      "utf8",
+    );
     const receipt = parseReceipt(raw);
     // Both fields are required. A worktree may reuse its state directory for
     // another tester bot later, and a generation alone must never bless that
@@ -157,7 +195,11 @@ export async function writeCompletedTelegramSafeReuseFence(params: {
     throw new Error("Cannot persist Telegram safe-reuse fence with an invalid update id.");
   }
   const accountId = normalizeAccountId(params.accountId);
-  const filePath = receiptPath(params.accountId, params.env ?? process.env);
+  const filePath = receiptPath({
+    accountId: params.accountId,
+    tokenHash,
+    env: params.env ?? process.env,
+  });
   await writeJsonAtomic(
     filePath,
     {

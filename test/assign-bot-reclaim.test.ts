@@ -355,7 +355,7 @@ describe("assign-bot stale claim reclaim", () => {
     expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toContain("222:free");
   });
 
-  it("does not reserve under an unreserved live runtime in the same worktree", () => {
+  it("migrates an unreserved live runtime in the same worktree without rotating bots", () => {
     const { root, mainDir } = initRepo("openclaw-assign-bot-same-worktree-lease-");
     installAssignBotFixture(mainDir);
     const home = path.join(root, "home");
@@ -363,6 +363,7 @@ describe("assign-bot stale claim reclaim", () => {
     mkdirSync(leaseRoot, { recursive: true });
     writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
     writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:live\nBOT_TOKEN=222:free\n");
+    writeFileSync(path.join(mainDir, ".env.local"), "TELEGRAM_BOT_TOKEN=111:live\nKEEP_ME=yes\n");
     const leasedToken = "111:live";
     const tokenHash = crypto.createHash("sha256").update(leasedToken).digest("hex");
     writeFileSync(
@@ -386,18 +387,24 @@ describe("assign-bot stale claim reclaim", () => {
       OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "new-scenario",
     });
 
-    expect(output).toContain("Assigned Telegram bot token #2");
-    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toContain("222:free");
+    expect(output).toContain("Retained Telegram bot token #1");
+    expect(output).toContain("Selection reason: active_same_worktree_legacy_lease");
+    const envContent = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    expect(envContent).toContain("TELEGRAM_BOT_TOKEN=111:live");
+    expect(envContent).toContain("KEEP_ME=yes");
+    expect(envContent).toContain("OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=new-scenario");
+    expect(envContent).toMatch(/^OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=[a-f0-9-]+$/m);
+    expect(envContent).not.toContain("OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=");
     const reservationRoot = path.join(home, ".openclaw", "telegram-tester-scenario-reservations");
     expect(
       readFileSync(
         path.join(
           reservationRoot,
-          `222-${crypto.createHash("sha256").update("222:free").digest("hex")}.json`,
+          `111-${crypto.createHash("sha256").update("111:live").digest("hex")}.json`,
         ),
         "utf8",
       ),
-    ).toContain('"scenarioId": "new-scenario"');
+    ).toContain('"requiresSafeReuseFence": false');
   });
 
   it("keeps a malformed polling lease unavailable instead of assigning its token", () => {

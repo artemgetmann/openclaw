@@ -106,6 +106,36 @@ describe("telegram-live-runtime.sh", () => {
     expect(readFileSync(envLocalPath, "utf8")).toBe("KEEP_ME=yes\n");
   });
 
+  it("releases a pre-reservation token claim after stopping its owned runtime", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-legacy-release-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const envLocalPath = path.join(tempDir, ".env.local");
+    const reservationRoot = path.join(tempDir, "reservations");
+    const token = "12345:legacy-release-test";
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+    writeFileSync(envLocalPath, `TELEGRAM_BOT_TOKEN=${token}\nKEEP_ME=yes\n`);
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; REPO_ROOT=${JSON.stringify(tempDir)}; WORKTREE=${JSON.stringify(tempDir)}; SCENARIO_RESERVATION_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-tester-scenario-reservations.mjs"))}; OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT=${JSON.stringify(reservationRoot)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(path.join(tempDir, "state"))}; RUNTIME_PORT=24567; }; resolve_runtime_owner() { RUNTIME_PID="31337"; RUNTIME_OWNERSHIP=ok; }; stop_owned_runtime() { RUNTIME_STOP_RESULT=stopped; RUNTIME_PID=""; }; remove_runtime_state_dir() { :; }; release_command`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toContain("release_runtime_stop=stopped");
+    expect(stdout).toContain("release_token_cleared=yes");
+    expect(stdout).toContain("release_scenario_id=none");
+    expect(readFileSync(envLocalPath, "utf8")).toBe("KEEP_ME=yes\n");
+  });
+
   it("accepts the exact tester profile marker after gateway cwd changes", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-owner-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");

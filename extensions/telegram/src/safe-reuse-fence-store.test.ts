@@ -153,4 +153,51 @@ describe("Telegram safe-reuse fence receipt", () => {
       }),
     ).resolves.toEqual({ lastUpdateId: 900 });
   });
+
+  it("keeps default-root tester completion durable when ACP resets runtime state", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "tg-safe-reuse-durable-"));
+    const originalStateDir = path.join(root, "runtime-before-reset");
+    const resetStateDir = path.join(root, "runtime-after-reset");
+    const baseEnv = {
+      HOME: path.join(root, "home"),
+      OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "scenario-default-root",
+    };
+    await writeCompletedTelegramSafeReuseFence({
+      accountId: "default",
+      botToken: "12345:first",
+      generation: "generation-123",
+      lastUpdateId: 900,
+      env: {
+        ...baseEnv,
+        OPENCLAW_STATE_DIR: originalStateDir,
+      },
+    });
+
+    await expect(
+      readCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        persistedOffsetIgnored: true,
+        env: {
+          ...baseEnv,
+          OPENCLAW_STATE_DIR: resetStateDir,
+        },
+      }),
+    ).resolves.toEqual({ lastUpdateId: 900 });
+
+    // A second tester bot on the same default account gets a distinct receipt
+    // instead of clobbering the first bot's restart proof.
+    await expect(
+      readCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "67890:second",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        persistedOffsetIgnored: true,
+        env: baseEnv,
+      }),
+    ).resolves.toBeNull();
+  });
 });

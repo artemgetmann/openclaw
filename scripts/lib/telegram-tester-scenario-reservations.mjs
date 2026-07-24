@@ -79,7 +79,9 @@ function parseReservation(raw) {
       ) ||
       typeof parsed.createdAt !== "string" ||
       typeof parsed.updatedAt !== "string" ||
-      typeof parsed.expiresAt !== "string"
+      typeof parsed.expiresAt !== "string" ||
+      (parsed.requiresSafeReuseFence !== undefined &&
+        typeof parsed.requiresSafeReuseFence !== "boolean")
     ) {
       return null;
     }
@@ -224,6 +226,51 @@ async function clearExactReservationEnv(params) {
   return { ok: true };
 }
 
+async function clearLegacyTokenEnv(params) {
+  const content = await fs.readFile(params.envLocalPath, "utf8");
+  if (readLastEnvValue(content, "TELEGRAM_BOT_TOKEN") !== params.token) {
+    return { ok: false, reason: "env_owner_mismatch" };
+  }
+  // A partial modern owner file is not a legacy assignment. Clearing it as
+  // legacy state could orphan a durable reservation after an interrupted
+  // migration or publication, so require all reservation credentials absent.
+  for (const key of [
+    "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID",
+    "OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION",
+    "OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH",
+  ]) {
+    if (readLastEnvValue(content, key)) {
+      return { ok: false, reason: "legacy_env_has_reservation_metadata" };
+    }
+  }
+
+  const clearedKeys = new Set([
+    "TELEGRAM_BOT_TOKEN",
+    "OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION",
+    "OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH",
+    "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID",
+  ]);
+  const kept = content.split(/\r?\n/gu).filter((line) => {
+    for (const key of clearedKeys) {
+      if (new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=`).test(line)) {
+        return false;
+      }
+    }
+    return true;
+  });
+  const next = kept.join("\n").replace(/^\n+/u, "");
+  const tempPath = `${params.envLocalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(tempPath, next, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  try {
+    await fs.rename(tempPath, params.envLocalPath);
+    await fs.chmod(params.envLocalPath, 0o600);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
+  return { ok: true };
+}
+
 export async function acquireTelegramTesterScenarioReservation(params) {
   const token = normalizeOwnerString(params?.token, "token");
   const scenarioId = normalizeOwnerString(params?.scenarioId, "scenarioId");
@@ -277,11 +324,21 @@ export async function acquireTelegramTesterScenarioReservation(params) {
       existing &&
       existing.scenarioId === scenarioId &&
       path.resolve(existing.worktreePath) === path.resolve(worktreePath);
+    const everyActiveLeaseMatchesOwner =
+      activePollingLeaseEntries.length > 0 &&
+      activePollingLeaseEntries.every(
+        (entry) =>
+          typeof entry?.worktreePath === "string" &&
+          path.resolve(entry.worktreePath) === path.resolve(worktreePath),
+      );
     const expectedGeneration = String(params?.expectedGeneration ?? "").trim();
     const expectedTokenHash = String(params?.expectedTokenHash ?? "").trim();
+    const mayMigrateLegacyLease =
+      params?.allowLegacyLeaseMigration === true && everyActiveLeaseMatchesOwner;
     if (
       sameOwner &&
       params?.requireExpectedOwner === true &&
+      !mayMigrateLegacyLease &&
       (!expectedGeneration ||
         !/^[a-f0-9]{64}$/u.test(expectedTokenHash) ||
         existing.generation !== expectedGeneration ||
@@ -296,13 +353,6 @@ export async function acquireTelegramTesterScenarioReservation(params) {
         reservationPath,
       };
     }
-    const everyActiveLeaseMatchesOwner =
-      activePollingLeaseEntries.length > 0 &&
-      activePollingLeaseEntries.every(
-        (entry) =>
-          typeof entry?.worktreePath === "string" &&
-          path.resolve(entry.worktreePath) === path.resolve(worktreePath),
-      );
     if (sameOwner && (!hasActivePollingLease || everyActiveLeaseMatchesOwner)) {
       // A running process in this exact scenario/worktree may call ensure
       // again. A live PID lease is compatible only when both the durable
@@ -320,6 +370,36 @@ export async function acquireTelegramTesterScenarioReservation(params) {
         generation: existing.generation,
         reservationPath,
         safeReuseRequired: false,
+        safeReuseEnabled: existing.requiresSafeReuseFence !== false,
+      };
+    }
+    if (!existing && hasActivePollingLease && mayMigrateLegacyLease) {
+      // Pre-reservation tester lanes already own their bot through the active
+      // same-worktree PID lease. Adopt that live owner without rotating bots or
+      // fencing a scenario that is already consuming updates.
+      const createdAt = new Date(nowMs).toISOString();
+      const payload = {
+        version: RESERVATION_VERSION,
+        tokenHash,
+        tokenFingerprint: fingerprintToken(token),
+        botId: botIdFromToken(token),
+        scenarioId,
+        worktreePath,
+        generation: crypto.randomUUID(),
+        createdAt,
+        updatedAt: createdAt,
+        expiresAt: new Date(nowMs + ttlMs).toISOString(),
+        requiresSafeReuseFence: false,
+      };
+      await writeReservationAtomic(reservationPath, payload);
+      return {
+        ok: true,
+        action: "migrated_legacy_lease",
+        reason: "active_same_worktree_legacy_lease",
+        generation: payload.generation,
+        reservationPath,
+        safeReuseRequired: false,
+        safeReuseEnabled: false,
       };
     }
     if (hasActivePollingLease) {
@@ -370,6 +450,7 @@ export async function acquireTelegramTesterScenarioReservation(params) {
       createdAt,
       updatedAt: createdAt,
       expiresAt: new Date(nowMs + ttlMs).toISOString(),
+      requiresSafeReuseFence: true,
     };
     await writeReservationAtomic(reservationPath, payload);
     return {
@@ -379,7 +460,36 @@ export async function acquireTelegramTesterScenarioReservation(params) {
       generation: payload.generation,
       reservationPath,
       safeReuseRequired: true,
+      safeReuseEnabled: true,
     };
+  });
+}
+
+export async function releaseLegacyTelegramTesterTokenAssignment(params) {
+  const token = normalizeOwnerString(params?.token, "token");
+  const envLocalPath = path.resolve(normalizeOwnerString(params?.envLocalPath, "envLocalPath"));
+  const reservationPath = resolveTelegramTesterScenarioReservationPath({
+    token,
+    reservationRoot: params?.reservationRoot,
+  });
+
+  return withReservationLock(reservationPath, async () => {
+    const current = await readReservation(reservationPath);
+    // Legacy cleanup is authorized only by the exact local token claim and the
+    // absence of durable reservation state. Any reservation, including
+    // malformed state, belongs to the modern fail-closed recovery path.
+    if (current.exists) {
+      return {
+        ok: false,
+        reason: current.payload ? "reservation_present" : "malformed_reservation",
+        reservationPath,
+      };
+    }
+    const envResult = await clearLegacyTokenEnv({ envLocalPath, token });
+    if (!envResult.ok) {
+      return { ok: false, reason: envResult.reason, reservationPath };
+    }
+    return { ok: true, reason: "legacy_assignment_released", reservationPath };
   });
 }
 

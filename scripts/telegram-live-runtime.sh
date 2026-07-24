@@ -58,6 +58,9 @@ CURRENT_LANE_BOT="unknown"
 TESTER_SCENARIO_ID="unknown"
 TESTER_RESERVATION_GENERATION="unknown"
 TESTER_RESERVATION_TOKEN_HASH="unknown"
+TESTER_SAFE_REUSE_GENERATION=""
+TESTER_SAFE_REUSE_TOKEN_HASH=""
+TESTER_SAFE_REUSE_ACCOUNT_ID=""
 RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
@@ -615,7 +618,11 @@ ensure_tester_bot_claim() {
 
   # Always resolve the claim via assign-bot so a stale .env.local token can be
   # rotated away when another runtime actively holds the lease.
-  if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
+  if ! assign_output="$(
+    cd "$REPO_ROOT" &&
+      OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-${HOME}/.openclaw/telegram-tester-scenario-reservations}" \
+        bash "$ASSIGN_BOT_SCRIPT" 2>&1
+  )"; then
     TOKEN_CLAIM_STATUS="fail"
     TOKEN_CLAIM_REASON="assign_failed"
     parse_assign_bot_output "$assign_output"
@@ -653,6 +660,15 @@ ensure_tester_bot_claim() {
   )"
   TESTER_RESERVATION_TOKEN_HASH="$(
     read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH"
+  )"
+  TESTER_SAFE_REUSE_GENERATION="$(
+    read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION"
+  )"
+  TESTER_SAFE_REUSE_TOKEN_HASH="$(
+    read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH"
+  )"
+  TESTER_SAFE_REUSE_ACCOUNT_ID="$(
+    read_last_env_value "$env_local" "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID"
   )"
   if [[ -z "$TESTER_SCENARIO_ID" || -z "$TESTER_RESERVATION_GENERATION" ||
     ! "$TESTER_RESERVATION_TOKEN_HASH" =~ ^[a-f0-9]{64}$ ]]; then
@@ -1359,13 +1375,14 @@ start_isolated_runtime() {
     RUNTIME_PORT="$RUNTIME_PORT" \
     RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
     HELPER_MODULE="$HELPER_MODULE" \
-    OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION="$TESTER_RESERVATION_GENERATION" \
-    OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH="$TESTER_RESERVATION_TOKEN_HASH" \
+    OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION="$TESTER_SAFE_REUSE_GENERATION" \
+    OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH="$TESTER_SAFE_REUSE_TOKEN_HASH" \
+    OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID="$TESTER_SAFE_REUSE_ACCOUNT_ID" \
     OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID="$TESTER_SCENARIO_ID" \
     OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION="$TESTER_RESERVATION_GENERATION" \
     OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH="$TESTER_RESERVATION_TOKEN_HASH" \
     OPENCLAW_TELEGRAM_TESTER_WORKTREE="$WORKTREE" \
-    OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-}" \
+    OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-${HOME}/.openclaw/telegram-tester-scenario-reservations}" \
     OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" \
     OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-0}" \
     node --input-type=module - <<'NODE'
@@ -1382,6 +1399,7 @@ const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
 const helperPath = process.env.HELPER_MODULE;
 const safeReuseGeneration = process.env.OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION;
 const safeReuseTokenHash = process.env.OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH;
+const safeReuseAccountId = process.env.OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID;
 const testerScenarioId = process.env.OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID;
 const testerReservationGeneration =
   process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION;
@@ -1393,7 +1411,10 @@ const enableCron = process.env.OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON === "1";
 const disableExternalCliAuthSync =
   process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "0";
 
-if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath || !profileId || !safeReuseGeneration || !safeReuseTokenHash || !testerScenarioId || !testerReservationGeneration || !testerTokenHash || !testerWorktree) {
+const safeReuseScopeValues = [safeReuseGeneration, safeReuseTokenHash, safeReuseAccountId];
+const safeReuseScopeComplete = safeReuseScopeValues.every(Boolean);
+const safeReuseScopeAbsent = safeReuseScopeValues.every((value) => !value);
+if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath || !profileId || (!safeReuseScopeComplete && !safeReuseScopeAbsent) || !testerScenarioId || !testerReservationGeneration || !testerTokenHash || !testerWorktree) {
   throw new Error("Missing detached runtime launch parameters.");
 }
 
@@ -1429,15 +1450,23 @@ const child = spawn(
         OPENCLAW_STATE_DIR: runtimeStateDir,
         OPENCLAW_CONFIG_PATH: runtimeConfigPath,
         OPENCLAW_GATEWAY_PORT: runtimePort,
-        OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION: safeReuseGeneration,
-        OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH: safeReuseTokenHash,
-        OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID: "default",
+        ...(safeReuseScopeComplete
+          ? {
+              OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION: safeReuseGeneration,
+              OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH: safeReuseTokenHash,
+              OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID: safeReuseAccountId,
+            }
+          : {
+              OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION: "",
+              OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH: "",
+              OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID: "",
+            }),
         OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: testerScenarioId,
         OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION: testerReservationGeneration,
         OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH: testerTokenHash,
         OPENCLAW_TELEGRAM_TESTER_WORKTREE: testerWorktree,
         OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:
-          process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT || "",
+          process.env.OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT,
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         // Normal Telegram smoke lanes keep background jobs off so old cron
         // state cannot create fake chat activity. Goal/monitor proof can opt
@@ -1698,7 +1727,42 @@ release_command() {
     local release_lines=""
     local release_ok=""
     local release_reason=""
-    if [[ -z "$scenario_before" || -z "$generation_before" ]]; then
+    if [[ -z "$scenario_before" && -z "$generation_before" ]]; then
+      # Pre-reservation tester lanes have only the token claim. The owned
+      # runtime is stopped above; clear that exact legacy claim under the same
+      # token-specific lock used by modern reservation acquisition.
+      if ! release_lines="$(
+        TOKEN="$token_before" \
+        ENV_LOCAL_PATH="$env_local" \
+        RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-${HOME}/.openclaw/telegram-tester-scenario-reservations}" \
+        SCENARIO_RESERVATION_MODULE="$SCENARIO_RESERVATION_MODULE" \
+        node --input-type=module - <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const { releaseLegacyTelegramTesterTokenAssignment } = await import(
+  pathToFileURL(process.env.SCENARIO_RESERVATION_MODULE).href
+);
+const result = await releaseLegacyTelegramTesterTokenAssignment({
+  token: process.env.TOKEN,
+  envLocalPath: process.env.ENV_LOCAL_PATH,
+  reservationRoot: process.env.RESERVATION_ROOT,
+});
+process.stdout.write(`${result.ok ? "ok" : "fail"}\n`);
+process.stdout.write(`${result.reason ?? "unknown"}\n`);
+NODE
+      )"; then
+        add_failure "release_legacy_token_assignment_command_failed"
+      else
+        release_ok="$(printf '%s\n' "$release_lines" | sed -n '1p')"
+        release_reason="$(printf '%s\n' "$release_lines" | sed -n '2p')"
+        if [[ "$release_ok" == "ok" ]] &&
+          [[ -z "$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")" ]]; then
+          release_token_cleared="yes"
+        else
+          add_failure "release_legacy_token_assignment_failed:${release_reason}"
+        fi
+      fi
+    elif [[ -z "$scenario_before" || -z "$generation_before" ]]; then
       add_failure "release_scenario_reservation_metadata_missing"
     elif ! release_lines="$(
       TOKEN="$token_before" \
@@ -1706,7 +1770,7 @@ release_command() {
       GENERATION="$generation_before" \
       WORKTREE="$WORKTREE" \
       ENV_LOCAL_PATH="$env_local" \
-      RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-}" \
+      RESERVATION_ROOT="${OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT:-${HOME}/.openclaw/telegram-tester-scenario-reservations}" \
       SCENARIO_RESERVATION_MODULE="$SCENARIO_RESERVATION_MODULE" \
       node --input-type=module - <<'NODE'
 import { pathToFileURL } from "node:url";
