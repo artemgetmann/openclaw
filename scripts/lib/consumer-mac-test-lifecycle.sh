@@ -181,14 +181,18 @@ consumer_mac_test_acquire_lock() {
   local lock_path=""
   local candidate_path=""
   local reap_path=""
+  local reap_candidate_path=""
+  local reaper_pid=""
   local owner_pid=""
   local attempt=0
   local missing_owner_attempts=0
+  local invalid_reaper_attempts=0
   local max_attempts="${OPENCLAW_CONSUMER_TEST_LOCK_ATTEMPTS:-600}"
 
   lock_path="$(consumer_mac_test_lock_path)"
   candidate_path="${lock_path}.candidate.$$"
   reap_path="${lock_path}.reap"
+  reap_candidate_path="${reap_path}.candidate.$$"
   if ! /bin/mkdir -p "$(dirname "$lock_path")"; then
     echo "ERROR: could not create Jarvis tester lock directory: $(dirname "$lock_path")" >&2
     return 1
@@ -197,13 +201,39 @@ consumer_mac_test_acquire_lock() {
     echo "ERROR: could not create Jarvis tester lock candidate: $candidate_path" >&2
     return 1
   fi
+  if ! printf '%s\n' "$$" >"$reap_candidate_path"; then
+    /bin/rm -f "$candidate_path"
+    echo "ERROR: could not create Jarvis tester reaper candidate: $reap_candidate_path" >&2
+    return 1
+  fi
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    # Publish a complete owner token atomically. The reaper is also a hard link,
-    # so only one contender can claim authority to unlink a dead owner's inode.
-    if [[ ! -e "$reap_path" ]] && /bin/ln "$candidate_path" "$lock_path" 2>/dev/null; then
+    # Reaping has its own atomic owner token. If that owner crashes, another
+    # contender can prove the reaper PID is dead and recover the handoff.
+    if [[ -e "$reap_path" ]]; then
+      reaper_pid="$(head -n 1 "$reap_path" 2>/dev/null || true)"
+      if [[ "$reaper_pid" =~ ^[0-9]+$ ]]; then
+        invalid_reaper_attempts=0
+        if ! consumer_mac_test_pid_alive "$reaper_pid"; then
+          /bin/rm -f "$reap_path"
+          continue
+        fi
+      else
+        invalid_reaper_attempts=$((invalid_reaper_attempts + 1))
+        if [[ "$invalid_reaper_attempts" -ge 5 ]]; then
+          /bin/rm -f "$reap_path"
+          invalid_reaper_attempts=0
+          continue
+        fi
+      fi
+      /bin/sleep 0.1
+      continue
+    fi
+
+    # Publish a complete lock owner token atomically.
+    if /bin/ln "$candidate_path" "$lock_path" 2>/dev/null; then
       CONSUMER_MAC_TEST_LOCK_OWNED="$lock_path"
-      /bin/rm -f "$candidate_path"
+      /bin/rm -f "$candidate_path" "$reap_candidate_path"
       return 0
     fi
 
@@ -211,8 +241,8 @@ consumer_mac_test_acquire_lock() {
     if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
       missing_owner_attempts=0
       if ! consumer_mac_test_pid_alive "$owner_pid"; then
-        if /bin/ln "$lock_path" "$reap_path" 2>/dev/null; then
-          owner_pid="$(head -n 1 "$reap_path" 2>/dev/null || true)"
+        if /bin/ln "$reap_candidate_path" "$reap_path" 2>/dev/null; then
+          owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
           if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! consumer_mac_test_pid_alive "$owner_pid"; then
             /bin/rm -f "$lock_path"
           fi
@@ -225,8 +255,11 @@ consumer_mac_test_acquire_lock() {
       # atomic publication. Retry briefly before reaping legacy/corrupt state.
       missing_owner_attempts=$((missing_owner_attempts + 1))
       if [[ "$missing_owner_attempts" -ge 5 ]]; then
-        if /bin/ln "$lock_path" "$reap_path" 2>/dev/null; then
-          /bin/rm -f "$lock_path"
+        if /bin/ln "$reap_candidate_path" "$reap_path" 2>/dev/null; then
+          owner_pid="$(head -n 1 "$lock_path" 2>/dev/null || true)"
+          if [[ ! "$owner_pid" =~ ^[0-9]+$ ]]; then
+            /bin/rm -f "$lock_path"
+          fi
           /bin/rm -f "$reap_path"
         fi
         missing_owner_attempts=0
@@ -236,7 +269,7 @@ consumer_mac_test_acquire_lock() {
     /bin/sleep 0.1
   done
 
-  /bin/rm -f "$candidate_path"
+  /bin/rm -f "$candidate_path" "$reap_candidate_path"
   echo "ERROR: timed out waiting for the Jarvis macOS tester slot lock: $lock_path" >&2
   return 1
 }
@@ -269,7 +302,18 @@ consumer_mac_test_quarantine_gateway() {
     return 1
   }
 
-  launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
+  if launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+    if ! launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+      if launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+        echo "ERROR: could not stop previous tester gateway: $label" >&2
+        return 1
+      fi
+    fi
+    if launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+      echo "ERROR: previous tester gateway remained loaded after bootout: $label" >&2
+      return 1
+    fi
+  fi
   plist_path="${HOME}/Library/LaunchAgents/${label}.plist"
   [[ -f "$plist_path" ]] || return 0
 

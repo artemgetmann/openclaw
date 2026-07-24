@@ -24,10 +24,12 @@ describe("consumer macOS tester lifecycle shell contract", () => {
     expect(result.stdout).toContain("PASS: same-instance path transfer preserves its gateway");
     expect(result.stdout).toContain("PASS: serializes tester-slot acquisition");
     expect(result.stdout).toContain("PASS: reclaims a stale lock without concurrent ownership");
+    expect(result.stdout).toContain("PASS: recovers an abandoned stale-lock reaper");
     expect(result.stdout).toContain("PASS: releases the slot lock when preparation fails");
     expect(result.stdout).toContain(
       "PASS: fails closed when the previous gateway cannot be quarantined",
     );
+    expect(result.stdout).toContain("PASS: fails closed when a loaded tester gateway cannot stop");
     expect(result.stdout).toContain(
       "PASS: fails closed when the tester registry cannot be written",
     );

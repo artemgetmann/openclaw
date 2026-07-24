@@ -166,6 +166,13 @@ wait "$SECOND_LOCK_WORKER"
 [[ ! -e "$STALE_LOCK_PATH" ]] || fail "concurrent stale-lock recovery should release the final lock"
 pass "reclaims a stale lock without concurrent ownership"
 
+printf '999999\n' >"$STALE_LOCK_PATH"
+printf '999999\n' >"${STALE_LOCK_PATH}.reap"
+consumer_mac_test_acquire_lock
+consumer_mac_test_release_lock
+[[ ! -e "${STALE_LOCK_PATH}.reap" ]] || fail "abandoned reaper token should be removed"
+pass "recovers an abandoned stale-lock reaper"
+
 TEST_PROCESS_LINES=("505 $OLD_APP/Contents/MacOS/OpenClaw")
 if consumer_mac_test_begin_launch "new-proof" "$NEW_APP" 0 >/dev/null 2>&1; then
   fail "begin launch should propagate a conflicting-slot refusal"
@@ -185,6 +192,25 @@ consumer_mac_test_quarantine_gateway() {
   TEST_QUARANTINED_INSTANCES+=("$1")
 }
 pass "fails closed when the previous gateway cannot be quarantined"
+
+GATEWAY_TEST_HOME="$TMP_DIR/gateway-home"
+/bin/mkdir -p "$GATEWAY_TEST_HOME/Library/LaunchAgents"
+: >"$GATEWAY_TEST_HOME/Library/LaunchAgents/ai.openclaw.consumer.old-proof.gateway.plist"
+if ROOT_DIR="$ROOT_DIR" HOME="$GATEWAY_TEST_HOME" bash -c '
+  source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+  source "$ROOT_DIR/scripts/lib/consumer-mac-test-lifecycle.sh"
+  consumer_instance_gateway_launchd_label() {
+    printf "ai.openclaw.consumer.old-proof.gateway\n"
+  }
+  launchctl() {
+    [[ "$1" == "print" ]] && return 0
+    [[ "$1" == "bootout" ]] && return 1
+  }
+  consumer_mac_test_quarantine_gateway "old-proof"
+' >/dev/null 2>&1; then
+  fail "loaded tester gateway should not hand off when bootout fails"
+fi
+pass "fails closed when a loaded tester gateway cannot stop"
 
 ORIGINAL_REGISTRY_PATH="$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH"
 export OPENCLAW_CONSUMER_TEST_REGISTRY_PATH="/dev/null/current.tsv"
