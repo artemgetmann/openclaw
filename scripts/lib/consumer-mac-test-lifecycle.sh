@@ -11,6 +11,23 @@ consumer_mac_test_registry_path() {
   printf '%s\n' "${OPENCLAW_CONSUMER_TEST_REGISTRY_PATH:-${HOME}/Library/Application Support/OpenClaw/test-lanes/current-mac-app.tsv}"
 }
 
+consumer_mac_test_parallel_registry_dir() {
+  printf '%s\n' "${OPENCLAW_CONSUMER_PARALLEL_TEST_REGISTRY_DIR:-$(dirname "$(consumer_mac_test_registry_path)")/parallel}"
+}
+
+consumer_mac_test_parallel_receipt_files() {
+  local registry_dir=""
+  local receipt_path=""
+
+  registry_dir="$(consumer_mac_test_parallel_registry_dir)"
+  [[ -d "$registry_dir" ]] || return 0
+  shopt -s nullglob
+  for receipt_path in "$registry_dir"/*.tsv; do
+    printf '%s\n' "$receipt_path"
+  done
+  shopt -u nullglob
+}
+
 consumer_mac_test_lock_path() {
   printf '%s.lock\n' "$(consumer_mac_test_registry_path)"
 }
@@ -97,14 +114,16 @@ consumer_mac_test_app_record_from_line() {
 }
 
 consumer_mac_test_read_registry() {
-  local registry_path=""
+  local registry_path="${1:-}"
   local line=""
   local key=""
   local value=""
 
   CONSUMER_MAC_TEST_PREVIOUS_INSTANCE=""
   CONSUMER_MAC_TEST_PREVIOUS_APP=""
-  registry_path="$(consumer_mac_test_registry_path)"
+  if [[ -z "$registry_path" ]]; then
+    registry_path="$(consumer_mac_test_registry_path)"
+  fi
   [[ -f "$registry_path" ]] || return 1
 
   while IFS= read -r line; do
@@ -361,11 +380,14 @@ consumer_mac_test_prepare_launch() {
   local current_app="$2"
   local replace="${3:-0}"
   local registry_status=1
+  local registry_instance=""
+  local registry_app=""
   local line=""
   local record=""
   local pid=""
   local instance_id=""
   local app_path=""
+  local receipt_path=""
   local conflict_count=0
   local previous_differs=0
   local retired_instances=$'\n'
@@ -378,10 +400,24 @@ consumer_mac_test_prepare_launch() {
   if [[ "$registry_status" -eq 2 ]]; then
     return 1
   fi
-  if [[ "$registry_status" -eq 0 && ( "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" || "$CONSUMER_MAC_TEST_PREVIOUS_APP" != "$current_app" ) ]]; then
+  if [[ "$registry_status" -eq 0 ]]; then
+    registry_instance="$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE"
+    registry_app="$CONSUMER_MAC_TEST_PREVIOUS_APP"
+  fi
+  if [[ "$registry_status" -eq 0 && ( "$registry_instance" != "$current_instance" || "$registry_app" != "$current_app" ) ]]; then
     previous_differs=1
     conflict_count=$((conflict_count + 1))
   fi
+
+  while IFS= read -r receipt_path; do
+    [[ -n "$receipt_path" ]] || continue
+    if ! consumer_mac_test_read_registry "$receipt_path"; then
+      return 1
+    fi
+    if [[ "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" || "$CONSUMER_MAC_TEST_PREVIOUS_APP" != "$current_app" ]]; then
+      conflict_count=$((conflict_count + 1))
+    fi
+  done < <(consumer_mac_test_parallel_receipt_files)
 
   while IFS= read -r line; do
     record="$(consumer_mac_test_app_record_from_line "$line" || true)"
@@ -396,13 +432,36 @@ consumer_mac_test_prepare_launch() {
     return 1
   fi
 
-  if [[ "$previous_differs" -eq 1 ]]; then
+  # Parallel receipts remain after their app exits, so a later normal launch
+  # can still retire a gateway-only lane. This is the deterministic cleanup
+  # boundary for agents that forget to tear down their isolated tester.
+  while IFS= read -r receipt_path; do
+    [[ -n "$receipt_path" ]] || continue
+    if ! consumer_mac_test_read_registry "$receipt_path"; then
+      return 1
+    fi
     consumer_mac_test_terminate_app_path "$CONSUMER_MAC_TEST_PREVIOUS_APP"
-    if [[ -n "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" && "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" ]]; then
+    if [[ -n "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" && "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" && "$retired_instances" != *$'\n'"$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE"$'\n'* ]]; then
       if ! consumer_mac_test_quarantine_gateway "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE"; then
         return 1
       fi
       retired_instances+="${CONSUMER_MAC_TEST_PREVIOUS_INSTANCE}"$'\n'
+    fi
+    # A same-instance handoff intentionally preserves its gateway. Keep that
+    # lane's receipt until the singleton registry is durably published, or a
+    # later write failure could leave the gateway with no cleanup identity.
+    if [[ "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" ]]; then
+      /bin/rm -f "$receipt_path"
+    fi
+  done < <(consumer_mac_test_parallel_receipt_files)
+
+  if [[ "$previous_differs" -eq 1 ]]; then
+    consumer_mac_test_terminate_app_path "$registry_app"
+    if [[ -n "$registry_instance" && "$registry_instance" != "$current_instance" && "$retired_instances" != *$'\n'"$registry_instance"$'\n'* ]]; then
+      if ! consumer_mac_test_quarantine_gateway "$registry_instance"; then
+        return 1
+      fi
+      retired_instances+="${registry_instance}"$'\n'
     fi
   fi
 
@@ -514,6 +573,51 @@ consumer_mac_test_record_launch() {
   umask "$previous_umask"
 }
 
+consumer_mac_test_record_parallel_launch() {
+  local instance_id="$1"
+  local app_path="$2"
+  local registry_dir=""
+  local registry_path=""
+  local pending_path=""
+  local previous_umask=""
+
+  consumer_mac_test_validate_launch_record "$instance_id" "$app_path" || return 1
+  [[ -n "$instance_id" ]] || return 1
+  registry_dir="$(consumer_mac_test_parallel_registry_dir)"
+  registry_path="${registry_dir}/${instance_id}.tsv"
+  pending_path="${registry_path}.pending.$$"
+  if ! /bin/mkdir -p "$registry_dir"; then
+    echo "ERROR: could not create parallel tester registry: $registry_dir" >&2
+    return 1
+  fi
+
+  previous_umask="$(umask)"
+  umask 077
+  if ! {
+    printf 'instance_id\t%s\n' "$instance_id"
+    printf 'app_path\t%s\n' "$app_path"
+  } >"$pending_path"; then
+    umask "$previous_umask"
+    /bin/rm -f "$pending_path"
+    return 1
+  fi
+  if ! /bin/mv "$pending_path" "$registry_path"; then
+    umask "$previous_umask"
+    /bin/rm -f "$pending_path"
+    return 1
+  fi
+  umask "$previous_umask"
+}
+
+consumer_mac_test_remove_parallel_receipt() {
+  local instance_id="$1"
+  local receipt_path=""
+
+  [[ -n "$instance_id" ]] || return 0
+  receipt_path="$(consumer_mac_test_parallel_registry_dir)/${instance_id}.tsv"
+  /bin/rm -f "$receipt_path"
+}
+
 consumer_mac_test_begin_launch() {
   local instance_id="${1:-}"
   local app_path="$2"
@@ -531,6 +635,10 @@ consumer_mac_test_begin_launch() {
     consumer_mac_test_release_lock
     return 1
   fi
+  if ! consumer_mac_test_remove_parallel_receipt "$instance_id"; then
+    consumer_mac_test_release_lock
+    return 1
+  fi
 }
 
 consumer_mac_test_begin_parallel_launch() {
@@ -541,6 +649,10 @@ consumer_mac_test_begin_parallel_launch() {
   consumer_mac_test_validate_launch_record "$instance_id" "$app_path" || return 1
   consumer_mac_test_acquire_lock
   if ! consumer_mac_test_prepare_parallel_launch "$instance_id" "$app_path" "$replace"; then
+    consumer_mac_test_release_lock
+    return 1
+  fi
+  if ! consumer_mac_test_record_parallel_launch "$instance_id" "$app_path"; then
     consumer_mac_test_release_lock
     return 1
   fi
