@@ -333,13 +333,10 @@ export async function acquireTelegramTesterScenarioReservation(params) {
       );
     const expectedGeneration = String(params?.expectedGeneration ?? "").trim();
     const expectedTokenHash = String(params?.expectedTokenHash ?? "").trim();
-    const mayMigrateLegacyLease =
-      params?.allowLegacyLeaseMigration === true && everyActiveLeaseMatchesOwner;
     const expired = existing ? Date.parse(existing.expiresAt) <= nowMs : false;
     if (
       sameOwner &&
       params?.requireExpectedOwner === true &&
-      !mayMigrateLegacyLease &&
       (!expectedGeneration ||
         !/^[a-f0-9]{64}$/u.test(expectedTokenHash) ||
         existing.generation !== expectedGeneration ||
@@ -351,6 +348,18 @@ export async function acquireTelegramTesterScenarioReservation(params) {
       return {
         ok: false,
         reason: "owner_generation_mismatch",
+        reservationPath,
+      };
+    }
+    if (sameOwner && expired && params?.requireExpectedOwner === true) {
+      // Reclaim would publish a new global generation while the current local
+      // owner file still authenticates the old one. An interruption between
+      // those writes strands both. Make the transition explicit: canonical
+      // release clears the exact old generation, then ensure creates a fresh
+      // fenced reservation from unassigned state.
+      return {
+        ok: false,
+        reason: "expired_owner_release_required",
         reservationPath,
       };
     }
@@ -374,35 +383,6 @@ export async function acquireTelegramTesterScenarioReservation(params) {
         safeReuseEnabled: existing.requiresSafeReuseFence !== false,
       };
     }
-    if (!existing && hasActivePollingLease && mayMigrateLegacyLease) {
-      // Pre-reservation tester lanes already own their bot through the active
-      // same-worktree PID lease. Adopt that live owner without rotating bots or
-      // fencing a scenario that is already consuming updates.
-      const createdAt = new Date(nowMs).toISOString();
-      const payload = {
-        version: RESERVATION_VERSION,
-        tokenHash,
-        tokenFingerprint: fingerprintToken(token),
-        botId: botIdFromToken(token),
-        scenarioId,
-        worktreePath,
-        generation: crypto.randomUUID(),
-        createdAt,
-        updatedAt: createdAt,
-        expiresAt: new Date(nowMs + ttlMs).toISOString(),
-        requiresSafeReuseFence: false,
-      };
-      await writeReservationAtomic(reservationPath, payload);
-      return {
-        ok: true,
-        action: "migrated_legacy_lease",
-        reason: "active_same_worktree_legacy_lease",
-        generation: payload.generation,
-        reservationPath,
-        safeReuseRequired: false,
-        safeReuseEnabled: false,
-      };
-    }
     if (hasActivePollingLease) {
       return {
         ok: false,
@@ -413,18 +393,6 @@ export async function acquireTelegramTesterScenarioReservation(params) {
         reservationPath,
       };
     }
-    if (!existing && params?.allowLegacyLeaseMigration === true) {
-      // A legacy local token is not enough to mint durable ownership. Only the
-      // active same-worktree PID lease migration above is authoritative; a
-      // dead/copied legacy claim must stop instead of falling through to the
-      // ordinary unreserved-token creation path.
-      return {
-        ok: false,
-        reason: "legacy_lease_not_active",
-        reservationPath,
-      };
-    }
-
     if (existing && !expired) {
       return {
         ok: false,

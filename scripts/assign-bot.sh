@@ -360,12 +360,14 @@ for (const candidate of candidates) {
     candidate === currentToken &&
     Boolean(storedReservationGeneration) &&
     Boolean(storedReservationTokenHash);
-  if (isLegacyCurrentToken && activeClaimTokens.has(candidate)) {
-    // A live same-worktree legacy PID lease can prove the local runtime, but it
-    // cannot disprove a second worktree's active-looking claim. Stop without
-    // reserving either bot; rotating would leave the live runtime polling the
-    // old identity while .env.local advertises the new one.
-    lastReservationReason = "legacy_current_token_claim_conflict";
+  if (isLegacyCurrentToken) {
+    // Metadata-free claims predate durable scenario ownership. Neither a local
+    // env file nor a live PID lease can exclude copied/expired competing state,
+    // so migration is deliberately explicit: serialized release first, then a
+    // fresh ensure that creates one fenced generation.
+    lastReservationReason = activeClaimTokens.has(candidate)
+      ? "legacy_current_token_claim_conflict_release_required"
+      : "legacy_current_token_release_required";
     break;
   }
   if (
@@ -378,13 +380,6 @@ for (const candidate of candidates) {
   ) {
     continue;
   }
-  if (isLegacyCurrentToken && !storedScenarioId) {
-    // Delay legacy intent publication until copied/active claim ambiguity has
-    // been ruled out above. The scenario still becomes durable before the
-    // global reservation write, but a fail-closed conflict leaves .env.local
-    // byte-for-byte unchanged.
-    persistScenarioIntent();
-  }
   const reservation = await acquireTelegramTesterScenarioReservation({
     token: candidate,
     scenarioId,
@@ -394,10 +389,6 @@ for (const candidate of candidates) {
     expectedGeneration: candidate === currentToken ? storedReservationGeneration : undefined,
     expectedTokenHash: candidate === currentToken ? storedReservationTokenHash : undefined,
     requireExpectedOwner: candidate === currentToken,
-    // A pre-reservation lane can prove ownership with its still-live,
-    // same-worktree PID lease. This narrow migration exception does not allow
-    // a dead or foreign legacy claim to adopt a reservation.
-    allowLegacyLeaseMigration: isLegacyCurrentToken,
     // The initial pool summary is diagnostic only. Re-read the per-token PID
     // lease inside the reservation lock so a just-started runtime wins the
     // race and assignment cannot reserve underneath it.
@@ -546,7 +537,14 @@ if [[ "$selection_ok" != "yes" || -z "$selected_token" || -z "$scenario_id" || -
       echo "  - ${claimed_worktree}" >&2
     done
   fi
-  echo "Release an unused worktree with 'bash scripts/telegram-live-runtime.sh release' or add more tester-only bot tokens." >&2
+  if [[ "${selection_reason:-}" == legacy_current_token_*_release_required ||
+    "${selection_reason:-}" == "legacy_current_token_release_required" ||
+    "${selection_reason:-}" == "expired_owner_release_required" ]]; then
+    echo "Existing tester ownership requires an explicit reset." >&2
+    echo "Run 'bash scripts/telegram-live-runtime.sh release', then rerun ensure." >&2
+  else
+    echo "Release an unused worktree with 'bash scripts/telegram-live-runtime.sh release' or add more tester-only bot tokens." >&2
+  fi
   exit 1
 fi
 

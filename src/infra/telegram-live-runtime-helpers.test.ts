@@ -938,9 +938,17 @@ describe("telegram live runtime helpers", () => {
       stateRoot: "/tmp/openclaw-telegram-live",
       acpValidation: "1",
     });
+    const ordinaryProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+      stateRoot: "/tmp/openclaw-telegram-live",
+    });
 
     expect(profile.runtimeStateDir).toMatch(
       /^\/tmp\/openclaw-telegram-live\/tg-live-[0-9a-f]{10}\/acp-validation$/,
+    );
+    expect(profile.commandLockDir).toBe(ordinaryProfile.commandLockDir);
+    expect(profile.commandLockDir).toMatch(
+      /^\/tmp\/openclaw-telegram-live\/tg-live-[0-9a-f]{10}\.command\.lock$/,
     );
   });
 

@@ -463,13 +463,16 @@ function normalizeLeaseEntries(values) {
       continue;
     }
     seen.add(key);
-    out.push({
+    const normalized = {
       token,
       worktreePath,
       pid: hasValidPid ? pid : null,
       accountId: String(value.accountId ?? "").trim() || null,
-      blockingReason,
-    });
+    };
+    if (blockingReason) {
+      normalized.blockingReason = blockingReason;
+    }
+    out.push(normalized);
   }
 
   return out;
@@ -1671,6 +1674,10 @@ export function deriveTelegramLiveRuntimeProfile(params) {
 
   const hash = crypto.createHash("sha256").update(worktreePath).digest("hex");
   const profileId = `tg-live-${hash.slice(0, 10)}`;
+  // Lifecycle commands mutate one worktree's shared token/reservation state
+  // even when the runtime state variant changes. Keep their lock beside the
+  // profile directory so neither normal-state cleanup nor ACP reset removes it.
+  const commandLockDir = path.join(stateRoot, `${profileId}.command.lock`);
   const hashInt = Number.parseInt(hash.slice(0, 8), 16);
   const runtimePort = portBase + (Number.isFinite(hashInt) ? hashInt % portRange : 0);
   // ACP validation must not reuse the default Telegram live state tree, or
@@ -1686,6 +1693,7 @@ export function deriveTelegramLiveRuntimeProfile(params) {
     profileId,
     runtimePort,
     runtimeStateDir,
+    commandLockDir,
   };
 }
 

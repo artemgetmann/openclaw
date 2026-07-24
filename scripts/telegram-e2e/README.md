@@ -569,8 +569,12 @@ new run/generation and therefore requires a new backlog fence.
 
 Release validates the exact generation and clears `.env.local` ownership while
 the global reservation lock is held before deleting the reservation. Do not
-change scenario IDs or edit reservation state by hand. The conservative
-fallback is a seven-day expired reservation with no active polling lease.
+change scenario IDs or edit reservation state by hand. Old lanes with a token
+but no scenario generation require one explicit `release`, then `ensure`.
+The exact owner of an expired generation uses the same release-then-ensure
+boundary; only an unassigned scenario/worktree can reclaim expiry after proving
+the polling lease absent. Ensure, release, and handoff-main serialize on one
+worktree-profile lock even when ACP uses a different runtime state directory.
 Crash-persistent locks are never auto-deleted: inspect their `owner.json` and
 recover manually only after proving no owner or polling lease is active.
 Malformed or ambiguous state fails closed.

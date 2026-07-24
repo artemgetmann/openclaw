@@ -383,17 +383,21 @@ const profile = helpers.deriveTelegramLiveRuntimeProfile({
   stateRoot: process.env.STATE_ROOT || undefined,
 });
 
-process.stdout.write(`${profile.profileId}\n${String(profile.runtimePort)}\n${profile.runtimeStateDir}\n`);
+process.stdout.write(
+  `${profile.profileId}\n${String(profile.runtimePort)}\n${profile.runtimeStateDir}\n${profile.commandLockDir}\n`,
+);
 NODE
   )"
 
   PROFILE_ID="$(printf '%s\n' "$profile_lines" | sed -n '1p')"
   RUNTIME_PORT="$(printf '%s\n' "$profile_lines" | sed -n '2p')"
   RUNTIME_STATE_DIR="$(printf '%s\n' "$profile_lines" | sed -n '3p')"
+  PROFILE_COMMAND_LOCK_DIR="$(printf '%s\n' "$profile_lines" | sed -n '4p')"
   RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
   RUNTIME_LOG_PATH="/tmp/openclaw-telegram-live-${PROFILE_ID}.log"
 
-  if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ]]; then
+  if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ||
+    -z "$PROFILE_COMMAND_LOCK_DIR" ]]; then
     add_failure "profile_resolution_failed"
   fi
 }
@@ -1562,11 +1566,13 @@ acquire_profile_command_lock() {
   fi
   local deadline=$((SECONDS + timeout_secs))
   local owner_pid=""
-  if [[ -z "$RUNTIME_STATE_DIR" || "$RUNTIME_STATE_DIR" != /* ]]; then
-    echo "Error: refusing Telegram live command lock for invalid runtime state path." >&2
+  if [[ -z "$PROFILE_COMMAND_LOCK_DIR" || "$PROFILE_COMMAND_LOCK_DIR" != /* ]]; then
+    echo "Error: refusing Telegram live command lock for invalid stable lock path." >&2
     return 1
   fi
-  PROFILE_COMMAND_LOCK_DIR="${RUNTIME_STATE_DIR}.command.lock"
+  # resolve_profile derives this path from state-root + worktree profile ID,
+  # independent of the normal/ACP runtime-state variant. That keeps every
+  # lifecycle mutator on one transaction while they share reservation/env data.
   mkdir -p -- "$(dirname "$PROFILE_COMMAND_LOCK_DIR")"
 
   while ! mkdir "$PROFILE_COMMAND_LOCK_DIR" 2>/dev/null; do
@@ -1593,9 +1599,10 @@ acquire_profile_command_lock() {
 }
 
 with_profile_command_lock() (
-  # The lock lives beside, not inside, the removable runtime state directory.
-  # Running the command in a subshell gives EXIT/interrupt cleanup a bounded
-  # scope while preserving the command's stdout, stderr, and exit status.
+  # The lock lives beside the stable profile directory, outside either
+  # removable runtime-state variant. Running the command in a subshell gives
+  # EXIT/interrupt cleanup a bounded scope while preserving stdout, stderr,
+  # and exit status.
   resolve_profile
   acquire_profile_command_lock || exit 1
   trap release_profile_command_lock EXIT

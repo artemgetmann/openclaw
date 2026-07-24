@@ -2,8 +2,9 @@ declare module "*telegram-live-runtime-helpers.mjs" {
   export type TelegramTokenLeaseEntry = {
     token: string;
     worktreePath: string;
-    pid: number;
+    pid: number | null;
     accountId: string | null;
+    blockingReason?: string;
   };
 
   export type TelegramLiveRuntimeConfig = {
@@ -84,6 +85,7 @@ declare module "*telegram-live-runtime-helpers.mjs" {
     profileId: string;
     runtimePort: number;
     runtimeStateDir: string;
+    commandLockDir: string;
   };
   export function isTelegramLiveIsolatedRuntimeProfile(params?: unknown): boolean;
   export function resolveTelegramLiveModelAuthProbe(params?: unknown): {

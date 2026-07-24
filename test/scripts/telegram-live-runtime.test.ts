@@ -59,11 +59,12 @@ describe("telegram-live-runtime.sh", () => {
     expect(stdout).not.toContain("token_claim_path=");
   });
 
-  it("serializes ensure and release across one profile command transaction", () => {
+  it("serializes ACP ensure and ordinary release across one stable profile lock", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-lock-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
     const logPath = path.join(tempDir, "transactions.log");
-    const runtimeStateDir = path.join(tempDir, "state");
+    const profileDir = path.join(tempDir, "profile");
+    const commandLockDir = path.join(tempDir, "profile.command.lock");
     const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
     writeFileSync(sourcePath, scriptSource, "utf8");
 
@@ -73,7 +74,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; }; ensure_command_unlocked() { printf 'ensure-start\\n' >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start\\n' >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; ensure_command & ensure_pid=$!; sleep 0.05; release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
+        `source ${JSON.stringify(sourcePath)}; resolve_profile() { PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(commandLockDir)}; if [[ "\${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" == "1" ]]; then RUNTIME_STATE_DIR=${JSON.stringify(path.join(profileDir, "acp-validation"))}; else RUNTIME_STATE_DIR=${JSON.stringify(path.join(profileDir, ".openclaw"))}; fi; }; ensure_command_unlocked() { printf 'ensure-start\\n' >> ${JSON.stringify(logPath)}; sleep 0.3; printf 'ensure-end\\n' >> ${JSON.stringify(logPath)}; }; release_command_unlocked() { printf 'release-start\\n' >> ${JSON.stringify(logPath)}; printf 'release-end\\n' >> ${JSON.stringify(logPath)}; }; OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION=1 ensure_command & ensure_pid=$!; sleep 0.05; OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION=0 release_command & release_pid=$!; wait "$ensure_pid"; wait "$release_pid"; cat ${JSON.stringify(logPath)}`,
       ],
       {
         cwd: process.cwd(),
@@ -82,12 +83,14 @@ describe("telegram-live-runtime.sh", () => {
     );
 
     expect(stdout).toBe("ensure-start\nensure-end\nrelease-start\nrelease-end\n");
+    expect(existsSync(commandLockDir)).toBe(false);
   });
 
   it("creates a missing profile lock parent before the first ensure", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-lock-parent-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
     const runtimeStateDir = path.join(tempDir, "missing", "nested", "state");
+    const commandLockDir = path.join(tempDir, "missing", "nested", "profile.command.lock");
     const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
     writeFileSync(sourcePath, scriptSource, "utf8");
 
@@ -97,7 +100,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; }; ensure_command_unlocked() { printf ok; }; ensure_command`,
+        `source ${JSON.stringify(sourcePath)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(runtimeStateDir)}; PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(commandLockDir)}; }; ensure_command_unlocked() { printf ok; }; ensure_command`,
       ],
       {
         cwd: process.cwd(),
@@ -107,7 +110,7 @@ describe("telegram-live-runtime.sh", () => {
 
     expect(stdout).toBe("ok");
     expect(existsSync(path.dirname(runtimeStateDir))).toBe(true);
-    expect(existsSync(`${runtimeStateDir}.command.lock`)).toBe(false);
+    expect(existsSync(commandLockDir)).toBe(false);
   });
 
   it("routes every profile lifecycle mutator through the command lock", () => {
@@ -169,7 +172,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; REPO_ROOT=${JSON.stringify(tempDir)}; WORKTREE=${JSON.stringify(tempDir)}; SCENARIO_RESERVATION_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-tester-scenario-reservations.mjs"))}; OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT=${JSON.stringify(reservationRoot)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(path.join(tempDir, "state"))}; RUNTIME_PORT=24567; }; resolve_runtime_owner() { RUNTIME_PID=""; RUNTIME_OWNERSHIP=ok; }; stop_owned_runtime() { RUNTIME_STOP_RESULT=not-running; }; remove_runtime_state_dir() { :; }; release_command`,
+        `source ${JSON.stringify(sourcePath)}; REPO_ROOT=${JSON.stringify(tempDir)}; WORKTREE=${JSON.stringify(tempDir)}; SCENARIO_RESERVATION_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-tester-scenario-reservations.mjs"))}; OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT=${JSON.stringify(reservationRoot)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(path.join(tempDir, "state"))}; PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(path.join(tempDir, "profile.command.lock"))}; RUNTIME_PORT=24567; }; resolve_runtime_owner() { RUNTIME_PID=""; RUNTIME_OWNERSHIP=ok; }; stop_owned_runtime() { RUNTIME_STOP_RESULT=not-running; }; remove_runtime_state_dir() { :; }; release_command`,
       ],
       {
         cwd: process.cwd(),
@@ -198,7 +201,7 @@ describe("telegram-live-runtime.sh", () => {
         "--noprofile",
         "--norc",
         "-lc",
-        `source ${JSON.stringify(sourcePath)}; REPO_ROOT=${JSON.stringify(tempDir)}; WORKTREE=${JSON.stringify(tempDir)}; SCENARIO_RESERVATION_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-tester-scenario-reservations.mjs"))}; OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT=${JSON.stringify(reservationRoot)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(path.join(tempDir, "state"))}; RUNTIME_PORT=24567; }; resolve_runtime_owner() { RUNTIME_PID="31337"; RUNTIME_OWNERSHIP=ok; }; stop_owned_runtime() { RUNTIME_STOP_RESULT=stopped; RUNTIME_PID=""; }; remove_runtime_state_dir() { :; }; release_command`,
+        `source ${JSON.stringify(sourcePath)}; REPO_ROOT=${JSON.stringify(tempDir)}; WORKTREE=${JSON.stringify(tempDir)}; SCENARIO_RESERVATION_MODULE=${JSON.stringify(path.join(process.cwd(), "scripts", "lib", "telegram-tester-scenario-reservations.mjs"))}; OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT=${JSON.stringify(reservationRoot)}; resolve_profile() { RUNTIME_STATE_DIR=${JSON.stringify(path.join(tempDir, "state"))}; PROFILE_COMMAND_LOCK_DIR=${JSON.stringify(path.join(tempDir, "profile.command.lock"))}; RUNTIME_PORT=24567; }; resolve_runtime_owner() { RUNTIME_PID="31337"; RUNTIME_OWNERSHIP=ok; }; stop_owned_runtime() { RUNTIME_STOP_RESULT=stopped; RUNTIME_PID=""; }; remove_runtime_state_dir() { :; }; release_command`,
       ],
       {
         cwd: process.cwd(),

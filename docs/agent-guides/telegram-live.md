@@ -119,12 +119,21 @@ erasure.
   token, scenario, canonical worktree, and reservation generation; clears the
   local claim while holding the reservation lock; then makes the bot
   claimable. Do not hand-edit `.env.local` or reservation files.
+- A pre-reservation lane whose `.env.local` has a token but no scenario
+  generation must perform a one-time canonical `release`, then `ensure`.
+  Likewise, the exact owner of an expired generation must `release`, then
+  `ensure`; it cannot replace its generation in place. Ensure, release, and
+  handoff-main share one worktree-profile lifecycle lock across normal and ACP
+  modes, so the reset cannot race a restart. Release preserves unrelated local
+  env settings.
 - Reservations renew on `ensure` and expire after seven days by default.
-  Expiry permits reuse only when the process-level polling lease is also
-  absent. Malformed reservation/lock state fails closed. A crash-persistent
-  lock is never auto-deleted because a read/remove recovery race can erase a
-  newer owner's lock. Stop and inspect its `owner.json`; recovery is an
-  explicit operator action after proving no owner or polling lease is active.
+  An unassigned scenario/worktree may reclaim an expired reservation only when
+  the process-level polling lease is known absent; the exact prior owner uses
+  the explicit release boundary above. Malformed reservation/lock state fails
+  closed. A crash-persistent lock is never auto-deleted because a read/remove
+  recovery race can erase a newer owner's lock. Stop and inspect its
+  `owner.json`; recovery is an explicit operator action after proving no owner
+  or polling lease is active.
 - The first runtime for a new reservation generation performs a transport-only
   negative-offset `getUpdates` fence before starting the runner or any model
   dispatch. Its receipt is scoped to token hash, account, and reservation
