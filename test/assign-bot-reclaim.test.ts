@@ -56,6 +56,9 @@ describe("assign-bot stale claim reclaim", () => {
     const firstGeneration = firstEnv.match(
       /^OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=(.+)$/m,
     )?.[1];
+    const firstTokenHash = crypto.createHash("sha256").update("111:first").digest("hex");
+    expect(firstEnv).toContain(`OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH=${firstTokenHash}`);
+    expect(firstEnv).toContain("OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID=default");
 
     const resumedOutput = run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home });
     expect(resumedOutput).toContain("Retained Telegram bot token #1");
@@ -76,6 +79,35 @@ describe("assign-bot stale claim reclaim", () => {
     expect(recreatedEnv).toContain(
       `OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=${recreatedGeneration}`,
     );
+  });
+
+  it("recovers the same generated scenario after interruption during assignment", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-crash-recovery-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:first\nBOT_TOKEN=222:second\n");
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        OPENCLAW_TELEGRAM_TESTER_ASSIGN_ABORT_AFTER_RESERVATION: "1",
+      }),
+    ).toThrow();
+
+    const intentEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    const scenarioId = intentEnv.match(
+      /^OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=(tg-scenario-.+)$/m,
+    )?.[1];
+    expect(scenarioId).toBeTruthy();
+    expect(intentEnv).not.toContain("TELEGRAM_BOT_TOKEN=");
+
+    const recoveredOutput = run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home });
+    expect(recoveredOutput).toContain("Assigned Telegram bot token #1");
+    const recoveredEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    expect(recoveredEnv).toContain(`OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}`);
+    expect(recoveredEnv).toContain("TELEGRAM_BOT_TOKEN=111:first");
   });
 
   it("does not adopt a durable reservation when the local generation is stale", () => {

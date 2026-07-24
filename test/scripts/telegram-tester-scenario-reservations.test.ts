@@ -263,6 +263,8 @@ describe("Telegram tester scenario reservations", () => {
         `OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=${String(first.generation)}`,
         `OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH=${crypto.createHash("sha256").update(token).digest("hex")}`,
         `OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=${String(first.generation)}`,
+        `OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH=${crypto.createHash("sha256").update(token).digest("hex")}`,
+        "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID=default",
         "KEEP_ME=yes",
         "",
       ].join("\n"),

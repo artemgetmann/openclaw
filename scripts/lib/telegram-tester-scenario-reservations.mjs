@@ -199,6 +199,8 @@ async function clearExactReservationEnv(params) {
     "OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION",
     "OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH",
     "OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION",
+    "OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH",
+    "OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID",
   ]);
   const lines = content.split(/\r?\n/gu);
   const kept = lines.filter((line) => {

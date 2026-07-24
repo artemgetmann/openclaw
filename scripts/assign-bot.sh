@@ -203,6 +203,21 @@ const requestedScenarioId = String(process.env.REQUESTED_SCENARIO_ID ?? "").trim
 const defaultScenarioId = `tg-scenario-${crypto.randomUUID()}`;
 const scenarioId = requestedScenarioId || storedScenarioId || defaultScenarioId;
 
+// Persist a freshly generated run identity before acquiring any global bot
+// reservation. If this process dies after the global write, the next invocation
+// can recover the same scenario instead of losing its only ownership credential
+// and leaving the bot stranded until the reservation expires.
+if (!currentToken && !storedScenarioId) {
+  const intentPath = `${envLocalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(intentPath, `OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=${scenarioId}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+  fs.renameSync(intentPath, envLocalPath);
+  fs.chmodSync(envLocalPath, 0o600);
+}
+
 // Changing scenario identity while a bot is still assigned would silently
 // transfer unfinished work inside one worktree. Require the same explicit
 // release boundary used for cross-worktree ownership.
@@ -345,6 +360,14 @@ if (!selection?.ok || !selection.selectedToken) {
   process.exit(0);
 }
 
+// Deterministic fault injection for the otherwise microscopic crash window
+// between the global reservation write and the final local assignment write.
+// Production callers never set this; the regression test proves recovery from
+// the same scenario identity persisted above.
+if (process.env.OPENCLAW_TELEGRAM_TESTER_ASSIGN_ABORT_AFTER_RESERVATION === "1") {
+  process.exit(86);
+}
+
 const selectedIndex = poolTokens.findIndex((token) => token === selection.selectedToken);
 console.log("ok=yes");
 console.log(`action=${selection.action}`);
@@ -483,6 +506,8 @@ done
   printf 'OPENCLAW_TELEGRAM_TESTER_RESERVATION_GENERATION=%s\n' "$reservation_generation"
   printf 'OPENCLAW_TELEGRAM_TESTER_TOKEN_HASH=%s\n' "$reservation_token_hash"
   printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_GENERATION=%s\n' "$reservation_generation"
+  printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_TOKEN_HASH=%s\n' "$reservation_token_hash"
+  printf 'OPENCLAW_TELEGRAM_SAFE_REUSE_ACCOUNT_ID=default\n'
 } > ".env.local"
 
 if [[ "$selection_action" == "retain" ]]; then
