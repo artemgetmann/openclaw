@@ -64,6 +64,9 @@ openclaw_jarvis_release_checkpoint_verify_signature() {
   local artifact_kind="$2"
   local codesign_bin="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN:-/usr/bin/codesign}"
 
+  # Each signature verdict owns its classification. Do not leak an earlier
+  # indeterminate result into a later trusted-control artifact check.
+  OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE=""
   OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="$codesign_bin" \
     openclaw_macos_host_trust_require || {
       OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="host-trust-indeterminate"
@@ -362,7 +365,12 @@ openclaw_jarvis_release_checkpoint_validate() {
   actual_build="$(openclaw_jarvis_release_checkpoint_plist_value "$absolute_app_context" CFBundleVersion)" || return 1
   actual_embedded="$(openclaw_jarvis_release_checkpoint_plist_value "$absolute_app_context" OpenClawGitCommit)" || return 1
   openclaw_jarvis_release_checkpoint_verify_signature "$absolute_app_context" app || {
-    OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="app-signature"
+    # Preserve the three-state trust result. Rewriting an indeterminate control
+    # failure as app-signature would recreate the exact false artifact verdict
+    # this guard exists to prevent.
+    if [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" != "host-trust-indeterminate" ]]; then
+      OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="app-signature"
+    fi
     return 1
   }
   actual_app_cdhash="$(openclaw_jarvis_release_checkpoint_app_cdhash "$absolute_app_context")" || {
@@ -393,7 +401,9 @@ openclaw_jarvis_release_checkpoint_validate() {
         return 1
       }
       openclaw_jarvis_release_checkpoint_verify_signature "$absolute_path" "$artifact_kind" || {
-        OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="signature"
+        if [[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" != "host-trust-indeterminate" ]]; then
+          OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="signature"
+        fi
         return 1
       }
       ;;

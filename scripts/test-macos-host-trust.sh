@@ -81,4 +81,55 @@ export TEST_ARTIFACT_RESULT
   || fail "valid artifact failed after trusted control"
 pass "valid artifact passes after trusted host control"
 
+# Exercise the release preflight entry point, not only the library. It must stop
+# before querying identities or credentials when the trust view is restricted.
+TEST_CONTROL_RESULT=fail
+export TEST_CONTROL_RESULT
+set +e
+preflight_output="$(
+  OPENCLAW_RELEASE_ENV_FILE=0 \
+  OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="$codesign_stub" \
+  OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH="$control_path" \
+    /bin/bash "$ROOT_DIR/scripts/preflight-consumer-mac-release.sh" 2>&1
+)"
+preflight_status=$?
+set -e
+[[ "$preflight_status" -eq 2 ]] \
+  || fail "release preflight returned $preflight_status instead of indeterminate exit 2"
+[[ "$preflight_output" == *"INDETERMINATE:"* ]] \
+  || fail "release preflight did not preserve the indeterminate trust state"
+[[ "$preflight_output" != *"certificate is not available in the keychain"* ]] \
+  || fail "release preflight converted restricted Keychain visibility into a missing identity"
+pass "release preflight stops before sandboxed Keychain conclusions"
+
+# Checkpoint reuse is another release-verdict boundary. It must expose the
+# distinct indeterminate reason so orchestration cannot rewrite it as a corrupt
+# or rejected artifact.
+source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
+export OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$codesign_stub"
+set +e
+openclaw_jarvis_release_checkpoint_verify_signature "$artifact_path" app \
+  >/dev/null 2>"$TMP_DIR/checkpoint.err"
+checkpoint_status=$?
+set -e
+[[ "$checkpoint_status" -eq 2 ]] \
+  || fail "checkpoint trust control returned $checkpoint_status instead of 2"
+[[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" == "host-trust-indeterminate" ]] \
+  || fail "checkpoint rewrote the indeterminate trust state"
+pass "release checkpoint preserves indeterminate trust state"
+
+TEST_CONTROL_RESULT=pass
+TEST_ARTIFACT_RESULT=fail
+export TEST_CONTROL_RESULT TEST_ARTIFACT_RESULT
+set +e
+openclaw_jarvis_release_checkpoint_verify_signature "$artifact_path" app \
+  >/dev/null 2>"$TMP_DIR/checkpoint-artifact.err"
+checkpoint_artifact_status=$?
+set -e
+[[ "$checkpoint_artifact_status" -eq 1 ]] \
+  || fail "checkpoint artifact failure returned $checkpoint_artifact_status instead of 1"
+[[ "$OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE" != "host-trust-indeterminate" ]] \
+  || fail "checkpoint mislabeled a genuine artifact failure as indeterminate"
+pass "release checkpoint fails closed after trusted host control"
+
 echo "All macOS host trust guard tests passed."
