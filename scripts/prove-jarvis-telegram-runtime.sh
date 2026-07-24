@@ -87,8 +87,6 @@ import path from "node:path";
 const [expectedCommit, selectedRuntimeSource, labChat, repoRoot, entrypoint, stateDir] = process.argv.slice(2);
 const label = "ai.jarvis.gateway";
 const logPath = path.join(stateDir, "logs", "gateway.log");
-const operatorSession = path.join(os.homedir(), ".openclaw", "telegram-user", "userbot.session");
-const operatorLockPath = `${operatorSession}.openclaw.lock`;
 const testMode = process.env.OPENCLAW_JARVIS_TELEGRAM_PROOF_TEST_MODE === "1";
 const gate = testMode && process.env.OPENCLAW_JARVIS_TELEGRAM_PROOF_TEST_GATE
   ? process.env.OPENCLAW_JARVIS_TELEGRAM_PROOF_TEST_GATE
@@ -167,6 +165,17 @@ function managedChildEnv() {
     "OPENCLAW_GATEWAY_PASSWORD",
     "CLAWDBOT_GATEWAY_PASSWORD",
     "CLAWDBOT_GATEWAY_PORT",
+    // Consumer instance identity outranks OPENCLAW_PROFILE and rewrites the
+    // state/config roots. Letting a tester lane leak through here could prove
+    // the main gateway while mutating that lane's Telegram account.
+    "OPENCLAW_CONSUMER_INSTANCE_ID",
+    // The packaged runtime's persisted monitor binding owns Telegram operator
+    // credentials. Shell selectors must not override it with a stale personal
+    // or worktree session during a managed canary.
+    "USERBOT_SESSION",
+    "OPENCLAW_TELEGRAM_USER_SESSION",
+    "OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION",
+    "OPENCLAW_TELEGRAM_USER_LOCK_PATH",
   ]) {
     delete childEnv[key];
   }
@@ -187,8 +196,6 @@ function managedChildEnv() {
     OPENCLAW_JARVIS_PROTECTION_MARKER: path.join(stateDir, ".consumer-bundled-runtime.protection.json"),
     OPENCLAW_INSTALLED_JARVIS_APP_PATH: "/Applications/Jarvis.app",
     OPENCLAW_JARVIS_APP_MANIFEST: "/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json",
-    OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION: operatorSession,
-    OPENCLAW_TELEGRAM_USER_LOCK_PATH: operatorLockPath,
   };
 }
 
@@ -196,23 +203,51 @@ function managedChildEnv() {
 // state cannot silently redirect this proof to a source checkout or shared bot.
 function jarvis(args, stage) {
   actions.push(stage);
-  // Explicit --session is the highest-priority backend selector. Repeat it on
-  // every Telegram-as-user command so neither inherited process state nor the
-  // Jarvis credential env file can select a historical SQLite owner.
-  const pinnedArgs = args[0] === "telegram-user"
-    ? [...args, "--session", operatorSession]
+  const isTelegramUser = args[0] === "telegram-user";
+  // Resolve the packaged credential context once during precheck. Pin both
+  // selectors before every later Telegram mutation so an atomic binding update
+  // cannot switch accounts between command execution and metadata validation.
+  const pinnedArgs = isTelegramUser && operatorBackend
+    ? [
+        ...args,
+        "--env-file", operatorBackend.envFile,
+        "--session", operatorBackend.sessionPath,
+      ]
     : args;
   const result = run(process.execPath, [entrypoint, ...pinnedArgs], {
     env: managedChildEnv(),
   });
   if (result.status !== 0) {
-    throw new Error(`${stage} failed`);
+    throw new Error(`${stage} failed with status ${String(result.status)}`);
   }
   const payload = parseJson(result.stdout, stage);
-  if (args[0] === "telegram-user") {
+  if (isTelegramUser) {
     const meta = payload?.backend_meta;
-    if (meta?.session_path !== operatorSession || meta?.lock_scope !== "machine") {
+    const stateDefaultSession = path.join(stateDir, "telegram-user", "userbot.session");
+    const stateDefaultEnvFile = path.join(stateDir, "telegram-user", ".env.local");
+    // The canary may trust a persisted monitor binding or the packaged state
+    // fallback. It must never promote legacy machine/env/repo discovery into an
+    // authority for live mutations merely because that database is readable.
+    const packagedPrecheckSource = meta?.session_source === "monitor-binding"
+      || (meta?.session_source === "state-default"
+        && meta?.session_path === stateDefaultSession
+        && meta?.env_file === stateDefaultEnvFile);
+    if (typeof meta?.session_source !== "string"
+      || typeof meta?.session_path !== "string"
+      || !path.isAbsolute(meta.session_path)
+      || typeof meta?.env_file !== "string"
+      || !path.isAbsolute(meta.env_file)
+      || meta?.lock_scope !== "machine"
+      || (!operatorBackend && !packagedPrecheckSource)) {
       throw new Error(`${stage} returned mismatched operator backend ownership`);
+    }
+    // Precheck establishes the packaged resolver's authoritative session.
+    // Every later mutation must prove it resolved the same owner again.
+    if (operatorBackend
+      && (meta.session_path !== operatorBackend.sessionPath
+        || meta.env_file !== operatorBackend.envFile
+        || meta.session_source !== "explicit")) {
+      throw new Error(`${stage} returned changed operator backend ownership`);
     }
   }
   return payload;
@@ -282,10 +317,17 @@ function parseProvenance(stdout) {
     rpc: selected.get("rpc"),
     health: selected.get("health"),
   };
+  const normalizedRuntimeCommit = identity.runtimeCommit?.toLowerCase();
+  const normalizedExpectedCommit = expectedCommit.toLowerCase();
+  // The runtime prover intentionally emits a short SHA. Accept either side as
+  // the prefix so callers may supply the normal full 40-character commit.
+  const commitMatches = /^[0-9a-f]{7,40}$/.test(normalizedRuntimeCommit ?? "")
+    && (normalizedRuntimeCommit.startsWith(normalizedExpectedCommit)
+      || normalizedExpectedCommit.startsWith(normalizedRuntimeCommit));
   if (identity.proof !== "true"
     || identity.serviceLabel !== label
     || identity.runtimeSource !== selectedRuntimeSource
-    || !identity.runtimeCommit?.toLowerCase().startsWith(expectedCommit.toLowerCase())
+    || !commitMatches
     || identity.stateDir !== stateDir
     || identity.configPath !== path.join(stateDir, "openclaw.json")
     || !Number.isSafeInteger(identity.pid)
@@ -571,7 +613,9 @@ try {
     "telegram-user", "precheck", "--chat", labChat, "--json",
   ], "operator-precheck");
   operatorBackend = {
+    envFile: precheck.backend_meta.env_file,
     sessionPath: precheck.backend_meta.session_path,
+    sessionSource: precheck.backend_meta.session_source,
     lockScope: precheck.backend_meta.lock_scope,
     backend: precheck.backend_meta.backend ?? null,
   };
@@ -732,9 +776,9 @@ const evidence = {
     finishedAtMs: finishedAt,
   },
   operatorSession: {
-    source: "machine-canonical",
-    path: operatorSession,
-    lockPath: operatorLockPath,
+    source: operatorBackend?.sessionSource ?? null,
+    path: operatorBackend?.sessionPath ?? null,
+    lockScope: operatorBackend?.lockScope ?? null,
     verifiedBackend: operatorBackend ?? null,
   },
   generated: { runId, title, nonce, prompt },

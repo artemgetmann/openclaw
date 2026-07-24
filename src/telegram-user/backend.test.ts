@@ -267,12 +267,18 @@ describe("telegram-user backend defaults", () => {
     await expect(resolveTelegramUserBackendSelectors({})).rejects.toThrow("E_AMBIGUOUS_SESSION");
   });
 
-  it("discovers a monitor service binding in a later backend import for the same state", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-state-"));
-    tempToolingRoots.push(stateDir);
+  it("keeps a monitor binding authoritative over a stale legacy session", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-home-"));
+    const stateDir = path.join(homeDir, "jarvis-state");
+    const staleLegacySession = path.join(homeDir, ".openclaw", "telegram-user", "userbot.session");
+    tempToolingRoots.push(homeDir);
     const boundEnvFile = path.join(stateDir, "configured.env");
     const boundSession = path.join(stateDir, "configured.session");
+    await fs.mkdir(path.dirname(staleLegacySession), { recursive: true });
+    await fs.writeFile(staleLegacySession, "needs-reauth-legacy-fixture\n");
+    await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(boundEnvFile, "TELEGRAM_API_ID=123\n");
+    vi.stubEnv("HOME", homeDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     const { writeTelegramUserMonitorBinding } = await import("./monitor-service-binding.js");
