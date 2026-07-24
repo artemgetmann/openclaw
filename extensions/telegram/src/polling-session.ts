@@ -98,6 +98,13 @@ type TelegramPollingOutcome =
   | "conflict"
   | "unhealthy";
 
+class TelegramSafeReuseManualRecoveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TelegramSafeReuseManualRecoveryError";
+  }
+}
+
 type TelegramPollingSessionOpts = {
   token: string;
   config: Parameters<typeof createTelegramBot>[0]["config"];
@@ -371,7 +378,7 @@ export class TelegramPollingSession {
         return state.recreateBot ? "recreate" : "ready";
       }
       if (state?.phase === "reading") {
-        throw new Error(
+        throw new TelegramSafeReuseManualRecoveryError(
           `Telegram safe-reuse tail-read outcome is ambiguous for reservation generation ${fence.generation}. Manual recovery is required; refusing to issue getUpdates(offset: -1) again.`,
         );
       }
@@ -408,7 +415,7 @@ export class TelegramPollingSession {
         // Deliberately omit `cause`: the polling retry classifier walks network
         // causes, but retrying this ambiguous operation could fence a valid
         // same-scenario message that arrived after Telegram processed the first.
-        throw new Error(
+        throw new TelegramSafeReuseManualRecoveryError(
           `Telegram safe-reuse tail-read outcome is ambiguous for reservation generation ${fence.generation}: ${formatErrorMessage(err)}. Manual recovery is required; refusing to issue getUpdates(offset: -1) again.`,
         );
       }
@@ -441,6 +448,13 @@ export class TelegramPollingSession {
       return "recreate";
     } catch (err) {
       await this.#disposeSetupBot(bot);
+      // Message-based network classification is intentionally broad and can
+      // match words such as "timeout" inside this terminal diagnostic. The
+      // explicit type is the authority: an ambiguous destructive read must
+      // never enter the ordinary setup retry loop.
+      if (err instanceof TelegramSafeReuseManualRecoveryError) {
+        throw err;
+      }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram safe-reuse backlog fence failed",

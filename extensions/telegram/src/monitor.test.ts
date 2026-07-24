@@ -1054,7 +1054,10 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed after an ambiguous tail-read timeout and never rereads on restart", async () => {
+  it.each([
+    "getUpdates timed out after 30 seconds",
+    'network request for "getUpdates" failed after 30 seconds',
+  ])("fails closed without retry for ambiguous tail-read error: %s", async (transportMessage) => {
     resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
       generation: "generation-123",
     });
@@ -1067,8 +1070,9 @@ describe("monitorTelegramProvider (grammY)", () => {
       fenceState = { phase: "reading", lastUpdateId: null };
     });
     // Model the decisive ambiguity: Telegram processed the negative-offset
-    // request, but the client received only a recoverable transport timeout.
-    api.getUpdates.mockRejectedValue(makeTaggedPollingFetchError());
+    // request, but the client received only a transport failure whose text
+    // would ordinarily be classified as recoverable.
+    api.getUpdates.mockRejectedValue(new Error(transportMessage));
 
     await expect(monitorTelegramProvider({ token: "123456:ABC" })).rejects.toThrow(
       /outcome is ambiguous.*Manual recovery is required.*refusing to issue getUpdates/s,
@@ -1079,8 +1083,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(sleepWithAbort).not.toHaveBeenCalled();
     expect(writePendingTelegramSafeReuseFenceSpy).not.toHaveBeenCalled();
 
-    // Restart resolves the durable reading marker before any API call. It must
-    // surface the same manual-recovery boundary, not sample Telegram's new tail.
+    // Restart resolves the durable reading marker before any API call. It
+    // must surface the same boundary, not sample Telegram's new tail.
     await expect(monitorTelegramProvider({ token: "123456:ABC" })).rejects.toThrow(
       /outcome is ambiguous.*Manual recovery is required.*refusing to issue getUpdates/s,
     );
