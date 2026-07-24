@@ -7,6 +7,10 @@ source "$ROOT_DIR/scripts/lib/macos-host-trust.sh"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Production ignores every fixture override. Tests opt in explicitly so a
+# release.env file can never silently substitute the Apple-owned controls.
+export OPENCLAW_MACOS_HOST_TRUST_TEST_MODE=1
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -81,6 +85,23 @@ export TEST_ARTIFACT_RESULT
   || fail "valid artifact failed after trusted control"
 pass "valid artifact passes after trusted host control"
 
+# A production probe must ignore inherited fixture paths. This subshell unsets
+# test mode and proves an invalid replacement cannot establish host trust.
+set +e
+production_override_output="$(
+  OPENCLAW_MACOS_HOST_TRUST_TEST_MODE=0 \
+  OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN="$codesign_stub" \
+  OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH="$control_path" \
+    /bin/bash "$ROOT_DIR/scripts/probe-macos-host-trust.sh" 2>&1
+)"
+production_override_status=$?
+set -e
+[[ "$production_override_status" -eq 2 ]] \
+  || fail "production probe accepted injected control paths"
+[[ "$production_override_output" == *"Control probe: /usr/bin/codesign --verify --strict /bin/ls"* ]] \
+  || fail "production probe did not stay pinned to the Apple-owned control"
+pass "production ignores inherited trust-control overrides"
+
 # Exercise the release preflight entry point, not only the library. It must stop
 # before querying identities or credentials when the trust view is restricted.
 TEST_CONTROL_RESULT=fail
@@ -149,10 +170,31 @@ TEST_GATEKEEPER_ARTIFACT_RESULT=fail
 export TEST_GATEKEEPER_CONTROL_RESULT TEST_GATEKEEPER_ARTIFACT_RESULT
 openclaw_macos_gatekeeper_require \
   || fail "trusted Gatekeeper control did not establish assessment context"
-if "$gatekeeper_stub" -a -vv "$artifact_path" >/dev/null 2>&1; then
+if "$gatekeeper_stub" -a -vv -t open --context context:primary-signature \
+  "$artifact_path" >/dev/null 2>&1; then
   fail "Gatekeeper candidate rejection passed after trusted control"
 fi
 pass "Gatekeeper candidate rejection remains fail-closed after its control"
+
+# Automatic release phase selection is mutation-bearing: a false checkpoint
+# rejection can choose a rebuild or resubmission. A blocked Gatekeeper control
+# must stop selection before it can print a full/retry package phase.
+TEST_GATEKEEPER_CONTROL_RESULT=fail
+export TEST_GATEKEEPER_CONTROL_RESULT
+set +e
+wrapper_output="$(
+  OPENCLAW_RELEASE_ENV_FILE=0 \
+  OPENCLAW_JARVIS_RELEASE_CHECKPOINT_CODESIGN_BIN="$codesign_stub" \
+  OPENCLAW_JARVIS_RELEASE_CHECKPOINT_SPCTL_BIN="$gatekeeper_stub" \
+    /bin/bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run 2>&1
+)"
+wrapper_status=$?
+set -e
+[[ "$wrapper_status" -eq 2 && "$wrapper_output" == *"Gatekeeper cannot be evaluated"* ]] \
+  || fail "automatic phase selection did not preserve Gatekeeper indeterminate"
+[[ "$wrapper_output" != *"--phase full"* && "$wrapper_output" != *"selected_phase=full"* ]] \
+  || fail "indeterminate Gatekeeper selected a mutating full release phase"
+pass "automatic release phase selection stops on indeterminate Gatekeeper"
 
 # Checkpoint reuse is another release-verdict boundary. It must expose the
 # distinct indeterminate reason so orchestration cannot rewrite it as a corrupt

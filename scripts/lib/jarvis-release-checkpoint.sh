@@ -191,6 +191,7 @@ openclaw_jarvis_release_checkpoint_write() {
   local notary_submission_id="${6:-}"
   local app_context_path="${7:-}"
   local checkpoint_path checkpoint_tmp absolute_path absolute_app_context sha256 commit version build embedded_commit app_cdhash
+  local notarized_status
   local signature_verified="not-applicable"
   local staple_validated="not-applicable"
 
@@ -245,7 +246,10 @@ openclaw_jarvis_release_checkpoint_write() {
           staple_validated="pending"
           ;;
         *)
-          openclaw_jarvis_release_checkpoint_verify_notarized "$absolute_path" "$artifact_kind" || return 1
+          openclaw_jarvis_release_checkpoint_verify_notarized "$absolute_path" "$artifact_kind" || {
+            notarized_status=$?
+            return "$notarized_status"
+          }
           staple_validated="true"
           ;;
       esac
@@ -292,7 +296,7 @@ openclaw_jarvis_release_checkpoint_validate() {
   local commit expected_commit checkpoint_app_context absolute_app_context app_version app_build embedded_commit app_cdhash
   local actual_version actual_build actual_embedded actual_app_cdhash
   local signature_verified notary_status submission_id staple_validated created_at
-  local signature_status
+  local signature_status notarized_validation_status
 
   OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE=""
   absolute_path="$(openclaw_jarvis_release_checkpoint_absolute_path "$artifact_path")" || {
@@ -462,8 +466,9 @@ openclaw_jarvis_release_checkpoint_validate() {
         return 1
       }
       openclaw_jarvis_release_checkpoint_verify_notarized "$absolute_path" "$artifact_kind" || {
+        notarized_validation_status=$?
         OPENCLAW_JARVIS_RELEASE_CHECKPOINT_FAILURE="${OPENCLAW_JARVIS_RELEASE_CHECKPOINT_NOTARIZED_FAILURE:-notarized-validation}"
-        return 1
+        return "$notarized_validation_status"
       }
       ;;
     *)

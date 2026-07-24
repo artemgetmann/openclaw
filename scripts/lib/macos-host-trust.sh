@@ -12,9 +12,18 @@ OPENCLAW_MACOS_GATEKEEPER_STATE="unchecked"
 OPENCLAW_MACOS_GATEKEEPER_DETAIL=""
 
 openclaw_macos_host_trust_probe() {
-  local codesign_bin="${OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN:-/usr/bin/codesign}"
-  local control_path="${OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH:-/bin/ls}"
+  local codesign_bin="/usr/bin/codesign"
+  local control_path="/bin/ls"
   local output=""
+
+  # Fixture overrides are deliberately unavailable to release environments.
+  # Otherwise a stale release.env value could replace the Apple-owned control
+  # with an ad-hoc signed binary and turn a sandbox false negative into a
+  # definitive artifact rejection.
+  if [[ "${OPENCLAW_MACOS_HOST_TRUST_TEST_MODE:-0}" == "1" ]]; then
+    codesign_bin="${OPENCLAW_MACOS_HOST_TRUST_CODESIGN_BIN:-$codesign_bin}"
+    control_path="${OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH:-$control_path}"
+  fi
 
   OPENCLAW_MACOS_HOST_TRUST_STATE="unchecked"
   OPENCLAW_MACOS_HOST_TRUST_DETAIL=""
@@ -66,9 +75,16 @@ openclaw_macos_host_trust_require() {
 }
 
 openclaw_macos_gatekeeper_probe() {
-  local spctl_bin="${OPENCLAW_MACOS_GATEKEEPER_SPCTL_BIN:-/usr/sbin/spctl}"
-  local control_path="${OPENCLAW_MACOS_GATEKEEPER_CONTROL_PATH:-/System/Applications/Finder.app}"
+  local spctl_bin="/usr/sbin/spctl"
+  local control_path="/System/Library/CoreServices/Finder.app"
   local output=""
+
+  # Keep production controls pinned to Apple-owned paths. Tests may inject
+  # deterministic fixtures only after opting into the isolated test mode.
+  if [[ "${OPENCLAW_MACOS_HOST_TRUST_TEST_MODE:-0}" == "1" ]]; then
+    spctl_bin="${OPENCLAW_MACOS_GATEKEEPER_SPCTL_BIN:-$spctl_bin}"
+    control_path="${OPENCLAW_MACOS_GATEKEEPER_CONTROL_PATH:-$control_path}"
+  fi
 
   OPENCLAW_MACOS_GATEKEEPER_STATE="unchecked"
   OPENCLAW_MACOS_GATEKEEPER_DETAIL=""
@@ -79,10 +95,13 @@ openclaw_macos_gatekeeper_probe() {
     return 2
   fi
 
-  # Gatekeeper is a separate policy service from codesign. Its own macOS-owned
-  # control must pass before a candidate rejection can be attributed to the
-  # candidate instead of blocked assessment-service access.
-  if ! output="$("$spctl_bin" -a -vv "$control_path" 2>&1)"; then
+  # Gatekeeper is a separate policy service from codesign. Exercise the
+  # Apple-owned control with the same "open" assessment type and primary
+  # signature context used for release DMGs. An executable assessment is not
+  # evidence that this separate policy path is available.
+  if ! output="$(
+    "$spctl_bin" -a -vv -t open --context context:primary-signature "$control_path" 2>&1
+  )"; then
     OPENCLAW_MACOS_GATEKEEPER_STATE="indeterminate"
     OPENCLAW_MACOS_GATEKEEPER_DETAIL="${output:-spctl returned no diagnostic output}"
     return 2
@@ -99,7 +118,7 @@ openclaw_macos_gatekeeper_require() {
 
   cat >&2 <<EOF
 INDETERMINATE: macOS Gatekeeper cannot be evaluated from this execution context.
-Gatekeeper control: /usr/sbin/spctl -a -vv /System/Applications/Finder.app
+Gatekeeper control: /usr/sbin/spctl -a -vv -t open --context context:primary-signature /System/Library/CoreServices/Finder.app
 Control result: ${OPENCLAW_MACOS_GATEKEEPER_DETAIL//$'\n'/ | }
 Rerun the original release verification outside any Codex/container/process sandbox from an ordinary macOS Terminal.
 This result does not justify artifact rejection, reboot, trustd/securityd restart, or Keychain reset/unlock.
