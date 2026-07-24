@@ -144,6 +144,31 @@ consumer_mac_test_prepare_launch "new-proof" "$NEW_APP" 1 >/dev/null
 [[ "${#TEST_QUARANTINED_INSTANCES[@]}" -eq 0 ]] || fail "same-instance path transfer must preserve its gateway"
 pass "same-instance path transfer preserves its gateway"
 
+PARALLEL_A="$TMP_DIR/Jarvis (parallel-a).app"
+PARALLEL_B="$TMP_DIR/Jarvis (parallel-b).app"
+PARALLEL_C="$TMP_DIR/Jarvis (parallel-c).app"
+make_test_app "$PARALLEL_A" "ai.openclaw.consumer.mac.debug.parallel-a" "parallel-a"
+make_test_app "$PARALLEL_B" "ai.openclaw.consumer.mac.debug.parallel-b" "parallel-b"
+make_test_app "$PARALLEL_C" "ai.openclaw.consumer.mac.debug.parallel-c" "parallel-c"
+TEST_KILLED_PIDS=()
+TEST_PROCESS_LINES=(
+  "701 $PARALLEL_A/Contents/MacOS/OpenClaw"
+  "702 $PARALLEL_B/Contents/MacOS/OpenClaw"
+)
+consumer_mac_test_prepare_parallel_launch "parallel-c" "$PARALLEL_C" 0 >/dev/null
+[[ "${#TEST_KILLED_PIDS[@]}" -eq 0 ]] || fail "a unique parallel instance must preserve other active lanes"
+if consumer_mac_test_prepare_parallel_launch "parallel-a" "$PARALLEL_A" 0 >/dev/null 2>&1; then
+  fail "parallel launch should refuse a duplicate live instance without --replace"
+fi
+consumer_mac_test_prepare_parallel_launch "parallel-a" "$PARALLEL_A" 1 >/dev/null
+[[ "${TEST_KILLED_PIDS[*]}" == "701" ]] || fail "parallel replace should retire only its own instance"
+OPENCLAW_CONSUMER_PARALLEL_TEST_MAX=2
+if consumer_mac_test_prepare_parallel_launch "parallel-c" "$PARALLEL_C" 0 >/dev/null 2>&1; then
+  fail "parallel launch should enforce the configured live tester cap"
+fi
+unset OPENCLAW_CONSUMER_PARALLEL_TEST_MAX
+pass "allows bounded parallel testers with unique isolated instances"
+
 consumer_mac_test_record_launch "new-proof" "$NEW_APP"
 grep -F $'instance_id\tnew-proof' "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH" >/dev/null || fail "registry should record current instance"
 grep -F $'app_path\t'"$NEW_APP" "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH" >/dev/null || fail "registry should record current app path"

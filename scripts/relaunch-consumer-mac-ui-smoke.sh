@@ -25,6 +25,7 @@ OPEN_APP=1
 BUILD_APP=1
 CLEAN_ONLY=0
 WITH_RUNTIME=0
+PARALLEL=0
 CONSUMER_STEP="${OPENCLAW_CONSUMER_SETUP_DEBUG_STEP:-}"
 BACKEND_API_TOKEN="${JARVIS_BACKEND_API_TOKEN:-${JARVIS_BACKEND_ACCESS_TOKEN:-}}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
@@ -38,7 +39,7 @@ UI_SMOKE_APP_BUILD="${UI_SMOKE_APP_BUILD:-1}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/relaunch-consumer-mac-ui-smoke.sh [--instance <id>] [--consumer-step <step>] [--no-open|--build-only] [--no-build] [--clean]
+Usage: scripts/relaunch-consumer-mac-ui-smoke.sh [--instance <id>] [--consumer-step <step>] [--parallel] [--no-open|--build-only] [--no-build] [--clean]
 
 Fast native Jarvis UI smoke:
   - builds apps/macos with SwiftPM only unless --no-build is passed
@@ -738,6 +739,10 @@ while [[ $# -gt 0 ]]; do
       WITH_RUNTIME=1
       shift
       ;;
+    --parallel)
+      PARALLEL=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -814,7 +819,11 @@ fi
 
 # UI smoke is an explicit replacement lane: transfer the single tester slot
 # before opening anything, including another worktree's stale debug app.
-consumer_mac_test_begin_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" 1
+if [[ "$PARALLEL" == "1" ]]; then
+  consumer_mac_test_begin_parallel_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" 1
+else
+  consumer_mac_test_begin_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" 1
+fi
 trap consumer_mac_test_release_lock EXIT
 terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
 

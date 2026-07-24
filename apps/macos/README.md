@@ -29,6 +29,20 @@ exact debug app and its named gateway before opening another Dock app. A direct
 `open-consumer-mac-app.sh` call without `--replace` refuses when another tester
 owns the slot. The installed `/Applications/Jarvis.app` and
 `ai.jarvis.gateway` are never part of tester cleanup.
+
+Rare multi-agent GUI/runtime work can opt into parallel lanes:
+
+```bash
+bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <unique-id> --parallel
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <unique-id> --parallel
+```
+
+Parallel mode allows at most 10 live debug apps by default and requires a
+unique isolated instance per agent. Relaunching the same instance replaces only
+that instance. The next normal `--replace` launch retires all leftover parallel
+testers and returns the machine to one tester. Override the cap only
+deliberately with `OPENCLAW_CONSUMER_PARALLEL_TEST_MAX`.
+
 - `pnpm openclaw:local gateway restart`
 
 ## Packaging flow

@@ -425,6 +425,57 @@ consumer_mac_test_prepare_launch() {
   done < <(consumer_mac_test_list_process_lines)
 }
 
+consumer_mac_test_prepare_parallel_launch() {
+  local current_instance="$1"
+  local current_app="$2"
+  local replace="${3:-0}"
+  local max_parallel="${OPENCLAW_CONSUMER_PARALLEL_TEST_MAX:-10}"
+  local line=""
+  local record=""
+  local pid=""
+  local instance_id=""
+  local app_path=""
+  local live_count=0
+  local same_instance_count=0
+
+  [[ -n "$current_instance" ]] || {
+    echo "ERROR: --parallel requires a named isolated consumer instance." >&2
+    return 1
+  }
+  [[ "$max_parallel" =~ ^[1-9][0-9]*$ && "$max_parallel" -le 50 ]] || {
+    echo "ERROR: OPENCLAW_CONSUMER_PARALLEL_TEST_MAX must be between 1 and 50." >&2
+    return 1
+  }
+
+  while IFS= read -r line; do
+    record="$(consumer_mac_test_app_record_from_line "$line" || true)"
+    [[ -n "$record" ]] || continue
+    IFS=$'\x1f' read -r pid instance_id app_path <<<"$record"
+    live_count=$((live_count + 1))
+
+    # Parallel lanes may coexist only when their runtime identity is unique.
+    # Two app bundles with one instance would still share a gateway/state dir.
+    [[ "$instance_id" == "$current_instance" ]] || continue
+    same_instance_count=$((same_instance_count + 1))
+    if [[ "$replace" == "1" ]]; then
+      echo "Retiring previous version of parallel tester instance=${instance_id} pid=${pid} path=${app_path}"
+      consumer_mac_test_terminate_pid "$pid"
+      live_count=$((live_count - 1))
+    fi
+  done < <(consumer_mac_test_list_process_lines)
+
+  if [[ "$same_instance_count" -gt 0 && "$replace" != "1" ]]; then
+    echo "ERROR: parallel tester instance '${current_instance}' is already running." >&2
+    echo "  Use --replace to relaunch that instance, or choose a unique --instance." >&2
+    return 1
+  fi
+  if [[ "$live_count" -ge "$max_parallel" ]]; then
+    echo "ERROR: parallel Jarvis tester cap reached (${max_parallel})." >&2
+    echo "  Finish/clean a lane, or use a normal --replace launch to collapse all testers back to one." >&2
+    return 1
+  fi
+}
+
 consumer_mac_test_record_launch() {
   local instance_id="${1:-}"
   local app_path="$2"
@@ -477,6 +528,19 @@ consumer_mac_test_begin_launch() {
     return 1
   fi
   if ! consumer_mac_test_record_launch "$instance_id" "$app_path"; then
+    consumer_mac_test_release_lock
+    return 1
+  fi
+}
+
+consumer_mac_test_begin_parallel_launch() {
+  local instance_id="${1:-}"
+  local app_path="$2"
+  local replace="${3:-0}"
+
+  consumer_mac_test_validate_launch_record "$instance_id" "$app_path" || return 1
+  consumer_mac_test_acquire_lock
+  if ! consumer_mac_test_prepare_parallel_launch "$instance_id" "$app_path" "$replace"; then
     consumer_mac_test_release_lock
     return 1
   fi

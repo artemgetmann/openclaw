@@ -11,19 +11,24 @@ source "$ROOT_DIR/scripts/lib/macos-activation.sh"
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
 REPLACE=0
+PARALLEL=0
 REFRESH_GATEWAY="${OPENCLAW_CONSUMER_REFRESH_GATEWAY:-0}"
 LAUNCH_RECEIPT="${OPENCLAW_APP_LAUNCH_RECEIPT:-}"
 LAUNCH_RECEIPT_PENDING=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/open-consumer-mac-app.sh [--instance <id>] [--replace] [--refresh-gateway] [app_path]
+Usage: scripts/open-consumer-mac-app.sh [--instance <id>] [--replace] [--parallel] [--refresh-gateway] [app_path]
 Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when opening an isolated runtime
 lane that was packaged with the stable consumer debug app identity.
 
 By default this only opens the app. Use --refresh-gateway when the caller
 intentionally wants to reinstall a per-instance gateway LaunchAgent from this
 source checkout.
+
+Use --parallel only for deliberate multi-agent GUI/runtime testing. It requires
+a unique named instance and allows up to 10 isolated tester apps. The next
+normal --replace launch collapses leftover tester lanes back to one.
 
 Default Jarvis runtime warning:
   --refresh-gateway on the empty/default instance would install ai.jarvis.gateway
@@ -158,6 +163,10 @@ while [[ $# -gt 0 ]]; do
       REPLACE=1
       shift
       ;;
+    --parallel)
+      PARALLEL=1
+      shift
+      ;;
     --refresh-gateway)
       REFRESH_GATEWAY=1
       shift
@@ -260,7 +269,11 @@ fi
 # launcher refuses before adding another Jarvis icon. Production Jarvis is not
 # a debug bundle and is never selected by this helper.
 if consumer_mac_test_is_debug_bundle_id "$actual_bundle_id"; then
-  consumer_mac_test_begin_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" "$REPLACE"
+  if [[ "$PARALLEL" == "1" ]]; then
+    consumer_mac_test_begin_parallel_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" "$REPLACE"
+  else
+    consumer_mac_test_begin_launch "$NORMALIZED_INSTANCE_ID" "$APP_PATH" "$REPLACE"
+  fi
   trap 'cleanup_pending_launch_receipt; consumer_mac_test_release_lock' EXIT
 fi
 

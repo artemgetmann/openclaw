@@ -25,6 +25,9 @@ describe("consumer macOS tester lifecycle shell contract", () => {
       "PASS: registry retires a running app after its bundle disappears",
     );
     expect(result.stdout).toContain("PASS: same-instance path transfer preserves its gateway");
+    expect(result.stdout).toContain(
+      "PASS: allows bounded parallel testers with unique isolated instances",
+    );
     expect(result.stdout).toContain("PASS: serializes tester-slot acquisition");
     expect(result.stdout).toContain("PASS: reclaims a stale lock without concurrent ownership");
     expect(result.stdout).toContain("PASS: recovers an abandoned stale-lock reaper");
@@ -52,5 +55,6 @@ describe("consumer macOS tester lifecycle shell contract", () => {
     expect(activate).toBeGreaterThan(refresh);
     expect(release).toBeGreaterThan(activate);
     expect(script).toContain('APP_PATH="$(cd "$APP_PATH" && pwd -P)"');
+    expect(script).toContain("consumer_mac_test_begin_parallel_launch");
   });
 });
