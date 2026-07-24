@@ -98,6 +98,7 @@ export async function hasCompletedTelegramSafeReuseFence(params: {
   botToken: string;
   generation: string;
   persistedLastUpdateId: number | null;
+  persistedOffsetIgnored?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<boolean> {
   const tokenHash = hashToken(params.botToken);
@@ -114,6 +115,13 @@ export async function hasCompletedTelegramSafeReuseFence(params: {
       receipt.accountId === accountId;
     if (!matchesOwner) {
       return false;
+    }
+    // ACP continuity validation deliberately disables the local skip cursor so
+    // a fresh post-restart probe can be ingested. The generation was already
+    // fenced before its first runner; repeating the destructive negative-tail
+    // fence on every intentional restart would discard that continuity probe.
+    if (params.persistedOffsetIgnored) {
+      return true;
     }
     // A non-empty tail is safe only while its durable cutoff is still active.
     // Missing/ignored/rewound offset state must repeat the transport-only

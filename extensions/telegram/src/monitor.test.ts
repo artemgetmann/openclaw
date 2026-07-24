@@ -978,6 +978,37 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not repeat a completed fence when ACP intentionally ignores its cursor", async () => {
+    const previous = process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET;
+    process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET = "1";
+    try {
+      resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
+        generation: "generation-123",
+      });
+      hasCompletedTelegramSafeReuseFenceSpy.mockResolvedValue(true);
+      readTelegramUpdateOffsetSpy.mockResolvedValue(549076204);
+      const abort = new AbortController();
+      mockRunOnceAndAbort(abort);
+
+      await monitorTelegramProvider({ token: "123456:ABC", abortSignal: abort.signal });
+
+      expect(hasCompletedTelegramSafeReuseFenceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          persistedLastUpdateId: null,
+          persistedOffsetIgnored: true,
+        }),
+      );
+      expect(api.getUpdates).not.toHaveBeenCalled();
+      expect(runSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      if (typeof previous === "string") {
+        process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET = previous;
+      } else {
+        delete process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET;
+      }
+    }
+  });
+
   it("fails closed when the safe-reuse tail response has no valid update id", async () => {
     resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
       generation: "generation-123",

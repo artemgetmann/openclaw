@@ -130,4 +130,27 @@ describe("Telegram safe-reuse fence receipt", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  it("preserves a completed generation when ACP intentionally ignores the cursor", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "tg-safe-reuse-acp-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    await writeCompletedTelegramSafeReuseFence({
+      accountId: "default",
+      botToken: "12345:first",
+      generation: "generation-123",
+      lastUpdateId: 900,
+      env,
+    });
+
+    await expect(
+      hasCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        persistedOffsetIgnored: true,
+        env,
+      }),
+    ).resolves.toBe(true);
+  });
 });
