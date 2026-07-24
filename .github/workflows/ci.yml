@@ -640,6 +640,12 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Verify macOS host-trust verdict boundaries
+        # Deterministic stubs cover both sides of the three-state contract:
+        # restricted controls are indeterminate; trusted controls keep bad
+        # release artifacts blocking.
+        run: bash scripts/test-macos-host-trust.sh
+
       - name: Verify pinned Gog release signatures when packaging changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
