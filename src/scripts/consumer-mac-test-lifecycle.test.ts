@@ -31,6 +31,9 @@ describe("consumer macOS tester lifecycle shell contract", () => {
     expect(result.stdout).toContain(
       "PASS: normal launch cleans abandoned parallel app and gateway receipts",
     );
+    expect(result.stdout).toContain(
+      "PASS: keeps same-instance cleanup identity until handoff commits",
+    );
     expect(result.stdout).toContain("PASS: serializes tester-slot acquisition");
     expect(result.stdout).toContain("PASS: reclaims a stale lock without concurrent ownership");
     expect(result.stdout).toContain("PASS: recovers an abandoned stale-lock reaper");

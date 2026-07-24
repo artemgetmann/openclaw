@@ -447,7 +447,12 @@ consumer_mac_test_prepare_launch() {
       fi
       retired_instances+="${CONSUMER_MAC_TEST_PREVIOUS_INSTANCE}"$'\n'
     fi
-    /bin/rm -f "$receipt_path"
+    # A same-instance handoff intentionally preserves its gateway. Keep that
+    # lane's receipt until the singleton registry is durably published, or a
+    # later write failure could leave the gateway with no cleanup identity.
+    if [[ "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" ]]; then
+      /bin/rm -f "$receipt_path"
+    fi
   done < <(consumer_mac_test_parallel_receipt_files)
 
   if [[ "$previous_differs" -eq 1 ]]; then
@@ -604,6 +609,15 @@ consumer_mac_test_record_parallel_launch() {
   umask "$previous_umask"
 }
 
+consumer_mac_test_remove_parallel_receipt() {
+  local instance_id="$1"
+  local receipt_path=""
+
+  [[ -n "$instance_id" ]] || return 0
+  receipt_path="$(consumer_mac_test_parallel_registry_dir)/${instance_id}.tsv"
+  /bin/rm -f "$receipt_path"
+}
+
 consumer_mac_test_begin_launch() {
   local instance_id="${1:-}"
   local app_path="$2"
@@ -618,6 +632,10 @@ consumer_mac_test_begin_launch() {
     return 1
   fi
   if ! consumer_mac_test_record_launch "$instance_id" "$app_path"; then
+    consumer_mac_test_release_lock
+    return 1
+  fi
+  if ! consumer_mac_test_remove_parallel_receipt "$instance_id"; then
     consumer_mac_test_release_lock
     return 1
   fi

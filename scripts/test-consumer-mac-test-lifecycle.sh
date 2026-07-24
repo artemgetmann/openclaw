@@ -180,6 +180,14 @@ consumer_mac_test_prepare_launch "new-proof" "$NEW_APP" 1 >/dev/null
 [[ ! -e "$OPENCLAW_CONSUMER_PARALLEL_TEST_REGISTRY_DIR/parallel-a.tsv" ]] || fail "normal launch should remove the retired parallel receipt"
 pass "normal launch cleans abandoned parallel app and gateway receipts"
 
+consumer_mac_test_record_parallel_launch "new-proof" "$NEW_APP"
+consumer_mac_test_prepare_launch "new-proof" "$NEW_APP" 1 >/dev/null
+[[ -e "$OPENCLAW_CONSUMER_PARALLEL_TEST_REGISTRY_DIR/new-proof.tsv" ]] || fail "same-instance handoff should retain its receipt until singleton commit"
+consumer_mac_test_record_launch "new-proof" "$NEW_APP"
+consumer_mac_test_remove_parallel_receipt "new-proof"
+[[ ! -e "$OPENCLAW_CONSUMER_PARALLEL_TEST_REGISTRY_DIR/new-proof.tsv" ]] || fail "same-instance receipt should clear after singleton commit"
+pass "keeps same-instance cleanup identity until handoff commits"
+
 consumer_mac_test_record_launch "new-proof" "$NEW_APP"
 grep -F $'instance_id\tnew-proof' "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH" >/dev/null || fail "registry should record current instance"
 grep -F $'app_path\t'"$NEW_APP" "$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH" >/dev/null || fail "registry should record current app path"
