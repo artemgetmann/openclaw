@@ -91,7 +91,9 @@ const {
   resolveTelegramSafeReuseFenceRequestSpy: vi.fn(
     (_params: { botToken: string; accountId?: string }) => null as { generation: string } | null,
   ),
-  hasCompletedTelegramSafeReuseFenceSpy: vi.fn(async () => false),
+  hasCompletedTelegramSafeReuseFenceSpy: vi.fn(
+    async (_params?: { persistedLastUpdateId?: number | null }) => false,
+  ),
   writeCompletedTelegramSafeReuseFenceSpy: vi.fn(async () => undefined),
 }));
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
@@ -938,9 +940,40 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitorTelegramProvider({ token: "123456:ABC", abortSignal: abort.signal });
 
     expect(api.getUpdates).not.toHaveBeenCalled();
+    expect(hasCompletedTelegramSafeReuseFenceSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ persistedLastUpdateId: 549076204 }),
+    );
     expect(createTelegramBotCalls).toHaveLength(1);
     expect(createTelegramBotCalls[0]?.updateOffset).toMatchObject({
       lastUpdateId: 549076204,
+    });
+    expect(runSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("repeats the fence when its receipt cutoff is no longer active", async () => {
+    resolveTelegramSafeReuseFenceRequestSpy.mockReturnValue({
+      generation: "generation-123",
+    });
+    hasCompletedTelegramSafeReuseFenceSpy.mockImplementation(
+      async ({ persistedLastUpdateId }: { persistedLastUpdateId?: number | null } = {}) =>
+        persistedLastUpdateId !== null,
+    );
+    readTelegramUpdateOffsetSpy.mockResolvedValue(null);
+    api.getUpdates.mockResolvedValue([{ update_id: 549076205 }]);
+    const abort = new AbortController();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "123456:ABC", abortSignal: abort.signal });
+
+    expect(api.getUpdates).toHaveBeenCalledWith({
+      offset: -1,
+      limit: 1,
+      timeout: 0,
+    });
+    expect(writeTelegramUpdateOffsetSpy).toHaveBeenCalledWith({
+      accountId: "default",
+      updateId: 549076205,
+      botToken: "123456:ABC",
     });
     expect(runSpy).toHaveBeenCalledTimes(1);
   });

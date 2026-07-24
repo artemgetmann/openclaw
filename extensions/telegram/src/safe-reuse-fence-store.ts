@@ -97,6 +97,7 @@ export async function hasCompletedTelegramSafeReuseFence(params: {
   accountId?: string;
   botToken: string;
   generation: string;
+  persistedLastUpdateId: number | null;
   env?: NodeJS.ProcessEnv;
 }): Promise<boolean> {
   const tokenHash = hashToken(params.botToken);
@@ -107,10 +108,20 @@ export async function hasCompletedTelegramSafeReuseFence(params: {
     // Both fields are required. A worktree may reuse its state directory for
     // another tester bot later, and a generation alone must never bless that
     // bot's unrelated backlog.
-    return (
+    const matchesOwner =
       receipt?.generation === params.generation &&
       receipt.tokenHash === tokenHash &&
-      receipt.accountId === accountId
+      receipt.accountId === accountId;
+    if (!matchesOwner) {
+      return false;
+    }
+    // A non-empty tail is safe only while its durable cutoff is still active.
+    // Missing/ignored/rewound offset state must repeat the transport-only
+    // fence instead of trusting a receipt that can no longer suppress backlog.
+    return (
+      receipt.lastUpdateId === null ||
+      (params.persistedLastUpdateId !== null &&
+        params.persistedLastUpdateId >= receipt.lastUpdateId)
     );
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {

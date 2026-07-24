@@ -363,4 +363,106 @@ exit 0
     expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toContain("222:free");
     expect(readFileSync(path.join(activeDir, ".env.local"), "utf8")).toContain("111:active");
   });
+
+  it("retains its exact reservation when another worktree copied the token claim", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-copied-claim-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:owned\nBOT_TOKEN=222:free\n");
+    run(mainDir, "git", ["add", "."]);
+    run(mainDir, "git", ["commit", "-m", "fixture"]);
+
+    run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+      HOME: home,
+      OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "scenario-a",
+    });
+    const originalEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    const copiedDir = path.join(root, "copied-lane");
+    run(mainDir, "git", ["worktree", "add", copiedDir, "-b", "codex/copied-lane", "HEAD"]);
+    writeFileSync(path.join(copiedDir, ".env.local"), "TELEGRAM_BOT_TOKEN=111:owned\n");
+
+    const stubDir = path.join(root, "stubs");
+    mkdirSync(stubDir, { recursive: true });
+    writeFileSync(
+      path.join(stubDir, "lsof"),
+      `#!/usr/bin/env bash
+if [[ "$*" == *"-tiTCP:"* ]]; then
+  printf '4242\\n'
+  exit 0
+fi
+if [[ "$*" == *"-a -p 4242 -d cwd -Fn"* ]]; then
+  printf 'n${copiedDir}\\n'
+  exit 0
+fi
+exit 0
+`,
+      { encoding: "utf8", mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(stubDir, "ps"),
+      "#!/usr/bin/env bash\nprintf 'node dist/index.js gateway run --port 20123\\n'\n",
+      { encoding: "utf8", mode: 0o755 },
+    );
+
+    const output = run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+      HOME: home,
+      PATH: `${stubDir}:${process.env.PATH}`,
+      OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "scenario-a",
+    });
+
+    expect(output).toContain("Retained Telegram bot token #1");
+    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toBe(originalEnv);
+    expect(readFileSync(path.join(copiedDir, ".env.local"), "utf8")).toContain("111:owned");
+  });
+
+  it("does not rotate an exact reservation while a foreign polling lease blocks it", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-foreign-lease-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    const leaseRoot = path.join(home, ".openclaw", "telegram-token-leases");
+    mkdirSync(leaseRoot, { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:owned\nBOT_TOKEN=222:free\n");
+
+    run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+      HOME: home,
+      OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "scenario-a",
+    });
+    const originalEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    const tokenHash = crypto.createHash("sha256").update("111:owned").digest("hex");
+    writeFileSync(
+      path.join(leaseRoot, `111-${tokenHash}.json`),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        starttime: null,
+        createdAt: new Date().toISOString(),
+        tokenHash,
+        tokenFingerprint: tokenHash.slice(0, 12),
+        botId: "111",
+        accountId: "default",
+        configPath: null,
+        worktree: path.join(root, "foreign-runtime"),
+      }),
+    );
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID: "scenario-a",
+      }),
+    ).toThrow();
+    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toBe(originalEnv);
+
+    const secondHash = crypto.createHash("sha256").update("222:free").digest("hex");
+    const secondReservation = path.join(
+      home,
+      ".openclaw",
+      "telegram-tester-scenario-reservations",
+      `222-${secondHash}.json`,
+    );
+    expect(() => readFileSync(secondReservation, "utf8")).toThrow();
+  });
 });

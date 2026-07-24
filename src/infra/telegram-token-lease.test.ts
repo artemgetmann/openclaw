@@ -253,6 +253,36 @@ describe("telegram token lease", () => {
     await lease.release();
   });
 
+  it("rejects an expired reservation even when runtime owner metadata still matches", async () => {
+    const existingHash = tokenHash();
+    await fs.writeFile(
+      path.join(reservationRoot, `12345-${existingHash}.json`),
+      JSON.stringify(
+        reservationPayload({
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+          expiresAt: "2026-01-01T00:02:00.000Z",
+        }),
+      ),
+    );
+
+    const { acquireTelegramTokenLease } = await import("./telegram-token-lease.js");
+    const { TelegramTesterScenarioReservationConflictError } =
+      await import("./telegram-tester-scenario-reservation.js");
+    await expect(
+      acquireTelegramTokenLease({
+        token,
+        leaseRoot,
+        reservationRoot,
+        worktree,
+        scenarioId: "scenario-a",
+        scenarioGeneration,
+        scenarioTokenHash: existingHash,
+      }),
+    ).rejects.toBeInstanceOf(TelegramTesterScenarioReservationConflictError);
+    expect(await fs.readdir(leaseRoot)).toEqual([]);
+  });
+
   it("scopes process-global tester metadata without blocking an unrelated named account", async () => {
     const defaultHash = tokenHash();
     await fs.writeFile(

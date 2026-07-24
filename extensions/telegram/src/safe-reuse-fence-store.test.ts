@@ -67,6 +67,7 @@ describe("Telegram safe-reuse fence receipt", () => {
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-123",
+        persistedLastUpdateId: 900,
         env,
       }),
     ).resolves.toBe(true);
@@ -75,6 +76,7 @@ describe("Telegram safe-reuse fence receipt", () => {
         accountId: "default",
         botToken: "12345:first",
         generation: "generation-456",
+        persistedLastUpdateId: 900,
         env,
       }),
     ).resolves.toBe(false);
@@ -83,8 +85,49 @@ describe("Telegram safe-reuse fence receipt", () => {
         accountId: "default",
         botToken: "67890:second",
         generation: "generation-123",
+        persistedLastUpdateId: 900,
         env,
       }),
     ).resolves.toBe(false);
+  });
+
+  it("requires the receipt cutoff to remain active", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "tg-safe-reuse-cutoff-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    await writeCompletedTelegramSafeReuseFence({
+      accountId: "default",
+      botToken: "12345:first",
+      generation: "generation-123",
+      lastUpdateId: 900,
+      env,
+    });
+
+    await expect(
+      hasCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: null,
+        env,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      hasCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: 899,
+        env,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      hasCompletedTelegramSafeReuseFence({
+        accountId: "default",
+        botToken: "12345:first",
+        generation: "generation-123",
+        persistedLastUpdateId: 901,
+        env,
+      }),
+    ).resolves.toBe(true);
   });
 });

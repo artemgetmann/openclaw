@@ -270,9 +270,16 @@ let lastReservationReason = "";
 // module's per-token lock. Keeping those operations together closes the race
 // where two simultaneous assigners both observe an unclaimed pool entry.
 for (const candidate of candidates) {
+  const isCurrentReservationCandidate =
+    candidate === currentToken &&
+    Boolean(storedReservationGeneration) &&
+    Boolean(storedReservationTokenHash);
   if (
     !poolTokens.includes(candidate) ||
-    activeClaimTokens.has(candidate) ||
+    // A copied .env.local is not reservation ownership. Let the exact current
+    // owner reach the locked reservation check; the in-lock PID lease re-read
+    // below still blocks any genuinely active foreign poller.
+    (activeClaimTokens.has(candidate) && !isCurrentReservationCandidate) ||
     reservedTokenSet.has(candidate)
   ) {
     continue;
@@ -296,7 +303,11 @@ for (const candidate of candidates) {
   });
   if (!reservation.ok) {
     lastReservationReason = reservation.reason;
-    if (candidate === currentToken && reservation.reason === "owner_generation_mismatch") {
+    if (candidate === currentToken) {
+      // A persisted current token is ownership state, even when its generation
+      // metadata is partial or stale. Any retain failure must stop instead of
+      // rotating to another bot, leaking a reservation, or silently adopting
+      // ownership that this worktree cannot prove.
       break;
     }
     continue;

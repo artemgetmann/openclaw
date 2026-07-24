@@ -194,6 +194,15 @@ export async function validateTelegramTesterScenarioReservation(params: {
       reason: "malformed_reservation",
     });
   }
+  // Expiry ends the reservation's authority even when an old worktree still
+  // has a matching .env.local. Otherwise a stopped lane could restart after
+  // expiry, reacquire the polling lease, and indefinitely prevent reclaim.
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    throw new TelegramTesterScenarioReservationConflictError({
+      reservationPath: filePath,
+      reason: "reservation_expired",
+    });
+  }
   const scenarioId = params.scenarioId?.trim() ?? "";
   const generation = params.generation?.trim() ?? "";
   const claimedTokenHash = params.tokenHash?.trim() ?? "";

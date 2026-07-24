@@ -319,6 +319,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
               accountId: account.accountId,
               botToken: token,
               generation: safeReuseRequest.generation,
+              persistedLastUpdateId: lastUpdateId,
             }),
           markComplete: (lastUpdateId: number | null) =>
             writeCompletedTelegramSafeReuseFence({
