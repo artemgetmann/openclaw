@@ -228,17 +228,24 @@ function jarvis(args, stage) {
     // The canary may trust a persisted monitor binding or the packaged state
     // fallback. It must never promote legacy machine/env/repo discovery into an
     // authority for live mutations merely because that database is readable.
-    const packagedPrecheckSource = meta?.session_source === "monitor-binding"
-      || (meta?.session_source === "state-default"
-        && meta?.session_path === stateDefaultSession
+    const packagedEnvSource = meta?.env_file_source === "monitor-binding"
+      || (meta?.env_file_source === "runtime-default"
         && meta?.env_file === stateDefaultEnvFile);
+    // Session provenance is interpreted inside the already-proven credential
+    // context. USERBOT_SESSION from a persisted monitor env file is
+    // session_source=env-file, while an env-only binding may legitimately fall
+    // back to the packaged state session.
+    const packagedSessionSource = meta?.session_source === "monitor-binding"
+      || meta?.session_source === "env-file"
+      || (meta?.session_source === "state-default"
+        && meta?.session_path === stateDefaultSession);
     if (typeof meta?.session_source !== "string"
       || typeof meta?.session_path !== "string"
       || !path.isAbsolute(meta.session_path)
       || typeof meta?.env_file !== "string"
       || !path.isAbsolute(meta.env_file)
       || meta?.lock_scope !== "machine"
-      || (!operatorBackend && !packagedPrecheckSource)) {
+      || (!operatorBackend && (!packagedEnvSource || !packagedSessionSource))) {
       throw new Error(`${stage} returned mismatched operator backend ownership`);
     }
     // Precheck establishes the packaged resolver's authoritative session.
@@ -246,6 +253,7 @@ function jarvis(args, stage) {
     if (operatorBackend
       && (meta.session_path !== operatorBackend.sessionPath
         || meta.env_file !== operatorBackend.envFile
+        || meta.env_file_source !== "explicit"
         || meta.session_source !== "explicit")) {
       throw new Error(`${stage} returned changed operator backend ownership`);
     }
@@ -614,6 +622,7 @@ try {
   ], "operator-precheck");
   operatorBackend = {
     envFile: precheck.backend_meta.env_file,
+    envFileSource: precheck.backend_meta.env_file_source,
     sessionPath: precheck.backend_meta.session_path,
     sessionSource: precheck.backend_meta.session_source,
     lockScope: precheck.backend_meta.lock_scope,

@@ -262,6 +262,7 @@ describe("telegram-user backend defaults", () => {
       resolveTelegramUserBackendSelectors({ session: "/tmp/separate-account.session" }),
     ).resolves.toEqual({
       envFilePath: path.join(stateDir, "telegram-user", ".env.local"),
+      envFileSource: "runtime-default",
       sessionPath: "/tmp/separate-account.session",
     });
     await expect(resolveTelegramUserBackendSelectors({})).rejects.toThrow("E_AMBIGUOUS_SESSION");
@@ -294,6 +295,7 @@ describe("telegram-user backend defaults", () => {
     const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: boundEnvFile,
+      envFileSource: "monitor-binding",
       sessionPath: boundSession,
     });
     await expect(
@@ -303,6 +305,7 @@ describe("telegram-user backend defaults", () => {
       }),
     ).resolves.toEqual({
       envFilePath: path.join(stateDir, "explicit.env"),
+      envFileSource: "explicit",
       sessionPath: path.join(stateDir, "explicit.session"),
     });
 
@@ -313,6 +316,7 @@ describe("telegram-user backend defaults", () => {
       resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
     ).resolves.toEqual({
       envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
       sessionPath: envSelectedSession,
     });
   });
@@ -339,6 +343,7 @@ describe("telegram-user backend defaults", () => {
     const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: boundEnvFile,
+      envFileSource: "monitor-binding",
       sessionPath: boundSession,
     });
   });
@@ -363,6 +368,7 @@ describe("telegram-user backend defaults", () => {
 
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
+      envFileSource: "runtime-default",
       sessionPath: path.join(homeDir, ".openclaw", "telegram-user", "userbot.session"),
     });
   });
@@ -401,6 +407,7 @@ describe("telegram-user backend defaults", () => {
       resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
     ).resolves.toEqual({
       envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
       sessionPath: envSelectedSession,
     });
     await expect(
@@ -410,6 +417,7 @@ describe("telegram-user backend defaults", () => {
       }),
     ).resolves.toEqual({
       envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
       sessionPath: path.join(stateDir, "flag.session"),
     });
   });
@@ -429,6 +437,7 @@ describe("telegram-user backend defaults", () => {
         api_hash_source: "missing",
         api_id_source: "missing",
         env_file: "/tmp/telegram.env",
+        env_file_source: "explicit",
         lock_scope: "machine",
         session_path: "/tmp/telegram.session",
         session_source: "explicit",
@@ -452,6 +461,7 @@ describe("telegram-user backend defaults", () => {
       api_hash_source: "missing" as const,
       api_id_source: "missing" as const,
       env_file: "/tmp/telegram.env",
+      env_file_source: "explicit" as const,
       lock_scope: "machine" as const,
       session_path: "/tmp/telegram.session",
       session_source: "explicit" as const,
