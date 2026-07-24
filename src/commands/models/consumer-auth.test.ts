@@ -49,7 +49,7 @@ const baseConfig: OpenClawConfig = {
   agents: {
     defaults: {
       model: {
-        primary: "openai-codex/gpt-5.5",
+        primary: "openai-codex/gpt-5.6-sol",
       },
     },
   },

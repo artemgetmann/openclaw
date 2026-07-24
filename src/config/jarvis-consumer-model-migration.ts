@@ -1,5 +1,12 @@
 export const JARVIS_CONSUMER_LEGACY_CODEX_MODEL = "openai-codex/gpt-5.4";
-export const JARVIS_CONSUMER_CURRENT_CODEX_MODEL = "openai-codex/gpt-5.5";
+export const JARVIS_CONSUMER_PREVIOUS_CODEX_MODEL = "openai-codex/gpt-5.5";
+export const JARVIS_CONSUMER_CURRENT_CODEX_MODEL = "openai-codex/gpt-5.6-sol";
+export const JARVIS_CONSUMER_LEGACY_CODEX_MODELS = [
+  JARVIS_CONSUMER_LEGACY_CODEX_MODEL,
+  JARVIS_CONSUMER_PREVIOUS_CODEX_MODEL,
+] as const;
+export const JARVIS_CONSUMER_LEGACY_OPENAI_MODELS = ["openai/gpt-5.4", "openai/gpt-5.5"] as const;
+export const JARVIS_CONSUMER_CURRENT_OPENAI_MODEL = "openai/gpt-5.6-sol";
 export const JARVIS_CONSUMER_CLAUDE_CLI_MODEL = "claude-cli/sonnet";
 export const JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
 
@@ -19,6 +26,22 @@ function readString(value: unknown): string | undefined {
 
 function hasOwn(record: UnknownRecord | undefined, key: string): boolean {
   return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function needsLegacyGptAliasTransfer(
+  root: UnknownRecord,
+  modelIds: readonly string[],
+  targetModelId: string,
+): boolean {
+  const models = getRecord(getJarvisConsumerAgentsDefaults(root)?.models);
+  const targetAlias = readString(getRecord(models?.[targetModelId])?.alias)?.toLowerCase();
+  if (targetAlias && targetAlias !== "gpt") {
+    return false;
+  }
+  return modelIds.some((modelId) => {
+    const alias = readString(getRecord(models?.[modelId])?.alias);
+    return alias?.toLowerCase() === "gpt";
+  });
 }
 
 export function getJarvisConsumerAgentsDefaults(root: UnknownRecord): UnknownRecord | undefined {
@@ -106,11 +129,30 @@ export function shouldMigrateJarvisConsumerModelDefaults(root: UnknownRecord): b
   }
 
   const primary = getJarvisConsumerPrimaryModel(root);
-  const hasLegacyCodex =
-    primary === JARVIS_CONSUMER_LEGACY_CODEX_MODEL ||
-    hasJarvisConsumerModel(root, JARVIS_CONSUMER_LEGACY_CODEX_MODEL);
+  const hasLegacyCodex = JARVIS_CONSUMER_LEGACY_CODEX_MODELS.some(
+    (model) => primary === model || hasJarvisConsumerModel(root, model),
+  );
   const needsCodexDefault =
     hasLegacyCodex && !hasJarvisConsumerModel(root, JARVIS_CONSUMER_CURRENT_CODEX_MODEL);
+  const hasLegacyOpenAI = JARVIS_CONSUMER_LEGACY_OPENAI_MODELS.some(
+    (model) => primary === model || hasJarvisConsumerModel(root, model),
+  );
+  const needsOpenAIDefault =
+    hasLegacyOpenAI && !hasJarvisConsumerModel(root, JARVIS_CONSUMER_CURRENT_OPENAI_MODEL);
+  const needsPrimaryPromotion =
+    JARVIS_CONSUMER_LEGACY_CODEX_MODELS.some((model) => primary === model) ||
+    JARVIS_CONSUMER_LEGACY_OPENAI_MODELS.some((model) => primary === model);
+  const needsAliasTransfer =
+    needsLegacyGptAliasTransfer(
+      root,
+      JARVIS_CONSUMER_LEGACY_CODEX_MODELS,
+      JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
+    ) ||
+    needsLegacyGptAliasTransfer(
+      root,
+      JARVIS_CONSUMER_LEGACY_OPENAI_MODELS,
+      JARVIS_CONSUMER_CURRENT_OPENAI_MODEL,
+    );
   const needsClaudeCli =
     hasJarvisConsumerClaudeCliAuth(root) &&
     !hasJarvisConsumerModel(root, JARVIS_CONSUMER_CLAUDE_CLI_MODEL);
@@ -118,5 +160,12 @@ export function shouldMigrateJarvisConsumerModelDefaults(root: UnknownRecord): b
     hasJarvisConsumerAnthropicAuth(root) &&
     !hasJarvisConsumerModel(root, JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL);
 
-  return needsCodexDefault || needsClaudeCli || needsAnthropic;
+  return (
+    needsCodexDefault ||
+    needsOpenAIDefault ||
+    needsPrimaryPromotion ||
+    needsAliasTransfer ||
+    needsClaudeCli ||
+    needsAnthropic
+  );
 }

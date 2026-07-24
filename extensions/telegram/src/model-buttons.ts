@@ -129,12 +129,7 @@ export const MODEL_FAMILIES: readonly ModelFamilyInfo[] = [
     family: "chatgpt",
     label: "ChatGPT",
     providers: ["openai-codex", "openai"],
-    recommended: [
-      "openai-codex/gpt-5.5",
-      "openai/gpt-5.5",
-      "openai-codex/gpt-5.4",
-      "openai/gpt-5.4",
-    ],
+    recommended: ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol"],
   },
 ] as const;
 
@@ -663,32 +658,17 @@ function buildChatGptFamilyKeyboard(params: {
 }): ButtonRow[] {
   const rows: ButtonRow[] = [];
   if (params.more) {
-    appendFirstAvailableStaticModelButton(rows, params, {
-      label: "GPT-5.4",
-      refs: [
-        { provider: "openai-codex", model: "gpt-5.4" },
-        { provider: "openai", model: "gpt-5.4" },
-      ],
-    });
-    appendFirstAvailableStaticModelButton(rows, params, {
-      label: "GPT-5.3 Codex Spark",
-      refs: [
-        { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
-        { provider: "openai", model: "gpt-5.3-codex-spark" },
-      ],
-    });
     rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
     return rows;
   }
 
   appendFirstAvailableStaticModelButton(rows, params, {
-    label: "GPT-5.5",
+    label: "GPT-5.6 Sol",
     refs: [
-      { provider: "openai-codex", model: "gpt-5.5" },
-      { provider: "openai", model: "gpt-5.5" },
+      { provider: "openai-codex", model: "gpt-5.6-sol" },
+      { provider: "openai", model: "gpt-5.6-sol" },
     ],
   });
-  rows.push([{ text: "More", callback_data: "mdl_fam_chatgpt_more" }]);
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
   return rows;
 }
