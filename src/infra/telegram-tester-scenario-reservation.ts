@@ -6,9 +6,13 @@ import path from "node:path";
 type ReservationPayload = {
   version: 1;
   tokenHash: string;
+  tokenFingerprint: string;
+  botId: string;
   scenarioId: string;
   worktreePath: string;
   generation: string;
+  createdAt: string;
+  updatedAt: string;
   expiresAt: string;
 };
 
@@ -29,6 +33,10 @@ function hashToken(token: string): string {
 function botIdFromToken(token: string): string {
   const value = token.split(":", 1)[0]?.trim() ?? "";
   return /^\d+$/.test(value) ? value : "bot";
+}
+
+function fingerprintToken(token: string): string {
+  return hashToken(token).slice(0, 12);
 }
 
 export function resolveTelegramTesterScenarioReservationPath(params: {
@@ -106,11 +114,25 @@ function parseReservation(raw: string): ReservationPayload | null {
       parsed.version !== 1 ||
       !isValidOwnerString(parsed.scenarioId) ||
       !isValidOwnerString(parsed.worktreePath) ||
+      !path.isAbsolute(parsed.worktreePath) ||
       !isValidOwnerString(parsed.generation) ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu.test(
+        parsed.generation,
+      ) ||
       typeof parsed.tokenHash !== "string" ||
       !/^[a-f0-9]{64}$/u.test(parsed.tokenHash) ||
+      typeof parsed.tokenFingerprint !== "string" ||
+      !/^[a-f0-9]{12}$/u.test(parsed.tokenFingerprint) ||
+      typeof parsed.botId !== "string" ||
+      !/^(?:bot|\d+)$/u.test(parsed.botId) ||
+      typeof parsed.createdAt !== "string" ||
+      typeof parsed.updatedAt !== "string" ||
       typeof parsed.expiresAt !== "string" ||
-      !Number.isFinite(Date.parse(parsed.expiresAt))
+      !Number.isFinite(Date.parse(parsed.createdAt)) ||
+      !Number.isFinite(Date.parse(parsed.updatedAt)) ||
+      !Number.isFinite(Date.parse(parsed.expiresAt)) ||
+      Date.parse(parsed.createdAt) > Date.parse(parsed.updatedAt) ||
+      Date.parse(parsed.updatedAt) > Date.parse(parsed.expiresAt)
     ) {
       return null;
     }
@@ -190,6 +212,8 @@ export async function validateTelegramTesterScenarioReservation(params: {
   ]);
   if (
     payload.tokenHash !== expectedTokenHash ||
+    payload.tokenFingerprint !== fingerprintToken(params.token) ||
+    payload.botId !== botIdFromToken(params.token) ||
     claimedTokenHash !== expectedTokenHash ||
     payload.scenarioId !== scenarioId ||
     payload.generation !== generation ||

@@ -17,8 +17,26 @@ describe("telegram token lease", () => {
   let reservationRoot: string;
   let worktree: string;
   const token = "12345:test-token";
+  const scenarioGeneration = "11111111-1111-4111-8111-111111111111";
 
   const tokenHash = () => crypto.createHash("sha256").update(token).digest("hex");
+  const reservationPayload = (overrides: Record<string, unknown> = {}) => {
+    const hash = tokenHash();
+    const now = new Date().toISOString();
+    return {
+      version: 1,
+      tokenHash: hash,
+      tokenFingerprint: hash.slice(0, 12),
+      botId: "12345",
+      scenarioId: "scenario-a",
+      worktreePath: worktree,
+      generation: scenarioGeneration,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      ...overrides,
+    };
+  };
 
   beforeEach(async () => {
     leaseRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-lease-"));
@@ -178,14 +196,7 @@ describe("telegram token lease", () => {
     const existingHash = tokenHash();
     await fs.writeFile(
       path.join(reservationRoot, `12345-${existingHash}.json`),
-      JSON.stringify({
-        version: 1,
-        tokenHash: existingHash,
-        scenarioId: "scenario-a",
-        worktreePath: worktree,
-        generation: "generation-a",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      }),
+      JSON.stringify(reservationPayload()),
     );
 
     const { acquireTelegramTokenLease } = await import("./telegram-token-lease.js");
@@ -225,14 +236,7 @@ describe("telegram token lease", () => {
     const existingHash = tokenHash();
     await fs.writeFile(
       path.join(reservationRoot, `12345-${existingHash}.json`),
-      JSON.stringify({
-        version: 1,
-        tokenHash: existingHash,
-        scenarioId: "scenario-a",
-        worktreePath: worktree,
-        generation: "generation-a",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      }),
+      JSON.stringify(reservationPayload()),
     );
 
     const { acquireTelegramTokenLease } = await import("./telegram-token-lease.js");
@@ -242,7 +246,7 @@ describe("telegram token lease", () => {
       reservationRoot,
       worktree,
       scenarioId: "scenario-a",
-      scenarioGeneration: "generation-a",
+      scenarioGeneration,
       scenarioTokenHash: existingHash,
     });
     expect(lease.owner.worktree).toBe(worktree);
@@ -253,14 +257,7 @@ describe("telegram token lease", () => {
     const defaultHash = tokenHash();
     await fs.writeFile(
       path.join(reservationRoot, `12345-${defaultHash}.json`),
-      JSON.stringify({
-        version: 1,
-        tokenHash: defaultHash,
-        scenarioId: "scenario-a",
-        worktreePath: worktree,
-        generation: "generation-a",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      }),
+      JSON.stringify(reservationPayload()),
     );
 
     const namedToken = "67890:named-token";
@@ -271,7 +268,7 @@ describe("telegram token lease", () => {
       reservationRoot,
       worktree,
       scenarioId: "scenario-a",
-      scenarioGeneration: "generation-a",
+      scenarioGeneration,
       scenarioTokenHash: defaultHash,
     });
     const namedLease = await acquireTelegramTokenLease({
@@ -280,7 +277,7 @@ describe("telegram token lease", () => {
       reservationRoot,
       worktree,
       scenarioId: "scenario-a",
-      scenarioGeneration: "generation-a",
+      scenarioGeneration,
       scenarioTokenHash: defaultHash,
     });
 
@@ -320,7 +317,7 @@ describe("telegram token lease", () => {
         reservationRoot,
         worktree,
         scenarioId: "scenario-a",
-        scenarioGeneration: "generation-a",
+        scenarioGeneration,
         scenarioTokenHash: existingHash,
       }),
     ).rejects.toBeInstanceOf(TelegramTesterScenarioReservationConflictError);
@@ -330,14 +327,7 @@ describe("telegram token lease", () => {
     const existingHash = tokenHash();
     await fs.writeFile(
       path.join(reservationRoot, `12345-${existingHash}.json`),
-      JSON.stringify({
-        version: 1,
-        tokenHash: existingHash,
-        scenarioId: "scenario-a",
-        worktreePath: "",
-        generation: "generation-a",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      }),
+      JSON.stringify(reservationPayload({ worktreePath: "" })),
     );
 
     const { acquireTelegramTokenLease } = await import("./telegram-token-lease.js");
@@ -350,7 +340,32 @@ describe("telegram token lease", () => {
         reservationRoot,
         worktree,
         scenarioId: "scenario-a",
-        scenarioGeneration: "generation-a",
+        scenarioGeneration,
+        scenarioTokenHash: existingHash,
+      }),
+    ).rejects.toBeInstanceOf(TelegramTesterScenarioReservationConflictError);
+  });
+
+  it("fails closed when a reservation omits canonical assignment fields", async () => {
+    const existingHash = tokenHash();
+    const incomplete = reservationPayload() as Record<string, unknown>;
+    delete incomplete.tokenFingerprint;
+    await fs.writeFile(
+      path.join(reservationRoot, `12345-${existingHash}.json`),
+      JSON.stringify(incomplete),
+    );
+
+    const { acquireTelegramTokenLease } = await import("./telegram-token-lease.js");
+    const { TelegramTesterScenarioReservationConflictError } =
+      await import("./telegram-tester-scenario-reservation.js");
+    await expect(
+      acquireTelegramTokenLease({
+        token,
+        leaseRoot,
+        reservationRoot,
+        worktree,
+        scenarioId: "scenario-a",
+        scenarioGeneration,
         scenarioTokenHash: existingHash,
       }),
     ).rejects.toBeInstanceOf(TelegramTesterScenarioReservationConflictError);
