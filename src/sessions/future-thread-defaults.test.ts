@@ -117,6 +117,75 @@ describe("future-thread default history", () => {
     expect(entry.thinkingLevel).toBeUndefined();
   });
 
+  it("uses current parent defaults beyond history without rewriting explicit children", () => {
+    const now = Date.now();
+    const parentEntry: SessionEntry = {
+      sessionId: "parent-session",
+      updatedAt: now,
+      // The managed model override was cleared when Sol became the global
+      // default, while Adaptive remains an explicit parent preference.
+      futureThreadThinkingLevelOverride: "adaptive",
+      futureThreadDefaultsHistory: [
+        {
+          afterThreadId: 25_040,
+          providerOverride: "openai-codex",
+          modelOverride: "gpt-5.4",
+          thinkingLevelOverride: "medium",
+          updatedAt: now - 2_000,
+        },
+        {
+          afterThreadId: 25_042,
+          providerOverride: "openai-codex",
+          modelOverride: "gpt-5.5",
+          thinkingLevelOverride: "adaptive",
+          updatedAt: now - 1_000,
+        },
+      ],
+    };
+
+    const historicalChild: SessionEntry = {
+      sessionId: "historical-child",
+      updatedAt: now,
+    };
+    seedSessionEntryFromFutureThreadDefaults({
+      entry: historicalChild,
+      parentEntry,
+      childThreadId: 25_041,
+    });
+    expect(historicalChild.providerOverride).toBe("openai-codex");
+    expect(historicalChild.modelOverride).toBe("gpt-5.4");
+    expect(historicalChild.thinkingLevel).toBe("medium");
+
+    const explicitExistingChild: SessionEntry = {
+      sessionId: "existing-child",
+      updatedAt: now,
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      thinkingLevel: "adaptive",
+    };
+    seedSessionEntryFromFutureThreadDefaults({
+      entry: explicitExistingChild,
+      parentEntry,
+      childThreadId: 25_043,
+    });
+    expect(explicitExistingChild.providerOverride).toBe("openai-codex");
+    expect(explicitExistingChild.modelOverride).toBe("gpt-5.5");
+    expect(explicitExistingChild.thinkingLevel).toBe("adaptive");
+
+    const newChild: SessionEntry = {
+      sessionId: "new-child",
+      updatedAt: now,
+    };
+    seedSessionEntryFromFutureThreadDefaults({
+      entry: newChild,
+      parentEntry,
+      childThreadId: 25_044,
+    });
+    expect(newChild.providerOverride).toBeUndefined();
+    expect(newChild.modelOverride).toBeUndefined();
+    expect(newChild.thinkingLevel).toBe("adaptive");
+  });
+
   it("copies exec overrides into future thread snapshots", () => {
     const parentEntry: SessionEntry = {
       sessionId: "parent-session",
