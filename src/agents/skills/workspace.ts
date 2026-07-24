@@ -38,8 +38,10 @@ const skillCommandDebugOnce = new Set<string>();
  *
  * Keep runtime-owned skills absolute. They are frequently read immediately on
  * live turns, and we have seen model-side `~` expansion or path guessing
- * produce malformed paths for app-owned/product skills. Using the exact path
- * removes that ambiguity without changing which skill is selected.
+ * produce malformed paths for app-owned/product skills. For symlink-backed
+ * workspace skills, prefer a shorter canonical absolute path when one exists.
+ * It remains directly readable while recovering prompt budget otherwise spent
+ * repeating a long app-support workspace prefix for every skill.
  *
  * Example compacted path:
  * `/Users/alice/.bun/.../skills/github/SKILL.md`
@@ -49,21 +51,32 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   const home = os.homedir();
   if (!home) return skills;
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-  return skills.map((s) => ({
-    ...s,
-    filePath:
-      // Loader-emitted workspace/product skills are runtime-owned. Preserve
-      // exact paths so model-side file reads do not depend on shell-style `~`
-      // expansion or reconstructed `workspace/skills/<name>` guesses.
-      s.source === "openclaw-workspace" ||
-      s.source === "workspace" ||
-      s.source === "openclaw-product-managed" ||
-      s.source === "openclaw-bundled"
-        ? s.filePath
-        : s.filePath.startsWith(prefix)
-          ? "~/" + s.filePath.slice(prefix.length)
-          : s.filePath,
-  }));
+  return skills.map((skill) => {
+    if (skill.source === "openclaw-workspace" || skill.source === "workspace") {
+      try {
+        const canonicalPath = fs.realpathSync.native(skill.filePath);
+        if (canonicalPath.length < skill.filePath.length) {
+          return { ...skill, filePath: canonicalPath };
+        }
+      } catch {
+        // A prompt snapshot can outlive a removed skill. Preserve the original
+        // location so this display-only optimization never breaks generation.
+      }
+      return skill;
+    }
+    return {
+      ...skill,
+      filePath:
+        // Product-managed and bundled skills are runtime-owned. Preserve exact
+        // paths so model-side file reads do not depend on shell-style `~`
+        // expansion or reconstructed product paths.
+        skill.source === "openclaw-product-managed" || skill.source === "openclaw-bundled"
+          ? skill.filePath
+          : skill.filePath.startsWith(prefix)
+            ? "~/" + skill.filePath.slice(prefix.length)
+            : skill.filePath,
+    };
+  });
 }
 
 function debugSkillCommandOnce(
