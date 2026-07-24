@@ -1,6 +1,6 @@
 ---
 name: openai-whisper
-description: Local speech-to-text with the Whisper CLI (no API key).
+description: Local speech-to-text with the Whisper CLI (no API key). Use only when the user explicitly requests local or offline transcription, or approves it after the configured media transcription route fails.
 homepage: https://openai.com/research/whisper
 metadata:
   {
@@ -24,7 +24,10 @@ metadata:
 
 # Whisper (CLI)
 
-Use `whisper` to transcribe audio locally.
+Use `whisper` to transcribe audio locally only when the user explicitly requests
+local or offline processing, or approves this fallback after
+`openclaw media transcribe` fails. For ordinary transcription requests, use the
+configured media route instead.
 
 Quick start
 

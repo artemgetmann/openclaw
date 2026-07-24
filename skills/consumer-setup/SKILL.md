@@ -161,10 +161,16 @@ explicitly ask for the CLI path.
 ### Google Workspace (`gog`)
 
 - Missing states usually look like: no OAuth client credentials, no authorized
-  account, or auth/account list coming back empty.
-- Tell the user Google Workspace is not connected yet.
-- Ask which Google account and which surfaces they want enabled first
-  (Gmail, Calendar, Drive, Docs, Sheets, Contacts).
+  account, auth/account list coming back empty, or `invalid_grant` showing that
+  the saved refresh token expired or was revoked.
+- Tell the user Google Workspace needs to reconnect; do not frame a recoverable
+  expired token as a terminal blocker.
+- For a new or ambiguous setup, ask which Google account and surfaces they want
+  enabled first (Gmail, Calendar, Drive, Docs, Sheets, Contacts). Reuse the
+  known account and requested surface during expired-token recovery.
+- Treat an account as known only when the failing command/error or original task
+  identifies it, or one configured Gog account clearly matches. If multiple
+  accounts could fit, stop and ask instead of choosing from the browser UI.
 - Prefer a browser-assisted OAuth flow when available.
 - Check `gog --version` before assuming newer auth helpers exist. Treat
   v0.31.0+ as the cutoff for `gog auth setup`, `GOG_HELP=agent`, classified
@@ -174,9 +180,21 @@ explicitly ask for the CLI path.
   On macOS, its single-flight lock prevents multiple setup sessions from
   producing overlapping Google or Keychain prompts. Other platforms use a
   direct background worker, so do not claim cross-session serialization there.
+- During expired-token recovery, populate `<csv>` from that account's saved
+  `gog auth list --json` services when available, plus only the surfaces required
+  by the current task. If the saved service set is unavailable, reuse the
+  explicitly established setup/task scope and ask before broadening it.
 - Prefer opening the real auth tab in Google Chrome when the runtime can do so.
   If Chrome is unavailable, use the default browser rather than dumping raw
   terminal instructions back to the user.
+- If the default browser opens Safari but Jarvis cannot control it, keep the
+  same guarded auth session alive and open its stored OAuth URL in Jarvis's
+  controllable signed-in Chrome profile. The callback belongs to the local
+  helper, not to Safari, so moving the tab itself is unnecessary.
+- On the Google permissions checklist, select every checkbox for the resolved
+  services and verify all expected boxes are checked before Continue. Stop on
+  an unexpected account or broader scope request; `Select all` is not permission
+  to grant unrelated access.
 - If Normal permissions block the guarded helper, report setup as blocked. Do
   not bypass the guard with direct `gog auth setup`, `gog auth add`, or
   `gog auth list` calls while setup is active.
@@ -200,8 +218,21 @@ explicitly ask for the CLI path.
   choose Always Allow. Never capture, store, type, or bypass that password.
 - After the guarded session succeeds, a read-only Gmail search or calendar/list
   call can verify the requested surface before creating drafts or events.
+- Confirm the resolved services in `gog auth list --json`. When the recovery is
+  supposed to restore both Gmail and Calendar, prove both with separate harmless
+  reads; do not call the connection complete after Gmail alone succeeds.
 - After verification succeeds, continue the user’s original Google task
   automatically instead of stopping at “auth is done”.
+- When a known account returns `invalid_grant`, start this guarded recovery with
+  forced consent as part of the original Google task. Do not require the user to
+  propose re-authentication first; pause only for a secure Google challenge or
+  an explicit scope/account ambiguity.
+- A roughly seven-day recurrence plus Google's unverified tester warning usually
+  means the OAuth app is External + Testing. Explain that the durable owner fix
+  is publishing the OAuth app to Production; an administered Workspace domain
+  can instead use an approved internal/trusted deployment. Never promise that a
+  refresh token is immortal: Google can still revoke it for password changes,
+  user/admin revocation, long inactivity, token limits, or security policy.
 
 ### Apple Notes
 

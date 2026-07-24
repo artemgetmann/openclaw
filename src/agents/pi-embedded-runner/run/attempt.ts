@@ -11,6 +11,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { isJarvisConsumerConfig } from "../../../config/jarvis-consumer-model-migration.js";
 import { resolveGatewayPort } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
@@ -1528,6 +1529,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      userPrompt: params.prompt,
     });
     logPreLockStage("skills-prompt-resolved");
 
@@ -1774,6 +1776,7 @@ export async function runEmbeddedAttempt(
       reactionGuidance,
       promptMode,
       acpEnabled: params.config?.acp?.enabled !== false,
+      jarvisBrowserPolicy: isJarvisConsumerConfig((params.config ?? {}) as Record<string, unknown>),
       runtimeInfo,
       messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

@@ -351,6 +351,47 @@ describe("buildReplyPayloads media filter integration", () => {
     ]);
   });
 
+  it("preserves a mixed text and media final after stale long-context progress", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      // Telegram defers mixed block media until finalization. The block callback
+      // still resolves, so the pipeline records this provisional payload as sent
+      // even though no durable media message exists yet.
+      hasSentPayload: (payload) => Boolean(payload.mediaUrl),
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        { text: "This chat is getting long." },
+        { text: "Inspecting v2 before sending." },
+        {
+          text: "Verified safe. Clean screenshot attached.",
+          mediaUrl: "file:///tmp/spotify-redacted-safe-v2.jpg",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toEqual([
+      {
+        text: "Verified safe. Clean screenshot attached.",
+        mediaUrl: "file:///tmp/spotify-redacted-safe-v2.jpg",
+        mediaUrls: undefined,
+        replyToTag: false,
+        replyToCurrent: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("keeps final text once when a source-preview snapshot matches the final answer", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,

@@ -6,6 +6,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isJarvisConsumerConfig } from "../../config/jarvis-consumer-model-migration.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -92,6 +93,7 @@ export function buildSystemPrompt(params: {
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     acpEnabled: params.config?.acp?.enabled !== false,
+    jarvisBrowserPolicy: isJarvisConsumerConfig((params.config ?? {}) as Record<string, unknown>),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),

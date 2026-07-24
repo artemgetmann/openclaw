@@ -381,6 +381,17 @@ describe("formatOpenComputerUseTccRecoveryGuidance", () => {
     ).toBeUndefined();
   });
 
+  it("does not invent a TCC identity for custom or PATH commands", () => {
+    const guidance = formatOpenComputerUseTccRecoveryGuidance({
+      command: "open-computer-use",
+      stderr: "Accessibility permission missing.",
+    });
+
+    expect(guidance).toContain("Bundle identity could not be verified");
+    expect(guidance).toContain("Do not run tccutil reset");
+    expect(guidance).not.toContain("com.ifuryst.opencomputeruse.dev");
+  });
+
   it("reports the packaged release app identity for permission failures", () => {
     const guidance = formatOpenComputerUseTccRecoveryGuidance({
       command:
@@ -507,7 +518,7 @@ describe("OpenComputerUseRuntime", () => {
     );
   });
 
-  it("adds exact stale-TCC recovery guidance to OCU permission failures", async () => {
+  it("fails closed when a permission error comes from an unknown helper identity", async () => {
     const runtime = new OpenComputerUseRuntime({
       command: process.execPath,
       baseArgs: [
@@ -520,7 +531,7 @@ describe("OpenComputerUseRuntime", () => {
     });
 
     await expect(runtime.observe({ appName: "TextEdit" })).rejects.toThrow(
-      "tccutil reset Accessibility com.ifuryst.opencomputeruse.dev",
+      "Bundle identity could not be verified",
     );
   });
 

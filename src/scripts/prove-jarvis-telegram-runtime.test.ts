@@ -11,6 +11,12 @@ const roots: string[] = [];
 function fixture(
   options: {
     gateFails?: boolean;
+    gateFailureMessage?: string;
+    gateRuntimeSource?: "jarvis-managed-bundle" | "jarvis-break-glass-hotfix";
+    gateRuntimeCommit?: string;
+    gatePid?: number;
+    gateListener?: string;
+    gateRpc?: "ok" | "failed";
     sessionMode?: "zero" | "one" | "multiple";
     waitFails?: boolean;
     missingTransportGeneration?: boolean;
@@ -31,6 +37,7 @@ function fixture(
   const entrypoint = path.join(stateDir, "lib", "openclaw-bundled", "dist", "index.js");
   const logPath = path.join(stateDir, "logs", "gateway.log");
   const gate = path.join(root, "gate.sh");
+  const gateArgs = path.join(root, "gate-args.txt");
   const launchctl = path.join(root, "launchctl");
   const calls = path.join(root, "calls.jsonl");
   const runtimeState = path.join(root, "runtime-state.json");
@@ -47,26 +54,32 @@ function fixture(
   fs.writeFileSync(
     gate,
     `#!/usr/bin/env bash
+printf '%s\n' "$*" > ${JSON.stringify(gateArgs)}
 ${
   options.gateFails
-    ? "exit 9"
+    ? `${options.gateFailureMessage ? `printf '%s\\n' ${JSON.stringify(options.gateFailureMessage)} >&2\n` : ""}exit 9`
     : `[[ -z "$OPENCLAW_GATEWAY_URL" && -z "$CLAWDBOT_GATEWAY_URL" ]] || exit 31
 [[ -z "$OPENCLAW_GATEWAY_TOKEN" && -z "$CLAWDBOT_GATEWAY_TOKEN" ]] || exit 32
 [[ -z "$OPENCLAW_GATEWAY_PASSWORD" && -z "$CLAWDBOT_GATEWAY_PASSWORD" ]] || exit 33
 [[ -z "$CLAWDBOT_GATEWAY_PORT" && "$OPENCLAW_GATEWAY_PORT" == "18789" ]] || exit 34
 [[ "$OPENCLAW_CONFIG_PATH" == "${stateDir}/openclaw.json" ]] || exit 35
+[[ "$OPENCLAW_JARVIS_GATEWAY_LABEL" == "ai.jarvis.gateway" ]] || exit 40
+[[ "$OPENCLAW_JARVIS_INSTALLED_MANIFEST" == "${stateDir}/.consumer-bundled-runtime.json" ]] || exit 36
+[[ "$OPENCLAW_JARVIS_PROTECTION_MARKER" == "${stateDir}/.consumer-bundled-runtime.protection.json" ]] || exit 37
+[[ "$OPENCLAW_INSTALLED_JARVIS_APP_PATH" == "/Applications/Jarvis.app" ]] || exit 38
+[[ "$OPENCLAW_JARVIS_APP_MANIFEST" == "/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/manifest.json" ]] || exit 39
 cat <<'EOF'
 [prove-jarvis-runtime] jarvis_runtime_proof=true
 [prove-jarvis-runtime] service_label=ai.jarvis.gateway
-[prove-jarvis-runtime] runtime_source=jarvis-managed-bundle
-[prove-jarvis-runtime] runtime_commit=389c0513cf
+[prove-jarvis-runtime] runtime_source=${options.gateRuntimeSource ?? "jarvis-managed-bundle"}
+[prove-jarvis-runtime] runtime_commit=${options.gateRuntimeCommit ?? "389c0513cf"}
 [prove-jarvis-runtime] runtime_package_version=2026.7.19
 [prove-jarvis-runtime] launch_service_version=2026.7.19
 [prove-jarvis-runtime] state_dir=${stateDir}
 [prove-jarvis-runtime] config_path=${stateDir}/openclaw.json
-[prove-jarvis-runtime] pid=4242
-[prove-jarvis-runtime] listener=127.0.0.1:18789
-[prove-jarvis-runtime] rpc=ok
+[prove-jarvis-runtime] pid=${options.gatePid ?? 4242}
+[prove-jarvis-runtime] listener=${options.gateListener ?? "127.0.0.1:18789"}
+[prove-jarvis-runtime] rpc=${options.gateRpc ?? "ok"}
 [prove-jarvis-runtime] health=healthy
 EOF`
 }
@@ -179,6 +192,7 @@ if (args[0] === "channels" && args[1] === "status") {
     root,
     home,
     calls,
+    gateArgs,
     lock,
     env: {
       ...process.env,
@@ -199,6 +213,11 @@ if (args[0] === "channels" && args[1] === "status") {
       CLAWDBOT_GATEWAY_TOKEN: "hostile-legacy-token",
       OPENCLAW_GATEWAY_PASSWORD: "hostile-current-password",
       CLAWDBOT_GATEWAY_PASSWORD: "hostile-legacy-password",
+      OPENCLAW_JARVIS_GATEWAY_LABEL: "ai.jarvis.gateway.hostile",
+      OPENCLAW_JARVIS_INSTALLED_MANIFEST: path.join(root, "hostile-installed-manifest.json"),
+      OPENCLAW_JARVIS_PROTECTION_MARKER: path.join(root, "hostile-protection-marker.json"),
+      OPENCLAW_INSTALLED_JARVIS_APP_PATH: path.join(root, "Hostile.app"),
+      OPENCLAW_JARVIS_APP_MANIFEST: path.join(root, "hostile-app-manifest.json"),
       ...(options.lockOwnerWriteFailure
         ? {
             OPENCLAW_JARVIS_TELEGRAM_PROOF_TEST_OWNER_WRITE_FAILURE: options.lockOwnerWriteFailure,
@@ -208,12 +227,20 @@ if (args[0] === "channels" && args[1] === "status") {
   };
 }
 
-function execute(testFixture: ReturnType<typeof fixture>, expectedCommit = "389c051") {
-  return spawnSync("bash", [script, "--execute", "--expected-commit", expectedCommit], {
-    cwd: repoRoot,
-    env: testFixture.env,
-    encoding: "utf8",
-  });
+function execute(
+  testFixture: ReturnType<typeof fixture>,
+  expectedCommit = "389c051",
+  runtimeSource: "jarvis-managed-bundle" | "jarvis-break-glass-hotfix" = "jarvis-managed-bundle",
+) {
+  return spawnSync(
+    "bash",
+    [script, "--execute", "--runtime-source", runtimeSource, "--expected-commit", expectedCommit],
+    {
+      cwd: repoRoot,
+      env: testFixture.env,
+      encoding: "utf8",
+    },
+  );
 }
 
 function callsFor(testFixture: ReturnType<typeof fixture>) {
@@ -246,9 +273,36 @@ describe("prove-jarvis-telegram-runtime", () => {
     expect(result.status).toBe(0);
     expect(evidence.mode).toBe("dry-run");
     expect(evidence.expectedCommit).toBe("389c051");
+    expect(evidence.runtimeSource).toEqual({
+      selected: "jarvis-managed-bundle",
+      default: "jarvis-managed-bundle",
+      autoFallback: false,
+    });
     expect(evidence.mutations).toBe(false);
     expect(callsFor(testFixture)).toEqual([]);
     expect(fs.existsSync(testFixture.lock)).toBe(false);
+
+    const hotfix = spawnSync(
+      "bash",
+      [
+        script,
+        "--dry-run",
+        "--runtime-source",
+        "jarvis-break-glass-hotfix",
+        "--expected-commit",
+        "389C051",
+      ],
+      { cwd: repoRoot, env: testFixture.env, encoding: "utf8" },
+    );
+    const hotfixEvidence = JSON.parse(hotfix.stdout);
+    expect(hotfix.status).toBe(0);
+    expect(hotfixEvidence.runtimeSource).toEqual({
+      selected: "jarvis-break-glass-hotfix",
+      default: "jarvis-managed-bundle",
+      autoFallback: false,
+    });
+    expect(callsFor(testFixture)).toEqual([]);
+    expect(fs.existsSync(testFixture.gateArgs)).toBe(false);
   });
 
   it("serializes the canary, performs exact cleanup, and reports archives as residuals", () => {
@@ -317,7 +371,94 @@ describe("prove-jarvis-telegram-runtime", () => {
     const evidence = JSON.parse(result.stdout);
     expect(result.status).toBe(1);
     expect(evidence.result).toBe("failed");
-    expect(evidence.reason).toContain("provenance gate failed");
+    expect(evidence.reason).toContain("selected Jarvis runtime provenance proof failed");
+    expect(callsFor(testFixture)).toEqual([]);
+  });
+
+  it("accepts an explicitly selected protected-hotfix provenance proof", () => {
+    const testFixture = fixture({ gateRuntimeSource: "jarvis-break-glass-hotfix" });
+    const result = execute(testFixture, "389c051", "jarvis-break-glass-hotfix");
+    const evidence = JSON.parse(result.stdout);
+    expect(result.status, result.stderr).toBe(0);
+    expect(evidence.runtimeSource).toEqual({
+      selected: "jarvis-break-glass-hotfix",
+      observed: "jarvis-break-glass-hotfix",
+      autoFallback: false,
+    });
+    expect(fs.readFileSync(testFixture.gateArgs, "utf8")).toContain(
+      "--runtime-source jarvis-break-glass-hotfix",
+    );
+  });
+
+  it.each([
+    [
+      "wrong commit",
+      "runtimeCommit=deadbee, expected 389c051; runtime_source_observed=jarvis-break-glass-hotfix; runtime_source_expected=jarvis-break-glass-hotfix",
+      "runtime-commit-mismatch",
+    ],
+    [
+      "missing protection",
+      "protected-hotfix marker is not readable; runtime_source_observed=jarvis-break-glass-hotfix; runtime_source_expected=jarvis-break-glass-hotfix",
+      "protection-marker-missing",
+    ],
+    [
+      "mismatched protection",
+      "protected-hotfix compatibility commit=deadbee, expected abcdef0; runtime_source_observed=jarvis-break-glass-hotfix; runtime_source_expected=jarvis-break-glass-hotfix",
+      "protection-compatibility-commit-mismatch",
+    ],
+    [
+      "PID ownership mismatch",
+      "launchctl pid=999, expected pid=4242; runtime_source_observed=jarvis-break-glass-hotfix; runtime_source_expected=jarvis-break-glass-hotfix",
+      "pid-owner-mismatch",
+    ],
+    [
+      "listener ownership mismatch",
+      "TCP port 18789 is not owned by ai.jarvis.gateway pid=4242; runtime_source_observed=jarvis-break-glass-hotfix; runtime_source_expected=jarvis-break-glass-hotfix",
+      "listener-owner-mismatch",
+    ],
+    [
+      "RPC mismatch",
+      "RPC probe is not ok; runtime_source_observed=jarvis-break-glass-hotfix; runtime_source_expected=jarvis-break-glass-hotfix",
+      "rpc-unhealthy",
+    ],
+  ] as const)("stops before Telegram for protected-hotfix %s", (_label, failure, code) => {
+    const testFixture = fixture({ gateFails: true, gateFailureMessage: failure });
+    const result = execute(testFixture, "389c051", "jarvis-break-glass-hotfix");
+    const evidence = JSON.parse(result.stdout);
+    expect(result.status).toBe(1);
+    expect(evidence.guidance).toMatchObject({
+      code,
+      observedRuntimeSource: "jarvis-break-glass-hotfix",
+      expectedRuntimeSource: "jarvis-break-glass-hotfix",
+    });
+    expect(evidence.guidance.nextCommand).toBe(
+      "bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --runtime-source jarvis-break-glass-hotfix --expected-commit 389c051",
+    );
+    expect(evidence.telegram.topicCreationAttempted).toBe(false);
+    expect(evidence.cleanup).toMatchObject({
+      topic: "not-created",
+      lock: "not-acquired",
+    });
+    expect(callsFor(testFixture)).toEqual([]);
+    expect(result.stdout).not.toContain("DO_NOT_LEAK_THIS_TOKEN");
+  });
+
+  it("rejects a wrong source without auto-fallback and gives the valid source-specific command", () => {
+    const testFixture = fixture({ gateRuntimeSource: "jarvis-break-glass-hotfix" });
+    const result = execute(testFixture);
+    const evidence = JSON.parse(result.stdout);
+    expect(result.status).toBe(1);
+    expect(evidence.runtimeSource).toEqual({
+      selected: "jarvis-managed-bundle",
+      observed: "jarvis-break-glass-hotfix",
+      autoFallback: false,
+    });
+    expect(evidence.guidance).toMatchObject({
+      code: "runtime-source-mismatch",
+      nextCommand:
+        "bash scripts/prove-jarvis-telegram-runtime.sh --dry-run --runtime-source jarvis-break-glass-hotfix --expected-commit 389c051",
+    });
+    expect(evidence.telegram.topicCreationAttempted).toBe(false);
     expect(callsFor(testFixture)).toEqual([]);
   });
 

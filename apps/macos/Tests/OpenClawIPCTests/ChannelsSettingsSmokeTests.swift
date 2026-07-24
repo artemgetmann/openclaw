@@ -217,8 +217,8 @@ struct ChannelsSettingsSmokeTests {
 
     @Test func `consumer telegram first task guides wake up message and accepts legacy status`() {
         let expectedInstruction =
-            "Telegram connected. In Telegram, press Start, then send " +
-            "“Wake up, my friend!” and click Verify Telegram."
+            "In Telegram, send “Wake up, my friend!” to your new bot. " +
+            "Then return here and click Verify Telegram."
         #expect(ConsumerTelegramSetupCardContent.firstTaskInstruction == expectedInstruction)
         #expect(
             ChannelsStore.consumerTelegramFirstTaskAccessApprovedStatus
@@ -233,6 +233,18 @@ struct ChannelsSettingsSmokeTests {
             runtimeOwnershipIssue: nil,
             awaitingManagedApproval: false,
             readyForFirstTaskVerification: true) == nil)
+    }
+
+    @Test func `consumer telegram pending status remains visible after check`() {
+        let pending = ChannelsStore.managedTelegramPendingStatus(
+            suggestedUsername: "jarvis_test_bot")
+
+        #expect(pending.contains("@jarvis_test_bot"))
+        #expect(ConsumerTelegramSetupCardContent.visibleStatusText(
+            statusText: pending,
+            runtimeOwnershipIssue: nil,
+            awaitingManagedApproval: true,
+            readyForFirstTaskVerification: false) == pending)
     }
 
     @Test func `consumer telegram setup card hides stale runtime blocker status after live blocker clears`() {

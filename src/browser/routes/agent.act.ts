@@ -673,6 +673,15 @@ function buildExistingSessionChooseOptionScript(params: {
       '.select2-results__option',
       '[data-option-index]'
     ].join(", ");
+    const genericDropdownSelector = [
+      '[class*="dropdown" i]',
+      '[class*="option" i]',
+      '[class*="menu" i]',
+      '[class*="listbox" i]',
+      '[class*="select" i]',
+      '[data-testid*="dropdown" i]',
+      '[data-testid*="option" i]'
+    ].join(", ");
     const editableSelector = 'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
     const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
     const visible = (el) => {
@@ -709,17 +718,42 @@ function buildExistingSessionChooseOptionScript(params: {
       el.dispatchEvent(new Event("change", { bubbles: true }));
     };
     const clickElement = (el) => {
-      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      const mouseInit = { bubbles: true, cancelable: true, composed: true, button: 0 };
+      el.dispatchEvent(new PointerEvent("pointerdown", mouseInit));
+      el.dispatchEvent(new MouseEvent("mousedown", mouseInit));
+      el.dispatchEvent(new PointerEvent("pointerup", mouseInit));
+      el.dispatchEvent(new MouseEvent("mouseup", mouseInit));
       el.click();
+    };
+    const genericDropdownCandidates = () => {
+      const candidates = Array.from(document.querySelectorAll(genericDropdownSelector))
+        .flatMap((root) => [root, ...root.querySelectorAll("*")]);
+      return candidates.filter((el, index, all) => all.indexOf(el) === index);
     };
     const controlRoot = visible(control)
       ? control
       : control.parentElement?.closest('.ant-select, .ant-select-selector, .ant-select-content, [role="combobox"]') || control;
     const beforeText = normalize(controlRoot.textContent);
+    // Generic class-only options are intentionally eligible only when opening
+    // this exact control reveals them. This keeps the fallback from clicking
+    // unrelated page text that merely happens to match the requested country.
+    const visibleBeforeOpen = new Set(
+      genericDropdownCandidates().filter(visible)
+    );
     controlRoot.scrollIntoView({ block: "center", inline: "center" });
-    clickElement(controlRoot);
+    const controlRect = controlRoot.getBoundingClientRect();
+    const centerTarget = document.elementFromPoint(
+      controlRect.left + controlRect.width / 2,
+      controlRect.top + controlRect.height / 2
+    );
+    // React controls often attach pointer handlers to a visible child rather
+    // than the wrapper selected by DOM inspection. Click only a descendant at
+    // the wrapper's center, never an element outside the requested control.
+    const activationTarget =
+      centerTarget instanceof Element && controlRoot.contains(centerTarget)
+        ? centerTarget
+        : controlRoot;
+    clickElement(activationTarget);
     const editable =
       controlRoot.querySelector(editableSelector) ||
       (control.matches(editableSelector) ? control : null) ||
@@ -730,8 +764,23 @@ function buildExistingSessionChooseOptionScript(params: {
 
     const deadline = Date.now() + timeoutMs;
     const tick = () => {
-      const options = Array.from(document.querySelectorAll(optionSelector))
+      const semanticOptions = Array.from(document.querySelectorAll(optionSelector))
         .filter((el) => visible(el) && !disabled(el));
+      const genericOptions = genericDropdownCandidates()
+        .filter((el) => {
+          if (!visible(el) || disabled(el) || !matches(el.textContent || "")) return false;
+          const dropdownRoot = el.closest(genericDropdownSelector);
+          if (!(dropdownRoot instanceof Element)) return false;
+          if (visibleBeforeOpen.has(el) && visibleBeforeOpen.has(dropdownRoot)) return false;
+          // Prefer the smallest matching text node. Clicking an ancestor whose
+          // text contains several choices can select the wrong row or close the
+          // menu without making a selection.
+          return !Array.from(el.children).some(
+            (child) => visible(child) && matches(child.textContent || "")
+          );
+        });
+      const options = [...semanticOptions, ...genericOptions]
+        .filter((el, index, all) => all.indexOf(el) === index);
       const option = options.find((el) => matches(el.textContent || ""));
       if (option) {
         const matchedText = normalize(option.textContent);
@@ -756,6 +805,8 @@ function buildExistingSessionChooseOptionScript(params: {
     tick();
   })`;
 }
+
+const EXISTING_SESSION_CHOOSE_OPTION_TRANSPORT_RESERVE_MS = 500;
 
 function normalizeChooseOptionText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -1809,6 +1860,7 @@ export function registerBrowserAgentActRoutes(
             const match = parseChooseOptionMatchMode(body.match) ?? "exact";
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              const optionWaitTimeoutMs = Math.max(500, Math.min(60_000, timeoutMs ?? 10_000));
               const result = await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
@@ -1819,10 +1871,14 @@ export function registerBrowserAgentActRoutes(
                   optionText,
                   matchMode: match,
                   queryText: query,
-                  timeoutMs: Math.max(500, Math.min(60000, timeoutMs ?? 10_000)),
+                  timeoutMs: optionWaitTimeoutMs,
                 }),
                 args: ref && !selector ? [ref] : undefined,
-                timeoutMs: timeoutMs ?? undefined,
+                // The page must get enough time to reject with its actionable
+                // "No visible option matched" error before the MCP transport
+                // can replace it with a generic evaluate_script timeout.
+                timeoutMs:
+                  optionWaitTimeoutMs + EXISTING_SESSION_CHOOSE_OPTION_TRANSPORT_RESERVE_MS,
               });
               const resultError = validateExistingSessionChooseOptionResult({
                 result,

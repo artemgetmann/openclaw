@@ -125,17 +125,23 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function inferOpenComputerUseAppIdentity(command: string): {
-  appPath: string;
-  bundleIdentifier: string;
-  development: boolean;
-} {
+type OpenComputerUseAppIdentity =
+  | {
+      recognized: true;
+      appPath: string;
+      bundleIdentifier: string;
+      development: boolean;
+    }
+  | { recognized: false; command: string };
+
+function inferOpenComputerUseAppIdentity(command: string): OpenComputerUseAppIdentity {
   for (const appName of [OPEN_COMPUTER_USE_PACKAGED_APP_NAME, OPEN_COMPUTER_USE_DEV_APP_NAME]) {
     const appMarker = `${appName}/`;
     const appMarkerIndex = command.indexOf(appMarker);
     if (appMarkerIndex >= 0) {
       const development = appName === OPEN_COMPUTER_USE_DEV_APP_NAME;
       return {
+        recognized: true,
         appPath: command.slice(0, appMarkerIndex + appName.length),
         bundleIdentifier: development
           ? OPEN_COMPUTER_USE_DEV_BUNDLE_ID
@@ -144,14 +150,10 @@ function inferOpenComputerUseAppIdentity(command: string): {
       };
     }
   }
-  const home = process.env.HOME;
-  return {
-    appPath: home
-      ? path.join(home, "Applications", OPEN_COMPUTER_USE_DEV_APP_NAME)
-      : `~/Applications/${OPEN_COMPUTER_USE_DEV_APP_NAME}`,
-    bundleIdentifier: OPEN_COMPUTER_USE_DEV_BUNDLE_ID,
-    development: true,
-  };
+
+  // Custom executables and PATH shims do not prove which .app owns the TCC
+  // grant. Inventing the dev identity here could reset an unrelated app.
+  return { recognized: false, command };
 }
 
 export function resolveOpenComputerUseCommand(
@@ -223,6 +225,14 @@ export function formatOpenComputerUseTccRecoveryGuidance(input: {
   }
 
   const app = inferOpenComputerUseAppIdentity(input.command);
+  if (!app.recognized) {
+    return [
+      "OpenComputerUse macOS permission recovery:",
+      `- Helper command: ${app.command}`,
+      "- Bundle identity could not be verified from this custom or PATH command.",
+      "- Do not run tccutil reset until the executable's real containing app path and bundle id are resolved.",
+    ].join("\n");
+  }
   const appPath = app.appPath;
   const quotedAppPath = shellQuote(appPath);
 

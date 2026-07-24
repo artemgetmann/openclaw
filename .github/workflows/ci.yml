@@ -629,10 +629,33 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure Gog signature base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Verify pinned Gog release signatures when packaging changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE_SHA" HEAD -- \
+            scripts/codesign-mac-app.sh \
+            scripts/package-mac-app.sh \
+            scripts/verify-consumer-mac-app.sh \
+            scripts/verify-gog-release-artifacts.sh \
+            scripts/lib/consumer-gog-runtime.sh \
+            scripts/lib/openclaw-runtime-payloads.sh; then
+            echo "Pinned Gog packaging is unchanged; skipping release artifact verification."
+            exit 0
+          fi
+          bash scripts/verify-gog-release-artifacts.sh
 
       # --- Xcode/Swift setup ---
       - name: Select Xcode 26.1
