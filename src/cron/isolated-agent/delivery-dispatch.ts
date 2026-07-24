@@ -201,6 +201,7 @@ function getCompletedDirectCronDelivery(
 
 function buildDirectCronDeliveryIdempotencyKey(params: {
   runSessionId: string;
+  runStartedAt: number;
   delivery: SuccessfulDeliveryTarget;
 }): string {
   const threadId =
@@ -209,7 +210,10 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
       : String(params.delivery.threadId);
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
-  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+  // A durable monitor reuses one run session across wakes. Keep each wake
+  // independently deliverable while still deduping retries of that wake by
+  // including its start timestamp alongside the durable session identity.
+  return `cron-direct-delivery:v2:${params.runSessionId}:${params.runStartedAt}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
 function hasVisibleDirectDeliveryContent(payload: ReplyPayload): boolean {
@@ -337,6 +341,7 @@ export async function dispatchCronDelivery(
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       runSessionId: params.runSessionId,
+      runStartedAt: params.runStartedAt,
       delivery,
     });
     try {

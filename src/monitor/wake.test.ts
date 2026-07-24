@@ -334,6 +334,10 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("notificationDecision.shouldNotify");
     expect(message).toContain("SLA or response deadline has passed");
     expect(message).toContain("Evaluate after this wake");
+    expect(message).toContain("require fresh external evidence confirming that outcome");
+    expect(message).toContain(
+      "Your own outbound proposal, acceptance, or follow-up is not evidence that the external outcome was achieved",
+    );
   });
 
   it("keeps delivery policy from escalating an observe-only bound goal", () => {

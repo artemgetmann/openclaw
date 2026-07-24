@@ -91,6 +91,8 @@ export function buildMonitorBootstrapPrompt(params: {
     ...buildMonitorDraftCompletionLines(params.actionPolicy),
     "Evaluate after each wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
+    "For outcomes that depend on another person or system, require fresh external evidence confirming that outcome before completing.",
+    "Your own outbound proposal, acceptance, or follow-up is not evidence that the external outcome was achieved.",
     ...(params.actionPolicy === "auto_send" &&
     (!params.goal || params.goal.autonomy?.level === "act_within_scope")
       ? telegramUserChat && params.watchDeliveryConfigured

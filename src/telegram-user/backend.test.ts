@@ -70,6 +70,59 @@ describe("telegram-user backend defaults", () => {
     });
   });
 
+  it("honors managed worktree selectors when tooling is loaded from an installed runtime", async () => {
+    const installedStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-telegram-installed-state-"),
+    );
+    const worktreeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-worktree-"));
+    tempToolingRoots.push(installedStateDir, worktreeRoot);
+    const envFilePath = path.join(worktreeRoot, "scripts", "telegram-e2e", ".env.local");
+    const sessionPath = path.join(worktreeRoot, "selected-account.session");
+    await fs.mkdir(path.dirname(envFilePath), { recursive: true });
+    await fs.writeFile(
+      envFilePath,
+      "TELEGRAM_API_ID=123\nTELEGRAM_API_HASH=test-hash\nUSERBOT_SESSION=/stale/from-env\n",
+    );
+    await fs.writeFile(sessionPath, "placeholder session\n");
+    vi.stubEnv("OPENCLAW_STATE_DIR", installedStateDir);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_ENV_FILE", envFilePath);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_SESSION", sessionPath);
+
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+
+    // Managed child-process selectors are an explicit pair and must beat both
+    // installed-runtime defaults and stale values inside the selected env file.
+    await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
+      envFilePath,
+      envFileSource: "explicit",
+      sessionPath,
+    });
+  });
+
+  it("keeps a caller-selected env file's session ahead of the managed lane session", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-selector-state-"));
+    tempToolingRoots.push(stateDir);
+    const ambientEnvFile = path.join(stateDir, "ambient.env");
+    const ambientSession = path.join(stateDir, "ambient.session");
+    const explicitEnvFile = path.join(stateDir, "explicit.env");
+    const envSelectedSession = path.join(stateDir, "env-selected.session");
+    await fs.writeFile(ambientEnvFile, `USERBOT_SESSION=${ambientSession}\n`);
+    await fs.writeFile(explicitEnvFile, `USERBOT_SESSION=${envSelectedSession}\n`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_ENV_FILE", ambientEnvFile);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_SESSION", ambientSession);
+
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+
+    await expect(
+      resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
+    ).resolves.toEqual({
+      envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
+      sessionPath: envSelectedSession,
+    });
+  });
+
   it("honors USERBOT_SESSION from the env file unless --session is explicit", async () => {
     const { resolveTelegramUserSessionPath } = await import("./backend.js");
 

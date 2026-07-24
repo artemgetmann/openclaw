@@ -1369,15 +1369,74 @@ export function buildTelegramLiveRuntimeChildEnv(params) {
   const parentEnv =
     params?.parentEnv && typeof params.parentEnv === "object" ? params.parentEnv : process.env;
   const env = { ...parentEnv };
-  const repoRoot =
-    typeof params?.repoRoot === "string" && params.repoRoot.trim().length > 0
-      ? path.resolve(params.repoRoot.trim())
-      : process.cwd();
+  const hasExplicitRepoRoot =
+    typeof params?.repoRoot === "string" && params.repoRoot.trim().length > 0;
+  const repoRoot = hasExplicitRepoRoot ? path.resolve(params.repoRoot.trim()) : process.cwd();
 
   // Detached tester lanes should boot only from their isolated runtime config
   // plus synced auth store. Raw host OpenAI env defaults reintroduce product
   // credentials/model routing behind our back, so strip them on entry.
   stripRawOpenAiEnvKeys(env);
+  const telegramUserEnvFilePath = path.join(repoRoot, "scripts", "telegram-e2e", ".env.local");
+  const telegramUserSessionFallbackPath = path.join(
+    repoRoot,
+    "scripts",
+    "telegram-e2e",
+    "tmp",
+    "userbot.session",
+  );
+  const telegramUserSessionSelectorPath = `${telegramUserSessionFallbackPath}.path`;
+  let telegramUserSessionPath = telegramUserSessionFallbackPath;
+  if (hasExplicitRepoRoot && fs.existsSync(telegramUserSessionSelectorPath)) {
+    const selectedSession = fs.readFileSync(telegramUserSessionSelectorPath, "utf8").trim();
+    let containsControlCharacter = false;
+    for (let index = 0; index < selectedSession.length; index += 1) {
+      const codeUnit = selectedSession.charCodeAt(index);
+      if (codeUnit <= 31 || codeUnit === 127) {
+        containsControlCharacter = true;
+        break;
+      }
+    }
+    if (!selectedSession || containsControlCharacter || !path.isAbsolute(selectedSession)) {
+      // The bootstrap selector is the durable ownership record for the shared
+      // machine session. Refuse to launch with malformed ownership rather than
+      // falling back to a second worktree-local Telegram database.
+      throw new Error(
+        `Invalid Telegram-user session selector: ${telegramUserSessionSelectorPath} must contain one absolute path.`,
+      );
+    }
+    telegramUserSessionPath = path.resolve(selectedSession);
+  }
+  // Explicit selectors are required when the agent shell resolves an
+  // installed/global OpenClaw binary: that binary's own tooling root must not
+  // redirect the child back to Jarvis app-support state. Keep the expected
+  // paths explicit even when bootstrap assets are absent so preflight fails
+  // against the lane's configured owner instead of silently probing another
+  // account.
+  if (hasExplicitRepoRoot) {
+    // The host `openclaw` wrapper resolves its source checkout from this
+    // selector when an agent shell's PWD is outside the worktree. Keep those
+    // subprocesses on the isolated lane without changing PATH or the sacred
+    // shared clone.
+    env.OPENCLAW_FORK_ROOT = repoRoot;
+    env.OPENCLAW_TELEGRAM_USER_ENV_FILE = telegramUserEnvFilePath;
+    // Bootstrap records the canonical machine-owned session in the worktree
+    // selector. Export its target so the installed backend receives the same
+    // ownership identity instead of opening a second local session database.
+    // Before bootstrap, the absent worktree path remains a fail-closed pin.
+    env.OPENCLAW_TELEGRAM_USER_SESSION = telegramUserSessionPath;
+    if (process.platform !== "win32") {
+      // Keep the user's command-shell semantics while isolating zsh startup
+      // files. Zsh resolves .zshenv from ZDOTDIR before executing the command;
+      // a lane-owned empty directory prevents host dotfiles from rewriting the
+      // fork and Telegram selectors above.
+      const runtimeStateDir =
+        typeof env.OPENCLAW_STATE_DIR === "string" && env.OPENCLAW_STATE_DIR.trim()
+          ? path.resolve(env.OPENCLAW_STATE_DIR.trim())
+          : path.join(repoRoot, ".openclaw");
+      env.ZDOTDIR = path.join(runtimeStateDir, "shell-env");
+    }
+  }
   // ACPX_CMD is only valid for ACP validation lanes; default tester lanes must
   // not inherit a host shell override that points at the wrong runtime.
   delete env.ACPX_CMD;

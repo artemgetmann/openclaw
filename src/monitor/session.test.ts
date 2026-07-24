@@ -32,6 +32,24 @@ describe("monitor bootstrap contract", () => {
     expect(prompt).not.toContain("status-only completion is incomplete");
   });
 
+  it("requires fresh external confirmation before completing an external outcome", () => {
+    const prompt = buildMonitorBootstrapPrompt({
+      instructions: "Keep coordinating until the appointment is confirmed.",
+      sourceType: "custom-service",
+      sourceTarget: { thread: "appointment-1" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      stopCondition: "The counterparty confirms the appointment.",
+      actionPolicy: "auto_send",
+      watchDeliveryConfigured: true,
+      originSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("require fresh external evidence confirming that outcome");
+    expect(prompt).toContain(
+      "Your own outbound proposal, acceptance, or follow-up is not evidence that the external outcome was achieved",
+    );
+  });
+
   it("preserves goal autonomy when watched-surface delivery is unavailable", () => {
     const prompt = buildMonitorBootstrapPrompt({
       instructions: "Keep the ticket moving.",
