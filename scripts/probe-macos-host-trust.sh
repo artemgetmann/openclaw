@@ -10,7 +10,10 @@ source "$ROOT_DIR/scripts/lib/macos-host-trust.sh"
 
 if openclaw_macos_host_trust_require; then
   printf 'host_trust_probe=confirmed\n'
-  printf 'control_path=%s\n' "${OPENCLAW_MACOS_HOST_TRUST_CONTROL_PATH:-/bin/ls}"
+  # This executable is a production operator probe. The library deliberately
+  # ignores fixture overrides unless explicit test mode is enabled, so report
+  # the same pinned control instead of echoing an inherited fixture variable.
+  printf 'control_path=/bin/ls\n'
   printf 'next=rerun the release verification from this same host Terminal\n'
   exit 0
 fi

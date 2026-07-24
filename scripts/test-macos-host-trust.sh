@@ -85,8 +85,10 @@ export TEST_ARTIFACT_RESULT
   || fail "valid artifact failed after trusted control"
 pass "valid artifact passes after trusted host control"
 
-# A production probe must ignore inherited fixture paths. This subshell unsets
-# test mode and proves an invalid replacement cannot establish host trust.
+# A production probe must ignore inherited fixture paths. The real Apple
+# control may pass on a GitHub-hosted runner or return indeterminate inside a
+# restricted process, so either verdict is valid here. The invariant is that
+# the injected fixture never becomes the production control.
 set +e
 production_override_output="$(
   OPENCLAW_MACOS_HOST_TRUST_TEST_MODE=0 \
@@ -96,10 +98,13 @@ production_override_output="$(
 )"
 production_override_status=$?
 set -e
-[[ "$production_override_status" -eq 2 ]] \
-  || fail "production probe accepted injected control paths"
+[[ "$production_override_status" -eq 0 || "$production_override_status" -eq 2 ]] \
+  || fail "production probe returned unexpected status $production_override_status"
 [[ "$production_override_output" == *"Control probe: /usr/bin/codesign --verify --strict /bin/ls"* ]] \
-  || fail "production probe did not stay pinned to the Apple-owned control"
+  || [[ "$production_override_output" == *$'control_path=/bin/ls'* ]] \
+  || fail "production probe did not report the pinned Apple-owned control"
+[[ "$production_override_output" != *"$control_path"* ]] \
+  || fail "production probe exposed the injected fixture as its control"
 pass "production ignores inherited trust-control overrides"
 
 # Exercise the release preflight entry point, not only the library. It must stop
