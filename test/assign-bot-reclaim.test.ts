@@ -147,6 +147,75 @@ describe("assign-bot stale claim reclaim", () => {
     expect(recoveredEnv).toContain("TELEGRAM_BOT_TOKEN=111:first");
   });
 
+  it("resumes the interrupted token when an earlier pool token becomes eligible", () => {
+    const { root, mainDir } = initRepo("openclaw-assign-bot-eligibility-change-");
+    installAssignBotFixture(mainDir);
+    const home = path.join(root, "home");
+    const leaseRoot = path.join(home, ".openclaw", "telegram-token-leases");
+    const reservationRoot = path.join(home, ".openclaw", "telegram-tester-scenario-reservations");
+    mkdirSync(leaseRoot, { recursive: true });
+    writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n");
+    writeFileSync(path.join(mainDir, ".env.bots"), "BOT_TOKEN=111:first\nBOT_TOKEN=222:second\n");
+
+    // Make token 1 ineligible for the first attempt so the interrupted
+    // transaction durably reserves token 2 for this scenario.
+    const firstTokenHash = crypto.createHash("sha256").update("111:first").digest("hex");
+    const firstLeasePath = path.join(leaseRoot, `111-${firstTokenHash}.json`);
+    writeFileSync(
+      firstLeasePath,
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        starttime: null,
+        createdAt: new Date().toISOString(),
+        tokenHash: firstTokenHash,
+        tokenFingerprint: firstTokenHash.slice(0, 12),
+        botId: "111",
+        accountId: "default",
+        configPath: null,
+        worktree: path.join(root, "foreign-runtime"),
+      }),
+    );
+
+    expect(() =>
+      run(mainDir, "bash", ["scripts/assign-bot.sh"], {
+        HOME: home,
+        OPENCLAW_TELEGRAM_TESTER_ASSIGN_ABORT_AFTER_RESERVATION: "1",
+      }),
+    ).toThrow();
+
+    const interruptedEnv = readFileSync(path.join(mainDir, ".env.local"), "utf8");
+    const scenarioId = interruptedEnv.match(
+      /^OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=(tg-scenario-.+)$/m,
+    )?.[1];
+    expect(scenarioId).toBeTruthy();
+    const interruptedReservations = readdirSync(reservationRoot).filter((name) =>
+      name.endsWith(".json"),
+    );
+    expect(interruptedReservations).toHaveLength(1);
+    const interruptedReservation = readFileSync(
+      path.join(reservationRoot, interruptedReservations[0]),
+      "utf8",
+    );
+    const interruptedGeneration = JSON.parse(interruptedReservation).generation;
+    expect(interruptedReservation).toContain(`"scenarioId": "${scenarioId}"`);
+    expect(interruptedReservation).toContain('"botId": "222"');
+
+    // Token 1 becomes eligible before retry. Recovery must resume token 2
+    // instead of creating a second reservation for the same scenario/worktree.
+    rmSync(firstLeasePath);
+    const recoveredOutput = run(mainDir, "bash", ["scripts/assign-bot.sh"], { HOME: home });
+    expect(recoveredOutput).toContain("Assigned Telegram bot token #2");
+    expect(readFileSync(path.join(mainDir, ".env.local"), "utf8")).toContain(
+      "TELEGRAM_BOT_TOKEN=222:second",
+    );
+    expect(readdirSync(reservationRoot).filter((name) => name.endsWith(".json"))).toHaveLength(1);
+    expect(
+      JSON.parse(readFileSync(path.join(reservationRoot, interruptedReservations[0]), "utf8"))
+        .generation,
+    ).toBe(interruptedGeneration);
+  });
+
   it("persists an explicit scenario override before interrupted reservation publication", () => {
     const { root, mainDir } = initRepo("openclaw-assign-bot-override-recovery-");
     installAssignBotFixture(mainDir);

@@ -189,9 +189,10 @@ const {
   collectActiveTelegramTokenLeaseEntries,
   summarizeTelegramTesterTokenPool,
 } = await import(pathToFileURL(helperPath).href);
-const { acquireTelegramTesterScenarioReservation } = await import(
-  pathToFileURL(reservationModulePath).href
-);
+const {
+  acquireTelegramTesterScenarioReservation,
+  findTelegramTesterScenarioReservation,
+} = await import(pathToFileURL(reservationModulePath).href);
 
 const envBotsPath = path.join(currentWorktree, ".env.bots");
 const envLocalPath = path.join(currentWorktree, ".env.local");
@@ -343,10 +344,42 @@ const summary = summarizeTelegramTesterTokenPool({
 });
 const activeClaimTokens = new Set(summary.claimedTokens);
 const reservedTokenSet = new Set(summary.reservedTokens);
-const candidates = [...new Set([currentToken, ...poolTokens].filter(Boolean))];
+const priorScenarioReservation = await findTelegramTesterScenarioReservation({
+  scenarioId,
+  worktreePath: currentWorktree,
+  reservationRoot: process.env.RESERVATION_ROOT,
+});
+let priorScenarioToken = "";
+let priorScenarioReason = "";
+if (!priorScenarioReservation.ok) {
+  priorScenarioReason = priorScenarioReservation.reason;
+} else if (priorScenarioReservation.reservation) {
+  priorScenarioToken =
+    poolTokens.find(
+      (token) =>
+        crypto.createHash("sha256").update(token).digest("hex") ===
+        priorScenarioReservation.reservation.tokenHash,
+    ) ?? "";
+  if (!priorScenarioToken) {
+    priorScenarioReason = "scenario_reservation_token_not_in_pool";
+  } else if (currentToken && currentToken !== priorScenarioToken) {
+    // A local token claim and a different durable scenario reservation are two
+    // competing owners. Rotating either side would destroy evidence needed for
+    // explicit recovery, so stop without touching global or local state.
+    priorScenarioReason = "scenario_reservation_token_mismatch";
+  }
+}
+// An interrupted assignment has already chosen the scenario's token globally.
+// Pin recovery to that token even if an earlier pool entry becomes eligible;
+// otherwise retry can create a second unreachable reservation for one owner.
+const candidates = priorScenarioReason
+  ? []
+  : priorScenarioToken
+    ? [priorScenarioToken]
+    : [...new Set([currentToken, ...poolTokens].filter(Boolean))];
 const parsedTtlMs = Number.parseInt(String(process.env.RESERVATION_TTL_MS ?? ""), 10);
 let selection = null;
-let lastReservationReason = "";
+let lastReservationReason = priorScenarioReason;
 
 // Token selection and durable reservation happen under the reservation
 // module's per-token lock. Keeping those operations together closes the race
@@ -378,6 +411,9 @@ for (const candidate of candidates) {
     (activeClaimTokens.has(candidate) && !isCurrentReservationCandidate) ||
     reservedTokenSet.has(candidate)
   ) {
+    if (priorScenarioToken) {
+      lastReservationReason = "scenario_reservation_token_unavailable";
+    }
     continue;
   }
   const reservation = await acquireTelegramTesterScenarioReservation({

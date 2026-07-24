@@ -126,6 +126,10 @@ erasure.
   handoff-main share one worktree-profile lifecycle lock across normal and ACP
   modes and custom runtime-state roots, so the reset cannot race a restart.
   Release preserves unrelated local env settings.
+- If assignment stops after publishing a reservation but before publishing the
+  local token credentials, rerunning `ensure` resumes that exact token even if
+  pool eligibility changed. Multiple reservations for the same
+  scenario/worktree fail closed instead of choosing one by file order.
 - Reservations renew on `ensure` and expire after seven days by default.
   An unassigned scenario/worktree may reclaim an expired reservation only when
   the process-level polling lease is known absent; the exact prior owner uses

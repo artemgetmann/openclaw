@@ -59,6 +59,53 @@ export function resolveTelegramTesterScenarioReservationPath(params) {
   );
 }
 
+export async function findTelegramTesterScenarioReservation(params) {
+  const scenarioId = normalizeOwnerString(params?.scenarioId, "scenarioId");
+  const worktreePath = await canonicalizeWorktree(params?.worktreePath);
+  const reservationRoot = resolveReservationRoot(params?.reservationRoot);
+  let names;
+  try {
+    names = await fs.readdir(reservationRoot);
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      return { ok: true, reservation: null };
+    }
+    throw err;
+  }
+
+  const matches = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) {
+      continue;
+    }
+    const reservationPath = path.join(reservationRoot, name);
+    const current = await readReservation(reservationPath);
+    if (
+      current.payload &&
+      current.payload.scenarioId === scenarioId &&
+      path.resolve(current.payload.worktreePath) === path.resolve(worktreePath)
+    ) {
+      matches.push({
+        tokenHash: current.payload.tokenHash,
+        generation: current.payload.generation,
+        reservationPath,
+      });
+    }
+  }
+
+  if (matches.length > 1) {
+    // Multiple token files for one scenario/worktree are ambiguous ownership.
+    // Never choose one by directory order; an operator must resolve the stale
+    // duplicate before assignment can safely continue.
+    return {
+      ok: false,
+      reason: "duplicate_scenario_reservations",
+      reservationPaths: matches.map((match) => match.reservationPath),
+    };
+  }
+  return { ok: true, reservation: matches[0] ?? null };
+}
+
 function parseReservation(raw) {
   try {
     const parsed = JSON.parse(raw);

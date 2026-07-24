@@ -576,6 +576,9 @@ boundary; only an unassigned scenario/worktree can reclaim expiry after proving
 the polling lease absent. Ensure, release, and handoff-main serialize on one
 worktree-profile lock even when ACP or a custom root uses a different runtime
 state directory.
+An interrupted assignment resumes the scenario/worktree's durable token
+reservation even if pool eligibility changes before retry. Duplicate durable
+owners for that scenario/worktree fail closed.
 Crash-persistent locks are never auto-deleted: inspect their `owner.json` and
 recover manually only after proving no owner or polling lease is active.
 Malformed or ambiguous state fails closed.
