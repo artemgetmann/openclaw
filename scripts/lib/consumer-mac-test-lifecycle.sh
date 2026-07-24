@@ -257,9 +257,15 @@ consumer_mac_test_quarantine_gateway() {
   [[ -f "$plist_path" ]] || return 0
 
   quarantine_dir="${OPENCLAW_CONSUMER_TEST_QUARANTINE_DIR:-${HOME}/Library/LaunchAgents/openclaw-test-disabled}"
-  /bin/mkdir -p "$quarantine_dir"
+  if ! /bin/mkdir -p "$quarantine_dir"; then
+    echo "ERROR: could not create tester gateway quarantine: $quarantine_dir" >&2
+    return 1
+  fi
   destination="${quarantine_dir}/$(date +%Y%m%d-%H%M%S)-$$-${label}.plist"
-  /bin/mv "$plist_path" "$destination"
+  if ! /bin/mv "$plist_path" "$destination"; then
+    echo "ERROR: could not quarantine tester gateway plist: $plist_path" >&2
+    return 1
+  fi
   echo "Quarantined previous tester gateway: $destination"
 }
 
@@ -306,7 +312,9 @@ consumer_mac_test_prepare_launch() {
   if [[ "$previous_differs" -eq 1 ]]; then
     consumer_mac_test_terminate_app_path "$CONSUMER_MAC_TEST_PREVIOUS_APP"
     if [[ -n "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" && "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE" != "$current_instance" ]]; then
-      consumer_mac_test_quarantine_gateway "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE"
+      if ! consumer_mac_test_quarantine_gateway "$CONSUMER_MAC_TEST_PREVIOUS_INSTANCE"; then
+        return 1
+      fi
       retired_instances+="${CONSUMER_MAC_TEST_PREVIOUS_INSTANCE}"$'\n'
     fi
   fi
@@ -322,7 +330,9 @@ consumer_mac_test_prepare_launch() {
     # Replacing the same instance should preserve its already-running gateway.
     # A different named instance relinquishes both app and launchd ownership.
     if [[ -n "$instance_id" && "$instance_id" != "$current_instance" && "$retired_instances" != *$'\n'"$instance_id"$'\n'* ]]; then
-      consumer_mac_test_quarantine_gateway "$instance_id"
+      if ! consumer_mac_test_quarantine_gateway "$instance_id"; then
+        return 1
+      fi
       retired_instances+="${instance_id}"$'\n'
     fi
   done < <(consumer_mac_test_list_process_lines)
@@ -342,15 +352,28 @@ consumer_mac_test_record_launch() {
   registry_path="$(consumer_mac_test_registry_path)"
   registry_dir="$(dirname "$registry_path")"
   pending_path="${registry_path}.pending.$$"
-  /bin/mkdir -p "$registry_dir"
+  if ! /bin/mkdir -p "$registry_dir"; then
+    echo "ERROR: could not create Jarvis tester registry directory: $registry_dir" >&2
+    return 1
+  fi
 
   previous_umask="$(umask)"
   umask 077
-  {
+  if ! {
     printf 'instance_id\t%s\n' "$instance_id"
     printf 'app_path\t%s\n' "$app_path"
-  } >"$pending_path"
-  /bin/mv "$pending_path" "$registry_path"
+  } >"$pending_path"; then
+    umask "$previous_umask"
+    /bin/rm -f "$pending_path"
+    echo "ERROR: could not write Jarvis tester registry: $pending_path" >&2
+    return 1
+  fi
+  if ! /bin/mv "$pending_path" "$registry_path"; then
+    umask "$previous_umask"
+    /bin/rm -f "$pending_path"
+    echo "ERROR: could not publish Jarvis tester registry: $registry_path" >&2
+    return 1
+  fi
   umask "$previous_umask"
 }
 

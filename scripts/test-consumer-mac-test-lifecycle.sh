@@ -146,6 +146,36 @@ fi
 [[ ! -e "$(consumer_mac_test_lock_path)" ]] || fail "failed launch preparation must release the tester-slot lock"
 pass "releases the slot lock when preparation fails"
 
+consumer_mac_test_quarantine_gateway() {
+  return 1
+}
+consumer_mac_test_record_launch "old-proof" "$OLD_APP"
+if consumer_mac_test_begin_launch "new-proof" "$NEW_APP" 1 >/dev/null 2>&1; then
+  fail "begin launch should fail when the previous gateway cannot be quarantined"
+fi
+[[ ! -e "$(consumer_mac_test_lock_path)" ]] || fail "gateway quarantine failure must release the tester-slot lock"
+consumer_mac_test_quarantine_gateway() {
+  TEST_QUARANTINED_INSTANCES+=("$1")
+}
+pass "fails closed when the previous gateway cannot be quarantined"
+
+ORIGINAL_REGISTRY_PATH="$OPENCLAW_CONSUMER_TEST_REGISTRY_PATH"
+export OPENCLAW_CONSUMER_TEST_REGISTRY_PATH="/dev/null/current.tsv"
+if consumer_mac_test_record_launch "new-proof" "$NEW_APP" >/dev/null 2>&1; then
+  fail "registry writer should propagate an unwritable registry path"
+fi
+export OPENCLAW_CONSUMER_TEST_REGISTRY_PATH="$ORIGINAL_REGISTRY_PATH"
+
+TEST_PROCESS_LINES=()
+consumer_mac_test_record_launch() {
+  return 1
+}
+if consumer_mac_test_begin_launch "new-proof" "$NEW_APP" 1 >/dev/null 2>&1; then
+  fail "begin launch should fail when the durable registry cannot be written"
+fi
+[[ ! -e "$(consumer_mac_test_lock_path)" ]] || fail "registry write failure must release the tester-slot lock"
+pass "fails closed when the tester registry cannot be written"
+
 TEST_PROCESS_LINES=("606 $NEW_APP/Contents/MacOS/OpenClaw")
 consumer_mac_test_wait_for_app_path "$NEW_APP"
 pass "holds the slot until the launched app is observable"
