@@ -3,6 +3,9 @@ import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js
 import {
   DEFAULT_HEARTBEAT_ACTIVE_HOURS,
   DEFAULT_HEARTBEAT_EVERY,
+  DEFAULT_HEARTBEAT_ISOLATED_SESSION,
+  DEFAULT_HEARTBEAT_LIGHT_CONTEXT,
+  DEFAULT_HEARTBEAT_WEEKEND_MODE,
 } from "../auto-reply/heartbeat.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
@@ -438,11 +441,20 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
 
   // Heartbeat defaults are product behavior, not Anthropic-specific tuning.
   // Apply them whenever agent defaults exist so fresh configs do not ping at night.
-  if (defaults.heartbeat?.every === undefined || defaults.heartbeat?.activeHours === undefined) {
+  if (
+    defaults.heartbeat?.every === undefined ||
+    defaults.heartbeat?.activeHours === undefined ||
+    defaults.heartbeat?.weekendMode === undefined ||
+    defaults.heartbeat?.lightContext === undefined ||
+    defaults.heartbeat?.isolatedSession === undefined
+  ) {
     nextDefaults.heartbeat = {
       ...heartbeat,
       every: defaults.heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY,
       activeHours: defaults.heartbeat?.activeHours ?? { ...DEFAULT_HEARTBEAT_ACTIVE_HOURS },
+      weekendMode: defaults.heartbeat?.weekendMode ?? DEFAULT_HEARTBEAT_WEEKEND_MODE,
+      lightContext: defaults.heartbeat?.lightContext ?? DEFAULT_HEARTBEAT_LIGHT_CONTEXT,
+      isolatedSession: defaults.heartbeat?.isolatedSession ?? DEFAULT_HEARTBEAT_ISOLATED_SESSION,
     };
     mutated = true;
   }

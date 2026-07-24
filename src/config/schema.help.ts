@@ -234,6 +234,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.defaults.heartbeat.weekendMode":
+    'Controls ambient Saturday/Sunday behavior: "urgent-only" (default), "normal", or "off". Explicit event-driven wakes can still run immediately.',
+  "agents.list[].heartbeat.weekendMode":
+    'Per-agent ambient Saturday/Sunday behavior: "urgent-only", "normal", or "off".',
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":

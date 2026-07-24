@@ -246,7 +246,7 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
-    /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
+    /** Heartbeat interval (duration string, default unit: minutes; default: 1h). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
@@ -257,6 +257,14 @@ export type AgentDefaultsConfig = {
       /** Timezone for the window ("user", "local", or IANA TZ id). Default: "user". */
       timezone?: string;
     };
+    /**
+     * Weekend behavior for ambient sweeps.
+     * - normal: use ordinary attention rules
+     * - urgent-only: check, but surface only urgent/time-sensitive attention
+     * - off: skip ambient weekend sweeps
+     * Default: urgent-only.
+     */
+    weekendMode?: "normal" | "urgent-only" | "off";
     /** Heartbeat model override (provider/model). */
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */

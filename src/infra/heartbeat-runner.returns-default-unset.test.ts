@@ -146,7 +146,7 @@ afterAll(async () => {
 
 describe("resolveHeartbeatIntervalMs", () => {
   it("returns default when unset", () => {
-    expect(resolveHeartbeatIntervalMs({})).toBe(24 * 60 * 60_000);
+    expect(resolveHeartbeatIntervalMs({})).toBe(60 * 60_000);
   });
 
   it("returns null when invalid or zero", () => {
@@ -544,6 +544,57 @@ describe("runHeartbeatOnce", () => {
     if (res.status === "skipped") {
       expect(res.reason).toBe("quiet-hours");
     }
+  });
+
+  it("skips ambient weekend sweeps when weekend mode is off", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "UTC",
+          heartbeat: {
+            every: "1h",
+            target: "none",
+            activeHours: { start: "08:00", end: "20:00", timezone: "user" },
+            weekendMode: "off",
+          },
+        },
+      },
+    };
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "interval",
+      deps: { nowMs: () => Date.UTC(2025, 0, 4, 12, 0, 0) },
+    });
+
+    expect(res).toEqual({ status: "skipped", reason: "weekend" });
+  });
+
+  it("lets explicit event wakes bypass quiet hours and weekend-off scheduling", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "UTC",
+          heartbeat: {
+            every: "1h",
+            target: "none",
+            activeHours: { start: "08:00", end: "09:00", timezone: "user" },
+            weekendMode: "off",
+          },
+        },
+      },
+    };
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "cron:urgent-check",
+      deps: { nowMs: () => Date.UTC(2025, 0, 4, 23, 0, 0) },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe("ran");
   });
 
   it("uses the last non-empty payload for delivery", async () => {
