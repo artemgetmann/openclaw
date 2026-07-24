@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONSUMER_CHATGPT_MODEL_REGISTRY,
+  formatConsumerChatGptModelId,
+} from "../../../src/consumer/model-registry.js";
+import {
   buildConfirmedModelSelectionCallbackData,
   buildModelSelectionCallbackData,
   buildModelFamilyKeyboard,
@@ -510,6 +514,20 @@ describe("buildModelFamilyKeyboard", () => {
 
     const more = buildModelFamilyKeyboard({ family: "chatgpt", byProvider, more: true });
     expect(more.map((row) => row[0]?.text)).toEqual(["<< Back"]);
+  });
+
+  it("mirrors shared consumer ChatGPT registry labels and callbacks", () => {
+    for (const choice of CONSUMER_CHATGPT_MODEL_REGISTRY) {
+      for (const ref of choice.refs) {
+        const byProvider = new Map([[ref.provider, new Set([ref.model])]]);
+        const rows = buildModelFamilyKeyboard({ family: "chatgpt", byProvider });
+
+        expect(rows[0]?.[0], formatConsumerChatGptModelId(ref)).toEqual({
+          text: choice.label,
+          callback_data: `mdl_sel_${formatConsumerChatGptModelId(ref)}`,
+        });
+      }
+    }
   });
 });
 
