@@ -990,6 +990,36 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expectFinalPreviewEditedInPlace(9303, mergedText);
   });
 
+  it("does not restore preview text removed by message_sending", async () => {
+    const previewText = "Secret prefix. Shared final sentence.";
+    const finalText = "Shared final sentence. Conclusion.";
+    const rewrittenText = "Shared final sentence. Approved conclusion.";
+    const answerStream = createDraftStream(9304);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    prepareTelegramReplyForDelivery.mockImplementationOnce(async ({ reply }) => ({
+      reply: { ...reply, text: rewrittenText },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: previewText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9304" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expectFinalPreviewEditedInPlace(9304, rewrittenText);
+    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+      123,
+      9304,
+      expect.stringContaining("Secret prefix."),
+      expect.anything(),
+    );
+  });
+
   it.each(["off", "code", "bullets"] as const)(
     "keeps table finals on legacy delivery when Telegram tables are %s",
     async (tables) => {

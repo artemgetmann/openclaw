@@ -103,6 +103,8 @@ type DeliverLaneTextParams = {
   allowPreviewUpdateForNonFinal?: boolean;
   /** Final text was already prepared by message_sending before preview routing. */
   messageSendingHookApplied?: boolean;
+  /** Final text already contains every retained preview fragment the user may see. */
+  finalTextAlreadyMerged?: boolean;
 };
 
 type TryUpdatePreviewParams = {
@@ -558,13 +560,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewButtons,
     allowPreviewUpdateForNonFinal = false,
     messageSendingHookApplied,
+    finalTextAlreadyMerged = false,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const deliveryText =
       laneName === "answer"
         ? infoKind === "final"
-          ? mergePreviewProgressWithFinal(lane.lastPartialText, text)
+          ? finalTextAlreadyMerged
+            ? normalizeAdjacentProgressBoundaries(text)
+            : mergePreviewProgressWithFinal(lane.lastPartialText, text)
           : normalizeAdjacentProgressBoundaries(text)
         : text;
     const canEditViaPreview =

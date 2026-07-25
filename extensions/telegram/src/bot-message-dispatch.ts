@@ -2233,6 +2233,10 @@ export const dispatchTelegramMessage = async ({
     previewButtons?: TelegramInlineButtons;
     hasMedia?: boolean;
   }) => {
+    // Final partial callbacks are queued independently from durable payloads.
+    // Drain them before any state-dependent preparation reads or mutates the
+    // answer lane, otherwise finalization can allocate the wrong preview.
+    await waitForDraftLaneIdle();
     const pendingPlanPartial = pendingAnswerPartialDuringPlan;
     pendingAnswerPartialDuringPlan = undefined;
     if (pendingPlanPartial) {
@@ -2293,10 +2297,8 @@ export const dispatchTelegramMessage = async ({
       logVerbose("telegram: skipped final echo that matched transient progress");
       return "skipped";
     }
-    // Final partials are queued independently from durable payload callbacks.
-    // Freeze their ordering before any hook can yield, then give the hook the
-    // exact merged text that preview editing or fallback delivery will expose.
-    await waitForDraftLaneIdle();
+    // Give the hook the exact merged text that preview editing or fallback
+    // delivery will expose.
     const mergedPreparedText = mergePreviewProgressWithFinal(
       answerLane.lastPartialText,
       preparedText,
@@ -2390,6 +2392,7 @@ export const dispatchTelegramMessage = async ({
           infoKind: "final",
           previewButtons,
           messageSendingHookApplied: true,
+          finalTextAlreadyMerged: true,
         });
       }
     }
