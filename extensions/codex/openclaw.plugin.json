@@ -1,0 +1,37 @@
+{
+  "id": "codex",
+  "name": "Codex",
+  "description": "Native Codex App Server thread-control compatibility pilot.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "default": "codex"
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": ["app-server", "--listen", "stdio://"]
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000,
+        "default": 30000
+      },
+      "turnTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 3600000,
+        "default": 1200000
+      },
+      "defaultWorkspaceDir": {
+        "type": "string"
+      }
+    }
+  }
+}

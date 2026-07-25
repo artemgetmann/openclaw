@@ -39,6 +39,7 @@ function createCommandContext(args: string): PluginCommandContext {
   return {
     channel: "test",
     isAuthorizedSender: true,
+    senderIsOwner: true,
     commandBody: `/phone ${args}`,
     args,
     config: {},
