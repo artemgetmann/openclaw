@@ -201,7 +201,10 @@ export function normalizeAdjacentProgressBoundaries(text: string): string {
   return deduped.join("\n\n");
 }
 
-function mergePreviewProgressWithFinal(previewText: string | undefined, finalText: string): string {
+export function mergePreviewProgressWithFinal(
+  previewText: string | undefined,
+  finalText: string,
+): string {
   const normalizedFinal = normalizeAdjacentProgressBoundaries(finalText);
   const preview = previewText?.trim();
   if (!preview || !normalizedFinal.trim()) {

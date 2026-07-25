@@ -965,6 +965,31 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("runs message_sending against the exact preview-merged final text", async () => {
+    const previewText = "Context before final. Shared final sentence.";
+    const finalText = "Shared final sentence. Conclusion.";
+    const mergedText = "Context before final.\n\nShared final sentence. Conclusion.";
+    const answerStream = createDraftStream(9303);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: previewText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9303" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reply: expect.objectContaining({ text: mergedText }),
+      }),
+    );
+    expectFinalPreviewEditedInPlace(9303, mergedText);
+  });
+
   it.each(["off", "code", "bullets"] as const)(
     "keeps table finals on legacy delivery when Telegram tables are %s",
     async (tables) => {

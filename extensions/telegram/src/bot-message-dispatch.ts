@@ -59,6 +59,7 @@ import {
   type DraftLaneState,
   type LaneName,
   type LanePreviewLifecycle,
+  mergePreviewProgressWithFinal,
   normalizeAdjacentProgressBoundaries,
 } from "./lane-delivery.js";
 import type { TelegramReplyLatencyTrace } from "./latency-trace.js";
@@ -2292,8 +2293,16 @@ export const dispatchTelegramMessage = async ({
       logVerbose("telegram: skipped final echo that matched transient progress");
       return "skipped";
     }
+    // Final partials are queued independently from durable payload callbacks.
+    // Freeze their ordering before any hook can yield, then give the hook the
+    // exact merged text that preview editing or fallback delivery will expose.
+    await waitForDraftLaneIdle();
+    const mergedPreparedText = mergePreviewProgressWithFinal(
+      answerLane.lastPartialText,
+      preparedText,
+    );
     const preparedFinal = await prepareTelegramReplyForDelivery({
-      reply: applyTextToPayload(payload, preparedText),
+      reply: applyTextToPayload(payload, mergedPreparedText),
       chatId: String(chatId),
       accountId: route.accountId,
       thread: threadSpec,
@@ -2306,10 +2315,8 @@ export const dispatchTelegramMessage = async ({
     if (!finalText?.trim()) {
       return "skipped";
     }
-    // Hook preparation can yield while queued partial/lifecycle callbacks
-    // finish. Drain them and enter the final phase only afterward so they
-    // cannot rotate a lane whose finalization state has already changed.
-    await waitForDraftLaneIdle();
+    // Enter the final phase only after the hook has accepted the exact visible
+    // payload. No post-hook text merge is allowed beyond idempotent normalization.
     await beginFinalAnswerPhase("before-final-answer");
     setDraftDurableSendClassification("answer", {
       reason: classifyPayloadDurableSendReason(finalPayload, "final"),
