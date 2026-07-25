@@ -191,6 +191,67 @@ describe("plugin conversation binding approvals", () => {
     expect(secondRequest.status).toBe("pending");
   });
 
+  it("persists native binding data and fail-closed routing across approval", async () => {
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex",
+      pluginRoot: "/plugins/codex",
+      requestedBySenderId: "owner-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "123:topic:77",
+        parentConversationId: "123",
+        threadId: 77,
+      },
+      binding: {
+        summary: "Bind this topic to one native Codex thread.",
+        detachHint: "/codex detach",
+        data: {
+          kind: "codex-app-server-pilot",
+          threadId: "019f-thread",
+        },
+        failClosed: true,
+      },
+    });
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    const resolved = await resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "allow-once",
+      senderId: "owner-1",
+    });
+    expect(resolved.status).toBe("approved");
+    if (resolved.status !== "approved") {
+      throw new Error("expected approved bind request");
+    }
+    expect(resolved.binding).toMatchObject({
+      failClosed: true,
+      data: {
+        kind: "codex-app-server-pilot",
+        threadId: "019f-thread",
+      },
+    });
+
+    const recovered = await getCurrentPluginConversationBinding({
+      pluginRoot: "/plugins/codex",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "123:topic:77",
+        parentConversationId: "123",
+        threadId: 77,
+      },
+    });
+    expect(recovered).toMatchObject({
+      failClosed: true,
+      data: { threadId: "019f-thread" },
+    });
+  });
+
   it("persists always-allow by plugin root plus channel/account only", async () => {
     const firstRequest = await requestPluginConversationBinding({
       pluginId: "codex",

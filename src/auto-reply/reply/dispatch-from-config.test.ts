@@ -4697,6 +4697,71 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
   });
 
+  it.each(["missing_plugin", "no_handler"] as const)(
+    "fails closed instead of invoking Pi when a native-bound plugin reports %s",
+    async (targetedStatus) => {
+      setNoAbort();
+      hookMocks.runner.hasHooks.mockImplementation(
+        ((hookName?: string) =>
+          hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+      );
+      hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+        status: targetedStatus,
+      });
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        bindingId: "binding-native-fail-closed",
+        targetSessionKey: "plugin-binding:codex:native123",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "123:topic:77",
+        },
+        status: "active",
+        boundAt: 1710000000000,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "codex",
+          pluginName: "Codex",
+          pluginRoot: "/extensions/codex",
+          failClosed: true,
+          data: {
+            kind: "codex-app-server-pilot",
+            threadId: "019f-thread",
+          },
+        },
+      } satisfies SessionBindingRecord);
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "Pi fallback" }) satisfies ReplyPayload);
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          To: "telegram:123",
+          AccountId: "default",
+          MessageThreadId: 77,
+          MessageSid: "msg-native-fail-closed",
+          SessionKey: "agent:main:telegram:123:topic:77",
+          CommandBody: "continue",
+          RawBody: "continue",
+          Body: "continue",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
+
+      const notice = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | ReplyPayload
+        | undefined;
+      expect(notice?.text).toContain("was not run with OpenClaw's default agent");
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    },
+  );
+
   it("notifies the user when a bound plugin declines the turn and keeps the binding attached", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(

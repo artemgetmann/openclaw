@@ -332,6 +332,7 @@ export async function executePluginCommand(params: {
   channel: string;
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
+  senderIsOwner: boolean;
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -339,7 +340,16 @@ export async function executePluginCommand(params: {
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
 }): Promise<PluginCommandResult> {
-  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
+  const {
+    command,
+    args,
+    senderId,
+    channel,
+    isAuthorizedSender,
+    senderIsOwner,
+    commandBody,
+    config,
+  } = params;
 
   // Check authorization
   const requireAuth = command.requireAuth !== false; // Default to true
@@ -365,6 +375,7 @@ export async function executePluginCommand(params: {
     channel,
     channelId: params.channelId,
     isAuthorizedSender,
+    senderIsOwner,
     args: sanitizedArgs,
     commandBody,
     config,

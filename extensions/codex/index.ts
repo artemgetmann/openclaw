@@ -1,0 +1,488 @@
+import { Type } from "@sinclair/typebox";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolFactory,
+  PluginCommandContext,
+  PluginCommandResult,
+} from "../../src/plugins/types.js";
+import { CodexAppServerClient, type CodexRpcClient } from "./src/app-server-client.js";
+import { CodexApprovalStore, type CodexApprovalAction } from "./src/approval-store.js";
+import { CodexThreadService, requireThreadId } from "./src/thread-service.js";
+
+type PilotConfig = {
+  command: string;
+  args: string[];
+  requestTimeoutMs: number;
+  turnTimeoutMs: number;
+  defaultWorkspaceDir: string;
+};
+
+type ToolParams = {
+  action?: string;
+  thread_id?: string;
+  text?: string;
+  search?: string;
+  archived?: boolean;
+  include_turns?: boolean;
+  limit?: number;
+};
+
+const APPROVAL_NAMESPACE = "codexpilot";
+const BINDING_KIND = "codex-app-server-pilot";
+
+const ToolSchema = Type.Object(
+  {
+    action: Type.Unsafe<
+      "status" | "list" | "search" | "read" | "create" | "message" | "resume" | "fork"
+    >({
+      type: "string",
+      enum: ["status", "list", "search", "read", "create", "message", "resume", "fork"],
+    }),
+    thread_id: Type.Optional(Type.String()),
+    text: Type.Optional(Type.String()),
+    search: Type.Optional(Type.String()),
+    archived: Type.Optional(Type.Boolean()),
+    include_turns: Type.Optional(Type.Boolean()),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * Selective compatibility port of the official Codex extension.
+ *
+ * Pi remains the default agent runtime. Codex is entered only through this
+ * owner-only tool, the explicit /codex command, or a conversation that was
+ * explicitly approved and bound to a native Codex thread.
+ */
+export default function register(api: OpenClawPluginApi) {
+  const config = readPilotConfig(api);
+  let clientPromise: Promise<CodexRpcClient> | undefined;
+
+  const getClient = async (): Promise<CodexRpcClient> => {
+    const existing = await clientPromise?.catch(() => undefined);
+    if (existing && !existing.isClosed()) {
+      return existing;
+    }
+    clientPromise = (async () => {
+      const client = new CodexAppServerClient({
+        command: config.command,
+        args: config.args,
+        requestTimeoutMs: config.requestTimeoutMs,
+      });
+      try {
+        await client.initialize();
+        return client;
+      } catch (error) {
+        await client.close();
+        throw explicitUnavailableError(error);
+      }
+    })();
+    return await clientPromise;
+  };
+
+  const service = new CodexThreadService({
+    client: getClient,
+    turnTimeoutMs: config.turnTimeoutMs,
+    defaultWorkspaceDir: config.defaultWorkspaceDir,
+  });
+  const approvals = new CodexApprovalStore();
+
+  api.registerTool(
+    ((ctx) => {
+      if (ctx.senderIsOwner !== true || ctx.sandboxed) {
+        return null;
+      }
+      return createCodexTool(service) as AnyAgentTool;
+    }) as OpenClawPluginToolFactory,
+    { name: "codex_threads", optional: true },
+  );
+
+  api.registerCommand({
+    name: "codex",
+    description: "Control or explicitly bind a native Codex thread",
+    acceptsArgs: true,
+    requireAuth: true,
+    handler: async (ctx) => await handleCodexCommand(ctx, service, approvals),
+  });
+
+  api.registerInteractiveHandler({
+    channel: "telegram",
+    namespace: APPROVAL_NAMESPACE,
+    handler: async (ctx) => {
+      const parsed = parseApprovalPayload(ctx.callback.payload);
+      if (!ctx.auth.isAuthorizedSender || !parsed) {
+        return { handled: true };
+      }
+      const approval = approvals.consume({
+        token: parsed.token,
+        decision: parsed.decision,
+        senderId: ctx.senderId,
+      });
+      await ctx.respond.clearButtons();
+      if (!approval) {
+        await ctx.respond.editMessage({ text: "Codex approval expired or was already used." });
+        return { handled: true };
+      }
+      if (parsed.decision === "reject") {
+        await ctx.respond.editMessage({
+          text: `Rejected ${approval.action} for Codex thread ${approval.threadId}.`,
+        });
+        return { handled: true };
+      }
+      if (parsed.decision === "open") {
+        await ctx.respond.editMessage({
+          text: `Open Codex on this Mac and select thread ${approval.threadId}. No change was made.`,
+        });
+        return { handled: true };
+      }
+      try {
+        await runApprovedMutation(service, approval.action, approval.threadId);
+        await ctx.respond.editMessage({
+          text: `${capitalize(approval.action)}d Codex thread ${approval.threadId}.`,
+        });
+      } catch (error) {
+        await ctx.respond.editMessage({
+          text: `Codex ${approval.action} failed after a fresh state check: ${formatError(error)}`,
+        });
+      }
+      return { handled: true };
+    },
+  });
+
+  api.on("inbound_claim", async (event, ctx) => {
+    const bindingData = ctx.pluginBinding?.data;
+    if (bindingData?.kind !== BINDING_KIND || typeof bindingData.threadId !== "string") {
+      return undefined;
+    }
+    if (event.senderIsOwner !== true) {
+      return {
+        handled: true,
+        reply: { text: "This Codex-bound conversation is owner-only. No task was started." },
+      };
+    }
+    const prompt = event.bodyForAgent?.trim() || event.content.trim();
+    if (!prompt) {
+      return { handled: true };
+    }
+    try {
+      const result = await service.message(bindingData.threadId, prompt);
+      return {
+        handled: true,
+        reply: {
+          text: formatCodexFinal(result.threadId, result.finalText, result.progress),
+        },
+      };
+    } catch (error) {
+      return {
+        handled: true,
+        reply: {
+          text: `Codex native turn failed: ${formatError(error)}\n\nThe request was not run with Pi.`,
+        },
+      };
+    }
+  });
+
+  api.registerService({
+    id: "codex-pilot-app-server",
+    start: async () => undefined,
+    stop: async () => {
+      const client = await clientPromise?.catch(() => undefined);
+      await client?.close();
+      clientPromise = undefined;
+    },
+  });
+}
+
+function createCodexTool(service: CodexThreadService) {
+  return {
+    name: "codex_threads",
+    label: "Codex Threads",
+    ownerOnly: true,
+    description:
+      "Owner-only native Codex thread status, catalog, lifecycle, and read-only continuation controls.",
+    parameters: ToolSchema,
+    execute: async (_toolCallId: string, raw: ToolParams) => {
+      const action = raw.action ?? "";
+      let result: unknown;
+      if (action === "status") {
+        result = await service.status();
+      } else if (action === "list" || action === "search") {
+        result = await service.list({
+          search: action === "search" ? (raw.search ?? raw.text) : raw.search,
+          archived: raw.archived,
+          limit: raw.limit,
+        });
+      } else if (action === "read") {
+        result = await service.read(
+          required(raw.thread_id, "thread_id"),
+          raw.include_turns === true,
+        );
+      } else if (action === "create") {
+        result = await service.create();
+      } else if (action === "message") {
+        result = await service.message(
+          required(raw.thread_id, "thread_id"),
+          required(raw.text, "text"),
+        );
+      } else if (action === "resume") {
+        result = await service.resume(required(raw.thread_id, "thread_id"));
+      } else if (action === "fork") {
+        result = await service.fork(required(raw.thread_id, "thread_id"));
+      } else {
+        throw new Error(`unsupported codex_threads action: ${action || "missing"}`);
+      }
+      return jsonToolResult(result);
+    },
+  };
+}
+
+async function handleCodexCommand(
+  ctx: PluginCommandContext,
+  service: CodexThreadService,
+  approvals: CodexApprovalStore,
+): Promise<PluginCommandResult> {
+  if (!ctx.senderIsOwner) {
+    return { text: "Codex thread control is owner-only." };
+  }
+  const parsed = parseCommandArgs(ctx.args);
+  try {
+    if (parsed.action === "status") {
+      return { text: JSON.stringify(await service.status(), null, 2) };
+    }
+    if (parsed.action === "list" || parsed.action === "search") {
+      return {
+        text: JSON.stringify(
+          await service.list({
+            search: parsed.action === "search" ? parsed.rest : undefined,
+            limit: 20,
+          }),
+          null,
+          2,
+        ),
+      };
+    }
+    if (parsed.action === "read") {
+      return {
+        text: JSON.stringify(
+          await service.read(required(parsed.first, "thread id"), true),
+          null,
+          2,
+        ),
+      };
+    }
+    if (parsed.action === "create") {
+      const created = await service.create();
+      const threadId = requireThreadId(created);
+      if (parsed.rest) {
+        const result = await service.message(threadId, parsed.rest);
+        return { text: formatCodexFinal(threadId, result.finalText, result.progress) };
+      }
+      return { text: `Created native Codex thread ${threadId}.` };
+    }
+    if (parsed.action === "message") {
+      const result = await service.message(
+        required(parsed.first, "thread id"),
+        required(parsed.rest, "message text"),
+      );
+      return { text: formatCodexFinal(result.threadId, result.finalText, result.progress) };
+    }
+    if (parsed.action === "resume") {
+      const resumed = await service.resume(required(parsed.first, "thread id"));
+      return { text: `Resumed native Codex thread ${requireThreadId(resumed)}.` };
+    }
+    if (parsed.action === "fork") {
+      const forked = await service.fork(required(parsed.first, "thread id"));
+      return { text: `Forked native Codex thread ${requireThreadId(forked)}.` };
+    }
+    if (parsed.action === "bind") {
+      const threadId = parsed.first
+        ? requireThreadId(await service.resume(parsed.first))
+        : requireThreadId(await service.create());
+      const binding = await ctx.requestConversationBinding({
+        summary: `Bind this conversation to native Codex thread ${threadId}.`,
+        detachHint: "/codex detach",
+        data: {
+          kind: BINDING_KIND,
+          threadId,
+        },
+        failClosed: true,
+      });
+      if (binding.status === "pending") {
+        return binding.reply;
+      }
+      if (binding.status === "error") {
+        return { text: binding.message };
+      }
+      return { text: `Bound this conversation to native Codex thread ${threadId}.` };
+    }
+    if (parsed.action === "detach") {
+      const detached = await ctx.detachConversationBinding();
+      return { text: detached.removed ? "Detached the Codex thread." : "No Codex binding found." };
+    }
+    if (parsed.action === "archive" || parsed.action === "unarchive") {
+      const threadId = required(parsed.first, "thread id");
+      // Read before showing the card to reject obvious stale targets; the
+      // service repeats the state check after approval immediately before write.
+      await service.read(threadId, false);
+      const approval = approvals.issue({
+        action: parsed.action,
+        threadId,
+        requesterSenderId: ctx.senderId,
+      });
+      return buildApprovalReply(approval.action, approval.threadId, approval.token);
+    }
+    return { text: codexHelp() };
+  } catch (error) {
+    return { text: `Codex command failed: ${formatError(error)}` };
+  }
+}
+
+function buildApprovalReply(
+  action: CodexApprovalAction,
+  threadId: string,
+  token: string,
+): PluginCommandResult {
+  return {
+    text: `Approve ${action} for Codex thread ${threadId}? State will be checked again before the change.`,
+    interactive: {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Approve once",
+              value: `${APPROVAL_NAMESPACE}:${token}:approve`,
+              style: "success",
+            },
+            {
+              label: "Reject",
+              value: `${APPROVAL_NAMESPACE}:${token}:reject`,
+              style: "danger",
+            },
+            {
+              label: "Open task",
+              value: `${APPROVAL_NAMESPACE}:${token}:open`,
+              style: "primary",
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+async function runApprovedMutation(
+  service: CodexThreadService,
+  action: CodexApprovalAction,
+  threadId: string,
+): Promise<void> {
+  if (action === "archive") {
+    await service.archive(threadId);
+  } else {
+    await service.unarchive(threadId);
+  }
+}
+
+function readPilotConfig(api: OpenClawPluginApi): PilotConfig {
+  const raw = api.pluginConfig ?? {};
+  const args = Array.isArray(raw.args)
+    ? raw.args.filter((value): value is string => typeof value === "string")
+    : ["app-server", "--listen", "stdio://"];
+  return {
+    command: typeof raw.command === "string" && raw.command.trim() ? raw.command.trim() : "codex",
+    args: args.length ? args : ["app-server", "--listen", "stdio://"],
+    requestTimeoutMs: readNumber(raw.requestTimeoutMs, 30_000),
+    turnTimeoutMs: readNumber(raw.turnTimeoutMs, 20 * 60_000),
+    defaultWorkspaceDir:
+      typeof raw.defaultWorkspaceDir === "string" && raw.defaultWorkspaceDir.trim()
+        ? raw.defaultWorkspaceDir.trim()
+        : process.cwd(),
+  };
+}
+
+function parseCommandArgs(args: string | undefined): {
+  action: string;
+  first?: string;
+  rest?: string;
+} {
+  const trimmed = args?.trim() ?? "";
+  if (!trimmed) {
+    return { action: "help" };
+  }
+  const [action = "", first, ...rest] = trimmed.split(/\s+/);
+  return {
+    action: action.toLowerCase(),
+    first,
+    rest: rest.join(" ").trim() || undefined,
+  };
+}
+
+function parseApprovalPayload(
+  payload: string,
+): { token: string; decision: "approve" | "reject" | "open" } | null {
+  const [token, decision] = payload.split(":");
+  if (!token || (decision !== "approve" && decision !== "reject" && decision !== "open")) {
+    return null;
+  }
+  return { token, decision };
+}
+
+function formatCodexFinal(threadId: string, finalText: string, progress: string[]): string {
+  const progressLine = progress.length ? `\n\nCodex progress: ${progress.join(", ")}` : "";
+  return `Codex · ${threadId}\n\n${finalText}${progressLine}`;
+}
+
+function jsonToolResult(payload: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    details: payload,
+  };
+}
+
+function required(value: string | undefined, label: string): string {
+  const normalized = value?.trim();
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  return normalized;
+}
+
+function readNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : fallback;
+}
+
+function explicitUnavailableError(error: unknown): Error {
+  return new Error(
+    `Codex native routing is unavailable: ${formatError(error)}. The request was not run with Pi.`,
+  );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function capitalize(value: string): string {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+}
+
+function codexHelp(): string {
+  return [
+    "Codex pilot commands:",
+    "/codex status",
+    "/codex list",
+    "/codex search <text>",
+    "/codex read <thread-id>",
+    "/codex create [first prompt]",
+    "/codex message <thread-id> <text>",
+    "/codex resume <thread-id>",
+    "/codex fork <thread-id>",
+    "/codex bind [thread-id]",
+    "/codex detach",
+    "/codex archive <thread-id>",
+    "/codex unarchive <thread-id>",
+  ].join("\n");
+}
