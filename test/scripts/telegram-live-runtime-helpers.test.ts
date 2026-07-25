@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   buildTelegramLiveRuntimeParityReport,
   buildTelegramLiveRuntimeConfig,
   clearEnvAssignmentText,
+  collectActiveTelegramTokenLeaseEntries,
   readUsableOpenClawCodexAuthStore,
   summarizeTelegramTesterTokenPool,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
@@ -21,6 +23,85 @@ function unsignedJwtWithExp(expSeconds: number): string {
   const payload = Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url");
   return `${header}.${payload}.`;
 }
+
+describe("collectActiveTelegramTokenLeaseEntries", () => {
+  const token = "12345:test-token";
+
+  function leasePath(leaseRoot: string): string {
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    return path.join(leaseRoot, `12345-${tokenHash}.json`);
+  }
+
+  it("blocks a token when its lease file is malformed", () => {
+    const leaseRoot = mkdtempSync(path.join(os.tmpdir(), "tg-lease-malformed-"));
+    writeFileSync(leasePath(leaseRoot), "{ malformed\n");
+
+    expect(
+      collectActiveTelegramTokenLeaseEntries({
+        tokens: [token],
+        leaseRoot,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        token,
+        blockingReason: "malformed_lease",
+      }),
+    ]);
+  });
+
+  it("ignores a stale lease when the PID starttime no longer matches", () => {
+    const leaseRoot = mkdtempSync(path.join(os.tmpdir(), "tg-lease-recycled-pid-"));
+    writeFileSync(
+      leasePath(leaseRoot),
+      JSON.stringify({
+        version: 1,
+        pid: 4321,
+        starttime: 100,
+        worktree: "/tmp/old-worktree",
+      }),
+    );
+
+    expect(
+      collectActiveTelegramTokenLeaseEntries({
+        tokens: [token],
+        leaseRoot,
+        platform: "linux",
+        isPidAliveFn: () => true,
+        getProcessStartTimeFn: () => 200,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps a live lease only when PID identity still matches", () => {
+    const leaseRoot = mkdtempSync(path.join(os.tmpdir(), "tg-lease-live-pid-"));
+    writeFileSync(
+      leasePath(leaseRoot),
+      JSON.stringify({
+        version: 1,
+        pid: 4321,
+        starttime: 100,
+        worktree: "/tmp/live-worktree",
+        accountId: "default",
+      }),
+    );
+
+    expect(
+      collectActiveTelegramTokenLeaseEntries({
+        tokens: [token],
+        leaseRoot,
+        platform: "linux",
+        isPidAliveFn: () => true,
+        getProcessStartTimeFn: () => 100,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        token,
+        pid: 4321,
+        worktreePath: "/tmp/live-worktree",
+      }),
+    ]);
+  });
+});
 
 describe("summarizeTelegramTesterTokenPool", () => {
   it("reports pool exhaustion after claimed and reserved tokens are removed", () => {

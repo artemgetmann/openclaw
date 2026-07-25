@@ -70,6 +70,59 @@ describe("telegram-user backend defaults", () => {
     });
   });
 
+  it("honors managed worktree selectors when tooling is loaded from an installed runtime", async () => {
+    const installedStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-telegram-installed-state-"),
+    );
+    const worktreeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-worktree-"));
+    tempToolingRoots.push(installedStateDir, worktreeRoot);
+    const envFilePath = path.join(worktreeRoot, "scripts", "telegram-e2e", ".env.local");
+    const sessionPath = path.join(worktreeRoot, "selected-account.session");
+    await fs.mkdir(path.dirname(envFilePath), { recursive: true });
+    await fs.writeFile(
+      envFilePath,
+      "TELEGRAM_API_ID=123\nTELEGRAM_API_HASH=test-hash\nUSERBOT_SESSION=/stale/from-env\n",
+    );
+    await fs.writeFile(sessionPath, "placeholder session\n");
+    vi.stubEnv("OPENCLAW_STATE_DIR", installedStateDir);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_ENV_FILE", envFilePath);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_SESSION", sessionPath);
+
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+
+    // Managed child-process selectors are an explicit pair and must beat both
+    // installed-runtime defaults and stale values inside the selected env file.
+    await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
+      envFilePath,
+      envFileSource: "explicit",
+      sessionPath,
+    });
+  });
+
+  it("keeps a caller-selected env file's session ahead of the managed lane session", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-selector-state-"));
+    tempToolingRoots.push(stateDir);
+    const ambientEnvFile = path.join(stateDir, "ambient.env");
+    const ambientSession = path.join(stateDir, "ambient.session");
+    const explicitEnvFile = path.join(stateDir, "explicit.env");
+    const envSelectedSession = path.join(stateDir, "env-selected.session");
+    await fs.writeFile(ambientEnvFile, `USERBOT_SESSION=${ambientSession}\n`);
+    await fs.writeFile(explicitEnvFile, `USERBOT_SESSION=${envSelectedSession}\n`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_ENV_FILE", ambientEnvFile);
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_SESSION", ambientSession);
+
+    const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
+
+    await expect(
+      resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
+    ).resolves.toEqual({
+      envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
+      sessionPath: envSelectedSession,
+    });
+  });
+
   it("honors USERBOT_SESSION from the env file unless --session is explicit", async () => {
     const { resolveTelegramUserSessionPath } = await import("./backend.js");
 
@@ -262,17 +315,24 @@ describe("telegram-user backend defaults", () => {
       resolveTelegramUserBackendSelectors({ session: "/tmp/separate-account.session" }),
     ).resolves.toEqual({
       envFilePath: path.join(stateDir, "telegram-user", ".env.local"),
+      envFileSource: "runtime-default",
       sessionPath: "/tmp/separate-account.session",
     });
     await expect(resolveTelegramUserBackendSelectors({})).rejects.toThrow("E_AMBIGUOUS_SESSION");
   });
 
-  it("discovers a monitor service binding in a later backend import for the same state", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-state-"));
-    tempToolingRoots.push(stateDir);
+  it("keeps a monitor binding authoritative over a stale legacy session", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-binding-home-"));
+    const stateDir = path.join(homeDir, "jarvis-state");
+    const staleLegacySession = path.join(homeDir, ".openclaw", "telegram-user", "userbot.session");
+    tempToolingRoots.push(homeDir);
     const boundEnvFile = path.join(stateDir, "configured.env");
     const boundSession = path.join(stateDir, "configured.session");
+    await fs.mkdir(path.dirname(staleLegacySession), { recursive: true });
+    await fs.writeFile(staleLegacySession, "needs-reauth-legacy-fixture\n");
+    await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(boundEnvFile, "TELEGRAM_API_ID=123\n");
+    vi.stubEnv("HOME", homeDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     const { writeTelegramUserMonitorBinding } = await import("./monitor-service-binding.js");
@@ -288,6 +348,7 @@ describe("telegram-user backend defaults", () => {
     const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: boundEnvFile,
+      envFileSource: "monitor-binding",
       sessionPath: boundSession,
     });
     await expect(
@@ -297,6 +358,7 @@ describe("telegram-user backend defaults", () => {
       }),
     ).resolves.toEqual({
       envFilePath: path.join(stateDir, "explicit.env"),
+      envFileSource: "explicit",
       sessionPath: path.join(stateDir, "explicit.session"),
     });
 
@@ -307,6 +369,7 @@ describe("telegram-user backend defaults", () => {
       resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
     ).resolves.toEqual({
       envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
       sessionPath: envSelectedSession,
     });
   });
@@ -333,6 +396,7 @@ describe("telegram-user backend defaults", () => {
     const { resolveTelegramUserBackendSelectors } = await import("./backend.js");
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: boundEnvFile,
+      envFileSource: "monitor-binding",
       sessionPath: boundSession,
     });
   });
@@ -357,6 +421,7 @@ describe("telegram-user backend defaults", () => {
 
     await expect(resolveTelegramUserBackendSelectors({})).resolves.toEqual({
       envFilePath: path.join(identity.stateDir, "telegram-user", ".env.local"),
+      envFileSource: "runtime-default",
       sessionPath: path.join(homeDir, ".openclaw", "telegram-user", "userbot.session"),
     });
   });
@@ -395,6 +460,7 @@ describe("telegram-user backend defaults", () => {
       resolveTelegramUserBackendSelectors({ envFile: explicitEnvFile }),
     ).resolves.toEqual({
       envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
       sessionPath: envSelectedSession,
     });
     await expect(
@@ -404,7 +470,71 @@ describe("telegram-user backend defaults", () => {
       }),
     ).resolves.toEqual({
       envFilePath: explicitEnvFile,
+      envFileSource: "explicit",
       sessionPath: path.join(stateDir, "flag.session"),
     });
+  });
+
+  it("turns a killed backend send into an explicit unknown-delivery timeout", async () => {
+    const { parseTelegramUserBackendExecError } = await import("./backend.js");
+    const processError = Object.assign(new Error("Command failed"), {
+      killed: true,
+      signal: "SIGTERM",
+      stderr: "",
+    });
+
+    const parsed = parseTelegramUserBackendExecError(processError, {
+      command: "send",
+      env: {} as NodeJS.ProcessEnv,
+      meta: {
+        api_hash_source: "missing",
+        api_id_source: "missing",
+        env_file: "/tmp/telegram.env",
+        env_file_source: "explicit",
+        lock_scope: "machine",
+        session_path: "/tmp/telegram.session",
+        session_source: "explicit",
+      },
+      timeoutMs: 60_000,
+    });
+
+    expect(parsed.message).toContain("E_BACKEND_TIMEOUT");
+    expect(parsed.message).toContain("delivery state is unknown");
+    expect(parsed.message).toContain("read the target chat before retrying");
+  });
+
+  it("treats every mutating backend timeout as indeterminate", async () => {
+    const { parseTelegramUserBackendExecError } = await import("./backend.js");
+    const processError = Object.assign(new Error("Command failed"), {
+      killed: true,
+      signal: "SIGTERM",
+      stderr: "",
+    });
+    const meta = {
+      api_hash_source: "missing" as const,
+      api_id_source: "missing" as const,
+      env_file: "/tmp/telegram.env",
+      env_file_source: "explicit" as const,
+      lock_scope: "machine" as const,
+      session_path: "/tmp/telegram.session",
+      session_source: "explicit" as const,
+    };
+
+    const topicCreate = parseTelegramUserBackendExecError(processError, {
+      command: "topic-create",
+      env: {} as NodeJS.ProcessEnv,
+      meta,
+      timeoutMs: 60_000,
+    });
+    const read = parseTelegramUserBackendExecError(processError, {
+      command: "read",
+      env: {} as NodeJS.ProcessEnv,
+      meta,
+      timeoutMs: 60_000,
+    });
+
+    expect(topicCreate.message).toContain("state is unknown");
+    expect(topicCreate.message).toContain("Inspect current state before retrying");
+    expect(read.message).toContain("may be retried");
   });
 });

@@ -15,6 +15,11 @@
  * - mdl_back              - back to providers list
  */
 
+import {
+  CONSUMER_CHATGPT_MODEL_REGISTRY,
+  formatConsumerChatGptModelId,
+} from "../../../src/consumer/model-registry.js";
+
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
 export type ParsedModelCallback =
@@ -123,18 +128,17 @@ const CLAUDE_MODEL_FAMILY: ModelFamilyInfo = {
   recommended: ["claude-cli/sonnet", "anthropic/claude-sonnet-4-6", "claude-bridge/sonnet"],
 };
 
+const CHATGPT_MODEL_REFS = CONSUMER_CHATGPT_MODEL_REGISTRY.flatMap((choice) =>
+  choice.refs.map(formatConsumerChatGptModelId),
+);
+
 export const MODEL_FAMILIES: readonly ModelFamilyInfo[] = [
   CLAUDE_MODEL_FAMILY,
   {
     family: "chatgpt",
     label: "ChatGPT",
     providers: ["openai-codex", "openai"],
-    recommended: [
-      "openai-codex/gpt-5.5",
-      "openai/gpt-5.5",
-      "openai-codex/gpt-5.4",
-      "openai/gpt-5.4",
-    ],
+    recommended: CHATGPT_MODEL_REFS,
   },
 ] as const;
 
@@ -663,32 +667,13 @@ function buildChatGptFamilyKeyboard(params: {
 }): ButtonRow[] {
   const rows: ButtonRow[] = [];
   if (params.more) {
-    appendFirstAvailableStaticModelButton(rows, params, {
-      label: "GPT-5.4",
-      refs: [
-        { provider: "openai-codex", model: "gpt-5.4" },
-        { provider: "openai", model: "gpt-5.4" },
-      ],
-    });
-    appendFirstAvailableStaticModelButton(rows, params, {
-      label: "GPT-5.3 Codex Spark",
-      refs: [
-        { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
-        { provider: "openai", model: "gpt-5.3-codex-spark" },
-      ],
-    });
     rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
     return rows;
   }
 
-  appendFirstAvailableStaticModelButton(rows, params, {
-    label: "GPT-5.5",
-    refs: [
-      { provider: "openai-codex", model: "gpt-5.5" },
-      { provider: "openai", model: "gpt-5.5" },
-    ],
-  });
-  rows.push([{ text: "More", callback_data: "mdl_fam_chatgpt_more" }]);
+  for (const choice of CONSUMER_CHATGPT_MODEL_REGISTRY) {
+    appendFirstAvailableStaticModelButton(rows, params, choice);
+  }
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
   return rows;
 }

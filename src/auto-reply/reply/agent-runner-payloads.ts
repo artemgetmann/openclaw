@@ -48,22 +48,31 @@ function isTextOnlyDurableFinalPayload(payload: ReplyPayload): boolean {
     payload.text.trim().length > 0 &&
     !hasPayloadMedia(payload) &&
     !payload.interactive &&
-    !payload.btw &&
-    !payload.isError
+    !payload.btw
   );
 }
 
-function keepLastTextOnlyFinalPayload(payloads: ReplyPayload[]): ReplyPayload[] {
-  const lastTextOnlyIndex = payloads.findLastIndex(isTextOnlyDurableFinalPayload);
-  if (lastTextOnlyIndex < 0) {
+function isTextBearingDurableFinalPayload(payload: ReplyPayload): boolean {
+  return (
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0 &&
+    !payload.interactive &&
+    !payload.btw
+  );
+}
+
+function keepLastTextBearingFinalPayload(payloads: ReplyPayload[]): ReplyPayload[] {
+  const lastTextBearingIndex = payloads.findLastIndex(isTextBearingDurableFinalPayload);
+  if (lastTextBearingIndex < 0) {
     return payloads;
   }
 
   // Telegram progress-preview runs can leave several model-authored status
-  // snapshots in the final payload array. Only the last text final is product
-  // output; earlier text-only finals are progress and must not become durable.
+  // snapshots in the final payload array. The last text-bearing payload is the
+  // product output even when it also owns media. Preserve earlier media while
+  // preventing stale text-only progress from becoming a durable reply.
   return payloads.filter(
-    (payload, index) => !isTextOnlyDurableFinalPayload(payload) || index === lastTextOnlyIndex,
+    (payload, index) => !isTextOnlyDurableFinalPayload(payload) || index === lastTextBearingIndex,
   );
 }
 
@@ -253,18 +262,29 @@ export async function buildReplyPayloads(params: {
     (payload) => !hasOpenClawSourcePreviewMarker(payload),
   );
   const preservedFinalPayloads = params.preserveFinalPayloadsAfterBlockStreaming
-    ? keepLastTextOnlyFinalPayload(durablePayloads)
+    ? keepLastTextBearingFinalPayload(durablePayloads)
     : durablePayloads;
+  // Telegram previews are mutable transport, not proof that the terminal
+  // payload became durable. Preserve the selected final even when the block
+  // pipeline saw identical text; otherwise a streamed context error can clear
+  // the preview and leave the user with no terminal explanation.
+  const authoritativeFinalPayload = params.preserveFinalPayloadsAfterBlockStreaming
+    ? preservedFinalPayloads.findLast(isTextBearingDurableFinalPayload)
+    : undefined;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
       ? preservedFinalPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+          (payload) =>
+            payload === authoritativeFinalPayload ||
+            !params.blockReplyPipeline?.hasSentPayload(payload),
         )
       : params.directlySentBlockKeys?.size
         ? preservedFinalPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
+            (payload) =>
+              payload === authoritativeFinalPayload ||
+              !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
         : preservedFinalPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;

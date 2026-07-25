@@ -33,17 +33,98 @@ function makeStaleJarvisConsumerConfig(overrides: Record<string, unknown> = {}) 
 }
 
 describe("legacy migrate Jarvis consumer model defaults", () => {
-  it("adds GPT-5.5 and promotes the managed GPT-5.4 primary", () => {
+  it("adds GPT-5.6 Sol and promotes the managed GPT-5.4 primary", () => {
     const res = migrateLegacyConfig(makeStaleJarvisConsumerConfig());
 
-    expect(res.changes).toContain("Added openai-codex/gpt-5.5 to Jarvis consumer model allowlist.");
     expect(res.changes).toContain(
-      "Updated Jarvis consumer primary model openai-codex/gpt-5.4 → openai-codex/gpt-5.5.",
+      "Added openai-codex/gpt-5.6-sol to Jarvis consumer model allowlist.",
     );
-    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.5" });
-    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toEqual({});
+    expect(res.changes).toContain(
+      "Updated Jarvis consumer primary model openai-codex/gpt-5.4 → openai-codex/gpt-5.6-sol.",
+    );
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.6-sol" });
+    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.6-sol"]).toEqual({});
     expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toEqual({});
     expect(res.config?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toBeDefined();
+  });
+
+  it("promotes the previous managed GPT-5.5 primary", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.5" },
+            models: { "openai-codex/gpt-5.5": {} },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.6-sol" });
+  });
+
+  it("promotes direct OpenAI Jarvis defaults without changing provider families", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: { "openai/gpt-5.4": { alias: "GPT" } },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6-sol" });
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toEqual({
+      alias: "GPT",
+    });
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBeUndefined();
+    expect(res.changes).toContain(
+      "Transferred GPT alias from openai/gpt-5.4 to openai/gpt-5.6-sol.",
+    );
+  });
+
+  it("removes a duplicate legacy GPT alias when Sol is already allowed", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.5": { alias: "GPT" },
+              "openai/gpt-5.6-sol": {},
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.5"]?.alias).toBeUndefined();
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBe("GPT");
+  });
+
+  it("preserves the legacy GPT alias when Sol already has a custom alias", () => {
+    const res = migrateLegacyConfig(
+      makeStaleJarvisConsumerConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.5": { alias: "GPT" },
+              "openai/gpt-5.6-sol": { alias: "sol" },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6-sol" });
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.5"]?.alias).toBe("GPT");
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBe("sol");
   });
 
   it("preserves a custom primary while refreshing the stale allowlist", () => {
@@ -62,7 +143,7 @@ describe("legacy migrate Jarvis consumer model defaults", () => {
     );
 
     expect(res.config?.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
-    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toEqual({});
+    expect(res.config?.agents?.defaults?.models?.["openai-codex/gpt-5.6-sol"]).toEqual({});
   });
 
   it("adds Claude Sonnet entries only when matching Claude auth exists", () => {

@@ -612,6 +612,34 @@ struct TelegramSetupBootstrapTests {
                         "futureFlag": true,
                     ],
                 ],
+                "tools": [
+                    "media": [
+                        "audio": [
+                            "enabled": true,
+                            // Reproduce the pre-managed package seed that used
+                            // to survive activation and bypass the backend.
+                            "models": [
+                                [
+                                    "type": "provider",
+                                    "provider": "openai",
+                                    "model": "gpt-4o-mini-transcribe",
+                                    "apiKey": "${OPENAI_NON_MODEL_API_KEY}",
+                                ],
+                                [
+                                    "type": "provider",
+                                    "provider": "deepgram",
+                                    "model": "nova-3",
+                                ],
+                                [
+                                    "type": "provider",
+                                    "provider": "openai",
+                                    "model": "gpt-4o-mini-transcribe",
+                                    "baseUrl": "https://speech.example.test",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
                 "secrets": [
                     "providers": [
                         "jarvis-keychain": [
@@ -700,8 +728,14 @@ struct TelegramSetupBootstrapTests {
             #expect(managedServices["mode"] as? String == "managed")
             #expect(managedServices["futureFlag"] as? Bool == true)
             #expect(audio["enabled"] as? Bool == true)
+            #expect(audioModels.count == 3)
             #expect(audioModels.first?["provider"] as? String == "jarvis-managed-openai")
             #expect(audioModels.first?["model"] as? String == "gpt-4o-mini-transcribe")
+            #expect(audioModels.first?["apiKey"] == nil)
+            #expect(audioModels[1]["provider"] as? String == "deepgram")
+            #expect(audioModels[1]["model"] as? String == "nova-3")
+            #expect(audioModels[2]["provider"] as? String == "openai")
+            #expect(audioModels[2]["baseUrl"] as? String == "https://speech.example.test")
             #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
             #expect(backend["accountAccessToken"] == nil)
             #expect(providers["jarvis-keychain"] == nil)
@@ -826,6 +860,68 @@ struct TelegramSetupBootstrapTests {
             #expect(telegram["allowFrom"] as? [String] == ["1336356696"])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
+    @Test func `managed setup repairs stale default account authorization overrides`() async throws {
+        let savedRoot = SavedConfigRoot()
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let initialRoot: [String: Any] = [
+                "channels": [
+                    "telegram": [
+                        "enabled": false,
+                        "botToken": "777000:test-child-token",
+                        "dmPolicy": "pairing",
+                        "allowFrom": [],
+                        "groupPolicy": "disabled",
+                        "groupAllowFrom": [],
+                        "accounts": [
+                            "default": [
+                                "botToken": "777000:test-child-token",
+                                "dmPolicy": "pairing",
+                                "allowFrom": [],
+                                "groupPolicy": "disabled",
+                                "groupAllowFrom": [],
+                                "futureSetting": "preserved",
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
+                saveLocal: { root in savedRoot.set(root) }))
+
+            let store = ChannelsStore(isPreview: true)
+            _ = try await store.applyTelegramSetupBootstrap(
+                token: "777000:test-child-token",
+                dmPolicy: "allowlist",
+                allowFrom: ["1336356696"],
+                enabled: true)
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            let accounts = try #require(telegram["accounts"] as? [String: Any])
+            let defaultAccount = try #require(accounts["default"] as? [String: Any])
+
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect(telegram["allowFrom"] as? [String] == ["1336356696"])
+            #expect(telegram["groupPolicy"] as? String == "allowlist")
+            #expect(telegram["groupAllowFrom"] as? [String] == ["1336356696"])
+            #expect(defaultAccount["dmPolicy"] as? String == "allowlist")
+            #expect(defaultAccount["allowFrom"] as? [String] == ["1336356696"])
+            #expect(defaultAccount["groupPolicy"] as? String == "allowlist")
+            #expect(defaultAccount["groupAllowFrom"] as? [String] == ["1336356696"])
+            #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+            #expect(defaultAccount["futureSetting"] as? String == "preserved")
 
             await ConfigStore._testClearOverrides()
         }

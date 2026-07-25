@@ -150,14 +150,17 @@ describe("startup reconciler", () => {
     );
   });
 
-  it("updates the Jarvis-managed Google Workspace CLI when a satisfying local copy exists", async () => {
+  it("installs the Jarvis-managed Google Workspace CLI on a clean Mac from the packaged copy", async () => {
     const root = await makeTempRoot("startup-reconciler-tool");
     const packageRoot = path.join(root, "package");
     const stateDir = path.join(root, "state");
-    const localBin = path.join(root, "local-bin");
     await fs.mkdir(packageRoot, { recursive: true });
-    await writeExecutable(path.join(localBin, "gog"), "#!/bin/sh\necho gog v0.33.0\n");
-    const env = { ...process.env, PATH: localBin };
+    const packagedArch = process.arch === "x64" ? "x86_64" : process.arch;
+    await writeExecutable(
+      path.join(packageRoot, "tools", "gog", `darwin-${packagedArch}`, "gog"),
+      "#!/bin/sh\necho gog v0.33.0\n",
+    );
+    const env = { ...process.env, PATH: "" };
     await writeManifest({
       packageRoot,
       managedTools: [
@@ -201,6 +204,48 @@ describe("startup reconciler", () => {
       status: "updated",
     });
     expect(messages).toContain("Updated Jarvis-managed Google Workspace CLI to v0.33.0.");
+  });
+
+  it("repairs same-version managed Gog byte drift from the packaged copy", async () => {
+    const root = await makeTempRoot("startup-reconciler-tool-signature-drift");
+    const packageRoot = path.join(root, "package");
+    const stateDir = path.join(root, "state");
+    const packagedArch = process.arch === "x64" ? "x86_64" : process.arch;
+    const packagedGog = path.join(packageRoot, "tools", "gog", `darwin-${packagedArch}`, "gog");
+    const managedGog = path.join(stateDir, "bin", "gog");
+    await writeExecutable(packagedGog, "#!/bin/sh\n# vendor-signed fixture\necho gog v0.33.0\n");
+    await writeExecutable(managedGog, "#!/bin/sh\n# Jarvis-resigned fixture\necho gog v0.33.0\n");
+    await writeManifest({
+      packageRoot,
+      managedTools: [
+        {
+          skillName: "gog",
+          installId: "brew",
+          bins: ["gog"],
+          versionCommand: ["gog", "--version"],
+          versionRegex: "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+          recommendedVersion: "0.33.0",
+        },
+      ],
+    });
+
+    const result = await runStartupReconciler({
+      packageRoot,
+      stateDir,
+      env: { ...process.env, PATH: "" },
+      log: { info: () => {}, warn: () => {} },
+    });
+
+    expect(await fs.readFile(managedGog, "utf8")).toBe(await fs.readFile(packagedGog, "utf8"));
+    if (result.status !== "reconciled") {
+      throw new Error("expected reconciled result");
+    }
+    expect(result.report.tools[0]).toMatchObject({
+      skillName: "gog",
+      sourcePath: packagedGog,
+      sourceVersion: "0.33.0",
+      status: "updated",
+    });
   });
 
   it("writes current status without noisy notifications when skills and tools are already current", async () => {

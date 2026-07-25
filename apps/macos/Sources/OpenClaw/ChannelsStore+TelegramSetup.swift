@@ -128,11 +128,11 @@ extension ChannelsStore {
             let response = try await self.pollManagedTelegramSetupStatus(
                 client: client,
                 setupId: setupId,
-                attempts: 1)
+                attempts: 8)
             self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername
             self.telegramManagedExpiresAt = response.expiresAt
             guard response.status == "connected" else {
-                self.telegramSetupStatus = self.managedTelegramPendingStatus(
+                self.telegramSetupStatus = Self.managedTelegramPendingStatus(
                     suggestedUsername: response.suggestedBotUsername)
                 return
             }
@@ -359,10 +359,17 @@ extension ChannelsStore {
         token: String,
         dmPolicy: String,
         allowFrom: [String]?,
+        groupAllowFrom: [String]? = nil,
         enabled: Bool = true
     ) async throws -> [String: Any] {
         await self.restoreConfigDraftFromCurrentSource()
         try self.seedConsumerJarvisWorkspaceForTelegramSetup()
+        // A configured default account overrides channel-level authorization
+        // fields during Telegram resolution. Keep both layers identical so an
+        // explicit setup repair cannot leave stale upgrade-era account values
+        // in control. Callers can pass an explicit empty group list when the DM
+        // identity came from pairing recovery rather than owner verification.
+        let synchronizedGroupAllowFrom = groupAllowFrom ?? allowFrom ?? []
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: enabled)
         self.updateConfigValue(
             path: [.key("channels"), .key("telegram"), .key("defaultAccount")],
@@ -372,6 +379,9 @@ extension ChannelsStore {
             path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("botToken")],
             value: token)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("dmPolicy")], value: dmPolicy)
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("dmPolicy")],
+            value: dmPolicy)
         self.updateConfigValue(path: [.key("tools"), .key("exec"), .key("security")], value: "full")
         self.updateConfigValue(path: [.key("tools"), .key("exec"), .key("ask")], value: "off")
         self.updateConfigValue(path: [.key("plugins"), .key("enabled")], value: true)
@@ -386,9 +396,21 @@ extension ChannelsStore {
         self.updateConfigValue(path: [.key("plugins"), .key("entries"), .key("brave"), .key("enabled")], value: true)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("groupPolicy")], value: "allowlist")
         self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("groupPolicy")],
+            value: "allowlist")
+        self.updateConfigValue(
             path: [.key("channels"), .key("telegram"), .key("groups"), .key("*"), .key("requireMention")],
             value: false)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("allowFrom")], value: allowFrom)
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("allowFrom")],
+            value: allowFrom)
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("groupAllowFrom")],
+            value: synchronizedGroupAllowFrom)
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("groupAllowFrom")],
+            value: synchronizedGroupAllowFrom)
         JarvisAccountActivationConfig.configureManagedRuntime(into: &self.configDraft)
         let persisted: [String: Any]
         if AppFlavor.current.isConsumer,
@@ -403,6 +425,7 @@ extension ChannelsStore {
             persistedRoot: persisted,
             dmPolicy: dmPolicy,
             allowFrom: allowFrom,
+            groupAllowFrom: synchronizedGroupAllowFrom,
             enabled: enabled)
         await self.reconnectConsumerGatewayAfterConfigBootstrap(enabled: enabled)
         Task { await self.refresh(probe: true) }
@@ -501,9 +524,9 @@ extension ChannelsStore {
                 return response
             }
 
-            // Some callers may intentionally wait briefly for Telegram's
-            // manager-bot webhook. The visible Check status button passes one
-            // attempt so the UI never looks stuck while still pending.
+            // Telegram's manager-bot webhook can land just after the user
+            // returns to Jarvis. Keep the visible check bounded, but tolerate
+            // that short delivery gap instead of reporting a false failure.
             guard attempt + 1 < attempts else { break }
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
@@ -515,11 +538,12 @@ extension ChannelsStore {
     }
 
     private func managedTelegramApprovalStatus(suggestedUsername: String) -> String {
-        "Telegram is opening. Approve @\(suggestedUsername), use Jarvis or edit the bot name, click Create, then come back and check status."
+        "Telegram is opening. Approve @\(suggestedUsername), use Jarvis or edit the bot name, " +
+            "click Create, open the new bot, and press Start. Then come back and click Check status."
     }
 
-    private func managedTelegramPendingStatus(suggestedUsername: String) -> String {
-        "Still waiting for Telegram approval for @\(suggestedUsername). In Telegram, approve it, use Jarvis or edit the bot name, click Create, then check again."
+    static func managedTelegramPendingStatus(suggestedUsername: String) -> String {
+        "Jarvis has not received @\(suggestedUsername) yet. Finish the Telegram steps above, wait a moment, then click Check status again."
     }
 
     private func managedTelegramConnectedStatus(botUsername: String?) -> String {
@@ -538,6 +562,7 @@ extension ChannelsStore {
             token: token,
             dmPolicy: "allowlist",
             allowFrom: [pending.id],
+            groupAllowFrom: [],
             enabled: true)
 
         if await self.completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap() {
@@ -649,6 +674,7 @@ extension ChannelsStore {
         persistedRoot: [String: Any],
         dmPolicy: String,
         allowFrom: [String]?,
+        groupAllowFrom: [String],
         enabled: Bool
     ) throws {
         let telegram = ((persistedRoot["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
@@ -671,7 +697,9 @@ extension ChannelsStore {
         }
         let persistedPolicy = (telegram["dmPolicy"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard persistedPolicy == dmPolicy else {
+        let persistedAccountPolicy = (persistedDefault?["dmPolicy"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard persistedPolicy == dmPolicy, persistedAccountPolicy == dmPolicy else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
         let tools = persistedRoot["tools"] as? [String: Any]
@@ -702,7 +730,11 @@ extension ChannelsStore {
         }
         let persistedGroupPolicy = (telegram["groupPolicy"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard persistedGroupPolicy == "allowlist" else {
+        let persistedAccountGroupPolicy = (persistedDefault?["groupPolicy"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard persistedGroupPolicy == "allowlist",
+              persistedAccountGroupPolicy == "allowlist"
+        else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
         let persistedGroups = telegram["groups"] as? [String: Any]
@@ -713,8 +745,15 @@ extension ChannelsStore {
         }
 
         let persistedAllowFrom = (telegram["allowFrom"] as? [String]) ?? []
+        let persistedAccountAllowFrom = (persistedDefault?["allowFrom"] as? [String]) ?? []
         let expectedAllowFrom = allowFrom ?? []
-        guard persistedAllowFrom == expectedAllowFrom else {
+        let persistedGroupAllowFrom = (telegram["groupAllowFrom"] as? [String]) ?? []
+        let persistedAccountGroupAllowFrom = (persistedDefault?["groupAllowFrom"] as? [String]) ?? []
+        guard persistedAllowFrom == expectedAllowFrom,
+              persistedAccountAllowFrom == expectedAllowFrom,
+              persistedGroupAllowFrom == groupAllowFrom,
+              persistedAccountGroupAllowFrom == groupAllowFrom
+        else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
     }

@@ -44,7 +44,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "Constraints: never read more than one skill up front; only read after selecting.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
-    "- When <available_skills> is present, do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step; the prompt inventory is the source of truth.",
+    "- Use <available_skills> as the active agent catalog. When it is compacted, match against its names and exact locations even when descriptions are absent. If it is truncated or an explicitly named skill is absent, do not claim the skill is unavailable; say the active catalog is incomplete instead of querying a different agent's inventory.",
     "",
   ];
 }
@@ -277,6 +277,8 @@ export function buildAgentSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Keep packaged Jarvis on its selected Chrome account plus explicit live Chrome only. */
+  jarvisBrowserPolicy?: boolean;
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -318,8 +320,9 @@ export function buildAgentSystemPrompt(params: {
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
-    browser:
-      'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks, and profile="user-live" only when actual live Chrome state is explicitly needed; after signed-in/user-live fails, ask before switching to clean openclaw and retry with fallbackApproved=true only after approval; before third-party external mutations, call browser action="contract" and verify the final artifact after commit',
+    browser: params.jarvisBrowserPolicy
+      ? 'Control browser; use the selected Chrome account for normal work and the live Chrome session only when current tabs or extensions are required; if the selected account is unavailable, repair it or explain the blocker without offering another browser or exposing internal profile names; before third-party external mutations, call browser action="contract" and verify the final artifact after commit'
+      : 'Control browser; use profile="signed-in" (cloned Chrome) for logged-in/hostile/social/account-bound work, profile="openclaw" for isolated public tasks, and profile="user-live" only when actual live Chrome state is explicitly needed; after signed-in/user-live fails, ask before switching to clean openclaw and retry with fallbackApproved=true only after approval; before third-party external mutations, call browser action="contract" and verify the final artifact after commit',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
@@ -543,7 +546,7 @@ export function buildAgentSystemPrompt(params: {
       : "",
     "For macOS computer-use, GUI-operation, or GUI-proof requests, prefer the `jarvis-computer-use` skill and `openclaw gui-control --runtime open-computer-use` for operation; use the `screen-record` skill and `openclaw screen record` for target-aware video proof. Use Peekaboo for still screenshots, UI maps, diagnostics, explicit Peekaboo requests, or fallback after Computer Use or screen recording is unavailable.",
     "Before sending or claiming any user-facing screenshot, screen recording, or other media proof, inspect the generated artifact locally. If you have not inspected it, say that plainly instead of implying it proves the result.",
-    "For a standalone local audio file the user wants transcribed, use `media transcribe --file <path> --json` when that command is available; channel-specific voice-note retrieval belongs in the matching channel skill.",
+    "For audio transcription, use `openclaw media transcribe --file <path> --json`; `media` is a subcommand, not a standalone binary to probe, and channel-specific retrieval belongs in the matching skill. Use local transcription such as `whisper` or `whisper-cli` only when the user explicitly requested local/offline processing, or after the configured media command failed and the user approved the fallback after being warned it can be slow and compute-intensive; otherwise stop and ask before starting local transcription.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed

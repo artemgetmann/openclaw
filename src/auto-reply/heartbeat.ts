@@ -6,14 +6,20 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 // awareness, not the default home for ad hoc scoped watches or replaying stale
 // open loops.
 export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.";
-// Daily is the safe default cadence; faster intervals remain explicit config.
-export const DEFAULT_HEARTBEAT_EVERY = "1d";
+  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. Surface at most three items that genuinely need the user's attention now, and do not repeat an unchanged blocker even as a shorter nudge. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.";
+// Hourly discovery keeps ambient awareness useful; stable dedupe and silent
+// HEARTBEAT_OK handling control notification volume independently from cadence.
+export const DEFAULT_HEARTBEAT_EVERY = "1h";
 export const DEFAULT_HEARTBEAT_ACTIVE_HOURS = {
   start: "09:00",
   end: "20:00",
   timezone: "user",
 } as const;
+export const DEFAULT_HEARTBEAT_WEEKEND_MODE = "urgent-only" as const;
+// Hourly ambient turns should not replay a large main-session transcript. Explicit
+// event wakes opt back into full context in the runner because they carry active work.
+export const DEFAULT_HEARTBEAT_LIGHT_CONTEXT = true;
+export const DEFAULT_HEARTBEAT_ISOLATED_SESSION = true;
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
 /**

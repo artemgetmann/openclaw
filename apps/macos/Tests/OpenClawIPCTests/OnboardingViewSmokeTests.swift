@@ -45,7 +45,14 @@ struct OnboardingViewSmokeTests {
 
     @Test func `consumer setup steps stay in expected order`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            #expect(ConsumerSetupStep.allCases == [.chrome, .permissions, .aiAccess, .accountActivation, .telegram, .telegramGroup])
+            #expect(ConsumerSetupStep.allCases == [
+                .chrome,
+                .permissions,
+                .aiAccess,
+                .accountActivation,
+                .telegram,
+                .telegramGroup,
+            ])
             #expect(ConsumerSetupStep.chrome.next == .permissions)
             #expect(ConsumerSetupStep.permissions.previous == .chrome)
             #expect(ConsumerSetupStep.aiAccess.next == .accountActivation)
@@ -62,7 +69,8 @@ struct OnboardingViewSmokeTests {
             #expect(ConsumerSetupStep.accountActivation.subtitle == "Enter your email to set up Jarvis on this Mac.")
             #expect(JarvisAccountActivationCopy.emailPlaceholder == "email@example.com")
             #expect(JarvisAccountActivationCopy.primaryButton == "Continue")
-            #expect(JarvisAccountActivationCopy.inactiveEmail == "No Jarvis access found for that email. Try a different address.")
+            #expect(JarvisAccountActivationCopy
+                .inactiveEmail == "No Jarvis access found for that email. Try a different address.")
         }
     }
 
@@ -104,7 +112,9 @@ struct OnboardingViewSmokeTests {
             #expect(OnboardingView.consumerSetupStepAfterAccountActivation(
                 current: .accountActivation,
                 isActivated: view.accountActivation.isActivated) == .accountActivation)
-            #expect(view._testAccountActivationStatusMessage == "No Jarvis access found for that email. Try a different address.")
+            #expect(view
+                ._testAccountActivationStatusMessage ==
+                "No Jarvis access found for that email. Try a different address.")
         }
     }
 
@@ -125,17 +135,21 @@ struct OnboardingViewSmokeTests {
         }
     }
 
-    @Test func `debug step override opens consumer setup to telegram for ui smoke`() async {
+    @Test func `debug step override opens consumer setup at requested ui smoke page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            let state = AppState(preview: true)
-            state.connectionMode = .local
-            let view = OnboardingView(
-                state: state,
-                permissionMonitor: PermissionMonitor.shared,
-                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
-                consumerSetupDebugStepEnvironment: ["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP": "telegram"])
+            for (rawStep, expectedStep) in [("permissions", ConsumerSetupStep.permissions), ("telegram", .telegram)] {
+                let state = AppState(preview: true)
+                state.connectionMode = .local
+                let view = OnboardingView(
+                    state: state,
+                    permissionMonitor: PermissionMonitor.shared,
+                    discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
+                    consumerSetupDebugStepEnvironment: ["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP": rawStep])
 
-            #expect(view.consumerSetupStep == .telegram)
+                #expect(view.consumerSetupDebugStep == expectedStep)
+                #expect(view.consumerSetupStep == expectedStep)
+                #expect(view.isConsumerSetupShellActive)
+            }
         }
     }
 

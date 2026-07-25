@@ -22,6 +22,27 @@ For linked worktrees, prefer the scoped launchers instead of relying on the shar
 - `bash scripts/dev-launch-mac.sh`
 - `bash scripts/open-consumer-mac-app.sh --instance <id>`
 - `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>`
+
+Local debug apps use one machine-wide tester slot. The normal rebuild and UI
+smoke wrappers pass `--replace`, so launching a new tester retires the previous
+exact debug app and its named gateway before opening another Dock app. A direct
+`open-consumer-mac-app.sh` call without `--replace` refuses when another tester
+owns the slot. The installed `/Applications/Jarvis.app` and
+`ai.jarvis.gateway` are never part of tester cleanup.
+
+Rare multi-agent GUI/runtime work can opt into parallel lanes:
+
+```bash
+bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <unique-id> --parallel
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <unique-id> --parallel
+```
+
+Parallel mode allows at most 10 live debug apps by default and requires a
+unique isolated instance per agent. Relaunching the same instance replaces only
+that instance. The next normal `--replace` launch retires all leftover parallel
+testers and returns the machine to one tester. Override the cap only
+deliberately with `OPENCLAW_CONSUMER_PARALLEL_TEST_MAX`.
+
 - `pnpm openclaw:local gateway restart`
 
 ## Packaging flow
@@ -60,12 +81,43 @@ For onboarding copy/layout GUI proof, use the native UI smoke instead:
 bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>
 ```
 
+To open one consumer onboarding page directly, pass `--consumer-step`. For
+example, this opens the isolated permissions page without replaying the earlier
+Chrome step:
+
+```bash
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id> --consumer-step permissions
+```
+
+Valid step identifiers are `chrome`, `permissions`, `aiAccess`,
+`accountActivation`, `telegram`, and `telegramGroup`. This debug-only override
+is for focused UI checks: it starts the consumer setup shell at the requested
+page instead of requiring earlier onboarding prerequisites. The smoke lane is
+isolated and visual-only by default (`--no-launchd`), so it does not touch the
+shared gateway or prove a full onboarding/runtime flow.
+
 That script builds `apps/macos` with SwiftPM and launches the debug binary from
 the current worktree through a tiny debug `.app` wrapper. It does not install
 into `/Applications`, does not run release packaging, does not bundle a
 DMG/zip/runtime archive/npm tarball/bundled Node, and does not restart the
 default gateway. Reserve `rebuild-relaunch` and full packaging for cases where
 the release artifact or installer path is the thing being proven.
+
+For a focused packaged-app visual proof, keep the same direct-step override,
+but launch the verified app from `dist/` instead of replaying all onboarding
+pages. Record only after the target app or System Settings pane is frontmost.
+Prefer macOS's bounded native capture for a clean static-UI clip:
+
+```bash
+screencapture -v -V6 -D1 -x /tmp/jarvis-permissions-proof.mov
+```
+
+Before sharing the result, inspect representative full-resolution frames and a
+contact sheet, run `ffprobe`, and run FFmpeg `blackdetect`. Crop to the relevant
+app/System Settings window when desktop notifications or unrelated windows are
+outside the review surface. If a floating `Transcribe` window appears, it is a
+Shortcuts overlay rather than Jarvis; close it through an observed accessibility
+element before recording instead of hiding it in the final proof.
 
 For the stable side-by-side Jarvis Consumer release-candidate app, use the
 dedicated RC wrapper. Both modes preserve `/Applications/Jarvis Consumer.app`,
@@ -92,13 +144,39 @@ hashes against the source checkout. If a skill changes, rerun packaging without
 runtime reuse so Jarvis does not ship stale model-facing skill instructions.
 Packaging also writes
 `OpenClawRuntime/openclaw/capabilities.manifest.json`, which records packaged
-skill hashes plus managed CLI version expectations from skill metadata. During
+skill hashes, managed CLI version expectations, and release-required native
+artifacts from skill metadata. A fresh consumer runtime builds the pinned
+universal `Open Computer Use.app` declared by `jarvis-computer-use`, places it
+under the resolved OpenClaw package root, and preserves its MIT license notice
+and source-ref receipt. The source is built in a process-isolated directory
+under the standard build-artifact `runs/` bucket, so parallel release jobs
+cannot mutate one checkout and interrupted builds remain cleanup-managed.
+Cached/reused runtimes and final app verification fail
+closed if the app is missing, has the wrong bundle ID/version/ref, lacks either
+required architecture, lacks the license, or is not signed in the final app.
+Changing the pinned ref, skill declaration, or materializer invalidates the
+consumer runtime cache. During
 fresh runtime packaging, local installed CLIs such as `gog`, `wacli`, or
 `himalaya` are compared against the packaged `recommendedVersion`; if the local
 tool is newer, packaging fails so the release cannot accidentally ship stale
 consumer dependency expectations. Use
 `OPENCLAW_CONSUMER_ALLOW_CAPABILITY_DRIFT=1` only when that drift is intentional
 for a local smoke build.
+
+The Google Workspace CLI is app-managed: fresh packages include the official
+vendor-signed arm64 and x86_64 payloads under `openclaw/tools/gog`, and gateway
+startup copies the host architecture into Jarvis-owned state when the managed
+copy is missing, older, or differs from the same-version packaged binary. The
+architecture slices remain separate because combining or re-signing them would
+change the code identity macOS Keychain token ACLs expect. Packaging and final
+app verification fail closed unless both binaries have the reviewed Gog
+identifier, Team ID, architecture, and valid signature. This gives clean
+installs and app updates the same pinned CLI without mutating Homebrew or
+Keychain. Its MIT license notice ships beside the binaries as
+`openclaw/tools/gog.LICENSE`. Heavier optional tools such as `summarize` remain
+package-manager-managed; their recommended versions are visible in skill
+status, but Jarvis does not silently install or upgrade their global
+dependencies.
 
 To remove generated UI-smoke build output without deleting a currently running
 smoke app, run:
@@ -189,6 +267,20 @@ This is the public app-release lane, not the default post-merge runtime ship
 lane. For normal hotfix validation, follow the fast runtime/app-support split in
 `docs/agent-guides/runtime-ops.md` instead of rebuilding, notarizing, or
 publishing app artifacts.
+
+Do not open an immediate signed/notarized release task after every merged
+runtime fix. The normal policy is to batch several merged, verified fixes into
+the next planned Jarvis release while a protected break-glass runtime retains
+clear provenance and a bounded, tracked package follow-up. Release immediately
+only when protection is absent or failing, an older package can overwrite the
+fix, users need the fix now, security/compatibility/migration/release-critical
+risk makes waiting unsafe, or the owner explicitly asks. Protection lowers
+downgrade risk but cannot cover manual removal, state resets, or every unusual
+or older reinstall path. See
+`docs/agent-guides/runtime-ops.md` ("Hotfix follow-up and release timing") for
+the full decision rule. Until a trigger changes, report packaging as deferred
+or batched rather than repeatedly urgent; this saves time, tokens, and build
+cycles without hiding the remaining safety risk.
 
 Run the read-only disk gate before starting a release package. By default it
 checks both repo `dist/` output and build-artifact `runs/` staging, requires 25
@@ -321,9 +413,9 @@ notary, publish, or verify work.
 Follow the launcher's printed next steps, then run the release commands from the
 release lane.
 
-Mutating release phases also acquire one fail-fast lock shared by this
-repository's worktrees. If a live owner holds it, use an explicit chat/session
-handoff and let that owner finish or exit. Never improvise a `ps`-scanning
+Mutating release phases also acquire one fail-fast, user-scoped machine lock
+shared by every clone and worktree. If a live owner holds it, use an explicit
+chat/session handoff and let that owner finish or exit. Never improvise a `ps`-scanning
 `SIGSTOP`/`SIGKILL` guard: the canonical lock reports owner PID/context,
 safely reclaims dead owners, and never signals a process. The wrapper's true
 read-only path, `jarvis-public-release.sh --dry-run`, exits before delegated

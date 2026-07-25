@@ -6,7 +6,9 @@ import {
   JARVIS_CONSUMER_ANTHROPIC_SONNET_MODEL,
   JARVIS_CONSUMER_CLAUDE_CLI_MODEL,
   JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
-  JARVIS_CONSUMER_LEGACY_CODEX_MODEL,
+  JARVIS_CONSUMER_CURRENT_OPENAI_MODEL,
+  JARVIS_CONSUMER_LEGACY_CODEX_MODELS,
+  JARVIS_CONSUMER_LEGACY_OPENAI_MODELS,
   shouldMigrateJarvisConsumerModelDefaults,
 } from "./jarvis-consumer-model-migration.js";
 import {
@@ -86,6 +88,35 @@ function addJarvisConsumerModel(
   changes.push(`Added ${modelId} to Jarvis consumer model allowlist.`);
 }
 
+function transferJarvisConsumerGptAlias(params: {
+  models: Record<string, unknown>;
+  legacyModelIds: readonly string[];
+  targetModelId: string;
+  changes: string[];
+}) {
+  const target = ensureRecord(params.models, params.targetModelId);
+  for (const legacyModelId of params.legacyModelIds) {
+    const legacy = getRecord(params.models[legacyModelId]);
+    if (!legacy) {
+      continue;
+    }
+    const alias = typeof legacy.alias === "string" ? legacy.alias.trim() : "";
+    if (alias.toLowerCase() !== "gpt") {
+      continue;
+    }
+
+    const targetAlias = typeof target.alias === "string" ? target.alias.trim() : "";
+    if (targetAlias && targetAlias.toLowerCase() !== "gpt") {
+      continue;
+    }
+    if (!targetAlias) {
+      target.alias = alias;
+    }
+    delete legacy.alias;
+    params.changes.push(`Transferred GPT alias from ${legacyModelId} to ${params.targetModelId}.`);
+  }
+}
+
 function migrateJarvisConsumerModelDefaults(raw: Record<string, unknown>, changes: string[]) {
   if (!shouldMigrateJarvisConsumerModelDefaults(raw)) {
     return;
@@ -95,22 +126,45 @@ function migrateJarvisConsumerModelDefaults(raw: Record<string, unknown>, change
   const defaults = ensureRecord(agents, "defaults");
   const models = ensureRecord(defaults, "models");
   const primary = getJarvisConsumerPrimaryModel(raw);
-  const hasLegacyCodex =
-    primary === JARVIS_CONSUMER_LEGACY_CODEX_MODEL ||
-    hasJarvisConsumerModel(raw, JARVIS_CONSUMER_LEGACY_CODEX_MODEL);
+  const hasLegacyCodex = JARVIS_CONSUMER_LEGACY_CODEX_MODELS.some(
+    (model) => primary === model || hasJarvisConsumerModel(raw, model),
+  );
+  const hasLegacyOpenAI = JARVIS_CONSUMER_LEGACY_OPENAI_MODELS.some(
+    (model) => primary === model || hasJarvisConsumerModel(raw, model),
+  );
 
   if (hasLegacyCodex) {
     addJarvisConsumerModel(models, JARVIS_CONSUMER_CURRENT_CODEX_MODEL, changes);
+    transferJarvisConsumerGptAlias({
+      models,
+      legacyModelIds: JARVIS_CONSUMER_LEGACY_CODEX_MODELS,
+      targetModelId: JARVIS_CONSUMER_CURRENT_CODEX_MODEL,
+      changes,
+    });
+  }
+  if (hasLegacyOpenAI) {
+    addJarvisConsumerModel(models, JARVIS_CONSUMER_CURRENT_OPENAI_MODEL, changes);
+    transferJarvisConsumerGptAlias({
+      models,
+      legacyModelIds: JARVIS_CONSUMER_LEGACY_OPENAI_MODELS,
+      targetModelId: JARVIS_CONSUMER_CURRENT_OPENAI_MODEL,
+      changes,
+    });
   }
 
-  if (primary === JARVIS_CONSUMER_LEGACY_CODEX_MODEL) {
+  const targetPrimary = JARVIS_CONSUMER_LEGACY_CODEX_MODELS.includes(
+    primary as (typeof JARVIS_CONSUMER_LEGACY_CODEX_MODELS)[number],
+  )
+    ? JARVIS_CONSUMER_CURRENT_CODEX_MODEL
+    : JARVIS_CONSUMER_LEGACY_OPENAI_MODELS.includes(
+          primary as (typeof JARVIS_CONSUMER_LEGACY_OPENAI_MODELS)[number],
+        )
+      ? JARVIS_CONSUMER_CURRENT_OPENAI_MODEL
+      : undefined;
+  if (targetPrimary) {
     const model = getRecord(defaults.model);
-    defaults.model = model
-      ? { ...model, primary: JARVIS_CONSUMER_CURRENT_CODEX_MODEL }
-      : { primary: JARVIS_CONSUMER_CURRENT_CODEX_MODEL };
-    changes.push(
-      `Updated Jarvis consumer primary model ${JARVIS_CONSUMER_LEGACY_CODEX_MODEL} → ${JARVIS_CONSUMER_CURRENT_CODEX_MODEL}.`,
-    );
+    defaults.model = model ? { ...model, primary: targetPrimary } : { primary: targetPrimary };
+    changes.push(`Updated Jarvis consumer primary model ${primary} → ${targetPrimary}.`);
   }
 
   if (hasJarvisConsumerClaudeCliAuth(raw)) {
@@ -138,8 +192,8 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
     },
   },
   {
-    id: "jarvis.consumer-model-defaults-v2",
-    describe: "Refresh persisted Jarvis consumer model defaults to include GPT-5.5 and Sonnet",
+    id: "jarvis.consumer-model-defaults-v3",
+    describe: "Refresh persisted Jarvis consumer model defaults to GPT-5.6 Sol and Sonnet",
     apply: (raw, changes) => {
       migrateJarvisConsumerModelDefaults(raw, changes);
     },

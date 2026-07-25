@@ -16,6 +16,7 @@ function writeSkill(params: {
   name: string;
   displayName?: string;
   install?: string;
+  packagedArtifacts?: string;
 }) {
   const skillDir = path.join(params.root, params.name);
   fs.mkdirSync(skillDir, { recursive: true });
@@ -30,6 +31,7 @@ metadata:
       {
         ${params.displayName ? `"displayName": "${params.displayName}",` : ""}
         ${params.install ? `"install": [${params.install}],` : ""}
+        ${params.packagedArtifacts ? `"packagedArtifacts": [${params.packagedArtifacts}],` : ""}
       },
   }
 ---
@@ -106,6 +108,111 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
       ],
     });
     expect(parsed.skills.gog.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("emits release-required native artifacts from skill metadata", () => {
+    const skillsRoot = makeTempRoot();
+    writeSkill({
+      root: skillsRoot,
+      name: "computer-use",
+      packagedArtifacts: `{
+        "id": "open-computer-use",
+        "kind": "macos-app",
+        "requirement": "consumer-release",
+        "path": "native/Open Computer Use.app",
+        "executable": "Contents/MacOS/OpenComputerUse",
+        "bundleIdentifier": "com.ifuryst.opencomputeruse",
+        "version": "0.1.53",
+        "architectures": ["x86_64", "arm64"],
+        "sourceRepo": "https://example.test/open-computer-use.git",
+        "sourceRef": "a8ad90ed703fbdc2095e900c2b2574bfa4d60f36",
+        "buildCommand": ["./scripts/build.sh", "release", "--arch", "universal"],
+        "licenseSource": "LICENSE",
+        "licensePath": "Contents/Resources/LICENSE.txt",
+        "receiptPath": "Contents/Resources/receipt.json"
+      }`,
+    });
+
+    const output = execFileSync(process.execPath, [manifestScript, skillsRoot], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+
+    expect(parsed.packagedArtifacts).toEqual([
+      expect.objectContaining({
+        skillName: "computer-use",
+        id: "open-computer-use",
+        requirement: "consumer-release",
+        architectures: ["arm64", "x86_64"],
+        sourceRef: "a8ad90ed703fbdc2095e900c2b2574bfa4d60f36",
+      }),
+    ]);
+  });
+
+  it("pins the bundled Open Computer Use artifact to the merged handshake fix", () => {
+    const output = execFileSync(process.execPath, [manifestScript, path.join(root, "skills")], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+    const artifact = parsed.packagedArtifacts.find(
+      (candidate: { id?: string }) => candidate.id === "open-computer-use",
+    );
+
+    expect(artifact).toMatchObject({
+      skillName: "jarvis-computer-use",
+      sourceRepo: "https://github.com/artemgetmann/open-codex-computer-use.git",
+      sourceRef: "658d72ad5cfbab60bfb477a8b54fcac9dd659121",
+    });
+  });
+
+  it("rejects unsafe release artifact paths", () => {
+    const skillsRoot = makeTempRoot();
+    writeSkill({
+      root: skillsRoot,
+      name: "computer-use",
+      packagedArtifacts: `{
+        "id": "escape",
+        "kind": "macos-app",
+        "requirement": "consumer-release",
+        "path": "../Escape.app",
+        "executable": "Contents/MacOS/Escape",
+        "bundleIdentifier": "test.escape",
+        "version": "1.0.0",
+        "architectures": ["arm64"],
+        "sourceRepo": "https://example.test/escape.git",
+        "sourceRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "buildCommand": ["./build.sh"],
+        "licenseSource": "LICENSE",
+        "licensePath": "Contents/Resources/LICENSE.txt",
+        "receiptPath": "Contents/Resources/receipt.json"
+      }`,
+    });
+
+    const result = spawnSync(process.execPath, [manifestScript, skillsRoot], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("invalid packaged artifact path");
+  });
+
+  it("tracks the supported summarize CLI version from the bundled skill", () => {
+    const output = execFileSync(process.execPath, [manifestScript, path.join(root, "skills")], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+
+    expect(parsed.managedTools).toContainEqual(
+      expect.objectContaining({
+        skillName: "summarize",
+        installId: "brew",
+        kind: "brew",
+        bins: ["summarize"],
+        formula: "summarize",
+        versionCommand: ["summarize", "--version"],
+        recommendedVersion: "0.21.6",
+      }),
+    );
   });
 
   it("fails when a local CLI is newer than packaged release metadata", () => {

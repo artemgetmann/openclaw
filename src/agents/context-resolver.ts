@@ -8,6 +8,7 @@ type AgentModelEntry = { params?: Record<string, unknown> };
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 export const OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS = 258_400;
+export const OPENAI_GPT_5_6_SOL_EFFECTIVE_CONTEXT_TOKENS = 272_000;
 
 function normalizeContextProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
@@ -141,7 +142,7 @@ function isClaudeCode1MModel(provider: string, model: string): boolean {
   return normalizedModel.endsWith("[1m]");
 }
 
-function resolveEffectiveContextTokensForModel(
+export function resolveKnownEffectiveContextTokensForModel(
   provider: string,
   model: string,
 ): number | undefined {
@@ -153,6 +154,16 @@ function resolveEffectiveContextTokensForModel(
   // usable window so it compacts before sending an oversized prompt.
   if (normalizedProvider === "openai-codex" && normalizedModel === "gpt-5.5") {
     return OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS;
+  }
+
+  // Jarvis deliberately caps Sol below the premium long-context threshold.
+  // Own this for both subscription and direct-API transports so status and
+  // runtime paths do not fall back to the generic 200K default.
+  if (
+    (normalizedProvider === "openai-codex" || normalizedProvider === "openai") &&
+    normalizedModel === "gpt-5.6-sol"
+  ) {
+    return OPENAI_GPT_5_6_SOL_EFFECTIVE_CONTEXT_TOKENS;
   }
 
   return undefined;
@@ -181,7 +192,10 @@ export function resolveDeterministicContextTokensForModel(params: {
     if (isClaudeCode1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
-    const effectiveContextTokens = resolveEffectiveContextTokensForModel(ref.provider, ref.model);
+    const effectiveContextTokens = resolveKnownEffectiveContextTokensForModel(
+      ref.provider,
+      ref.model,
+    );
     if (effectiveContextTokens !== undefined) {
       return effectiveContextTokens;
     }

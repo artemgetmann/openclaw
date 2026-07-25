@@ -33,6 +33,61 @@ function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCr
   );
 }
 
+function normalizeOAuthIdentity(value: unknown): string | undefined {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized || undefined;
+}
+
+/**
+ * Codex CLI state is an import/recovery source, not authority over an
+ * established local Codex profile. Refuse explicit local auth modes and
+ * cross-account copies before comparing token freshness.
+ *
+ * Missing identity on the existing OAuth credential stays compatible so old
+ * profiles can still be upgraded with account metadata during safe migration.
+ * This mirrors the cross-agent copy policy in oauth.ts.
+ */
+function isSafeToSyncExternalOAuthCredential(
+  existing: AuthProfileCredential | undefined,
+  incoming: OAuthCredential,
+  provider: string,
+): boolean {
+  if (incoming.provider !== provider) {
+    return false;
+  }
+  // MiniMax keeps its existing expiry-based sync policy. Codex is the rotating
+  // credential source with a separate Jarvis-owned refresh path, so the
+  // ownership boundary applies only to that provider.
+  if (provider !== "openai-codex") {
+    return true;
+  }
+  if (!existing) {
+    return true;
+  }
+  if (existing.type !== "oauth" || existing.provider !== provider) {
+    return false;
+  }
+
+  const existingAccountId = normalizeOAuthIdentity(existing.accountId);
+  const incomingAccountId = normalizeOAuthIdentity(incoming.accountId);
+  if (existingAccountId && incomingAccountId) {
+    return existingAccountId === incomingAccountId;
+  }
+
+  const existingEmail = normalizeOAuthIdentity(existing.email);
+  const incomingEmail = normalizeOAuthIdentity(incoming.email);
+  if (existingEmail && incomingEmail) {
+    return existingEmail === incomingEmail;
+  }
+
+  // An identified local profile must not accept an external credential that
+  // cannot prove it belongs to the same account.
+  if (existingAccountId || existingEmail) {
+    return false;
+  }
+  return true;
+}
+
 function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
   if (!cred) {
     return false;
@@ -60,16 +115,12 @@ function syncExternalCliCredentialsForProvider(
   provider: string,
   readCredentials: () => OAuthCredential | null,
   now: number,
-  options?: { alwaysCheck?: boolean },
 ): boolean {
   const existing = store.profiles[profileId];
   const shouldSync =
-    options?.alwaysCheck === true ||
-    !existing ||
-    existing.provider !== provider ||
-    !isExternalProfileFresh(existing, now);
+    !existing || existing.provider !== provider || !isExternalProfileFresh(existing, now);
   const creds = shouldSync ? readCredentials() : null;
-  if (!creds) {
+  if (!creds || !isSafeToSyncExternalOAuthCredential(existing, creds, provider)) {
     return false;
   }
 
@@ -78,10 +129,7 @@ function syncExternalCliCredentialsForProvider(
     !existingOAuth ||
     existingOAuth.provider !== provider ||
     existingOAuth.expires <= now ||
-    creds.expires > existingOAuth.expires ||
-    (provider === "openai-codex" &&
-      creds.expires >= existingOAuth.expires &&
-      !shallowEqualOAuthCredentials(existingOAuth, creds));
+    creds.expires > existingOAuth.expires;
 
   if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, creds)) {
     store.profiles[profileId] = creds;
@@ -152,7 +200,6 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
       "openai-codex",
       () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
       now,
-      { alwaysCheck: true },
     )
   ) {
     mutated = true;

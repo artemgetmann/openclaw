@@ -3,8 +3,35 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-OCU_REPO_URL="${OPENCLAW_OPEN_COMPUTER_USE_REPO:-https://github.com/artemgetmann/open-codex-computer-use.git}"
-OCU_REF="${OPENCLAW_OPEN_COMPUTER_USE_REF:-a8ad90ed703fbdc2095e900c2b2574bfa4d60f36}"
+read_declared_open_computer_use_field() {
+  local field="$1"
+
+  # Developer bootstrap and consumer release packaging must follow the same
+  # pinned source declaration. Reading the bundled-skill manifest here avoids
+  # a second ref that can silently drift from the shipped runtime.
+  node --input-type=module - "$ROOT_DIR" "$field" <<'NODE'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [rootDir, field] = process.argv.slice(2);
+const { buildConsumerCapabilitiesManifest } = await import(
+  pathToFileURL(path.join(rootDir, "scripts", "consumer-capabilities-manifest.mjs")).href
+);
+process.chdir(rootDir);
+const manifest = buildConsumerCapabilitiesManifest("skills");
+const artifact = manifest.packagedArtifacts.find(
+  (candidate) => candidate.id === "open-computer-use",
+);
+const value = artifact?.[field];
+if (typeof value !== "string" || !value) {
+  throw new Error(`jarvis-computer-use does not declare packaged artifact field: ${field}`);
+}
+process.stdout.write(value);
+NODE
+}
+
+OCU_REPO_URL="${OPENCLAW_OPEN_COMPUTER_USE_REPO:-$(read_declared_open_computer_use_field sourceRepo)}"
+OCU_REF="${OPENCLAW_OPEN_COMPUTER_USE_REF:-$(read_declared_open_computer_use_field sourceRef)}"
 OCU_WORKDIR="${OPENCLAW_OPEN_COMPUTER_USE_WORKDIR:-/tmp/jarvis-ocu-pinned-runtime/open-codex-computer-use}"
 OCU_APP_PATH="${OPENCLAW_OPEN_COMPUTER_USE_APP_PATH:-${HOME}/Applications/Open Computer Use (Dev).app}"
 OCU_BIN_PATH_FILE="${OPENCLAW_OPEN_COMPUTER_USE_BIN_PATH_FILE:-/tmp/jarvis-ocu-stability-bin-path.txt}"

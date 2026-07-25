@@ -482,6 +482,62 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
+  it("does not inherit accumulated lane text as a final media caption", async () => {
+    const harness = createHarness({
+      answerLastPartialText: "Final PDF proof 01bb162.",
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      // This is accumulated lane text, not text owned by the document payload.
+      text: "Final PDF proof 01bb162.",
+      payload: { mediaUrl: "file:///tmp/final-proof.pdf" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        text: undefined,
+        mediaUrl: "file:///tmp/final-proof.pdf",
+      },
+      expect.objectContaining({
+        reason: "media",
+        callsite: "lane-final-standard-send",
+        infoKind: "final",
+      }),
+    );
+  });
+
+  it("treats whitespace-only final media text as captionless", async () => {
+    const harness = createHarness({
+      answerLastPartialText: "Completed answer stays in its text message.",
+    });
+
+    await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Completed answer stays in its text message.",
+      payload: {
+        text: "   ",
+        mediaUrl: "file:///tmp/final-proof.pdf",
+        isError: true,
+      },
+      infoKind: "final",
+    });
+
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        text: undefined,
+        mediaUrl: "file:///tmp/final-proof.pdf",
+        isError: true,
+      },
+      expect.objectContaining({
+        reason: "error",
+        callsite: "lane-final-standard-send",
+      }),
+    );
+  });
+
   it("does not use DM draft final shortcut when inline buttons are present", async () => {
     const answerStream = createTestDraftStream({ previewMode: "draft" });
     const harness = createHarness({

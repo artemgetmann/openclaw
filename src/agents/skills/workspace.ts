@@ -38,8 +38,10 @@ const skillCommandDebugOnce = new Set<string>();
  *
  * Keep runtime-owned skills absolute. They are frequently read immediately on
  * live turns, and we have seen model-side `~` expansion or path guessing
- * produce malformed paths for app-owned/product skills. Using the exact path
- * removes that ambiguity without changing which skill is selected.
+ * produce malformed paths for app-owned/product skills. For symlink-backed
+ * workspace skills, prefer a shorter canonical absolute path when one exists.
+ * It remains directly readable while recovering prompt budget otherwise spent
+ * repeating a long app-support workspace prefix for every skill.
  *
  * Example compacted path:
  * `/Users/alice/.bun/.../skills/github/SKILL.md`
@@ -49,21 +51,32 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   const home = os.homedir();
   if (!home) return skills;
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-  return skills.map((s) => ({
-    ...s,
-    filePath:
-      // Loader-emitted workspace/product skills are runtime-owned. Preserve
-      // exact paths so model-side file reads do not depend on shell-style `~`
-      // expansion or reconstructed `workspace/skills/<name>` guesses.
-      s.source === "openclaw-workspace" ||
-      s.source === "workspace" ||
-      s.source === "openclaw-product-managed" ||
-      s.source === "openclaw-bundled"
-        ? s.filePath
-        : s.filePath.startsWith(prefix)
-          ? "~/" + s.filePath.slice(prefix.length)
-          : s.filePath,
-  }));
+  return skills.map((skill) => {
+    if (skill.source === "openclaw-workspace" || skill.source === "workspace") {
+      try {
+        const canonicalPath = fs.realpathSync.native(skill.filePath);
+        if (canonicalPath.length < skill.filePath.length) {
+          return { ...skill, filePath: canonicalPath };
+        }
+      } catch {
+        // A prompt snapshot can outlive a removed skill. Preserve the original
+        // location so this display-only optimization never breaks generation.
+      }
+      return skill;
+    }
+    return {
+      ...skill,
+      filePath:
+        // Product-managed and bundled skills are runtime-owned. Preserve exact
+        // paths so model-side file reads do not depend on shell-style `~`
+        // expansion or reconstructed product paths.
+        skill.source === "openclaw-product-managed" || skill.source === "openclaw-bundled"
+          ? skill.filePath
+          : skill.filePath.startsWith(prefix)
+            ? "~/" + skill.filePath.slice(prefix.length)
+            : skill.filePath,
+    };
+  });
 }
 
 function debugSkillCommandOnce(
@@ -207,6 +220,181 @@ function rankSkillsForPrompt(
       return a.index - b.index;
     })
     .map(({ entry }) => entry.skill);
+}
+
+function resolveProtectedSkillNames(
+  entries: SkillEntry[],
+  config?: OpenClawConfig,
+  skillFilter?: string[],
+  inventory: SkillEntry[] = entries,
+): Set<string> {
+  const selectedSkillNames = new Set([
+    ...(resolveBundledAllowlist(config, inventory) ?? []),
+    ...(resolveSkillFilter(skillFilter, config, inventory) ?? []),
+  ]);
+  return new Set(
+    entries
+      .filter((entry) => resolvePromptEntryPriority(entry, config, selectedSkillNames) <= 1)
+      .map((entry) => entry.skill.name),
+  );
+}
+
+const SKILL_MATCH_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "and",
+  "are",
+  "before",
+  "can",
+  "for",
+  "from",
+  "have",
+  "into",
+  "its",
+  "not",
+  "that",
+  "the",
+  "their",
+  "this",
+  "use",
+  "user",
+  "when",
+  "with",
+  "you",
+  "your",
+]);
+
+/**
+ * Normalize routing text without trying to become a full search engine.
+ *
+ * The lightweight plural folding is intentional: user prompts often say
+ * "priorities" while a skill name says "priority". Keeping this resolver
+ * deterministic avoids a model call before the model-facing prompt exists.
+ */
+function normalizeSkillMatchTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map((token) => {
+      if (token.length > 4 && token.endsWith("ies")) {
+        return `${token.slice(0, -3)}y`;
+      }
+      if (token.length > 4 && token.endsWith("s") && !token.endsWith("ss")) {
+        return token.slice(0, -1);
+      }
+      return token;
+    })
+    .filter((token) => token.length >= 3 && !SKILL_MATCH_STOP_WORDS.has(token));
+}
+
+function countTokenOverlap(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
+  let overlap = 0;
+  for (const token of left) {
+    if (right.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
+function collectAdjacentPhrases(tokens: string[]): Set<string> {
+  const phrases = new Set<string>();
+  for (let index = 0; index + 1 < tokens.length; index += 1) {
+    phrases.add(`${tokens[index]} ${tokens[index + 1]}`);
+  }
+  return phrases;
+}
+
+function containsTokenSequence(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return false;
+  }
+  return haystack.some((_, start) =>
+    needle.every((token, offset) => haystack[start + offset] === token),
+  );
+}
+
+function scoreSkillForUserPrompt(params: {
+  skill: Skill;
+  queryTokens: string[];
+  querySet: ReadonlySet<string>;
+  queryPhrases: ReadonlySet<string>;
+}): { explicitMatch: boolean; score: number } {
+  const { skill, queryTokens, querySet, queryPhrases } = params;
+  const nameTokens = normalizeSkillMatchTokens(skill.name);
+  const descriptionTokens = normalizeSkillMatchTokens(skill.description ?? "");
+  const nameSet = new Set(nameTokens);
+  const descriptionSet = new Set(descriptionTokens);
+  const explicitMatch = containsTokenSequence(queryTokens, nameTokens);
+  let score = 0;
+
+  const nameOverlap = countTokenOverlap(nameSet, querySet);
+  const descriptionOverlap = countTokenOverlap(descriptionSet, querySet);
+  score += nameOverlap * 500;
+  score += descriptionOverlap * 25;
+
+  if (nameTokens.length > 0 && nameOverlap === nameSet.size) {
+    score += 2_000;
+  } else if (nameOverlap >= 2) {
+    score += 750;
+  }
+
+  // Adjacent phrases such as "builder priority" and "build in public" carry
+  // more routing intent than isolated generic words.
+  for (const phrase of collectAdjacentPhrases(nameTokens)) {
+    if (queryPhrases.has(phrase)) {
+      score += 1_000;
+    }
+  }
+  for (const phrase of collectAdjacentPhrases(descriptionTokens)) {
+    if (queryPhrases.has(phrase)) {
+      score += 100;
+    }
+  }
+
+  return { explicitMatch, score };
+}
+
+function rankSkillsForPromptByUserPrompt(
+  skills: Skill[],
+  userPrompt?: string,
+  protectedSkillNames: ReadonlySet<string> = new Set(),
+): Skill[] {
+  if (!userPrompt?.trim()) {
+    return skills;
+  }
+  const queryTokens = normalizeSkillMatchTokens(userPrompt);
+  if (queryTokens.length === 0) {
+    return skills;
+  }
+  const querySet = new Set(queryTokens);
+  const queryPhrases = collectAdjacentPhrases(queryTokens);
+  return skills
+    .map((skill, index) => {
+      const relevance = scoreSkillForUserPrompt({
+        skill,
+        queryTokens,
+        querySet,
+        queryPhrases,
+      });
+      return {
+        skill,
+        index,
+        ...relevance,
+        protected: protectedSkillNames.has(skill.name),
+      };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.protected) - Number(left.protected) ||
+        (left.protected
+          ? left.index - right.index
+          : Number(right.explicitMatch) - Number(left.explicitMatch) || right.score - left.score) ||
+        left.index - right.index,
+    )
+    .map(({ skill }) => skill);
 }
 
 function sanitizeSkillCommandName(raw: string): string {
@@ -661,50 +849,195 @@ function loadSkillEntries(
   return skillEntries;
 }
 
-function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
+function escapeSkillPromptXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/**
+ * Render a mixed-detail catalog.
+ *
+ * Relevant skills at the front keep descriptions. The remaining skills keep
+ * their names and exact locations, so prompt pressure cannot make them
+ * completely undiscoverable merely because their descriptions are long.
+ */
+function formatSkillsForHybridPrompt(skills: Skill[], detailedCount: number): string {
+  if (skills.length === 0) {
+    return "";
+  }
+  const lines = [
+    "",
+    "",
+    "The following skills provide specialized instructions for specific tasks.",
+    "Use the read tool to load a skill's file when the task matches its description or name.",
+    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+    "",
+    "<available_skills>",
+  ];
+  for (const [index, skill] of skills.entries()) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeSkillPromptXml(skill.name)}</name>`);
+    if (index < detailedCount && skill.description?.trim()) {
+      lines.push(
+        `    <description>${escapeSkillPromptXml(skill.description.trim())}</description>`,
+      );
+    }
+    lines.push(`    <location>${escapeSkillPromptXml(skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}
+
+function buildSkillsPromptLimitNote(params: {
+  included: number;
+  total: number;
+  detailedCount: number;
+}): string {
+  const compactCount = params.included - params.detailedCount;
+  if (params.included < params.total) {
+    return `⚠️ Skills truncated: included ${params.included} of ${params.total} (${params.detailedCount} detailed, ${compactCount} compact). Run \`openclaw skills check\` to audit.`;
+  }
+  if (compactCount > 0) {
+    return `⚠️ Skills catalog compacted: ${params.detailedCount} detailed, ${compactCount} name-and-location only, ${params.total} total. Match compact entries by name or exact location when descriptions are absent.`;
+  }
+  return "";
+}
+
+function renderSkillsPrompt(params: {
+  skills: Skill[];
+  total: number;
+  detailedCount: number;
+  remoteNote?: string;
+}): string {
+  const limitNote = buildSkillsPromptLimitNote({
+    included: params.skills.length,
+    total: params.total,
+    detailedCount: params.detailedCount,
+  });
+  const catalog =
+    params.detailedCount === params.skills.length
+      ? formatSkillsForPrompt(params.skills)
+      : formatSkillsForHybridPrompt(params.skills, params.detailedCount);
+  return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
+}
+
+function applySkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  remoteNote?: string;
+}): {
   skillsForPrompt: Skill[];
+  detailedCount: number;
   truncated: boolean;
-  truncatedReason: "count" | "chars" | null;
 } {
   const limits = resolveSkillsLimits(params.config);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
-  let truncated = total > byCount.length;
-  let truncatedReason: "count" | "chars" | null = truncated ? "count" : null;
+  let detailedCount = skillsForPrompt.length;
 
-  const fits = (skills: Skill[]): boolean => {
-    const block = formatSkillsForPrompt(skills);
+  const fits = (skills: Skill[], detailCount: number): boolean => {
+    const block = renderSkillsPrompt({
+      skills,
+      total,
+      detailedCount: detailCount,
+      remoteNote: params.remoteNote,
+    });
     return block.length <= limits.maxSkillsPromptChars;
   };
 
-  if (!fits(skillsForPrompt)) {
-    // Binary search the largest prefix that fits in the char budget.
-    let lo = 0;
-    let hi = skillsForPrompt.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fits(skillsForPrompt.slice(0, mid))) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
+  if (!fits(skillsForPrompt, detailedCount)) {
+    // First preserve the count-limited catalog as names + locations, then use
+    // the remaining budget for descriptions of the most relevant prefix.
+    if (fits(skillsForPrompt, 0)) {
+      let lo = 0;
+      let hi = skillsForPrompt.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fits(skillsForPrompt, mid)) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
       }
+      detailedCount = lo;
+    } else {
+      // Even names + locations overflow. Keep the largest compact prefix.
+      // Current-turn relevance ranking runs before this step, so exact and
+      // semantically strong matches remain at the front.
+      detailedCount = 0;
+      let lo = 0;
+      let hi = skillsForPrompt.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fits(skillsForPrompt.slice(0, mid), 0)) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      skillsForPrompt = skillsForPrompt.slice(0, lo);
     }
-    skillsForPrompt = skillsForPrompt.slice(0, lo);
-    truncated = true;
-    truncatedReason = "chars";
   }
 
-  return { skillsForPrompt, truncated, truncatedReason };
+  const truncated = skillsForPrompt.length < total;
+  return { skillsForPrompt, detailedCount, truncated };
+}
+
+function buildPromptFromRankedSkills(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  remoteNote?: string;
+}): string {
+  const { skillsForPrompt, detailedCount } = applySkillsPromptLimits({
+    skills: params.skills,
+    config: params.config,
+    remoteNote: params.remoteNote,
+  });
+  return renderSkillsPrompt({
+    skills: skillsForPrompt,
+    total: params.skills.length,
+    detailedCount,
+    remoteNote: params.remoteNote,
+  });
+}
+
+function resolveLegacySnapshotRemoteNote(snapshot?: SkillSnapshot): string | undefined {
+  if (snapshot?.remoteNote !== undefined) {
+    return snapshot.remoteNote;
+  }
+  const firstLine = snapshot?.prompt
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (
+    !firstLine ||
+    firstLine.startsWith("⚠️ Skills ") ||
+    firstLine === "The following skills provide specialized instructions for specific tasks." ||
+    firstLine.includes("<available_skills") ||
+    firstLine.startsWith("<")
+  ) {
+    return undefined;
+  }
+  // Older snapshots stored the remote eligibility note only as the first
+  // prompt line. Preserve that instruction while rebuilding the catalog.
+  return firstLine;
 }
 
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const { eligible, prompt, protectedSkillNames, resolvedSkills } =
+    resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+  const remoteNote = opts?.eligibility?.remote?.note?.trim();
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -713,6 +1046,8 @@ export function buildWorkspaceSkillSnapshot(
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    ...(remoteNote ? { remoteNote } : {}),
+    protectedSkillNames: [...protectedSkillNames],
     resolvedSkills,
     version: opts?.snapshotVersion,
   };
@@ -734,6 +1069,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** Current user request used only to rank the model-facing prompt catalog. */
+  userPrompt?: string;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -742,6 +1079,7 @@ function resolveWorkspaceSkillPromptState(
 ): {
   eligible: SkillEntry[];
   prompt: string;
+  protectedSkillNames: Set<string>;
   resolvedSkills: Skill[];
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
@@ -762,21 +1100,20 @@ function resolveWorkspaceSkillPromptState(
     opts?.skillFilter,
     skillEntries,
   );
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
-    skills: resolvedSkills,
+  const protectedSkillNames = resolveProtectedSkillNames(
+    promptEntries,
+    opts?.config,
+    opts?.skillFilter,
+    skillEntries,
+  );
+  const prompt = buildPromptFromRankedSkills({
+    skills: compactSkillPaths(
+      rankSkillsForPromptByUserPrompt(resolvedSkills, opts?.userPrompt, protectedSkillNames),
+    ),
     config: opts?.config,
-  });
-  const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
-    : "";
-  const prompt = [
     remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  });
+  return { eligible, prompt, protectedSkillNames, resolvedSkills };
 }
 
 export function resolveSkillsPromptForRun(params: {
@@ -784,7 +1121,25 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  userPrompt?: string;
 }): string {
+  const resolvedSkills = params.skillsSnapshot?.resolvedSkills;
+  if (resolvedSkills && resolvedSkills.length > 0 && params.userPrompt?.trim()) {
+    const protectedSkillNames = new Set(
+      params.skillsSnapshot?.protectedSkillNames ?? [
+        CRITICAL_PRODUCT_POLICY_SKILL,
+        ...Object.keys(params.config?.skills?.entries ?? {}),
+        ...(params.config?.skills?.allowBundled ?? []),
+      ],
+    );
+    return buildPromptFromRankedSkills({
+      skills: compactSkillPaths(
+        rankSkillsForPromptByUserPrompt(resolvedSkills, params.userPrompt, protectedSkillNames),
+      ),
+      config: params.config,
+      remoteNote: resolveLegacySnapshotRemoteNote(params.skillsSnapshot),
+    });
+  }
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
@@ -793,6 +1148,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      userPrompt: params.userPrompt,
     });
     return prompt.trim() ? prompt : "";
   }

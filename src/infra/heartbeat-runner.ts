@@ -47,7 +47,17 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { isWithinActiveHours, resolveHeartbeatWeekendMode } from "./heartbeat-active-hours.js";
+import {
+  buildHeartbeatAttentionPrompt,
+  buildHeartbeatAttentionState,
+  buildHeartbeatPagerText,
+  constrainHeartbeatAttentionRoutes,
+  groupHeartbeatTopicItems,
+  parseHeartbeatAttentionEnvelope,
+  resolveTrustedHeartbeatTopicRoutes,
+  selectHeartbeatAttentionItems,
+} from "./heartbeat-attention.js";
 import {
   buildExecEventPrompt,
   buildCronEventPrompt,
@@ -55,7 +65,7 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
-import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
+import { isHeartbeatEventDrivenReason, resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
@@ -635,7 +645,7 @@ function appendRecentHeartbeatHistory(
   const historyBlock = [
     "Recent delivered heartbeat alerts (most recent first):",
     ...lines,
-    "Use this to avoid repeating the same unresolved blocker as a full alert unless something materially changed. If follow-up is still needed with no material change, prefer a shorter nudge.",
+    "Use this to avoid repeating the same unresolved blocker unless something materially changed or its urgency escalated. Changed wording is not a material change.",
   ].join("\n");
   if (prompt.includes("Recent delivered heartbeat alerts (most recent first):")) {
     return prompt;
@@ -733,6 +743,7 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const isEventDrivenWake = isHeartbeatEventDrivenReason(opts.reason);
   // Inspect only the explicit in-memory target before ordinary policy gates.
   // Normal disabled heartbeats retain their old cheap exit and never touch the
   // session store or HEARTBEAT.md merely to decide they are disabled.
@@ -754,8 +765,19 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isForcedRestartContinuation && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  const weekendMode = resolveHeartbeatWeekendMode(cfg, heartbeat, startedAt);
+  // Explicit event sources are already scoped work (cron, monitor/webhook, notification, or
+  // exec completion). They bypass the ambient schedule, but they still respect an explicitly
+  // disabled heartbeat. An interval run has no such urgency proof and stays inside the window.
+  if (
+    !isForcedRestartContinuation &&
+    !isEventDrivenWake &&
+    !isWithinActiveHours(cfg, heartbeat, startedAt)
+  ) {
     return { status: "skipped", reason: "quiet-hours" };
+  }
+  if (!isForcedRestartContinuation && !isEventDrivenWake && weekendMode === "off") {
+    return { status: "skipped", reason: "weekend" };
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
@@ -793,7 +815,8 @@ export async function runHeartbeatOnce(opts: {
   // Restart continuation must reuse the original transcript: that is where the
   // interrupted task and its safety state live. An isolated heartbeat session
   // would neither drain the tagged event nor have enough context to resume it.
-  const useIsolatedSession = heartbeat?.isolatedSession === true && !hasRestartContinuation;
+  const useIsolatedSession =
+    heartbeat?.isolatedSession === true && !hasRestartContinuation && !isEventDrivenWake;
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
@@ -847,11 +870,11 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeatDelivery: delivery,
   });
-  const alertDelivery = resolveSourceTopicAlertDelivery({
+  let alertDelivery = resolveSourceTopicAlertDelivery({
     sourceReceipt,
     fallbackDelivery: delivery,
   });
-  const alertVisibility =
+  let alertVisibility =
     alertDelivery === delivery
       ? okVisibility
       : alertDelivery.channel !== "none"
@@ -880,8 +903,45 @@ export async function runHeartbeatOnce(opts: {
     workspaceDir,
     recentHeartbeats: entry?.recentHeartbeats,
   });
-  const prompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
   const { hasExecCompletion, hasCronEvents } = promptResolution;
+  const useAttentionEnvelope =
+    !isForcedRestartContinuation &&
+    !hasExecCompletion &&
+    !hasCronEvents &&
+    heartbeat?.includeReasoning !== true &&
+    alertVisibility.showAlerts &&
+    delivery.channel === "telegram" &&
+    Boolean(delivery.to);
+  const sourcePrompt = appendHeartbeatSourceContext(promptResolution.prompt, sourceReceipt);
+  const scheduleAwarePrompt =
+    !useAttentionEnvelope && !isEventDrivenWake && weekendMode === "urgent-only"
+      ? `${sourcePrompt}\n\nWeekend urgent-only mode is active. Surface only urgent/time-sensitive attention; routine work waits until the next weekday sweep.`
+      : sourcePrompt;
+  const heartbeatSessionStore = useAttentionEnvelope
+    ? Object.fromEntries(
+        Object.entries(loadSessionStore(storePath)).filter(
+          ([candidateSessionKey]) => resolveAgentIdFromSessionKey(candidateSessionKey) === agentId,
+        ),
+      )
+    : {};
+  const trustedHeartbeatTopics = useAttentionEnvelope
+    ? resolveTrustedHeartbeatTopicRoutes(
+        heartbeatSessionStore,
+        sourceReceipt?.sourceAccountId ?? delivery.accountId,
+      )
+    : [];
+  // Normal Telegram heartbeat sweeps use a typed envelope so one model turn can produce
+  // several independently routed items. Cron, exec, and restart-continuation turns retain
+  // their existing free-text contracts because they represent one explicit unit of work.
+  const prompt = useAttentionEnvelope
+    ? `${scheduleAwarePrompt}\n\n${buildHeartbeatAttentionPrompt(
+        entry?.heartbeatAttentionState,
+        trustedHeartbeatTopics,
+        {
+          urgentOnly: !isEventDrivenWake && weekendMode === "urgent-only",
+        },
+      )}`
+    : scheduleAwarePrompt;
   const originContext = sourceReceipt
     ? {
         channel: sourceReceipt.sourceChannel,
@@ -1002,7 +1062,7 @@ export async function runHeartbeatOnce(opts: {
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
-      heartbeat?.lightContext === true ? "lightweight" : undefined;
+      heartbeat?.lightContext === true && !isEventDrivenWake ? "lightweight" : undefined;
     let agentRunStarted = false;
     const replyOpts = heartbeatModelOverride
       ? {
@@ -1143,6 +1203,153 @@ export async function runHeartbeatOnce(opts: {
 
     const mediaUrls =
       replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+
+    const attentionEnvelope =
+      useAttentionEnvelope && mediaUrls.length === 0
+        ? parseHeartbeatAttentionEnvelope(normalized.text)
+        : null;
+    if (attentionEnvelope && delivery.channel === "telegram" && delivery.to) {
+      const selected = selectHeartbeatAttentionItems({
+        items: constrainHeartbeatAttentionRoutes({
+          items: attentionEnvelope.items,
+          trustedTopics: trustedHeartbeatTopics,
+        }),
+        previous: entry?.heartbeatAttentionState,
+        maxItems: 3,
+        urgentOnly: !isEventDrivenWake && weekendMode === "urgent-only",
+      });
+      if (selected.items.length === 0) {
+        await restoreHeartbeatUpdatedAt({
+          storePath,
+          sessionKey,
+          updatedAt: previousUpdatedAt,
+        });
+        // The model did useful discovery work, but every item is materially unchanged.
+        // Prune the synthetic heartbeat turn so repeated sweeps do not bloat main context.
+        await pruneHeartbeatTranscript(transcriptState);
+        emitHeartbeatEvent({
+          status: "skipped",
+          reason: "duplicate",
+          preview: selected.suppressedKeys.join(", ").slice(0, 200),
+          durationMs: Date.now() - startedAt,
+          hasMedia: false,
+          channel: delivery.channel,
+          accountId: delivery.accountId,
+        });
+        return { status: "ran", durationMs: Date.now() - startedAt };
+      }
+
+      const topicGroups = groupHeartbeatTopicItems(selected.items);
+      const pagerItems = selected.items.filter((item) => item.destination.kind === "pager");
+      const destinationCount = topicGroups.length + (pagerItems.length > 0 ? 1 : 0);
+      const needsPager = pagerItems.length > 0 || destinationCount > 1;
+      const withResponsePrefix = (text: string): string =>
+        responsePrefix && text && !text.startsWith(responsePrefix)
+          ? `${responsePrefix} ${text}`
+          : text;
+      const persistAttentionDelivery = async (params: {
+        delivered: typeof selected.items;
+        recordText?: string;
+        recordTo?: string;
+      }) => {
+        // Re-read and write under the session-store lock. Heartbeats can overlap with ordinary
+        // chat activity, and a stale load/save pair would otherwise clobber newer session state.
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (!current) {
+            return;
+          }
+          store[sessionKey] = {
+            ...current,
+            ...(params.recordText
+              ? {
+                  lastHeartbeatText: params.recordText,
+                  lastHeartbeatSentAt: startedAt,
+                  recentHeartbeats: recordRecentHeartbeat({
+                    previous: current.recentHeartbeats,
+                    sentAt: startedAt,
+                    channel: "telegram",
+                    to: params.recordTo,
+                    preview: params.recordText,
+                  }),
+                }
+              : {}),
+            heartbeatAttentionState: buildHeartbeatAttentionState({
+              previous: current.heartbeatAttentionState,
+              delivered: params.delivered,
+              deliveredAt: startedAt,
+            }),
+          };
+        });
+      };
+
+      // Topic details are silent whenever a compact DM pager also exists. The user gets one
+      // notification, while every task still lands in its durable workbench with full context.
+      for (const group of topicGroups) {
+        const topicAccountId = sourceReceipt?.sourceAccountId ?? delivery.accountId;
+        const topicDeliveryResults = await deliverOutboundPayloads({
+          cfg,
+          channel: "telegram",
+          to: group.chatId,
+          accountId: topicAccountId,
+          session: outboundSession,
+          threadId: group.threadId,
+          payloads: [{ text: withResponsePrefix(group.text) }],
+          silent: needsPager,
+          deps: opts.deps,
+        });
+        if (topicDeliveryResults.length === 0) {
+          throw new Error("heartbeat topic delivery produced no message");
+        }
+      }
+
+      const pagerText = needsPager
+        ? withResponsePrefix(buildHeartbeatPagerText(selected.items))
+        : "";
+      if (needsPager) {
+        const pagerDeliveryResults = await deliverOutboundPayloads({
+          cfg,
+          channel: "telegram",
+          to: delivery.to,
+          accountId: delivery.accountId,
+          session: outboundSession,
+          threadId: delivery.threadId,
+          payloads: [{ text: pagerText }],
+          deps: opts.deps,
+        });
+        if (pagerDeliveryResults.length === 0) {
+          throw new Error("heartbeat pager delivery produced no message");
+        }
+      }
+
+      const singleTopic = !needsPager ? topicGroups[0] : undefined;
+      const recordedText = pagerText || withResponsePrefix(singleTopic?.text ?? "");
+      const recordedTo = needsPager ? delivery.to : singleTopic?.chatId;
+      await persistAttentionDelivery({
+        delivered: selected.items,
+        recordText: recordedText,
+        recordTo: recordedTo,
+      });
+
+      emitHeartbeatEvent({
+        status: "sent",
+        to: recordedTo,
+        preview: recordedText.slice(0, 200),
+        durationMs: Date.now() - startedAt,
+        hasMedia: false,
+        channel: "telegram",
+        accountId: delivery.accountId,
+        indicatorType: okVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      });
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+    if (useAttentionEnvelope && !attentionEnvelope) {
+      // Malformed or missing typed output may contain several unrelated items. Falling back to
+      // the configured pager is noisier than a perfect fan-out, but it cannot corrupt an
+      // arbitrary task topic. A later valid heartbeat can recover normal per-topic routing.
+      alertDelivery = delivery;
+      alertVisibility = okVisibility;
+    }
 
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.

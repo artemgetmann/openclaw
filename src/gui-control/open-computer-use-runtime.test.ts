@@ -380,6 +380,31 @@ describe("formatOpenComputerUseTccRecoveryGuidance", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not invent a TCC identity for custom or PATH commands", () => {
+    const guidance = formatOpenComputerUseTccRecoveryGuidance({
+      command: "open-computer-use",
+      stderr: "Accessibility permission missing.",
+    });
+
+    expect(guidance).toContain("Bundle identity could not be verified");
+    expect(guidance).toContain("Do not run tccutil reset");
+    expect(guidance).not.toContain("com.ifuryst.opencomputeruse.dev");
+  });
+
+  it("reports the packaged release app identity for permission failures", () => {
+    const guidance = formatOpenComputerUseTccRecoveryGuidance({
+      command:
+        "/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/native/Open Computer Use.app/Contents/MacOS/OpenComputerUse",
+      stderr: "Accessibility permission missing.",
+    });
+
+    expect(guidance).toContain(
+      "Exact app: /Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/native/Open Computer Use.app",
+    );
+    expect(guidance).toContain("Bundle id: com.ifuryst.opencomputeruse");
+    expect(guidance).not.toContain("Dev builds are often ad-hoc signed");
+  });
 });
 
 describe("OpenComputerUseRuntime", () => {
@@ -394,11 +419,64 @@ describe("OpenComputerUseRuntime", () => {
 
   it("uses the OCU env override before default app discovery", () => {
     expect(
-      resolveOpenComputerUseCommand(undefined, {
-        HOME: "/tmp/home",
-        OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
-      }),
+      resolveOpenComputerUseCommand(
+        undefined,
+        {
+          HOME: "/tmp/home",
+          OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
+        },
+        null,
+      ),
     ).toBe("/tmp/env-ocu");
+  });
+
+  it("uses the OCU env override before packaged app discovery", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    const packagedCommand = path.join(
+      packageRoot,
+      "native",
+      "Open Computer Use.app",
+      "Contents",
+      "MacOS",
+      "OpenComputerUse",
+    );
+    await fs.mkdir(path.dirname(packagedCommand), { recursive: true });
+    await fs.writeFile(packagedCommand, "");
+
+    expect(
+      resolveOpenComputerUseCommand(
+        undefined,
+        {
+          HOME: "/tmp/home",
+          OPENCLAW_OPEN_COMPUTER_USE_BIN: "/tmp/env-ocu",
+        },
+        packageRoot,
+      ),
+    ).toBe("/tmp/env-ocu");
+  });
+
+  it("prefers the release app embedded in the resolved package root by default", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ocu-package-root-"));
+    const packagedCommand = path.join(
+      packageRoot,
+      "native",
+      "Open Computer Use.app",
+      "Contents",
+      "MacOS",
+      "OpenComputerUse",
+    );
+    await fs.mkdir(path.dirname(packagedCommand), { recursive: true });
+    await fs.writeFile(packagedCommand, "");
+
+    expect(
+      resolveOpenComputerUseCommand(
+        undefined,
+        {
+          HOME: "/tmp/home",
+        },
+        packageRoot,
+      ),
+    ).toBe(packagedCommand);
   });
 
   it("discovers the installed dev app executable when no shim is configured", async () => {
@@ -414,13 +492,13 @@ describe("OpenComputerUseRuntime", () => {
     await fs.mkdir(path.dirname(appCommand), { recursive: true });
     await fs.writeFile(appCommand, "");
 
-    expect(resolveOpenComputerUseCommand(undefined, { HOME: tempDir })).toBe(appCommand);
+    expect(resolveOpenComputerUseCommand(undefined, { HOME: tempDir }, null)).toBe(appCommand);
   });
 
   it("falls back to the PATH shim when OCU is not otherwise discoverable", () => {
-    expect(resolveOpenComputerUseCommand(undefined, { HOME: "/path/that/does/not/exist" })).toBe(
-      "open-computer-use",
-    );
+    expect(
+      resolveOpenComputerUseCommand(undefined, { HOME: "/path/that/does/not/exist" }, null),
+    ).toBe("open-computer-use");
   });
 
   it("preserves stderr from failed OCU snapshot commands", async () => {
@@ -440,7 +518,7 @@ describe("OpenComputerUseRuntime", () => {
     );
   });
 
-  it("adds exact stale-TCC recovery guidance to OCU permission failures", async () => {
+  it("fails closed when a permission error comes from an unknown helper identity", async () => {
     const runtime = new OpenComputerUseRuntime({
       command: process.execPath,
       baseArgs: [
@@ -453,7 +531,7 @@ describe("OpenComputerUseRuntime", () => {
     });
 
     await expect(runtime.observe({ appName: "TextEdit" })).rejects.toThrow(
-      "tccutil reset Accessibility com.ifuryst.opencomputeruse.dev",
+      "Bundle identity could not be verified",
     );
   });
 

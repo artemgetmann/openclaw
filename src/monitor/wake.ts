@@ -203,6 +203,19 @@ function resolveTelegramUserChat(monitor: MonitorRecord): string | undefined {
   );
 }
 
+function resolveWhatsAppCliTarget(monitor: MonitorRecord): string | undefined {
+  if (monitor.sourceType.trim().toLowerCase() !== "whatsapp") {
+    return undefined;
+  }
+  return (
+    readOptionalString(monitor.sourceTarget.target) ??
+    readOptionalString(monitor.sourceTarget.to) ??
+    readOptionalString(monitor.sourceTarget.chat) ??
+    readOptionalString(monitor.sourceTarget.chatId) ??
+    readOptionalString(monitor.sourceTarget.chatJid)
+  );
+}
+
 export function isMonitorExpired(monitor: MonitorRecord, nowMs: number): boolean {
   if (!monitor.expiryAt?.trim()) {
     return false;
@@ -220,6 +233,7 @@ export function buildMonitorWakeMessage(params: {
   const { monitor } = params;
   const watchDeliveryConfigured = params.watchDeliveryConfigured ?? Boolean(monitor.watchDelivery);
   const telegramUserChat = resolveTelegramUserChat(monitor);
+  const whatsAppCliTarget = resolveWhatsAppCliTarget(monitor);
   const lines = [
     `Wake the monitor for ${monitor.monitorId}.`,
     "Keep the same monitor session going and continue the same task in plain language.",
@@ -271,42 +285,55 @@ export function buildMonitorWakeMessage(params: {
     ...buildMonitorDraftCompletionLines(monitor.actionPolicy),
     "Evaluate after this wake: done, keep going, blocked, needs user input, or needs approval.",
     "Do not mark the goal complete unless the stop condition is satisfied with evidence.",
+    "For outcomes that depend on another person or system, require fresh external evidence confirming that outcome before completing.",
+    "Your own outbound proposal, acceptance, or follow-up is not evidence that the external outcome was achieved.",
     ...(monitor.actionPolicy === "auto_send" &&
     (!monitor.goal || monitor.goal.autonomy?.level === "act_within_scope")
-      ? telegramUserChat && watchDeliveryConfigured
+      ? whatsAppCliTarget && watchDeliveryConfigured
         ? [
-            `Telegram-as-me watched-surface delivery is authorized and configured for chat ${telegramUserChat}.`,
-            "For green-zone follow-ups, use the telegram-user skill/CLI to read the fresh chat state and send directly to that Telegram chat.",
-            "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly in the Telegram chat; do not ask the user unless you are considering accepting the changed term.",
-            "Immediately before every Telegram-as-me send, re-read the target chat and stop if a newer inbound message changes the context.",
-            "After a successful Telegram-as-me send, update the monitor checkpoint/status and return exactly NO_REPLY.",
-            "Do not also send the same green-zone reply to the origin chat.",
+            `WhatsApp-as-me watched-surface delivery is authorized and configured for target ${whatsAppCliTarget}.`,
+            "For green-zone follow-ups, use the wacli skill/CLI to re-read the fresh chat state, then send exactly once through the wacli safe-send helper.",
+            "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly in WhatsApp; do not ask the user unless you are considering accepting the changed term.",
+            "Immediately before every WhatsApp-as-me send, re-read the target chat and stop if a newer inbound message changes the context.",
+            "After a successful WhatsApp-as-me send, update the monitor checkpoint/status and return exactly NO_REPLY.",
+            "Do not also route the sent text through the generic WhatsApp gateway channel.",
             "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
-            "Do not send approval questions, private status, or monitor narration to the watched Telegram-as-me chat.",
+            "Do not send approval questions, private status, or monitor narration to the watched WhatsApp chat.",
           ]
-        : watchDeliveryConfigured
+        : telegramUserChat && watchDeliveryConfigured
           ? [
-              "Watched-surface delivery is authorized and configured for this wake.",
-              "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
-              "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly on the watched surface; do not ask the user unless you are considering accepting the changed term.",
-              "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+              `Telegram-as-me watched-surface delivery is authorized and configured for chat ${telegramUserChat}.`,
+              "For green-zone follow-ups, use the telegram-user skill/CLI to read the fresh chat state and send directly to that Telegram chat.",
+              "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly in the Telegram chat; do not ask the user unless you are considering accepting the changed term.",
+              "Immediately before every Telegram-as-me send, re-read the target chat and stop if a newer inbound message changes the context.",
+              "After a successful Telegram-as-me send, update the monitor checkpoint/status and return exactly NO_REPLY.",
+              "Do not also send the same green-zone reply to the origin chat.",
               "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
-              "Do not send approval questions, private status, or monitor narration to the watched surface.",
-              "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
+              "Do not send approval questions, private status, or monitor narration to the watched Telegram-as-me chat.",
             ]
-          : [
-              "auto_send was requested, but no watched-surface delivery target is configured.",
-              ...(monitor.goal?.autonomy?.level === "act_within_scope"
-                ? [
-                    "Only the delivery adapter is unavailable; the goal's act_within_scope autonomy remains intact.",
-                    "Use an available normal tool or skill path for an allowed action when one exists, and preserve every approval-required boundary.",
-                    "Do not use the unavailable adapter. If no authorized normal path exists, report that specific gap through the origin chat.",
-                  ]
-                : [
-                    "Do not send on the watched surface until a watched-surface delivery target is configured.",
-                    "Report the missing delivery target through the origin chat instead.",
-                  ]),
-            ]
+          : watchDeliveryConfigured
+            ? [
+                "Watched-surface delivery is authorized and configured for this wake.",
+                "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
+                "If the other person proposes something outside the user's stated constraints, reject or push back while restating the allowed options directly on the watched surface; do not ask the user unless you are considering accepting the changed term.",
+                "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
+                "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
+                "Do not send approval questions, private status, or monitor narration to the watched surface.",
+                "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
+              ]
+            : [
+                "auto_send was requested, but no watched-surface delivery target is configured.",
+                ...(monitor.goal?.autonomy?.level === "act_within_scope"
+                  ? [
+                      "Only the delivery adapter is unavailable; the goal's act_within_scope autonomy remains intact.",
+                      "Use an available normal tool or skill path for an allowed action when one exists, and preserve every approval-required boundary.",
+                      "Do not use the unavailable adapter. If no authorized normal path exists, report that specific gap through the origin chat.",
+                    ]
+                  : [
+                      "Do not send on the watched surface until a watched-surface delivery target is configured.",
+                      "Report the missing delivery target through the origin chat instead.",
+                    ]),
+              ]
       : [
           "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",
           "Write the update like an assistant talking to the user: natural, concise, and ready to send.",

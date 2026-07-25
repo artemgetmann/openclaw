@@ -654,7 +654,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.4-mini. Use openai-codex/gpt-5.5.",
+      "Unknown model: openai-codex/gpt-5.4-mini. Use openai-codex/gpt-5.6-sol.",
     );
   });
 
@@ -922,7 +922,9 @@ describe("resolveModel", () => {
     const result = resolveModel("openai-codex", modelId, "/tmp/agent", cfg);
 
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe(`Unknown model: openai-codex/${modelId}. Use openai-codex/gpt-5.5.`);
+    expect(result.error).toBe(
+      `Unknown model: openai-codex/${modelId}. Use openai-codex/gpt-5.6-sol.`,
+    );
   });
 
   it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {

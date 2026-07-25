@@ -31,6 +31,8 @@ import type {
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+const telegramUserBackendTimeoutMs = 60_000;
+const telegramUserReadOnlyBackendCommands = new Set(["status", "precheck", "read", "inbox"]);
 
 const telegramUserToolingFiles = [
   "requirements.txt",
@@ -547,6 +549,7 @@ export function resolveTelegramUserSessionSelection(params: {
 
 type TelegramUserBackendSelection = {
   envFilePath: string;
+  envFileSource: TelegramUserBackendMeta["env_file_source"];
   loadedEnv: Record<string, string>;
   sessionPath: string;
   sessionSelection: {
@@ -558,15 +561,32 @@ type TelegramUserBackendSelection = {
 async function resolveTelegramUserBackendSelection(
   options: TelegramUserBackendOptions,
 ): Promise<TelegramUserBackendSelection> {
-  const explicitEnvFile = normalizeTelegramUserMonitorSelector(options.envFile);
   // Service installation canonicalizes consumer profiles into their app-owned
   // state roots. Backend calls must use the same identity or they silently read
   // a different binding file from the raw shell profile state.
   const runtimeEnv = resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv;
+  // Detached tester gateways may execute the Telegram-user skill through an
+  // installed OpenClaw runtime. The managed child-process selectors pin that
+  // invocation to the owning worktree independently of the installed tooling
+  // root. A direct CLI option remains the highest-precedence override.
+  const callerEnvFile = normalizeTelegramUserMonitorSelector(options.envFile);
+  const managedEnvFile = normalizeTelegramUserMonitorSelector(
+    runtimeEnv.OPENCLAW_TELEGRAM_USER_ENV_FILE,
+  );
+  const selectedEnvFile = callerEnvFile ?? managedEnvFile;
+  const callerSession = normalizeTelegramUserMonitorSelector(options.session);
+  const managedSession = normalizeTelegramUserMonitorSelector(
+    runtimeEnv.OPENCLAW_TELEGRAM_USER_SESSION,
+  );
+  const selectedSession =
+    callerSession ??
+    // A caller-selected env file is a complete credential context. Its own
+    // USERBOT_SESSION must beat an ambient managed lane selector.
+    (callerEnvFile ? undefined : managedSession);
   // An explicit env file is a complete credential context. Do not even read a
   // damaged persisted binding first: it cannot influence this invocation and
   // must not make an explicit recovery command unusable.
-  const binding = explicitEnvFile ? null : await readTelegramUserMonitorBinding(runtimeEnv);
+  const binding = selectedEnvFile ? null : await readTelegramUserMonitorBinding(runtimeEnv);
   // Env-file discovery is independent from session ownership. Delay the
   // implicit-session ambiguity check until after --session/binding/env selectors
   // have had a chance to win in resolveTelegramUserSessionSelection.
@@ -574,25 +594,44 @@ async function resolveTelegramUserBackendSelection(
     runtimeEnv,
     { checkSessionAmbiguity: false },
   );
-  const envFilePath = explicitEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
+  const envFilePath = selectedEnvFile ?? binding?.envFile ?? runtimeDefaultEnvFilePath;
+  // Preserve why this credential file won. A session sourced from USERBOT_SESSION
+  // inside a monitor-bound env file is still monitor-owned even though the
+  // session selector itself reports "env-file".
+  const envFileSource: TelegramUserBackendMeta["env_file_source"] = selectedEnvFile
+    ? "explicit"
+    : binding?.envFile
+      ? "monitor-binding"
+      : "runtime-default";
   const loadedEnv = await loadScopedEnvFile(envFilePath);
   const sessionSelection = resolveTelegramUserSessionSelection({
-    explicitSession: options.session,
+    explicitSession: selectedSession,
     // An explicit env file selects a complete credential context. Its
     // USERBOT_SESSION (or the normal fallback) must not inherit a stale session
     // from a different monitor-service binding.
-    boundSession: explicitEnvFile ? undefined : binding?.session,
-    env: runtimeEnv,
+    boundSession: selectedEnvFile ? undefined : binding?.session,
+    env: callerEnvFile ? { ...runtimeEnv, OPENCLAW_TELEGRAM_USER_SESSION: undefined } : runtimeEnv,
     loadedEnv,
   });
-  return { envFilePath, loadedEnv, sessionPath: sessionSelection.sessionPath, sessionSelection };
+  return {
+    envFilePath,
+    envFileSource,
+    loadedEnv,
+    sessionPath: sessionSelection.sessionPath,
+    sessionSelection,
+  };
 }
 
 export async function resolveTelegramUserBackendSelectors(
   options: TelegramUserBackendOptions,
-): Promise<{ envFilePath: string; sessionPath: string }> {
-  const { envFilePath, sessionPath } = await resolveTelegramUserBackendSelection(options);
-  return { envFilePath, sessionPath };
+): Promise<{
+  envFilePath: string;
+  envFileSource: TelegramUserBackendMeta["env_file_source"];
+  sessionPath: string;
+}> {
+  const { envFilePath, envFileSource, sessionPath } =
+    await resolveTelegramUserBackendSelection(options);
+  return { envFilePath, envFileSource, sessionPath };
 }
 
 export function resolveTelegramUserLockSelection(params: {
@@ -623,7 +662,7 @@ async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<Bac
   // Credential values and USERBOT_SESSION must come from one file snapshot.
   // Re-reading after selector resolution could pair credentials from a replaced
   // env file with the previous account's resolved session path.
-  const { envFilePath, loadedEnv, sessionPath, sessionSelection } =
+  const { envFilePath, envFileSource, loadedEnv, sessionPath, sessionSelection } =
     await resolveTelegramUserBackendSelection(options);
   const lockSelection = resolveTelegramUserLockSelection({
     env: process.env,
@@ -641,6 +680,7 @@ async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<Bac
       api_hash_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_HASH"),
       api_id_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_ID"),
       env_file: envFilePath,
+      env_file_source: envFileSource,
       lock_scope: lockSelection.scope,
       session_source: sessionSelection.source,
       session_path: sessionPath,
@@ -712,6 +752,43 @@ function readExecErrorStderr(error: unknown): string {
   return "";
 }
 
+/**
+ * Preserve timeout semantics that Node's execFile reports out-of-band instead
+ * of on stderr. Without this branch a timed-out Telegram command collapses to
+ * "failed without diagnostic output", and agents cannot distinguish a safe
+ * read retry from a send that Telegram may already have accepted.
+ */
+export function parseTelegramUserBackendExecError(
+  error: unknown,
+  params: {
+    command: string;
+    env: NodeJS.ProcessEnv;
+    meta: TelegramUserBackendMeta;
+    timeoutMs: number;
+  },
+): Error {
+  const processError = error && typeof error === "object" ? error : undefined;
+  const killed = processError && "killed" in processError ? processError.killed === true : false;
+  const signal = processError && "signal" in processError ? processError.signal : undefined;
+  const code = processError && "code" in processError ? processError.code : undefined;
+  const timedOut = code === "ETIMEDOUT" || (killed && signal === "SIGTERM");
+
+  if (timedOut) {
+    // Only commands that cannot create duplicate messages, topics, auth
+    // challenges, or local state changes are safe to repeat automatically.
+    const retryGuidance = telegramUserReadOnlyBackendCommands.has(params.command)
+      ? " The operation did not return a result and may be retried."
+      : params.command === "send"
+        ? " Telegram delivery state is unknown; read the target chat before retrying to avoid a duplicate message."
+        : " The operation may have changed Telegram or local state; current state is unknown. Inspect current state before retrying.";
+    return new Error(
+      `E_BACKEND_TIMEOUT: Telegram user backend exceeded ${params.timeoutMs}ms.${retryGuidance}`,
+    );
+  }
+
+  return parseBackendError(readExecErrorStderr(error), params.env, params.meta);
+}
+
 async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
   const python = await ensureTelethonPython();
   const { env: baseEnv, meta } = await buildBackendEnv(options);
@@ -720,7 +797,7 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
     const { stdout } = await execFileAsync(python, [backendScriptPath, ...options.args], {
       cwd: toolingRoot,
       env,
-      timeout: 60_000,
+      timeout: telegramUserBackendTimeoutMs,
       maxBuffer: 4 * 1024 * 1024,
     });
     const sanitizedStdout = sanitizeBackendText(stdout, env);
@@ -731,7 +808,12 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
     parsed.backend_meta ??= meta;
     return parsed;
   } catch (error) {
-    throw parseBackendError(readExecErrorStderr(error), env, meta);
+    throw parseTelegramUserBackendExecError(error, {
+      command: options.args[0] ?? "unknown",
+      env,
+      meta,
+      timeoutMs: telegramUserBackendTimeoutMs,
+    });
   }
 }
 

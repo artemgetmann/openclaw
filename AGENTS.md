@@ -43,6 +43,7 @@
 - Never edit `node_modules`.
 - Never update the Carbon dependency.
 - Do not patch dependencies without explicit approval.
+- Before making a host-level macOS claim from `codesign`, `security`, Keychain, TCC, `trustd`, signing-identity, or similar system output, rerun the decisive command outside the sandbox. Treat sandbox-only failures as indeterminate; never recommend a reboot or host-state mutation from sandbox-only evidence.
 - Treat the default shared gateway service as sacred: tester/consumer/rescue runtimes must use explicit profile/config/state/port isolation instead of plain `openclaw gateway install`.
 - Only replace the default shared gateway service intentionally, via `openclaw gateway install --force --allow-shared-service-takeover`.
 - When adding a new `AGENTS.md`, add a sibling `CLAUDE.md` symlink to it.

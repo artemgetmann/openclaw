@@ -131,12 +131,12 @@ describe("provider auth contract", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/gpt-5.5": {},
+              "openai-codex/gpt-5.6-sol": {},
             },
           },
         },
       },
-      defaultModel: "openai-codex/gpt-5.5",
+      defaultModel: "openai-codex/gpt-5.6-sol",
       notes: undefined,
     });
   });

@@ -35,7 +35,7 @@ describe("applyModelDefaults", () => {
         defaults: {
           models: {
             "anthropic/claude-opus-4-6": {},
-            "openai/gpt-5.5": {},
+            "openai/gpt-5.6-sol": {},
           },
         },
       },
@@ -43,7 +43,41 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBe("gpt");
+  });
+
+  it("keeps the implicit GPT alias on GPT-5.5 when Sol is absent", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
     expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.alias).toBe("gpt");
+  });
+
+  it("moves the implicit GPT alias from GPT-5.5 to Sol when both are present", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": {},
+            "openai/gpt-5.5": { alias: "GPT" },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBe("gpt");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.alias).toBeUndefined();
   });
 
   it("does not override existing aliases", () => {

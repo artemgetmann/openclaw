@@ -5,6 +5,7 @@ const programArgsMock = vi.hoisted(() => vi.fn());
 const runtimeInputsMock = vi.hoisted(() => vi.fn());
 const runtimeWarningMock = vi.hoisted(() => vi.fn());
 const readConfigMock = vi.hoisted(() => vi.fn());
+const loadConfigMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../daemon/program-args.js", () => ({
@@ -17,7 +18,10 @@ vi.mock("./daemon-install-plan.shared.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfig: readConfigMock,
+  createConfigIO: (params: { env: Record<string, string | undefined> }) => ({
+    loadConfigReadOnly: loadConfigMock,
+    readConfigFileSnapshot: () => readConfigMock(params.env),
+  }),
   resolveGatewayPort: resolveGatewayPortMock,
 }));
 
@@ -28,7 +32,8 @@ describe("whatsapp monitor service install helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtimeInputsMock.mockResolvedValue({ devMode: false, nodePath: "/usr/local/bin/node" });
-    readConfigMock.mockResolvedValue({});
+    readConfigMock.mockResolvedValue({ config: {}, valid: true });
+    loadConfigMock.mockReturnValue({});
     resolveGatewayPortMock.mockImplementation(
       (_cfg: unknown, env: Record<string, string | undefined>) =>
         Number(env.OPENCLAW_GATEWAY_PORT?.trim()) || 18789,
@@ -46,7 +51,8 @@ describe("whatsapp monitor service install helpers", () => {
   });
 
   it("uses the resolved gateway config port for the default hook URL", async () => {
-    readConfigMock.mockResolvedValueOnce({ gateway: { port: 19999 } });
+    readConfigMock.mockResolvedValueOnce({ config: { gateway: { port: 19999 } }, valid: true });
+    loadConfigMock.mockReturnValueOnce({ gateway: { port: 19999 } });
     resolveGatewayPortMock.mockReturnValueOnce(19999);
 
     await buildWhatsAppMonitorServiceInstallPlan({
@@ -63,6 +69,27 @@ describe("whatsapp monitor service install helpers", () => {
     expect(programArgsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         hookUrl: "http://127.0.0.1:19999/hooks/monitor-event",
+      }),
+    );
+  });
+
+  it("pins an omitted selector to the gateway cron store", async () => {
+    readConfigMock.mockResolvedValueOnce({
+      config: { cron: { store: "/profile/cron/jobs.json" } },
+      valid: true,
+    });
+    loadConfigMock.mockReturnValueOnce({ cron: { store: "/profile/cron/jobs.json" } });
+
+    await buildWhatsAppMonitorServiceInstallPlan({
+      dbPath: "/tmp/wacli.db",
+      env: { HOME: "/Users/test" },
+      intervalMs: 1000,
+      runtime: "node",
+    });
+
+    expect(programArgsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronStore: "/profile/cron/jobs.json",
       }),
     );
   });
@@ -147,5 +174,35 @@ describe("whatsapp monitor service install helpers", () => {
       "ai.openclaw.consumer-lane.whatsapp-monitor",
     );
     expect(plan.environment.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-whatsapp-monitor-consumer-lane");
+  });
+
+  it("reads cron configuration using the normalized consumer service identity", async () => {
+    const identity = resolveConsumerRuntimeIdentity({
+      homeDir: "/Users/test",
+      instanceId: "lane",
+    });
+    loadConfigMock.mockReturnValueOnce({ cron: { store: "/consumer/custom/jobs.json" } });
+
+    await buildWhatsAppMonitorServiceInstallPlan({
+      dbPath: "/tmp/wacli.db",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "consumer-lane",
+      },
+      intervalMs: 1000,
+      runtime: "node",
+    });
+
+    expect(readConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_CONFIG_PATH: identity.configPath,
+        OPENCLAW_STATE_DIR: identity.stateDir,
+      }),
+    );
+    expect(programArgsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronStore: "/consumer/custom/jobs.json",
+      }),
+    );
   });
 });

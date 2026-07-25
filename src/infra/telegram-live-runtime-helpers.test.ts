@@ -753,6 +753,55 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("keeps Telegram-user subprocesses on the isolated lane's repo-local selectors", () => {
+    const repoRoot = makeTempDir();
+    const telegramE2eDir = path.join(repoRoot, "scripts", "telegram-e2e");
+    const envFilePath = path.join(telegramE2eDir, ".env.local");
+    const sessionFallbackPath = path.join(telegramE2eDir, "tmp", "userbot.session");
+    const sessionSelectorPath = `${sessionFallbackPath}.path`;
+    const canonicalSessionPath = path.join(repoRoot, "machine-owner", "userbot.session");
+    fs.mkdirSync(path.dirname(sessionFallbackPath), { recursive: true });
+    fs.writeFileSync(envFilePath, "TELEGRAM_API_ID=123\nTELEGRAM_API_HASH=test-hash\n");
+    fs.writeFileSync(sessionSelectorPath, `${canonicalSessionPath}\n`);
+    const childEnv = buildTelegramLiveRuntimeChildEnv({
+      repoRoot,
+      parentEnv: {
+        OPENCLAW_STATE_DIR: path.join(repoRoot, ".state"),
+      },
+    });
+
+    // The worktree selector is the lane pin; child processes receive its
+    // canonical target rather than opening a second worktree-local database.
+    expect(childEnv).toMatchObject({
+      OPENCLAW_FORK_ROOT: repoRoot,
+      OPENCLAW_TELEGRAM_USER_ENV_FILE: envFilePath,
+      OPENCLAW_TELEGRAM_USER_SESSION: canonicalSessionPath,
+      ZDOTDIR: path.join(repoRoot, ".state", "shell-env"),
+    });
+  });
+
+  it("fails closed on a malformed Telegram-user session ownership selector", () => {
+    const repoRoot = makeTempDir();
+    const selectorPath = path.join(
+      repoRoot,
+      "scripts",
+      "telegram-e2e",
+      "tmp",
+      "userbot.session.path",
+    );
+    fs.mkdirSync(path.dirname(selectorPath), { recursive: true });
+    fs.writeFileSync(selectorPath, "relative/session.db\n");
+
+    expect(() => buildTelegramLiveRuntimeChildEnv({ repoRoot, parentEnv: {} })).toThrow(
+      `Invalid Telegram-user session selector: ${selectorPath}`,
+    );
+
+    fs.writeFileSync(selectorPath, "/tmp/first.session\n/tmp/second.session\n");
+    expect(() => buildTelegramLiveRuntimeChildEnv({ repoRoot, parentEnv: {} })).toThrow(
+      `Invalid Telegram-user session selector: ${selectorPath}`,
+    );
+  });
+
   it("prunes tester auth stores down to the pinned model provider", () => {
     const pruned = pruneTesterRuntimeAuthStore({
       preferredModel: "openai-codex/gpt-5.4",
@@ -902,6 +951,16 @@ describe("telegram live runtime helpers", () => {
       }),
     ).toEqual({
       ACPX_CMD: acpxCommand,
+      OPENCLAW_FORK_ROOT: repoRoot,
+      OPENCLAW_TELEGRAM_USER_ENV_FILE: path.join(repoRoot, "scripts", "telegram-e2e", ".env.local"),
+      OPENCLAW_TELEGRAM_USER_SESSION: path.join(
+        repoRoot,
+        "scripts",
+        "telegram-e2e",
+        "tmp",
+        "userbot.session",
+      ),
+      ZDOTDIR: path.join(repoRoot, ".openclaw", "shell-env"),
       OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
       PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
       OTHER_VALUE: "kept",
@@ -926,6 +985,16 @@ describe("telegram live runtime helpers", () => {
       }),
     ).toEqual({
       ACPX_CMD: acpxCommand,
+      OPENCLAW_FORK_ROOT: repoRoot,
+      OPENCLAW_TELEGRAM_USER_ENV_FILE: path.join(repoRoot, "scripts", "telegram-e2e", ".env.local"),
+      OPENCLAW_TELEGRAM_USER_SESSION: path.join(
+        repoRoot,
+        "scripts",
+        "telegram-e2e",
+        "tmp",
+        "userbot.session",
+      ),
+      ZDOTDIR: path.join(repoRoot, ".openclaw", "shell-env"),
       OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
       PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
       OTHER_VALUE: "kept",
@@ -938,9 +1007,41 @@ describe("telegram live runtime helpers", () => {
       stateRoot: "/tmp/openclaw-telegram-live",
       acpValidation: "1",
     });
+    const ordinaryProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+      stateRoot: "/tmp/openclaw-telegram-live",
+    });
 
     expect(profile.runtimeStateDir).toMatch(
       /^\/tmp\/openclaw-telegram-live\/tg-live-[0-9a-f]{10}\/acp-validation$/,
+    );
+    expect(profile.commandLockDir).toBe(ordinaryProfile.commandLockDir);
+    expect(profile.commandLockDir).toMatch(
+      /\/Library\/Application Support\/OpenClaw\/telegram-live-worktrees\/command-locks\/tg-live-[0-9a-f]{10}\.command\.lock$/,
+    );
+  });
+
+  it("keeps lifecycle lock identity stable across default and custom state roots", () => {
+    const defaultProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+    });
+    const customProfile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+      stateRoot: "/tmp/custom-telegram-live-state",
+    });
+
+    expect(customProfile.runtimeStateDir).not.toBe(defaultProfile.runtimeStateDir);
+    expect(customProfile.commandLockDir).toBe(defaultProfile.commandLockDir);
+    expect(defaultProfile.commandLockDir).toBe(
+      path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "OpenClaw",
+        "telegram-live-worktrees",
+        "command-locks",
+        `${defaultProfile.profileId}.command.lock`,
+      ),
     );
   });
 

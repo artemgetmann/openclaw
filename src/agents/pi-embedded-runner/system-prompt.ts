@@ -31,6 +31,7 @@ export function buildEmbeddedSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  jarvisBrowserPolicy?: boolean;
   runtimeInfo: {
     agentId?: string;
     host: string;
@@ -73,6 +74,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reactionGuidance: params.reactionGuidance,
     promptMode: params.promptMode,
     acpEnabled: params.acpEnabled,
+    jarvisBrowserPolicy: params.jarvisBrowserPolicy,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

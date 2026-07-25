@@ -452,21 +452,27 @@ function normalizeLeaseEntries(values) {
     const token = String(value.token ?? "").trim();
     const worktreePath = String(value.worktreePath ?? "").trim();
     const pid = Number.parseInt(String(value.pid ?? ""), 10);
-    if (!token || !worktreePath || !Number.isFinite(pid) || pid <= 0) {
+    const blockingReason = String(value.blockingReason ?? "").trim() || null;
+    const hasValidPid = Number.isFinite(pid) && pid > 0;
+    if (!token || !worktreePath || (!hasValidPid && !blockingReason)) {
       continue;
     }
 
-    const key = `${token}\u0000${worktreePath}\u0000${pid}`;
+    const key = `${token}\u0000${worktreePath}\u0000${hasValidPid ? pid : "unknown"}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    out.push({
+    const normalized = {
       token,
       worktreePath,
-      pid,
+      pid: hasValidPid ? pid : null,
       accountId: String(value.accountId ?? "").trim() || null,
-    });
+    };
+    if (blockingReason) {
+      normalized.blockingReason = blockingReason;
+    }
+    out.push(normalized);
   }
 
   return out;
@@ -1363,15 +1369,74 @@ export function buildTelegramLiveRuntimeChildEnv(params) {
   const parentEnv =
     params?.parentEnv && typeof params.parentEnv === "object" ? params.parentEnv : process.env;
   const env = { ...parentEnv };
-  const repoRoot =
-    typeof params?.repoRoot === "string" && params.repoRoot.trim().length > 0
-      ? path.resolve(params.repoRoot.trim())
-      : process.cwd();
+  const hasExplicitRepoRoot =
+    typeof params?.repoRoot === "string" && params.repoRoot.trim().length > 0;
+  const repoRoot = hasExplicitRepoRoot ? path.resolve(params.repoRoot.trim()) : process.cwd();
 
   // Detached tester lanes should boot only from their isolated runtime config
   // plus synced auth store. Raw host OpenAI env defaults reintroduce product
   // credentials/model routing behind our back, so strip them on entry.
   stripRawOpenAiEnvKeys(env);
+  const telegramUserEnvFilePath = path.join(repoRoot, "scripts", "telegram-e2e", ".env.local");
+  const telegramUserSessionFallbackPath = path.join(
+    repoRoot,
+    "scripts",
+    "telegram-e2e",
+    "tmp",
+    "userbot.session",
+  );
+  const telegramUserSessionSelectorPath = `${telegramUserSessionFallbackPath}.path`;
+  let telegramUserSessionPath = telegramUserSessionFallbackPath;
+  if (hasExplicitRepoRoot && fs.existsSync(telegramUserSessionSelectorPath)) {
+    const selectedSession = fs.readFileSync(telegramUserSessionSelectorPath, "utf8").trim();
+    let containsControlCharacter = false;
+    for (let index = 0; index < selectedSession.length; index += 1) {
+      const codeUnit = selectedSession.charCodeAt(index);
+      if (codeUnit <= 31 || codeUnit === 127) {
+        containsControlCharacter = true;
+        break;
+      }
+    }
+    if (!selectedSession || containsControlCharacter || !path.isAbsolute(selectedSession)) {
+      // The bootstrap selector is the durable ownership record for the shared
+      // machine session. Refuse to launch with malformed ownership rather than
+      // falling back to a second worktree-local Telegram database.
+      throw new Error(
+        `Invalid Telegram-user session selector: ${telegramUserSessionSelectorPath} must contain one absolute path.`,
+      );
+    }
+    telegramUserSessionPath = path.resolve(selectedSession);
+  }
+  // Explicit selectors are required when the agent shell resolves an
+  // installed/global OpenClaw binary: that binary's own tooling root must not
+  // redirect the child back to Jarvis app-support state. Keep the expected
+  // paths explicit even when bootstrap assets are absent so preflight fails
+  // against the lane's configured owner instead of silently probing another
+  // account.
+  if (hasExplicitRepoRoot) {
+    // The host `openclaw` wrapper resolves its source checkout from this
+    // selector when an agent shell's PWD is outside the worktree. Keep those
+    // subprocesses on the isolated lane without changing PATH or the sacred
+    // shared clone.
+    env.OPENCLAW_FORK_ROOT = repoRoot;
+    env.OPENCLAW_TELEGRAM_USER_ENV_FILE = telegramUserEnvFilePath;
+    // Bootstrap records the canonical machine-owned session in the worktree
+    // selector. Export its target so the installed backend receives the same
+    // ownership identity instead of opening a second local session database.
+    // Before bootstrap, the absent worktree path remains a fail-closed pin.
+    env.OPENCLAW_TELEGRAM_USER_SESSION = telegramUserSessionPath;
+    if (process.platform !== "win32") {
+      // Keep the user's command-shell semantics while isolating zsh startup
+      // files. Zsh resolves .zshenv from ZDOTDIR before executing the command;
+      // a lane-owned empty directory prevents host dotfiles from rewriting the
+      // fork and Telegram selectors above.
+      const runtimeStateDir =
+        typeof env.OPENCLAW_STATE_DIR === "string" && env.OPENCLAW_STATE_DIR.trim()
+          ? path.resolve(env.OPENCLAW_STATE_DIR.trim())
+          : path.join(repoRoot, ".openclaw");
+      env.ZDOTDIR = path.join(runtimeStateDir, "shell-env");
+    }
+  }
   // ACPX_CMD is only valid for ACP validation lanes; default tester lanes must
   // not inherit a host shell override that points at the wrong runtime.
   delete env.ACPX_CMD;
@@ -1429,13 +1494,47 @@ function isPidAlive(pid) {
   }
 }
 
+function getProcessStartTime(pid) {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const commEndIndex = stat.lastIndexOf(")");
+    if (commEndIndex < 0) {
+      return null;
+    }
+    const fields = stat
+      .slice(commEndIndex + 1)
+      .trimStart()
+      .split(/\s+/u);
+    const starttime = Number(fields[19]);
+    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
+  } catch {
+    return null;
+  }
+}
+
 export function collectActiveTelegramTokenLeaseEntries(params) {
   const tokens = normalizeTokenList(params?.tokens ?? []);
   const currentWorktreePath =
     params?.currentWorktreePath && String(params.currentWorktreePath).trim().length > 0
-      ? path.resolve(String(params.currentWorktreePath))
+      ? canonicalizePath(String(params.currentWorktreePath))
       : null;
   const out = [];
+  const isPidAliveFn = params?.isPidAliveFn ?? isPidAlive;
+  const getProcessStartTimeFn = params?.getProcessStartTimeFn ?? getProcessStartTime;
+  const platform = String(params?.platform ?? process.platform);
+
+  const blockAmbiguousLease = (token, leasePath, reason, parsed = null) => {
+    out.push({
+      token,
+      worktreePath: `[ambiguous Telegram token lease: ${leasePath}]`,
+      pid: Number.isInteger(parsed?.pid) && parsed.pid > 0 ? parsed.pid : null,
+      accountId: null,
+      blockingReason: reason,
+    });
+  };
 
   for (const token of tokens) {
     const leasePath = buildTelegramTokenLeasePath({
@@ -1450,17 +1549,48 @@ export function collectActiveTelegramTokenLeaseEntries(params) {
     try {
       parsed = JSON.parse(fs.readFileSync(leasePath, "utf8"));
     } catch {
+      // A malformed lease is unknown ownership, not evidence that the bot is
+      // available. Preserve a blocking entry for explicit operator recovery.
+      blockAmbiguousLease(token, leasePath, "malformed_lease");
       continue;
     }
 
     const pid = Number.parseInt(String(parsed?.pid ?? ""), 10);
     const worktreePath =
       typeof parsed?.worktree === "string" && parsed.worktree.trim()
-        ? path.resolve(parsed.worktree.trim())
+        ? canonicalizePath(parsed.worktree.trim())
         : "";
-    if (!Number.isFinite(pid) || pid <= 0 || !worktreePath || !isPidAlive(pid)) {
+    if (!Number.isFinite(pid) || pid <= 0 || !worktreePath) {
+      blockAmbiguousLease(token, leasePath, "malformed_lease", parsed);
       continue;
     }
+    if (!isPidAliveFn(pid)) {
+      continue;
+    }
+    const storedStarttime =
+      typeof parsed?.starttime === "number" && Number.isInteger(parsed.starttime)
+        ? parsed.starttime
+        : null;
+    const activeStarttime = getProcessStartTimeFn(pid);
+    if (storedStarttime !== null) {
+      if (activeStarttime === null) {
+        blockAmbiguousLease(token, leasePath, "process_starttime_unavailable", parsed);
+        continue;
+      }
+      if (activeStarttime !== storedStarttime) {
+        // The PID now belongs to a different process. This lease is stale, so
+        // it must not pin a tester bot forever.
+        continue;
+      }
+    } else if (platform === "linux" && activeStarttime !== null) {
+      // Current Linux leases always carry starttime. Missing identity data is
+      // ambiguous legacy/corrupt state and must fail closed.
+      blockAmbiguousLease(token, leasePath, "process_starttime_missing", parsed);
+      continue;
+    }
+    // macOS temp/worktree paths can alternate between /var and /private/var.
+    // Compare canonical paths so this lane's own live lease does not look
+    // foreign and force an unnecessary second bot assignment.
     if (currentWorktreePath && worktreePath === currentWorktreePath) {
       continue;
     }
@@ -1603,6 +1733,16 @@ export function deriveTelegramLiveRuntimeProfile(params) {
 
   const hash = crypto.createHash("sha256").update(worktreePath).digest("hex");
   const profileId = `tg-live-${hash.slice(0, 10)}`;
+  // Lifecycle commands mutate one worktree's shared token/reservation state
+  // even when callers override the disposable runtime state root. Anchor their
+  // lock under the non-overridable machine-user root and key it only by the
+  // canonical worktree profile so normal, ACP, and custom-root commands cannot
+  // run concurrent ownership transactions.
+  const commandLockDir = path.join(
+    resolveDefaultTelegramLiveStateRoot(),
+    "command-locks",
+    `${profileId}.command.lock`,
+  );
   const hashInt = Number.parseInt(hash.slice(0, 8), 16);
   const runtimePort = portBase + (Number.isFinite(hashInt) ? hashInt % portRange : 0);
   // ACP validation must not reuse the default Telegram live state tree, or
@@ -1618,6 +1758,7 @@ export function deriveTelegramLiveRuntimeProfile(params) {
     profileId,
     runtimePort,
     runtimeStateDir,
+    commandLockDir,
   };
 }
 

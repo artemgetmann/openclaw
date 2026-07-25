@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type {
   ActionResult,
@@ -21,7 +22,9 @@ type OpenComputerUseRuntimeOptions = {
 };
 
 const OPEN_COMPUTER_USE_DEV_BUNDLE_ID = "com.ifuryst.opencomputeruse.dev";
+const OPEN_COMPUTER_USE_RELEASE_BUNDLE_ID = "com.ifuryst.opencomputeruse";
 const OPEN_COMPUTER_USE_DEV_APP_NAME = "Open Computer Use (Dev).app";
+const OPEN_COMPUTER_USE_PACKAGED_APP_NAME = "Open Computer Use.app";
 const OPEN_COMPUTER_USE_EXECUTABLE = "Contents/MacOS/OpenComputerUse";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -122,21 +125,45 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function inferOpenComputerUseDevAppPath(command: string): string {
-  const appMarker = `${OPEN_COMPUTER_USE_DEV_APP_NAME}/`;
-  const appMarkerIndex = command.indexOf(appMarker);
-  if (appMarkerIndex >= 0) {
-    return command.slice(0, appMarkerIndex + OPEN_COMPUTER_USE_DEV_APP_NAME.length);
+type OpenComputerUseAppIdentity =
+  | {
+      recognized: true;
+      appPath: string;
+      bundleIdentifier: string;
+      development: boolean;
+    }
+  | { recognized: false; command: string };
+
+function inferOpenComputerUseAppIdentity(command: string): OpenComputerUseAppIdentity {
+  for (const appName of [OPEN_COMPUTER_USE_PACKAGED_APP_NAME, OPEN_COMPUTER_USE_DEV_APP_NAME]) {
+    const appMarker = `${appName}/`;
+    const appMarkerIndex = command.indexOf(appMarker);
+    if (appMarkerIndex >= 0) {
+      const development = appName === OPEN_COMPUTER_USE_DEV_APP_NAME;
+      return {
+        recognized: true,
+        appPath: command.slice(0, appMarkerIndex + appName.length),
+        bundleIdentifier: development
+          ? OPEN_COMPUTER_USE_DEV_BUNDLE_ID
+          : OPEN_COMPUTER_USE_RELEASE_BUNDLE_ID,
+        development,
+      };
+    }
   }
-  const home = process.env.HOME;
-  return home
-    ? path.join(home, "Applications", OPEN_COMPUTER_USE_DEV_APP_NAME)
-    : `~/Applications/${OPEN_COMPUTER_USE_DEV_APP_NAME}`;
+
+  // Custom executables and PATH shims do not prove which .app owns the TCC
+  // grant. Inventing the dev identity here could reset an unrelated app.
+  return { recognized: false, command };
 }
 
 export function resolveOpenComputerUseCommand(
   command?: string,
   env: NodeJS.ProcessEnv = process.env,
+  packageRoot: string | null = resolveOpenClawPackageRootSync({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  }),
 ): string {
   if (command?.trim()) {
     return command;
@@ -145,6 +172,18 @@ export function resolveOpenComputerUseCommand(
   const envCommand = env.OPENCLAW_OPEN_COMPUTER_USE_BIN?.trim();
   if (envCommand) {
     return envCommand;
+  }
+
+  if (packageRoot) {
+    const packagedAppCommand = path.join(
+      packageRoot,
+      "native",
+      OPEN_COMPUTER_USE_PACKAGED_APP_NAME,
+      OPEN_COMPUTER_USE_EXECUTABLE,
+    );
+    if (fsSync.existsSync(packagedAppCommand)) {
+      return packagedAppCommand;
+    }
   }
 
   const home = env.HOME?.trim();
@@ -185,7 +224,16 @@ export function formatOpenComputerUseTccRecoveryGuidance(input: {
     return undefined;
   }
 
-  const appPath = inferOpenComputerUseDevAppPath(input.command);
+  const app = inferOpenComputerUseAppIdentity(input.command);
+  if (!app.recognized) {
+    return [
+      "OpenComputerUse macOS permission recovery:",
+      `- Helper command: ${app.command}`,
+      "- Bundle identity could not be verified from this custom or PATH command.",
+      "- Do not run tccutil reset until the executable's real containing app path and bundle id are resolved.",
+    ].join("\n");
+  }
+  const appPath = app.appPath;
   const quotedAppPath = shellQuote(appPath);
 
   // This is intentionally guidance, not repair. `tccutil reset` deletes the
@@ -194,12 +242,16 @@ export function formatOpenComputerUseTccRecoveryGuidance(input: {
   return [
     "OpenComputerUse macOS permission recovery:",
     `- Exact app: ${appPath}`,
-    `- Bundle id: ${OPEN_COMPUTER_USE_DEV_BUNDLE_ID}`,
+    `- Bundle id: ${app.bundleIdentifier}`,
     "- If System Settings already shows this app enabled but OCU still reports Accessibility or ScreenCapture missing, the TCC grant may be stale.",
-    "- Dev builds are often ad-hoc signed, have no TeamIdentifier, and can change CDHash after rebuilds.",
+    ...(app.development
+      ? [
+          "- Dev builds are often ad-hoc signed, have no TeamIdentifier, and can change CDHash after rebuilds.",
+        ]
+      : []),
     "- Operator-approved reset commands:",
-    `  tccutil reset Accessibility ${OPEN_COMPUTER_USE_DEV_BUNDLE_ID}`,
-    `  tccutil reset ScreenCapture ${OPEN_COMPUTER_USE_DEV_BUNDLE_ID}`,
+    `  tccutil reset Accessibility ${app.bundleIdentifier}`,
+    `  tccutil reset ScreenCapture ${app.bundleIdentifier}`,
     `  open ${quotedAppPath}`,
     "- Then re-grant Accessibility and Screen Recording for that exact app in System Settings > Privacy & Security.",
   ].join("\n");

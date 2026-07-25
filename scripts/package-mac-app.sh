@@ -8,6 +8,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
 source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"
+source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
+source "$ROOT_DIR/scripts/lib/consumer-gog-runtime.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -370,10 +372,59 @@ verify_required_capabilities_manifest() {
   local runtime_root="$1"
   local context_label="$2"
   local manifest_path="$runtime_root/openclaw/capabilities.manifest.json"
+  local gog_arm64_path="$runtime_root/openclaw/tools/gog/darwin-arm64/gog"
+  local gog_x86_64_path="$runtime_root/openclaw/tools/gog/darwin-x86_64/gog"
+  local gog_host_path=""
+  local gog_license_path="$runtime_root/openclaw/tools/gog.LICENSE"
+  local gog_version=""
 
   if [[ ! -f "$manifest_path" ]]; then
     echo "ERROR: ${context_label} is missing capabilities.manifest.json." >&2
     echo "Expected file: $manifest_path" >&2
+    return 1
+  fi
+
+  # Skill hashes prove instructions, not the native code those instructions
+  # promise. Reject cached/reused runtimes unless all release-required payloads
+  # declared in the same manifest are still present and current.
+  "$ROOT_DIR/scripts/verify-consumer-packaged-artifacts.sh" \
+    "$manifest_path" \
+    "$runtime_root/openclaw" || return 1
+
+  # Cached and smoke-reused runtimes must also carry the app-owned managed CLI
+  # payload. Otherwise a cache hit can silently regress clean installs back to
+  # "gog must already exist somewhere on the user's PATH."
+  gog_version="$(managed_tool_recommended_version "$manifest_path" "gog" "gog")" || return 1
+  if [[ ! -x "$gog_arm64_path" || ! -x "$gog_x86_64_path" ]]; then
+    echo "ERROR: ${context_label} is missing an architecture-specific app-managed Google Workspace CLI." >&2
+    echo "Expected executables: $gog_arm64_path and $gog_x86_64_path" >&2
+    return 1
+  fi
+  if [[ ! -s "$gog_license_path" ]]; then
+    echo "ERROR: ${context_label} is missing the Gog MIT license notice." >&2
+    echo "Expected file: $gog_license_path" >&2
+    return 1
+  fi
+  case "$(uname -m)" in
+    arm64)
+      gog_host_path="$gog_arm64_path"
+      ;;
+    x86_64)
+      gog_host_path="$gog_x86_64_path"
+      ;;
+    *)
+      echo "ERROR: unsupported macOS architecture while verifying Gog: $(uname -m)" >&2
+      return 1
+      ;;
+  esac
+  if [[ "$("$gog_host_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
+    echo "ERROR: ${context_label} has the wrong Google Workspace CLI version." >&2
+    echo "Expected version: $gog_version" >&2
+    return 1
+  fi
+  if ! openclaw_verify_vendor_signed_gog "$gog_arm64_path" \
+    || ! openclaw_verify_vendor_signed_gog "$gog_x86_64_path"; then
+    echo "ERROR: ${context_label} Google Workspace CLI vendor identity is invalid." >&2
     return 1
   fi
 }
@@ -863,6 +914,54 @@ ensure_consumer_uv_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+managed_tool_recommended_version() {
+  local manifest_path="$1"
+  local skill_name="$2"
+  local bin_name="$3"
+
+  "$VALIDATED_NODE_BIN" --input-type=module - "$manifest_path" "$skill_name" "$bin_name" <<'NODE'
+import fs from "node:fs";
+
+const [manifestPath, skillName, binName] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const match = manifest.managedTools?.find(
+  (tool) =>
+    tool?.skillName === skillName &&
+    Array.isArray(tool.bins) &&
+    tool.bins.includes(binName) &&
+    typeof tool.recommendedVersion === "string",
+);
+
+if (!match?.recommendedVersion) {
+  throw new Error(
+    `No recommended version for managed tool ${skillName}/${binName} in ${manifestPath}`,
+  );
+}
+process.stdout.write(match.recommendedVersion);
+NODE
+}
+
+ensure_consumer_gog_runtime() {
+  openclaw_ensure_consumer_gog_runtime "$1"
+}
+
+bundle_consumer_managed_tool_payloads() {
+  local manifest_path="$1"
+  local gog_version=""
+  local gog_runtime_root=""
+  local tools_dir="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/tools"
+
+  # Keep app-owned mutation intentionally narrow. summarize is version-tracked
+  # but remains Homebrew-managed because its supported install also requires
+  # node, ffmpeg, tesseract, and yt-dlp.
+  gog_version="$(managed_tool_recommended_version "$manifest_path" "gog" "gog")"
+  gog_runtime_root="$(ensure_consumer_gog_runtime "$gog_version")"
+  mkdir -p "$tools_dir"
+  rm -rf "$tools_dir/gog"
+  cp -R "$gog_runtime_root/gog" "$tools_dir/gog"
+  cp "$gog_runtime_root/LICENSE" "$tools_dir/gog.LICENSE"
+}
+
 resolve_matrix_crypto_package_root() {
   local package_root=""
 
@@ -1074,6 +1173,11 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "package.json"
       hash_consumer_runtime_path "pnpm-lock.yaml"
       hash_consumer_runtime_path "scripts/consumer-capabilities-manifest.mjs"
+      hash_consumer_runtime_path "scripts/materialize-consumer-packaged-artifacts.sh"
+      hash_consumer_runtime_path "scripts/verify-consumer-packaged-artifacts.sh"
+      hash_consumer_runtime_path "scripts/package-mac-app.sh"
+      hash_consumer_runtime_path "scripts/lib/consumer-gog-runtime.sh"
+      hash_consumer_runtime_path "scripts/lib/openclaw-runtime-payloads.sh"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
       hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
       hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
@@ -1241,7 +1345,13 @@ prepare_bundled_consumer_runtime() {
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
   trap 'rm -rf "$deploy_root"' RETURN
   echo "📦 Staging bundled consumer runtime node_modules"
-  openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
+  # pnpm prepares git-hosted dependencies through npm before it writes the
+  # deployment. npm otherwise inherits the production-only request and omits
+  # package-local build tools, so a clean store cannot prepare @tloncorp/api.
+  # Include devDependencies only in npm's disposable preparation directory;
+  # pnpm's --prod flag still controls the dependencies copied into the app.
+  npm_config_include=dev \
+    openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
@@ -1295,6 +1405,11 @@ prepare_bundled_consumer_runtime() {
       "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills" \
       --out "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
       --fail-on-local-drift
+    "$ROOT_DIR/scripts/materialize-consumer-packaged-artifacts.sh" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json" \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+    bundle_consumer_managed_tool_payloads \
+      "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/capabilities.manifest.json"
   fi
 
   local bundled_template_src="$ROOT_DIR/docs/reference/templates"

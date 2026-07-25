@@ -1,6 +1,6 @@
 ---
 name: openai-whisper-api
-description: Transcribe audio via OpenAI Audio Transcriptions API (Whisper).
+description: Direct OpenAI Audio Transcriptions API access. Use only when the user explicitly requests the direct API path or when diagnosing that provider; use the configured media transcription route for ordinary requests.
 homepage: https://platform.openai.com/docs/guides/speech-to-text
 metadata:
   {
@@ -15,7 +15,11 @@ metadata:
 
 # OpenAI Whisper API (curl)
 
-Transcribe an audio file via OpenAI’s `/v1/audio/transcriptions` endpoint.
+Transcribe an audio file directly through OpenAI’s
+`/v1/audio/transcriptions` endpoint. This bypasses the runtime's configured
+media route, so use it only when the user explicitly requests direct API access
+or when diagnosing that provider. For ordinary transcription requests, use
+`openclaw media transcribe --file <path> --json`.
 
 ## Quick start
 

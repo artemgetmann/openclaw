@@ -334,6 +334,10 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain("notificationDecision.shouldNotify");
     expect(message).toContain("SLA or response deadline has passed");
     expect(message).toContain("Evaluate after this wake");
+    expect(message).toContain("require fresh external evidence confirming that outcome");
+    expect(message).toContain(
+      "Your own outbound proposal, acceptance, or follow-up is not evidence that the external outcome was achieved",
+    );
   });
 
   it("keeps delivery policy from escalating an observe-only bound goal", () => {
@@ -465,7 +469,7 @@ describe("buildMonitorWakeMessage", () => {
     );
   });
 
-  it("switches auto_send wakes into reply-only delivery guidance when watched-surface delivery is configured", () => {
+  it("guides WhatsApp auto_send wakes through the safe wacli path", () => {
     const message = buildMonitorWakeMessage({
       nowIso: "2026-04-10T04:30:13.436Z",
       wakeReason: "cron:test",
@@ -487,18 +491,13 @@ describe("buildMonitorWakeMessage", () => {
       },
     });
 
-    expect(message).toContain(
-      "Watched-surface delivery is authorized and configured for this wake.",
-    );
+    expect(message).toContain("WhatsApp-as-me watched-surface delivery is authorized");
     expect(message).toContain(
       'originDelivery: {"mode":"announce","channel":"telegram","to":"user-1"}',
     );
-    expect(message).toContain(
-      "For green-zone follow-ups, reply only with the exact content that should be sent to the watched surface.",
-    );
-    expect(message).toContain(
-      "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply' to watched-surface replies.",
-    );
+    expect(message).toContain("use the wacli skill/CLI");
+    expect(message).toContain("safe-send helper");
+    expect(message).toContain("After a successful WhatsApp-as-me send");
     expect(message).toContain(
       "If the next step needs user input or approval, send the approval question to originDelivery with the message tool, then return exactly NO_REPLY.",
     );

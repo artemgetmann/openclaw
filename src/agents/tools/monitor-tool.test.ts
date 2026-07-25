@@ -192,6 +192,26 @@ describe("monitor tool", () => {
     expect(tool.description).toContain("Never call a consumer monitor a cron job");
   });
 
+  it("describes the canonical Telegram-as-me event binding contract", () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    expect(tool.description).toContain("sourceType=telegram-user");
+    expect(tool.description).toContain("sourceTarget.chat");
+    expect(tool.description).toContain("exact Telegram chat");
+    expect(tool.description).toContain("omit watchDelivery");
+    expect(tool.description).toContain("local listener");
+    expect(tool.description).toContain("instead of supplying a schedule-only trigger");
+  });
+
+  it("describes the canonical WhatsApp-as-me delivery contract", () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    expect(tool.description).toContain("sourceType=whatsapp");
+    expect(tool.description).toContain("sourceTarget.target");
+    expect(tool.description).toContain("wacli");
+    expect(tool.description).toContain("omit watchDelivery");
+  });
+
   it("passes explicit goal snapshots through monitor.create", async () => {
     const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
 

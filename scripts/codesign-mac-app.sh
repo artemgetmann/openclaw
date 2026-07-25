@@ -278,6 +278,10 @@ verify_team_ids() {
   while IFS= read -r -d '' f; do
     [[ -f "$f" ]] || continue
     if /usr/bin/file "$f" | /usr/bin/grep -q "Mach-O"; then
+      if openclaw_runtime_payload_is_vendor_signed_gog "$f"; then
+        openclaw_verify_vendor_signed_gog "$f"
+        continue
+      fi
       local team
       team="$(team_id_for "$f" || true)"
       if [[ -z "$team" ]]; then
@@ -367,12 +371,30 @@ if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" ]]; then
 else
   while IFS= read -r -d '' runtime_file; do
     if openclaw_file_is_macho "$runtime_file"; then
+      if openclaw_runtime_payload_is_vendor_signed_gog "$runtime_file"; then
+        echo "Preserving verified Gog vendor signature: $runtime_file"
+        openclaw_verify_vendor_signed_gog "$runtime_file"
+        continue
+      fi
       echo "Signing runtime payload: $runtime_file"
       sign_plain_item "$runtime_file"
     fi
   done < <(openclaw_runtime_payload_files "$APP_BUNDLE")
 fi
 phase_log_elapsed "$runtime_payload_started_ms" "Sign runtime payloads"
+
+# Seal nested runtime apps only after their Mach-O children have the Jarvis
+# identity. Signing a child afterward would invalidate the nested bundle.
+runtime_nested_apps_started_ms="$(phase_now_ms)"
+if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" ]]; then
+  echo "Note: skipping nested runtime app signing (SKIP_RUNTIME_PAYLOAD_CODESIGN=1)."
+else
+  while IFS= read -r -d '' runtime_app; do
+    echo "Signing nested runtime app: $runtime_app"
+    sign_plain_item "$runtime_app"
+  done < <(openclaw_runtime_nested_app_bundles "$APP_BUNDLE")
+fi
+phase_log_elapsed "$runtime_nested_apps_started_ms" "Sign nested runtime apps"
 
 # Finally sign the bundle
 bundle_sign_started_ms="$(phase_now_ms)"

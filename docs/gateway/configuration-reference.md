@@ -975,12 +975,13 @@ Periodic heartbeat runs.
   agents: {
     defaults: {
       heartbeat: {
-        every: "1d", // 0m disables
+        every: "1h", // 0m disables
         model: "openai/gpt-5.2-mini",
         includeReasoning: false,
-        lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
-        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
+        lightContext: true,
+        isolatedSession: true,
         activeHours: { start: "09:00", end: "20:00", timezone: "user" },
+        weekendMode: "urgent-only", // normal | urgent-only | off
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -994,15 +995,16 @@ Periodic heartbeat runs.
 }
 ```
 
-- `every`: duration string (ms/s/m/h). Default: `1d`.
+- `every`: duration string (ms/s/m/h). Default: `1h`.
 - `activeHours`: default heartbeat quiet-hours gate. Default: `{ start: "09:00", end: "20:00", timezone: "user" }`. Override to change the window, or use `{ start: "00:00", end: "24:00" }` for 24/7 behavior.
+- `weekendMode`: `urgent-only` (default) checks but suppresses routine weekend attention; `normal` uses weekday rules; `off` skips ambient weekend sweeps.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
-- `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
-- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
+- `lightContext`: defaults to true for ambient sweeps, keeping only `HEARTBEAT.md` from workspace bootstrap files.
+- `isolatedSession`: defaults to true for ambient sweeps, avoiding replay of prior conversation history. Explicit event wakes retain full main-session context.
 - Heartbeat keeps a tiny internal recent-delivery buffer in session metadata so later heartbeat turns can reason about what was already surfaced without relying only on exact-text dedupe.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
-- Heartbeats run full agent turns — shorter intervals burn more tokens.
+- Heartbeats run agent turns. Hourly ambient isolation bounds context cost; actual cost still scales with tools and model work.
 
 ### `agents.defaults.compaction`
 

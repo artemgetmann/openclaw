@@ -65,6 +65,7 @@ import {
   markControlCommandReplyPayload,
 } from "./control-command-reply.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
+import { markCaptionlessFinalMediaSupplement } from "./final-media-supplement.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
@@ -349,6 +350,32 @@ function markFinalTtsSupplement(payload: ReplyPayload): ReplyPayload {
       },
     },
   };
+}
+
+function hasReplyMedia(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+function isMarkedFinalTtsSupplement(payload: ReplyPayload): boolean {
+  const openclaw =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.openclaw
+      : undefined;
+  return (
+    openclaw != null &&
+    typeof openclaw === "object" &&
+    !Array.isArray(openclaw) &&
+    (openclaw as { finalTtsSupplement?: unknown }).finalTtsSupplement === true
+  );
+}
+
+function isFinalTtsAudioPayload(payload: ReplyPayload): boolean {
+  // Automatic TTS is an additive voice note, not a generic "final with media"
+  // lane. Requiring the voice semantic here prevents an unchanged document
+  // payload from being mislabeled as synthesized speech.
+  return hasReplyMedia(payload) && payload.audioAsVoice === true;
 }
 
 const resolveSessionStoreLookup = (
@@ -915,6 +942,10 @@ export async function dispatchReplyFromConfig(params: {
     // and return no final payload. Track those visible blocks so final-mode TTS
     // still gets one additive supplement; sourcePreview blocks stay progress-only.
     let durableBlockFinalText = "";
+    const deferredTelegramBlockMedia: Array<{
+      payload: ReplyPayload;
+      abortSignal?: AbortSignal;
+    }> = [];
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
@@ -952,6 +983,30 @@ export async function dispatchReplyFromConfig(params: {
               !sourceReplyPolicy.suppressAutomaticSourceDelivery;
             if (shouldTrackBlockAsDurableFinal && payload.text?.trim()) {
               durableBlockFinalText += payload.text;
+            }
+            const shouldDeferTelegramBlockMedia =
+              isTelegramProvider &&
+              shouldTrackBlockAsDurableFinal &&
+              hasReplyMedia(payload) &&
+              // Preserve the established media-only block path. The ordering
+              // bug exists when media belongs to an accumulated text answer:
+              // either this mixed payload owns the text, or an earlier block
+              // already established the durable answer that this media follows.
+              Boolean(payload.text?.trim() || durableBlockFinalText.trim());
+            if (shouldDeferTelegramBlockMedia) {
+              const { text: _blockCaption, ...mediaOnlyPayload } = payload;
+              // A Telegram document cannot participate in the mutable text
+              // preview. Hold it until the resolver settles, then emit it only
+              // if block text becomes the authoritative final. If the resolver
+              // returns a separate final, that payload wins and this provisional
+              // media is discarded instead of being delivered twice.
+              deferredTelegramBlockMedia.push({
+                payload: markCaptionlessFinalMediaSupplement(
+                  sanitizeTelegramVisiblePayload(mediaOnlyPayload),
+                ),
+                abortSignal: context?.abortSignal,
+              });
+              return;
             }
             // Block callbacks are preview/progress material until the resolver
             // either returns a final payload or the accumulated block text is
@@ -1087,13 +1142,47 @@ export async function dispatchReplyFromConfig(params: {
       logInfo(
         `telegram: block-stream final preview finalized before tts textLength=${blockFinalTextForTts.length}`,
       );
+      // The resolver returned no authoritative final, so the accumulated block
+      // answer now owns delivery. Flush its deferred media after text promotion
+      // and preview finalization, but before TTS, preserving text -> media ->
+      // voice ordering. Each original block abort signal still gates delivery.
+      for (const deferredMedia of deferredTelegramBlockMedia) {
+        if (deferredMedia.abortSignal?.aborted) {
+          continue;
+        }
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const result = await routeReply({
+            payload: deferredMedia.payload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            abortSignal: deferredMedia.abortSignal,
+            isGroup,
+            groupId,
+          });
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (block-final-media) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+          queuedFinal = result.ok || queuedFinal;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(deferredMedia.payload) || queuedFinal;
+        }
+      }
       const ttsAttemptStartedAt = Date.now();
       logInfo(
         `tts: final supplement synthesis start path=block-stream textLength=${blockFinalTextForTts.length} channel=${ttsChannel ?? "unknown"}`,
       );
       const ttsReply = await maybeApplyAutomaticTts({ text: blockFinalTextForTts }, "final");
-      const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
-      if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+      const hasFinalTtsAudio = isFinalTtsAudioPayload(ttsReply);
+      if (hasFinalTtsAudio && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsPayload = {
           ...ttsReply,
           // The TTS payload may carry cleaned or synthesized text that differs
@@ -1187,6 +1276,113 @@ export async function dispatchReplyFromConfig(params: {
         continue;
       }
       const replyFinalText = reply.text?.trim();
+      const hasOriginalMedia = hasReplyMedia(reply);
+      const shouldSplitTelegramFinalMedia =
+        isTelegramProvider &&
+        !sourceReplyPolicy.suppressAutomaticSourceDelivery &&
+        Boolean(replyFinalText) &&
+        hasOriginalMedia &&
+        !isMarkedFinalTtsSupplement(reply) &&
+        !isControlCommandReplyPayload(reply);
+      if (shouldSplitTelegramFinalMedia && replyFinalText) {
+        const deliverSplitFinalPayload = async (payload: ReplyPayload, label: string) => {
+          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const result = await routeReply({
+              payload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: ctx.SessionKey,
+              accountId: ctx.AccountId,
+              threadId: routeThreadId,
+              cfg,
+              isGroup,
+              groupId,
+            });
+            if (!result.ok) {
+              logVerbose(
+                `dispatch-from-config: route-reply (${label}) failed: ${result.error ?? "unknown error"}`,
+              );
+            }
+            queuedFinal = result.ok || queuedFinal;
+            if (result.ok) {
+              routedFinalCount += 1;
+            }
+            return;
+          }
+          queuedFinal = dispatcher.sendFinalReply(payload) || queuedFinal;
+        };
+        // Telegram cannot edit a streamed text preview into a document. Split
+        // the accepted final into three ordered payloads: durable text, original
+        // media, then optional synthesized voice. This also gives TTS a
+        // canonical text-only input instead of triggering its existing-media
+        // guard and accidentally relabeling the document as speech.
+        const { mediaUrl: _mediaUrl, mediaUrls: _mediaUrls, ...replyWithoutMedia } = reply;
+        const durableFinalPayload = sanitizeTelegramVisiblePayload({
+          ...replyWithoutMedia,
+          text: replyFinalText,
+          channelData: {
+            ...reply.channelData,
+            openclaw: {
+              ...((reply.channelData?.openclaw &&
+              typeof reply.channelData.openclaw === "object" &&
+              !Array.isArray(reply.channelData.openclaw)
+                ? reply.channelData.openclaw
+                : {}) as Record<string, unknown>),
+              assistantPhase: "final_answer",
+            },
+          },
+        });
+        await deliverSplitFinalPayload(durableFinalPayload, "mixed-final-text");
+        await dispatcher.finalizeBlockReply?.();
+
+        const { text: _fullFinalCaption, ...mediaOnlyPayload } = reply;
+        // The full answer already owns the durable text bubble. Keep generated
+        // files as separate follow-ups without repeating that answer as a
+        // document caption. The explicit marker prevents Telegram's lane
+        // finalizer from treating the missing caption as an invitation to
+        // rehydrate the already-finalized answer text.
+        await deliverSplitFinalPayload(
+          markCaptionlessFinalMediaSupplement(mediaOnlyPayload),
+          "mixed-final-media",
+        );
+
+        const ttsAttemptStartedAt = Date.now();
+        const ttsReply = await maybeApplyAutomaticTts(replyWithoutMedia, "final");
+        if (isFinalTtsAudioPayload(ttsReply)) {
+          const ttsPayload = {
+            ...ttsReply,
+            text: buildFinalTtsCaptionPreview(replyFinalText),
+          };
+          await deliverSplitFinalPayload(
+            shouldMarkFinalTtsSupplement ? markFinalTtsSupplement(ttsPayload) : ttsPayload,
+            "mixed-final-tts",
+          );
+        } else {
+          const lastAttempt = getLastTtsAttempt();
+          const failedThisAttempt =
+            lastAttempt && lastAttempt.timestamp >= ttsAttemptStartedAt && !lastAttempt.success;
+          const expectedThisAttempt = shouldExpectFinalTtsAttempt({
+            cfg,
+            inboundAudio,
+            sessionTtsAuto: turnTtsAuto,
+            text: replyFinalText,
+          });
+          if (failedThisAttempt || expectedThisAttempt) {
+            await deliverSplitFinalPayload(
+              markFinalTtsSupplement({
+                text: "Voice note failed. Final text is above.",
+                channelData: {
+                  openclaw: {
+                    ttsFailureStatus: true,
+                  },
+                },
+              }),
+              "mixed-final-tts-failure",
+            );
+          }
+        }
+        continue;
+      }
       const shouldPreDeliverTelegramFinalText =
         shouldCaptionFinalTtsSupplement &&
         !sourceReplyPolicy.suppressAutomaticSourceDelivery &&
@@ -1248,9 +1444,7 @@ export async function dispatchReplyFromConfig(params: {
 
         const ttsAttemptStartedAt = Date.now();
         const ttsReply = await maybeApplyAutomaticTts(reply, "final");
-        const hasFinalTtsMedia =
-          Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
-        if (hasFinalTtsMedia) {
+        if (isFinalTtsAudioPayload(ttsReply)) {
           const finalTtsCaptionText =
             typeof durableFinalPayload.text === "string" && durableFinalPayload.text.trim()
               ? durableFinalPayload.text

@@ -37,6 +37,39 @@ describe("gog auth local helper", () => {
     expect(DEFAULT_CONSUMER_GOOGLE_SERVICES).toBe("gmail,calendar,drive,contacts,docs,sheets");
   });
 
+  it("starts outside the repository without the development-only tsx loader", async () => {
+    const rootDir = await temporaryRoot();
+    const sourceDir = path.resolve("skills/gog/scripts");
+    const helperDir = path.join(rootDir, "packaged-skill");
+    await fsp.mkdir(helperDir);
+    await Promise.all(
+      ["gog-auth-local.sh", "gog-auth-local.ts"].map((name) =>
+        fsp.copyFile(path.join(sourceDir, name), path.join(helperDir, name)),
+      ),
+    );
+
+    // A copied helper models the packaged workspace: it has the managed Node
+    // binary but no repository node_modules tree from which `tsx` could load.
+    const child = spawnChild("/bin/bash", [path.join(helperDir, "gog-auth-local.sh")], {
+      cwd: rootDir,
+      env: { ...process.env, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("Usage:");
+    expect(stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+    expect(await fsp.readFile(path.join(helperDir, "gog-auth-local.ts"), "utf8")).not.toContain(
+      '"tsx"',
+    );
+  });
+
   it("classifies missing Google test-user access clearly", () => {
     const result = classifyGoogleAuthFailure({
       combinedText:

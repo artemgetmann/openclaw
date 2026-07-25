@@ -37,6 +37,8 @@ Jarvis docs should create action, not emotional debt.
   artifact truth.
 - `docs/consumer/jarvis-identity-migration-checklist.md` - active identity
   migration proof checklist.
+- `docs/jarvis/browser-profile-retirement.md` - short-lived two-browser rollout
+  and owner-confirmed old-data cleanup gate.
 
 ## Reference
 

@@ -74,6 +74,11 @@ payment-sensitive, or out-of-scope actions.
 Do not ask before every normal follow-up inside the approved goal. That defeats
 the product.
 
+Ask only for a missing safety or continuation boundary. When the outcome,
+allowed autonomous actions, approval-required actions, hard constraints,
+watched surface, stop condition, and expiry are already supplied or
+authorized, proceed without repeating them.
+
 Examples:
 
 - Restaurant: if the user says "organize dinner with Alex, only 8 or 9, ask
@@ -99,6 +104,10 @@ After each goal turn or monitor wake, classify the state:
 Call `update_goal(status="complete")` only with evidence that the outcome was
 achieved, for example refund confirmed or received, restaurant time/place
 agreed, purchase placed, or support case resolved.
+
+For outcomes that depend on another person or system, require fresh external
+evidence confirming that outcome before completing. Your own outbound proposal,
+acceptance, or follow-up is not evidence that the external outcome was achieved.
 
 Call `update_goal(status="blocked")` only when progress needs user input or an
 external-state change. Ordinary difficulty is not a blocker.

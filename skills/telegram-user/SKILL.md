@@ -73,6 +73,28 @@ Automation Rule
   `skills/telegram-user/scripts/telegram-user-cli.sh <subcommand> ...`
 - Run one command per call. Do not add shell chains, pipes, or redirection
   around the wrapper unless the user explicitly asks for raw shell plumbing.
+- When the agent shell/exec tool has its own deadline, set it to at least 360
+  seconds for a one-shot installed `telegram-user` command. A cold or stale
+  environment can spend up to 32 seconds probing interpreters and dependency
+  versions, 60 seconds creating its virtual environment, and 180 seconds
+  installing dependencies before the CLI backend starts its own 60-second
+  deadline. The outer layer must allow that 332-second configured budget plus
+  scheduling margin to return its structured result or error first. For `wait`
+  or monitor commands, add the requested wait duration to that budget.
+  If the shell tool says the command is still running and returns a process or
+  session id, poll that same process; do not launch a duplicate command.
+- `E_BACKEND_TIMEOUT` on any mutating command, or an external SIGTERM before a
+  mutating command returns, means Telegram or local state is unknown. Do not
+  blindly retry. For a text or captioned `send`, re-read the target chat with a
+  narrow `--contains` filter and inspect reply/topic metadata before deciding
+  whether another send is needed. For a captionless media or voice send, read
+  recent messages without `--contains` and match the outgoing message's
+  `media_kind`, timestamp, and reply/topic metadata. `read` does not accept
+  `--topic-anchor`; topic verification uses the returned `reply_to_top_id`,
+  `reply_to_msg_id`, or DM topic metadata. For other mutations such as login or
+  topic creation, inspect the relevant current state first. Only `status`,
+  `precheck`, `read`, and `inbox` are safe to retry automatically after the
+  backend timeout.
 - Use structured CLI filters before shell parsing. If you need to find a known
   chat or message, prefer `inbox --contains ...`, `read --contains ...`, or
   `wait --contains ...`; do not pipe Telegram JSON to `grep` when one of those

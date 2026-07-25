@@ -281,10 +281,76 @@ import fs from "node:fs";
 
 const manifestPath = process.argv[2];
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-if (manifest.format !== 1 || !manifest.skills || !Array.isArray(manifest.managedTools)) {
+if (
+  manifest.format !== 1 ||
+  !manifest.skills ||
+  !Array.isArray(manifest.managedTools) ||
+  !Array.isArray(manifest.packagedArtifacts)
+) {
   throw new Error(`invalid capabilities manifest: ${manifestPath}`);
 }
 NODE
+
+  "$ROOT_DIR/scripts/verify-consumer-packaged-artifacts.sh" \
+    "$manifest_path" \
+    "$(dirname "$skills_dir")" \
+    --require-signed
+}
+
+assert_app_managed_cli_payloads() {
+  local runtime_root="$1"
+  local manifest_path="$runtime_root/capabilities.manifest.json"
+  local gog_arm64_path="$runtime_root/tools/gog/darwin-arm64/gog"
+  local gog_x86_64_path="$runtime_root/tools/gog/darwin-x86_64/gog"
+  local gog_host_path=""
+  local gog_license_path="$runtime_root/tools/gog.LICENSE"
+  local gog_version=""
+
+  gog_version="$(
+    "$OPENCLAW_NODE_BIN" --input-type=module - "$manifest_path" <<'NODE'
+import fs from "node:fs";
+
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const gog = manifest.managedTools?.find(
+  (tool) => tool?.skillName === "gog" && tool.bins?.includes("gog"),
+);
+if (typeof gog?.recommendedVersion !== "string" || !gog.recommendedVersion) {
+  throw new Error("capabilities manifest has no recommended gog version");
+}
+process.stdout.write(gog.recommendedVersion);
+NODE
+  )"
+
+  if [[ ! -x "$gog_arm64_path" || ! -x "$gog_x86_64_path" ]]; then
+    echo "ERROR: bundled runtime is missing an architecture-specific app-managed Google Workspace CLI." >&2
+    echo "Expected executables: $gog_arm64_path and $gog_x86_64_path" >&2
+    exit 1
+  fi
+  if [[ ! -s "$gog_license_path" ]]; then
+    echo "ERROR: bundled runtime is missing the Gog MIT license notice: $gog_license_path" >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    arm64)
+      gog_host_path="$gog_arm64_path"
+      ;;
+    x86_64)
+      gog_host_path="$gog_x86_64_path"
+      ;;
+    *)
+      echo "ERROR: unsupported macOS architecture while verifying Gog: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$("$gog_host_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
+    echo "ERROR: bundled Google Workspace CLI does not match recommended version $gog_version" >&2
+    exit 1
+  fi
+  if ! openclaw_verify_vendor_signed_gog "$gog_arm64_path" \
+    || ! openclaw_verify_vendor_signed_gog "$gog_x86_64_path"; then
+    echo "ERROR: bundled Google Workspace CLI vendor identity is invalid." >&2
+    exit 1
+  fi
 }
 
 load_consumer_default_bundled_skills
@@ -373,6 +439,8 @@ assert_bundled_skill_content_current \
 assert_capabilities_manifest_present \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
+assert_app_managed_cli_payloads \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"
 
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then
@@ -426,6 +494,14 @@ while IFS= read -r -d '' runtime_file; do
     if ! codesign --verify --strict "$runtime_file" >/dev/null; then
       echo "ERROR: runtime payload failed codesign verification: $runtime_file" >&2
       exit 1
+    fi
+
+    # Gog intentionally keeps its upstream identity because macOS Keychain
+    # binds token ACLs to that designated requirement. This is a narrow,
+    # fail-closed exception to the normal same-team runtime rule.
+    if openclaw_runtime_payload_is_vendor_signed_gog "$runtime_file"; then
+      openclaw_verify_vendor_signed_gog "$runtime_file"
+      continue
     fi
 
     # Release builds need the bundled runtime payloads to come from the same

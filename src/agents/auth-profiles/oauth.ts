@@ -10,12 +10,17 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { readCodexCliCredentials } from "../cli-credentials.js";
-import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, OAUTH_REFRESH_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
+import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
@@ -124,7 +129,8 @@ function adoptNewerMainOAuthCredential(params: {
       mainCred?.type === "oauth" &&
       mainCred.provider === params.cred.provider &&
       Number.isFinite(mainCred.expires) &&
-      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
+      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires) &&
+      isSafeToCopyOAuthCredential(params.cred, mainCred)
     ) {
       params.store.profiles[params.profileId] = { ...mainCred };
       saveAuthProfileStore(params.store, params.agentDir);
@@ -227,67 +233,236 @@ async function adoptFreshCodexCliCredential(params: {
   }
 }
 
+// The file lock helper is intentionally re-entrant inside one process. OAuth
+// refresh is different: two concurrent lanes in the gateway must never spend
+// the same single-use refresh token. This FIFO queue closes that same-process
+// gap before the cross-process lock below coordinates sibling agents.
+const refreshQueues = new Map<string, Promise<unknown>>();
+
+function refreshQueueKey(provider: string, profileId: string): string {
+  return `${provider}\u0000${profileId}`;
+}
+
+export function resetOAuthRefreshQueuesForTest(): void {
+  refreshQueues.clear();
+}
+
+function normalizeOAuthIdentity(value: unknown): string | undefined {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized || undefined;
+}
+
+/**
+ * Refuse cross-agent credential copies when both stores identify different
+ * accounts. Missing identity on the old credential is allowed so a refresh can
+ * upgrade legacy profiles that predate account metadata.
+ */
+function isSafeToCopyOAuthCredential(
+  existing: OAuthCredential,
+  incoming: OAuthCredential,
+): boolean {
+  const existingAccountId = normalizeOAuthIdentity(existing.accountId);
+  const incomingAccountId = normalizeOAuthIdentity(incoming.accountId);
+  if (existingAccountId && incomingAccountId) {
+    return existingAccountId === incomingAccountId;
+  }
+  const existingEmail = normalizeOAuthIdentity(existing.email);
+  const incomingEmail = normalizeOAuthIdentity(incoming.email);
+  if (existingEmail && incomingEmail) {
+    return existingEmail === incomingEmail;
+  }
+  // If the existing profile has identity but the incoming credential cannot
+  // prove the same identity, do not let a sibling agent overwrite it.
+  if (existingAccountId || existingEmail) {
+    return false;
+  }
+  return true;
+}
+
+async function mirrorRefreshedCredentialIntoMainStore(params: {
+  profileId: string;
+  refreshed: OAuthCredential;
+}): Promise<void> {
+  try {
+    await updateAuthProfileStoreWithLock({
+      agentDir: undefined,
+      updater: (store) => {
+        const existing = store.profiles[params.profileId];
+        if (existing && existing.type !== "oauth") {
+          return false;
+        }
+        if (existing && existing.provider !== params.refreshed.provider) {
+          return false;
+        }
+        if (existing && !isSafeToCopyOAuthCredential(existing, params.refreshed)) {
+          log.warn("refused to mirror OAuth credential with mismatched identity", {
+            profileId: params.profileId,
+          });
+          return false;
+        }
+        if (
+          existing &&
+          Number.isFinite(existing.expires) &&
+          existing.expires >= params.refreshed.expires
+        ) {
+          return false;
+        }
+        store.profiles[params.profileId] = { ...params.refreshed };
+        return true;
+      },
+    });
+  } catch (err) {
+    // The caller already persisted its own fresh credential. Mirroring is a
+    // cross-agent optimization and must not turn a successful refresh into a
+    // failed user request.
+    log.debug("mirrorRefreshedCredentialIntoMainStore failed", {
+      profileId: params.profileId,
+      error: extractErrorMessage(err),
+    });
+  }
+}
+
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
+  provider: string;
+  agentDir?: string;
+}): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+  const key = refreshQueueKey(params.provider, params.profileId);
+  const previous = refreshQueues.get(key) ?? Promise.resolve();
+  let releaseQueue!: () => void;
+  const queueGate = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+  refreshQueues.set(key, queueGate);
+  try {
+    await previous;
+    return await refreshOAuthTokenAcrossAgents(params);
+  } finally {
+    releaseQueue();
+    if (refreshQueues.get(key) === queueGate) {
+      refreshQueues.delete(key);
+    }
+  }
+}
+
+async function refreshOAuthTokenAcrossAgents(params: {
+  profileId: string;
+  provider: string;
   agentDir?: string;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
+  const refreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
-  return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-    const store = ensureAuthProfileStore(params.agentDir);
-    const cred = store.profiles[params.profileId];
-    if (!cred || cred.type !== "oauth") {
-      return null;
-    }
+  return await withFileLock(refreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
+    withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+      // Bypass runtime snapshots after taking the locks. Another lane may have
+      // refreshed and persisted this profile while the current caller waited.
+      const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+      const cred = store.profiles[params.profileId];
+      if (!cred || cred.type !== "oauth" || cred.provider !== params.provider) {
+        return null;
+      }
 
-    if (Date.now() < cred.expires) {
-      return {
-        apiKey: await buildOAuthApiKey(cred.provider, cred),
-        newCredentials: cred,
+      if (Date.now() < cred.expires) {
+        return {
+          apiKey: await buildOAuthApiKey(cred.provider, cred),
+          newCredentials: cred,
+        };
+      }
+
+      // OAuth setup copies credentials into sibling agent stores. Once one
+      // sibling refreshes, peers should adopt the fresh main credential rather
+      // than reuse the rotated token they still have on disk.
+      if (params.agentDir) {
+        const mainPath = resolveAuthStorePath(undefined);
+        if (mainPath !== authPath) {
+          const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
+          const mainCred = mainStore.profiles[params.profileId];
+          if (
+            mainCred?.type === "oauth" &&
+            mainCred.provider === cred.provider &&
+            Date.now() < mainCred.expires &&
+            isSafeToCopyOAuthCredential(cred, mainCred)
+          ) {
+            store.profiles[params.profileId] = { ...mainCred };
+            saveAuthProfileStore(store, params.agentDir);
+            return {
+              apiKey: await buildOAuthApiKey(mainCred.provider, mainCred),
+              newCredentials: mainCred,
+            };
+          }
+        }
+      }
+
+      const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
+      const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
+        provider: cred.provider,
+        context: cred,
+      });
+      if (pluginRefreshed) {
+        // Provider refresh tokens rotate. Persist the merged credential before
+        // returning, otherwise the next request reuses the dead token.
+        const refreshedCredential: OAuthCredential = {
+          ...cred,
+          ...pluginRefreshed,
+          type: "oauth",
+          provider: cred.provider,
+        };
+        store.profiles[params.profileId] = refreshedCredential;
+        saveAuthProfileStore(store, params.agentDir);
+        if (params.agentDir && resolveAuthStorePath(undefined) !== authPath) {
+          await mirrorRefreshedCredentialIntoMainStore({
+            profileId: params.profileId,
+            refreshed: refreshedCredential,
+          });
+        }
+        return {
+          apiKey: await buildOAuthApiKey(cred.provider, refreshedCredential),
+          newCredentials: refreshedCredential,
+        };
+      }
+
+      const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
+      const result =
+        String(cred.provider) === "chutes"
+          ? await (async () => {
+              const newCredentials = await refreshChutesTokens({
+                credential: cred,
+              });
+              return { apiKey: newCredentials.access, newCredentials };
+            })()
+          : await (async () => {
+              const oauthProvider = resolveOAuthProvider(cred.provider);
+              if (!oauthProvider) {
+                return null;
+              }
+              return await getOAuthApiKey(oauthProvider, oauthCreds);
+            })();
+      if (!result) {
+        return null;
+      }
+      const refreshedCredential: OAuthCredential = {
+        ...cred,
+        ...result.newCredentials,
+        type: "oauth",
+        provider: cred.provider,
       };
-    }
+      store.profiles[params.profileId] = refreshedCredential;
+      saveAuthProfileStore(store, params.agentDir);
+      if (params.agentDir && resolveAuthStorePath(undefined) !== authPath) {
+        await mirrorRefreshedCredentialIntoMainStore({
+          profileId: params.profileId,
+          refreshed: refreshedCredential,
+        });
+      }
 
-    const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
-    const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
-      provider: cred.provider,
-      context: cred,
-    });
-    if (pluginRefreshed) {
       return {
-        apiKey: await buildOAuthApiKey(cred.provider, pluginRefreshed),
-        newCredentials: pluginRefreshed,
+        apiKey: await buildOAuthApiKey(cred.provider, refreshedCredential),
+        newCredentials: refreshedCredential,
       };
-    }
-
-    const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
-    const result =
-      String(cred.provider) === "chutes"
-        ? await (async () => {
-            const newCredentials = await refreshChutesTokens({
-              credential: cred,
-            });
-            return { apiKey: newCredentials.access, newCredentials };
-          })()
-        : await (async () => {
-            const oauthProvider = resolveOAuthProvider(cred.provider);
-            if (!oauthProvider) {
-              return null;
-            }
-            return await getOAuthApiKey(oauthProvider, oauthCreds);
-          })();
-    if (!result) {
-      return null;
-    }
-    store.profiles[params.profileId] = {
-      ...cred,
-      ...result.newCredentials,
-      type: "oauth",
-    };
-    saveAuthProfileStore(store, params.agentDir);
-
-    return result;
-  });
+    }),
+  );
 }
 
 async function tryResolveOAuthProfile(
@@ -319,6 +494,7 @@ async function tryResolveOAuthProfile(
 
   const refreshed = await refreshOAuthTokenWithLock({
     profileId,
+    provider: cred.provider,
     agentDir: params.agentDir,
   });
   if (!refreshed) {
@@ -465,6 +641,7 @@ export async function resolveApiKeyForProfile(
   try {
     const result = await refreshOAuthTokenWithLock({
       profileId,
+      provider: oauthCred.provider,
       agentDir: params.agentDir,
     });
     if (!result) {
@@ -523,7 +700,11 @@ export async function resolveApiKeyForProfile(
       try {
         const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
         const mainCred = mainStore.profiles[profileId];
-        if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
+        if (
+          mainCred?.type === "oauth" &&
+          Date.now() < mainCred.expires &&
+          isSafeToCopyOAuthCredential(cred, mainCred)
+        ) {
           // Main agent has fresh credentials - copy them to this agent and use them
           refreshedStore.profiles[profileId] = { ...mainCred };
           saveAuthProfileStore(refreshedStore, params.agentDir);

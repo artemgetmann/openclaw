@@ -60,6 +60,15 @@ than a shim, treat it as a repo-local skill and patch it there.
 
 ## Shipping Proof
 
+Every external command or native runtime invoked by a shipped skill must be
+declared in that skill's metadata. Use normal `requires`/`install` metadata for
+commands that are setup-gated. Use a `packagedArtifacts` entry with
+`requirement: "consumer-release"` when the default consumer experience requires
+a local native payload to exist at package time. Do not make an embedded app a
+`requires.bins` dependency unless packaging also exposes that exact command on
+the runtime PATH; otherwise skill discovery will hide a capability that is
+present inside the package.
+
 Before claiming a skill update is live, prove the right layer:
 
 - Repo truth: `git diff -- skills/<skill-name> .agents/skills/<skill-name>`

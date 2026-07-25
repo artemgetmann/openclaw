@@ -507,6 +507,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.embeddedPi.projectSettingsPolicy": "Embedded Pi Project Settings Policy",
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
+  "agents.defaults.heartbeat.weekendMode": "Heartbeat Weekend Mode",
+  "agents.list.*.heartbeat.weekendMode": "Heartbeat Weekend Mode",
   "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",

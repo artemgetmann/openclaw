@@ -313,6 +313,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      liveReplyRoute: Pick<
+        FollowupRun,
+        "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+      >;
     }> = {},
   ) {
     return createFollowupRunner({
@@ -324,6 +328,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       sessionStore: overrides.sessionStore,
       sessionKey: overrides.sessionKey,
       storePath: overrides.storePath,
+      liveReplyRoute: overrides.liveReplyRoute,
     });
   }
 
@@ -335,6 +340,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      liveReplyRoute: Pick<
+        FollowupRun,
+        "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+      >;
     }>;
   }) {
     const onBlockReply = createAsyncReplySpy();
@@ -342,8 +351,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
       ...params.agentResult,
     });
-    const runner = createMessagingDedupeRunner(onBlockReply, params.runnerOverrides);
-    await runner(params.queued ?? baseQueuedRun());
+    const queued = params.queued ?? baseQueuedRun();
+    const runner = createMessagingDedupeRunner(onBlockReply, {
+      liveReplyRoute: queued,
+      ...params.runnerOverrides,
+    });
+    await runner(queued);
     return { onBlockReply };
   }
 
@@ -426,6 +439,39 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       }),
     );
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves same-channel Telegram progress lifecycle for queued followups", async () => {
+    const commentaryChannelData = { openclaw: { assistantPhase: "commentary" } };
+    const finalChannelData = { openclaw: { assistantPhase: "final_answer" } };
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          { text: "Checking the live thread.", channelData: commentaryChannelData },
+          { text: "Preparing the approved send.", channelData: commentaryChannelData },
+          { text: "Sent with proof.", channelData: finalChannelData },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("telegram"),
+        originatingChannel: "telegram",
+        originatingTo: "-100123:topic:456",
+        originatingThreadId: "456",
+      } as FollowupRun,
+    });
+
+    // The Telegram dispatcher folds commentary into one mutable Work log and
+    // recognizes the explicit final boundary. Generic routeReply has no such
+    // lifecycle and was the source of one durable message per payload.
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const deliveredPayloads = onBlockReply.mock.calls as unknown as Array<
+      [{ text?: string; channelData?: Record<string, unknown> }]
+    >;
+    expect(deliveredPayloads.map(([payload]) => payload)).toEqual([
+      { text: "Checking the live thread.", channelData: commentaryChannelData },
+      { text: "Preparing the approved send.", channelData: commentaryChannelData },
+      { text: "Sent with proof.", channelData: finalChannelData },
+    ]);
   });
 
   it("drops media URL from payload when messaging tool already sent it", async () => {
@@ -511,11 +557,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("falls back to dispatcher when same-channel origin routing fails", async () => {
-    routeReplyMock.mockResolvedValueOnce({
-      ok: false,
-      error: "outbound adapter unavailable",
-    });
+  it("prefers the live dispatcher for same-channel origin routing", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
       queued: {
@@ -525,9 +567,41 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("does not reuse a same-channel dispatcher bound to another destination", async () => {
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "adapter unavailable" });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "private reply" }] },
+      queued: {
+        ...baseQueuedRun("telegram"),
+        originatingChannel: "telegram",
+        originatingTo: "chat:queued",
+        originatingAccountId: "work",
+        originatingThreadId: "42",
+      } as FollowupRun,
+      runnerOverrides: {
+        liveReplyRoute: {
+          originatingChannel: "telegram",
+          originatingTo: "chat:dispatcher",
+          originatingAccountId: "work",
+          originatingThreadId: "42",
+        },
+      },
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "chat:queued",
+        accountId: "work",
+        threadId: "42",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("routes followups with originating account/thread metadata", async () => {
@@ -809,6 +883,44 @@ describe("createFollowupRunner durable delivery recovery", () => {
       expect.objectContaining({ payload: { text: "agent finished once" } }),
     );
     await Promise.all([first.id, second.id].map((id) => ackDurableFollowup(id)));
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
+  it("checkpoints a successful payload prefix before retrying a failed suffix", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "delivery-prefix-checkpoint",
+      run: queued,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "a" }, { text: "b" }],
+      meta: {},
+    });
+    routeReplyMock
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, error: "media failed" });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow("media failed");
+    const [deliveryRecord] = await loadDurableFollowups();
+    expect(deliveryRecord?.delivery?.payloads).toEqual([{ text: "b" }]);
+
+    routeReplyMock.mockResolvedValueOnce({ ok: true });
+    await runner(hydrateDurableFollowup(deliveryRecord, {}));
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls.map(([call]) => call.payload.text)).toEqual(["a", "b", "b"]);
+    await ackDurableFollowup(deliveryRecord?.id);
     await expect(loadDurableFollowups()).resolves.toEqual([]);
   });
 

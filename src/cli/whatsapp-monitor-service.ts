@@ -5,10 +5,12 @@ import {
 } from "../commands/daemon-runtime.js";
 import {
   buildWhatsAppMonitorServiceInstallPlan,
+  readWhatsAppMonitorConfigForEnv,
   resolveDefaultWhatsAppMonitorHookUrl,
+  resolveWhatsAppMonitorCronStorePath,
 } from "../commands/whatsapp-monitor-service-install-helpers.js";
 import { resolveLocalWhatsAppMonitorHookUrl } from "../commands/whatsapp-monitor.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/config.js";
 import {
   resolveWhatsAppMonitorLaunchAgentLabel,
   resolveWhatsAppMonitorSystemdServiceName,
@@ -24,6 +26,7 @@ import type { GatewayServiceCommandConfig } from "../daemon/service.js";
 import { resolveWhatsAppMonitorService } from "../daemon/whatsapp-monitor-service.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readListenerHealth, resolveListenerHealthStorePath } from "../monitor/listener-health.js";
+import { resolveMonitorStorePath } from "../monitor/store.js";
 import { defaultRuntime } from "../runtime.js";
 import { colorize } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
@@ -410,7 +413,7 @@ export async function runWhatsAppMonitorServiceStatus(
       runtimeUnavailable = true;
       return { status: "unknown", detail: String(err) };
     }),
-    readBestEffortConfig(),
+    readWhatsAppMonitorConfigForEnv(daemonEnv),
   ]);
   const defaultHookUrl = resolveDefaultWhatsAppMonitorHookUrl({
     env: daemonEnv,
@@ -420,6 +423,18 @@ export async function runWhatsAppMonitorServiceStatus(
   const hookUrl = readMonitorArgument(command?.programArguments ?? [], "--hook-url");
   const monitorStorePath = readMonitorArgument(command?.programArguments ?? [], "--monitor-store");
   const cronStorePath = readMonitorArgument(command?.programArguments ?? [], "--cron-store");
+  const expectedCronStorePath = resolveWhatsAppMonitorCronStorePath({
+    configuredStore: cfg.cron?.store,
+    env: daemonEnv,
+  });
+  const expectedMonitorStorePath = resolveMonitorStorePath({
+    cronStorePath: expectedCronStorePath,
+  });
+  const selectedMonitorStorePath = monitorStorePath
+    ? resolveMonitorStorePath({ storePath: monitorStorePath })
+    : cronStorePath
+      ? resolveMonitorStorePath({ cronStorePath })
+      : undefined;
   const pollIntervalMs =
     parseStrictPositiveInteger(
       readMonitorArgument(command?.programArguments ?? [], "--poll-interval-ms") ?? "1000",
@@ -441,6 +456,20 @@ export async function runWhatsAppMonitorServiceStatus(
   // Missing evidence cannot prove that the running service owns this listener heartbeat.
   const listenerOwnerMatches =
     runtime.pid !== undefined && listenerOwnerPid !== undefined && runtime.pid === listenerOwnerPid;
+  const profileOwnership = summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_PROFILE");
+  const configOwnership = summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_CONFIG_PATH");
+  const stateOwnership = summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_STATE_DIR");
+  const hookOwnership = { configured: Boolean(hookUrl), loopback: isLoopbackHookUrl(hookUrl) };
+  const selectorOwnership = {
+    configured: selectedMonitorStorePath !== undefined,
+    matches:
+      selectedMonitorStorePath !== undefined &&
+      selectedMonitorStorePath === expectedMonitorStorePath,
+    dbPath: Boolean(readMonitorArgument(command?.programArguments ?? [], "--db-path")),
+    cronStore: Boolean(cronStorePath),
+    cursorStore: Boolean(readMonitorArgument(command?.programArguments ?? [], "--cursor-store")),
+    monitorStore: Boolean(monitorStorePath),
+  };
   const acceptance = {
     configured: command !== null,
     loaded,
@@ -449,7 +478,13 @@ export async function runWhatsAppMonitorServiceStatus(
       loaded &&
       runtime.status === "running" &&
       listenerHealth?.state === "healthy" &&
-      listenerOwnerMatches,
+      listenerOwnerMatches &&
+      profileOwnership.matches &&
+      configOwnership.matches &&
+      stateOwnership.matches &&
+      hookOwnership.loopback &&
+      selectorOwnership.matches &&
+      selectorOwnership.dbPath,
     unavailable: {
       configured: commandUnavailable,
       loaded: loadedUnavailable,
@@ -457,23 +492,14 @@ export async function runWhatsAppMonitorServiceStatus(
       listenerHealth: listenerHealthUnavailable,
     },
     ownership: {
-      profile: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_PROFILE"),
-      config: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_CONFIG_PATH"),
-      state: summarizeInstalledIdentity(command, daemonEnv, "OPENCLAW_STATE_DIR"),
-      hook: { configured: Boolean(hookUrl), loopback: isLoopbackHookUrl(hookUrl) },
+      profile: profileOwnership,
+      config: configOwnership,
+      state: stateOwnership,
+      hook: hookOwnership,
       listener: {
         pidMatches: listenerOwnerMatches,
       },
-      selectors: {
-        dbPath: Boolean(readMonitorArgument(command?.programArguments ?? [], "--db-path")),
-        cronStore: Boolean(readMonitorArgument(command?.programArguments ?? [], "--cron-store")),
-        cursorStore: Boolean(
-          readMonitorArgument(command?.programArguments ?? [], "--cursor-store"),
-        ),
-        monitorStore: Boolean(
-          readMonitorArgument(command?.programArguments ?? [], "--monitor-store"),
-        ),
-      },
+      selectors: selectorOwnership,
     },
   };
   const payload = {

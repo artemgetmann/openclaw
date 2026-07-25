@@ -1,9 +1,19 @@
+import { createRequire } from "node:module";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
+
+// jsdom does not ship TypeScript declarations. Keep this test dependency local
+// and describe only the constructor surface exercised by the browser fixture.
+const { JSDOM } = createRequire(import.meta.url)("jsdom") as {
+  JSDOM: new (
+    html?: string,
+    options?: { runScripts?: "outside-only" },
+  ) => { window: Window & typeof globalThis };
+};
 
 const routeState = vi.hoisted(() => ({
   profileCtx: {
@@ -32,9 +42,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
     path: "/tmp/openclaw/downloads/report.pdf",
   })),
   fillChromeMcpElement: vi.fn(async () => {}),
-  evaluateChromeMcpScript: vi.fn(
-    async (_params: { profileName: string; targetId: string; fn: string }) => true,
-  ),
+  evaluateChromeMcpScript: vi.fn<
+    (_params: { profileName: string; targetId: string; fn: string }) => Promise<unknown>
+  >(async (_params: { profileName: string; targetId: string; fn: string }) => true),
   insertTextViaCdp: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   pressChromeMcpKey: vi.fn(async () => {}),
@@ -566,12 +576,171 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       fn: expect.stringContaining("ant-select-dropdown"),
       args: ["combo-to"],
-      timeoutMs: 14_000,
+      timeoutMs: 14_500,
     });
     const script = chromeMcpMocks.evaluateChromeMcpScript.mock.calls[0]?.[0].fn;
     expect(script).toContain("setValue(editable, queryText)");
     expect(script).not.toContain("matchTexts");
     expect(script).not.toContain("matchTexts.push(queryText)");
+  });
+
+  it("keeps the in-page chooseOption miss inside the Chrome MCP timeout budget", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockImplementationOnce(
+      async (params: { fn: string; timeoutMs?: number }) => {
+        const inPageTimeoutMs = Number(
+          params.fn.match(/const timeoutMs = (\d+);/)?.[1] ?? Number.NaN,
+        );
+        if (!Number.isFinite(inPageTimeoutMs) || (params.timeoutMs ?? 0) <= inPageTimeoutMs) {
+          throw new Error("Chrome MCP evaluate_script timed out");
+        }
+        throw new Error('No visible option matched "Ukraine"');
+      },
+    );
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await expect(
+      handler?.(
+        {
+          params: {},
+          query: {},
+          body: {
+            kind: "chooseOption",
+            selector: "#nationality",
+            optionText: "Ukraine",
+            match: "contains",
+            timeoutMs: 20_000,
+          },
+        },
+        response.res,
+      ),
+    ).rejects.toThrow('No visible option matched "Ukraine"');
+
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 20_500,
+        fn: expect.stringContaining("const timeoutMs = 20000;"),
+      }),
+    );
+  });
+
+  it("chooses the verified text from a newly opened class-only custom DIV dropdown", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    const clickedOptions: string[] = [];
+    chromeMcpMocks.evaluateChromeMcpScript.mockImplementationOnce(
+      async (params: { fn: string }) => {
+        const dom = new JSDOM(
+          `<!doctype html>
+          <body>
+            <div id="nationality" class="Dropdown__Main-sc-16g04av-1">
+              <span class="Dropdown__Value-sc-16g04av-2">Nationality</span>
+            </div>
+            <div class="Dropdown__Menu-sc-16g04av-3" style="display:none">
+              <div class="Dropdown__Item-sc-16g04av-4">United Kingdom</div>
+              <div class="Dropdown__Item-sc-16g04av-4">Ukraine</div>
+            </div>
+          </body>`,
+          { runScripts: "outside-only" },
+        );
+        const { window } = dom;
+        Object.defineProperty(window, "PointerEvent", {
+          configurable: true,
+          value: window.MouseEvent,
+        });
+        Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
+          configurable: true,
+          value: vi.fn(),
+        });
+        const isHiddenByAncestor = (element: Element | null): boolean =>
+          element !== null &&
+          (window.getComputedStyle(element).display === "none" ||
+            isHiddenByAncestor(element.parentElement));
+        Object.defineProperty(window.HTMLElement.prototype, "getBoundingClientRect", {
+          configurable: true,
+          value: function (this: HTMLElement) {
+            if (isHiddenByAncestor(this)) {
+              return {
+                x: 0,
+                y: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                width: 0,
+                height: 0,
+                toJSON: () => ({}),
+              };
+            }
+            return {
+              x: 0,
+              y: 0,
+              top: 0,
+              right: 200,
+              bottom: 40,
+              left: 0,
+              width: 200,
+              height: 40,
+              toJSON: () => ({}),
+            };
+          },
+        });
+        const control = window.document.querySelector("#nationality");
+        const menu = window.document.querySelector(".Dropdown__Menu-sc-16g04av-3");
+        Object.defineProperty(window.document, "elementFromPoint", {
+          configurable: true,
+          value: () => control?.firstElementChild,
+        });
+        control?.addEventListener("pointerdown", () => {
+          if (menu instanceof window.HTMLElement) {
+            menu.style.display = "block";
+          }
+        });
+        for (const option of window.document.querySelectorAll(".Dropdown__Item-sc-16g04av-4")) {
+          option.addEventListener("click", () => {
+            const text = option.textContent?.trim() ?? "";
+            clickedOptions.push(text);
+            if (control instanceof window.HTMLElement) {
+              control.textContent = `Nationality ${text}`;
+            }
+          });
+        }
+
+        const chooseOption = window.eval(`(${params.fn})`) as (
+          target: Element | null,
+        ) => Promise<unknown>;
+        return await chooseOption(null);
+      },
+    );
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "chooseOption",
+          selector: "#nationality",
+          optionText: "Ukraine",
+          match: "exact",
+          timeoutMs: 2_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      result: {
+        matchedText: "Ukraine",
+        selectedText: "Nationality Ukraine",
+        changed: true,
+      },
+    });
+    expect(clickedOptions).toEqual(["Ukraine"]);
+    expect(clickedOptions).not.toContain("United Kingdom");
   });
 
   it("rejects existing-session chooseOption when query matches the wrong visible option", async () => {
@@ -1012,7 +1181,7 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       fn: expect.stringContaining("Kuala Lumpur"),
       args: ["airport-from"],
-      timeoutMs: 30_000,
+      timeoutMs: 30_500,
     });
   });
 

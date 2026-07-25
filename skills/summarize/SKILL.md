@@ -13,9 +13,12 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
-              "formula": "steipete/tap/summarize",
+              "formula": "summarize",
               "bins": ["summarize"],
               "label": "Install summarize (brew)",
+              "versionCommand": ["summarize", "--version"],
+              "versionRegex": "v?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)",
+              "recommendedVersion": "0.21.6",
             },
           ],
       },
