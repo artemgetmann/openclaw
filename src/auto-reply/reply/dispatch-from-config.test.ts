@@ -1850,6 +1850,46 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("does not promote explicit commentary into a Telegram final or TTS supplement", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const commentary =
+      "I’ll reduce the test to AED 25, then send a verified screenshot before payment.";
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      // Provider failures can leave only a structurally marked progress block.
+      // That progress stays visible, but it must never become the final/TTS input.
+      await opts?.onBlockReply?.({
+        text: commentary,
+        channelData: { openclaw: { assistantPhase: "commentary" } },
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: commentary },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("synthesizes final TTS once from durable block-streamed final text", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

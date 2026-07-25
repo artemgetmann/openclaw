@@ -50,6 +50,7 @@ import {
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import { resolveOpenClawAssistantPhase } from "./assistant-phase.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
@@ -285,6 +286,12 @@ async function runReplyAgentWithFinalizationOwnership(
   };
   const markFinalVisibleReply = (payload: ReplyPayload) => {
     markVisibleReply(payload);
+    // Commentary proves that progress reached the user, not that the run
+    // completed. If the provider dies after this block, preserve the empty-final
+    // fallback instead of silently treating working state as the answer.
+    if (resolveOpenClawAssistantPhase(payload) === "commentary") {
+      return;
+    }
     didSendFinalVisibleReply.value = true;
   };
   const runOpts =
@@ -878,6 +885,7 @@ async function runReplyAgentWithFinalizationOwnership(
           isHeartbeat,
           rawPayloads: payloadArray,
           didSendVisibleReply: didSendVisibleReply.value,
+          didSendFinalVisibleReply: didSendFinalVisibleReply.value,
           messagingToolSentTargets: runResult.messagingToolSentTargets,
           messageProvider: followupRun.run.messageProvider,
           originatingTo: sessionCtx.OriginatingTo,
@@ -934,6 +942,7 @@ async function runReplyAgentWithFinalizationOwnership(
           rawPayloads: payloadArray,
           replyPayloads,
           didSendVisibleReply: didSendVisibleReply.value,
+          didSendFinalVisibleReply: didSendFinalVisibleReply.value,
           messagingToolSentTargets: runResult.messagingToolSentTargets,
           messageProvider: followupRun.run.messageProvider,
           originatingTo: sessionCtx.OriginatingTo,

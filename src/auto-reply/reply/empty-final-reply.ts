@@ -32,6 +32,7 @@ export function shouldReturnEmptyFinalFallback(params: {
   rawPayloads: ReplyPayload[];
   replyPayloads?: ReplyPayload[];
   didSendVisibleReply: boolean;
+  didSendFinalVisibleReply?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
   messageProvider?: string;
   originatingTo?: string;
@@ -40,7 +41,10 @@ export function shouldReturnEmptyFinalFallback(params: {
   if (!isUserVisibleRun(params.opts, params.isHeartbeat)) {
     return false;
   }
-  if (params.didSendVisibleReply) {
+  // Progress/commentary can be visible without completing the turn. Callers
+  // that track final ownership separately must use that stronger signal; older
+  // callers retain the original visible-reply behavior by default.
+  if (params.didSendFinalVisibleReply ?? params.didSendVisibleReply) {
     return false;
   }
   if (
