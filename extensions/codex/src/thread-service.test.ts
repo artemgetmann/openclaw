@@ -137,6 +137,19 @@ describe("CodexThreadService", () => {
     });
   });
 
+  it("starts the first turn on a freshly created empty thread without resuming it", async () => {
+    const client = new FakeCodexClient();
+    const service = createService(client);
+
+    const created = await service.create();
+    await service.message(requireThreadId(created), "first turn");
+
+    expect(client.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+  });
+
   it("allows only one active continuation per native thread", async () => {
     const client = new FakeCodexClient();
     client.holdTurn = true;

@@ -657,7 +657,14 @@ export async function dispatchReplyFromConfig(params: {
       ? await hookRunner.runInboundClaimForPluginOutcome(
           pluginOwnedBinding.pluginId,
           inboundClaimEvent,
-          { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
+          {
+            ...inboundClaimContext,
+            pluginBinding: pluginOwnedBinding,
+            // Keep channel delivery in core. The plugin can request concise
+            // progress, but only core decides whether that means dispatcher
+            // tool output or cross-provider route-reply.
+            replyProgress: async (payload) => await sendBindingNotice(payload, "additive"),
+          },
         )
       : (() => {
           const pluginLoaded =

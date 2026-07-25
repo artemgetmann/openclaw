@@ -1517,6 +1517,13 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   messageId?: string;
   /** Durable plugin-owned state for a conversation explicitly bound to this plugin. */
   pluginBinding?: PluginConversationBinding;
+  /**
+   * Sends a non-terminal update into the bound conversation.
+   *
+   * This is intentionally available only during targeted bound routing so a
+   * native runtime can acknowledge long work without owning channel delivery.
+   */
+  replyProgress?: (payload: ReplyPayload) => Promise<boolean>;
 };
 
 export type PluginHookInboundClaimEvent = {
