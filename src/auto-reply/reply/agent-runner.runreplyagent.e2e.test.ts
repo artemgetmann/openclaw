@@ -1586,6 +1586,81 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("continues after transcript reconciliation replaces stale cumulative prompt usage", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "stale-cumulative-usage-session";
+      const sessionKey = "agent:main:telegram:group:-1003783709877:topic:21876";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "openai-codex": { command: "codex" },
+            },
+            compaction: {
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        totalTokens: 177_807,
+        totalTokensFresh: false,
+        inputTokens: 4_061_906,
+        contextTokens: 272_000,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        JSON.stringify({ usage: { input: 177_807, output: 7_807 } }),
+        "utf-8",
+      );
+
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "The conversation continued." }],
+        meta: { agentMeta: { usage: { input: 171_000, output: 20, total: 171_020 } } },
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        agentCfgContextTokens: 272_000,
+        runOverrides: {
+          agentId: "main",
+          agentDir: stateDir,
+          sessionId,
+          sessionFile: transcriptPath,
+          messageProvider: "telegram",
+          provider: "openai-codex",
+          model: "gpt-5.6-sol",
+          config: cfg,
+          persistedPromptTokens: 4_061_906,
+        },
+      });
+      const res = await run();
+
+      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        sessionId,
+      });
+      expect(res).toMatchObject({ text: "The conversation continued." });
+      expect(sessionStore[sessionKey].sessionId).toBe(sessionId);
+      expect(sessionStore[sessionKey].totalTokens).toBe(177_807);
+      expect(sessionStore[sessionKey].totalTokensFresh).toBe(true);
+    });
+  });
+
   it("uses the active Codex GPT-5.5 budget instead of stale session context during hard-reserve preflight", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "codex-gpt55-session";
