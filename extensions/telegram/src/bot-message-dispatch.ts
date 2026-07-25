@@ -1892,6 +1892,22 @@ export const dispatchTelegramMessage = async ({
         : payload;
     const hasMedia =
       Boolean(normalizedPayload.mediaUrl) || (normalizedPayload.mediaUrls?.length ?? 0) > 0;
+    const sourceDurableReason =
+      classification?.reason ??
+      classifyPayloadDurableSendReason(normalizedPayload, classification?.infoKind);
+    const sourceFinalTextKey =
+      sourceDurableReason === "final" && !hasMedia && typeof normalizedPayload.text === "string"
+        ? normalizedPayload.text.trim()
+        : undefined;
+    if (sourceFinalTextKey && deliveredFinalTextKeys.has(sourceFinalTextKey)) {
+      // Deduplicate the provider's logical final before invoking a modifying
+      // hook. Stateful message_sending hooks must run once for one visible
+      // final, even when a provider replays that final through two callbacks.
+      logVerbose(
+        `telegram: skipped duplicate source final text callsite=${classification?.callsite ?? "dispatch-send-payload"}`,
+      );
+      return true;
+    }
     const isTtsSupplement = isFinalTtsSupplementPayload(normalizedPayload);
     if (
       isTtsSupplement &&
@@ -2025,6 +2041,12 @@ export const dispatchTelegramMessage = async ({
       },
     });
     if (result.delivered) {
+      if (sourceFinalTextKey) {
+        // Keep both sides of a hook rewrite. The source key suppresses provider
+        // replay before another hook pass; the delivered key suppresses a
+        // different source payload that rewrites to the same visible final.
+        deliveredFinalTextKeys.add(sourceFinalTextKey);
+      }
       if (finalTextKey) {
         deliveredFinalTextKeys.add(finalTextKey);
       }
@@ -2247,6 +2269,12 @@ export const dispatchTelegramMessage = async ({
     if (!normalizedPreparedText) {
       return "skipped";
     }
+    if (deliveredFinalTextKeys.has(normalizedPreparedText)) {
+      // The phased final path prepares its hook before sendPayload. Suppress a
+      // provider replay here so one logical final cannot invoke that hook twice.
+      logVerbose("telegram: skipped duplicate final before final-answer preparation");
+      return "skipped";
+    }
     const activeProgressController = getActiveProgressController();
     const activeProgressText = normalizeAdjacentProgressBoundaries(
       activeProgressController?.lastText() ?? "",
@@ -2264,7 +2292,6 @@ export const dispatchTelegramMessage = async ({
       logVerbose("telegram: skipped final echo that matched transient progress");
       return "skipped";
     }
-    await beginFinalAnswerPhase("before-final-answer");
     const preparedFinal = await prepareTelegramReplyForDelivery({
       reply: applyTextToPayload(payload, preparedText),
       chatId: String(chatId),
@@ -2279,6 +2306,11 @@ export const dispatchTelegramMessage = async ({
     if (!finalText?.trim()) {
       return "skipped";
     }
+    // Hook preparation can yield while queued partial/lifecycle callbacks
+    // finish. Drain them and enter the final phase only afterward so they
+    // cannot rotate a lane whose finalization state has already changed.
+    await waitForDraftLaneIdle();
+    await beginFinalAnswerPhase("before-final-answer");
     setDraftDurableSendClassification("answer", {
       reason: classifyPayloadDurableSendReason(finalPayload, "final"),
       callsite: "answer-final-preview",
@@ -2355,6 +2387,9 @@ export const dispatchTelegramMessage = async ({
       }
     }
     if (result !== "skipped") {
+      // Record the provider's pre-hook text as well as sendPayload's delivered
+      // text. A replay must be suppressed before another message_sending pass.
+      deliveredFinalTextKeys.add(normalizedPreparedText);
       latencyTrace?.mark("final_telegram_send_edit_completed", {
         result,
         textLength: preparedText.length,

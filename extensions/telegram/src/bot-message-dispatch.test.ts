@@ -939,6 +939,32 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
   });
 
+  it("deduplicates replayed final text before rerunning message_sending", async () => {
+    const sourceText = "One logical final.";
+    prepareTelegramReplyForDelivery.mockImplementation(async ({ reply }) => ({
+      reply: { ...reply, text: "One rewritten final." },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      // High-route providers can expose the same logical final through both a
+      // phased callback and their generic completion callback.
+      await dispatcherOptions.deliver({ text: sourceText }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: sourceText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "One rewritten final." })],
+      }),
+    );
+  });
+
   it.each(["off", "code", "bullets"] as const)(
     "keeps table finals on legacy delivery when Telegram tables are %s",
     async (tables) => {
