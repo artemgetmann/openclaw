@@ -142,6 +142,55 @@ function buildChunkTextResolver(params: {
   };
 }
 
+/**
+ * Apply message_sending exactly once before a reply's transport is chosen.
+ * Final-answer callers can invoke this before deciding preview versus rich
+ * delivery; deliverReplies retains the normal call for every other caller.
+ */
+export async function prepareTelegramReplyForDelivery(params: {
+  reply: ReplyPayload;
+  chatId: string;
+  accountId?: string;
+  thread?: TelegramThreadSpec | null;
+}): Promise<{ reply: ReplyPayload; cancelled: boolean }> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return { reply: params.reply, cancelled: false };
+  }
+  const mediaList = params.reply.mediaUrls?.length
+    ? params.reply.mediaUrls
+    : params.reply.mediaUrl
+      ? [params.reply.mediaUrl]
+      : [];
+  const rawContent = params.reply.text || "";
+  const hookResult = await hookRunner.runMessageSending(
+    {
+      to: params.chatId,
+      content: rawContent,
+      metadata: {
+        channel: "telegram",
+        mediaUrls: mediaList,
+        threadId: params.thread?.id,
+      },
+    },
+    {
+      channelId: "telegram",
+      accountId: params.accountId,
+      conversationId: params.chatId,
+    },
+  );
+  if (hookResult?.cancel) {
+    return { reply: params.reply, cancelled: true };
+  }
+  return {
+    reply:
+      typeof hookResult?.content === "string" && hookResult.content !== rawContent
+        ? { ...params.reply, text: hookResult.content }
+        : params.reply,
+    cancelled: false,
+  };
+}
+
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
@@ -656,6 +705,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Controls Bot API rich-message sends. Default: true when Telegram exposes the raw API. */
   richMessages?: boolean;
+  /** The caller already invoked message_sending for these replies. */
+  skipMessageSendingHooks?: boolean;
   /** Message id that the optional quote text belongs to. */
   replyQuoteMessageId?: number;
   /** Optional quote text for Telegram reply_parameters. */
@@ -673,7 +724,6 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
   };
   const hookRunner = getGlobalHookRunner();
-  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
@@ -699,30 +749,17 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const rawContent = reply.text || "";
-    if (hasMessageSendingHooks) {
-      const hookResult = await hookRunner?.runMessageSending(
-        {
-          to: params.chatId,
-          content: rawContent,
-          metadata: {
-            channel: "telegram",
-            mediaUrls: mediaList,
-            threadId: params.thread?.id,
-          },
-        },
-        {
-          channelId: "telegram",
-          accountId: params.accountId,
-          conversationId: params.chatId,
-        },
-      );
-      if (hookResult?.cancel) {
+    if (!params.skipMessageSendingHooks) {
+      const prepared = await prepareTelegramReplyForDelivery({
+        reply,
+        chatId: params.chatId,
+        accountId: params.accountId,
+        thread: params.thread,
+      });
+      if (prepared.cancelled) {
         continue;
       }
-      if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
-        reply = { ...reply, text: hookResult.content };
-      }
+      reply = prepared.reply;
     }
 
     const contentForSentHook = reply.text || "";

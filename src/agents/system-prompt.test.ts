@@ -120,6 +120,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
+    expect(prompt).not.toContain("For Telegram comparison or data tables");
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
@@ -414,6 +415,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("wacli-recent-reply.sh");
     expect(prompt).not.toContain("telegram-user download --chat <chat> --message-id <id>");
     expect(prompt).not.toContain("do not inspect Telethon internals");
+  });
+
+  it("formats Telegram data tables as native rich tables in full prompts only", () => {
+    const fullPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+    const minimalPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+    });
+
+    expect(fullPrompt).toContain("For Telegram comparison or data tables");
+    expect(fullPrompt).toContain("standard unfenced Markdown pipe table");
+    expect(fullPrompt).toContain("one header row and one delimiter row");
+    expect(fullPrompt).toContain("Never wrap data tables in code fences");
+    expect(fullPrompt).toContain("literal copy text instead of native rich tables");
+    expect(minimalPrompt).not.toContain("For Telegram comparison or data tables");
   });
 
   it("uses consumer terminology for reminders and explicit monitors", () => {

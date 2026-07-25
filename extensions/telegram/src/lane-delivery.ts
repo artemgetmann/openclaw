@@ -5,6 +5,7 @@ export {
   type LaneDeliveryResult,
   type LaneName,
   type LanePreviewLifecycle,
+  mergePreviewProgressWithFinal,
   normalizeAdjacentProgressBoundaries,
 } from "./lane-delivery-text-deliverer.js";
 export {

@@ -69,6 +69,7 @@ type SendPayloadContext = {
   callsite?: string;
   laneName?: LaneName;
   infoKind?: string;
+  messageSendingHookApplied?: boolean;
 };
 
 type CreateLaneTextDelivererParams = {
@@ -100,6 +101,10 @@ type DeliverLaneTextParams = {
   infoKind: string;
   previewButtons?: TelegramInlineButtons;
   allowPreviewUpdateForNonFinal?: boolean;
+  /** Final text was already prepared by message_sending before preview routing. */
+  messageSendingHookApplied?: boolean;
+  /** Final text already contains every retained preview fragment the user may see. */
+  finalTextAlreadyMerged?: boolean;
 };
 
 type TryUpdatePreviewParams = {
@@ -125,6 +130,7 @@ type ConsumeArchivedAnswerPreviewParams = {
   payload: ReplyPayload;
   previewButtons?: TelegramInlineButtons;
   canEditViaPreview: boolean;
+  messageSendingHookApplied?: boolean;
 };
 
 type PreviewUpdateContext = "final" | "update";
@@ -197,7 +203,10 @@ export function normalizeAdjacentProgressBoundaries(text: string): string {
   return deduped.join("\n\n");
 }
 
-function mergePreviewProgressWithFinal(previewText: string | undefined, finalText: string): string {
+export function mergePreviewProgressWithFinal(
+  previewText: string | undefined,
+  finalText: string,
+): string {
   const normalizedFinal = normalizeAdjacentProgressBoundaries(finalText);
   const preview = previewText?.trim();
   if (!preview || !normalizedFinal.trim()) {
@@ -486,6 +495,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     payload,
     previewButtons,
     canEditViaPreview,
+    messageSendingHookApplied,
   }: ConsumeArchivedAnswerPreviewParams): Promise<LaneDeliveryResult | undefined> => {
     const archivedPreview = params.archivedAnswerPreviews.shift();
     if (!archivedPreview) {
@@ -526,6 +536,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       callsite: "lane-archived-answer-final-fallback",
       laneName: "answer",
       infoKind: "final",
+      ...(messageSendingHookApplied ? { messageSendingHookApplied: true } : {}),
     });
     // Once this archived preview is consumed by a fallback final send, delete it
     // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
@@ -548,13 +559,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     infoKind,
     previewButtons,
     allowPreviewUpdateForNonFinal = false,
+    messageSendingHookApplied,
+    finalTextAlreadyMerged = false,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const deliveryText =
       laneName === "answer"
         ? infoKind === "final"
-          ? mergePreviewProgressWithFinal(lane.lastPartialText, text)
+          ? finalTextAlreadyMerged
+            ? normalizeAdjacentProgressBoundaries(text)
+            : mergePreviewProgressWithFinal(lane.lastPartialText, text)
           : normalizeAdjacentProgressBoundaries(text)
         : text;
     const canEditViaPreview =
@@ -577,6 +592,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           payload,
           previewButtons,
           canEditViaPreview,
+          messageSendingHookApplied,
         });
         if (archivedResult) {
           return archivedResult;
@@ -591,6 +607,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             payload,
             previewButtons,
             canEditViaPreview,
+            messageSendingHookApplied,
           });
           if (archivedResultAfterFlush) {
             return archivedResultAfterFlush;
@@ -655,6 +672,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         callsite: "lane-final-standard-send",
         laneName,
         infoKind,
+        ...(messageSendingHookApplied ? { messageSendingHookApplied: true } : {}),
       });
       return delivered ? "sent" : "skipped";
     }
