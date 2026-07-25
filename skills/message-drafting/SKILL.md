@@ -16,8 +16,9 @@ user-invocable: false
 
 ## Exact Recipient Payload Formatting
 
-- Render every exact recipient-ready payload as Markdown blockquote lines: prefix
-  every payload line with `>`.
+- Render every exact recipient-ready payload as one Markdown blockquote: prefix
+  every payload line with `>`, including blank separator lines between
+  paragraphs. This preserves one tap-to-copy block for the complete draft.
 - Keep the exact draft plain and copyable. Do not switch to native rich
   presentation merely because the content is structured.
 - For cross-language drafts, keep the meaning/review block as normal prose and

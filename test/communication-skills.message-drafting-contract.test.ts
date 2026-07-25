@@ -37,8 +37,12 @@ describe("message-drafting cross-language contract", () => {
   });
 
   it("renders exact recipient-ready drafts as copyable Markdown blockquotes", () => {
-    expect(canonicalSkill).toContain("every exact recipient-ready payload as Markdown blockquote");
+    expect(canonicalSkill).toContain(
+      "every exact recipient-ready payload as one Markdown blockquote",
+    );
     expect(canonicalSkill).toContain("every payload line with `>`");
+    expect(canonicalSkill).toContain("including blank separator lines");
+    expect(canonicalSkill).toContain("one tap-to-copy block for the complete draft");
     expect(canonicalSkill).toContain("exact draft plain and copyable");
     expect(canonicalSkill).toContain("Do not switch to native rich");
     expect(canonicalSkill).toContain("meaning/review block as normal prose");
