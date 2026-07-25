@@ -60,6 +60,7 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { resolveOpenClawAssistantPhase } from "./assistant-phase.js";
 import {
   isControlCommandReplyPayload,
   markControlCommandReplyPayload,
@@ -980,6 +981,10 @@ export async function dispatchReplyFromConfig(params: {
             }
             const shouldTrackBlockAsDurableFinal =
               !isSourcePreviewToolPayload(payload) &&
+              // A provider failure can end a run after signed commentary was
+              // already streamed. Commentary remains progress; only an actual
+              // final or a legacy phase-less block may own final/TTS delivery.
+              resolveOpenClawAssistantPhase(payload) !== "commentary" &&
               !sourceReplyPolicy.suppressAutomaticSourceDelivery;
             if (shouldTrackBlockAsDurableFinal && payload.text?.trim()) {
               durableBlockFinalText += payload.text;

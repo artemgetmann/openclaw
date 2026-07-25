@@ -2535,6 +2535,44 @@ describe("runReplyAgent reply liveness", () => {
     });
   });
 
+  it("returns the empty-final fallback after explicit commentary without a final", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onBlockReply?: (payload: {
+          text?: string;
+          channelData?: { openclaw?: { assistantPhase?: string } };
+        }) => Promise<void> | void;
+      }) => {
+        // A provider error may terminate after commentary was already streamed.
+        // Commentary proves visible progress, not successful final completion.
+        await params.onBlockReply?.({
+          text: "I’m checking the order and will send a verified screenshot next.",
+          channelData: { openclaw: { assistantPhase: "commentary" } },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+
+    const result = await createRun({
+      opts: { onBlockReply },
+      blockStreamingEnabled: true,
+      config: {
+        agents: {
+          defaults: {
+            // This regression owns final classification, not timeout recovery.
+            replyTimeoutContinuation: { enabled: false },
+          },
+        },
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      text: "I finished the run, but the model did not return a visible reply.",
+    });
+  });
+
   it("keeps intentional NO_REPLY silent", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
