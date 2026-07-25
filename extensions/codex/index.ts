@@ -166,6 +166,16 @@ export default function register(api: OpenClawPluginApi) {
     if (!prompt) {
       return { handled: true };
     }
+    if (ctx.replyProgress) {
+      try {
+        await ctx.replyProgress({
+          text: `Codex started · ${bindingData.threadId}`,
+        });
+      } catch {
+        // A progress transport failure must not cancel an otherwise valid
+        // native turn. The terminal result still uses core-owned delivery.
+      }
+    }
     try {
       const result = await service.message(bindingData.threadId, prompt);
       return {

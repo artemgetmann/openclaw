@@ -7,6 +7,7 @@ import { buildMonitorReceiptChannelData, formatMonitorReceipt } from "../../moni
 import type { MonitorDisclosure } from "../../monitor/types.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginHookInboundClaimContext } from "../../plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -39,9 +40,13 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn(() => false),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
-    runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
-      async () => ({ status: "no_handler" as const }),
-    ),
+    runInboundClaimForPluginOutcome: vi.fn<
+      (
+        pluginId: string,
+        event: unknown,
+        ctx: PluginHookInboundClaimContext,
+      ) => Promise<PluginTargetedInboundClaimOutcome>
+    >(async () => ({ status: "no_handler" as const })),
     runMessageReceived: vi.fn(async () => {}),
   },
 }));
@@ -4417,10 +4422,18 @@ describe("dispatchReplyFromConfig", () => {
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
     );
     hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementation(
+      async (_pluginId, _event, claimContext) => {
+        await claimContext.replyProgress?.({ text: "Codex started · thread-1" });
+        return {
+          status: "handled",
+          result: {
+            handled: true,
+            reply: { text: "Codex · thread-1\n\nFinished." },
+          },
+        };
+      },
+    );
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
@@ -4475,7 +4488,19 @@ describe("dispatchReplyFromConfig", () => {
         channelId: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
+        replyProgress: expect.any(Function),
       }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({
+      text: "Codex started · thread-1",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Codex · thread-1\n\nFinished.",
+    });
+    expect(
+      (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? 0,
     );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
