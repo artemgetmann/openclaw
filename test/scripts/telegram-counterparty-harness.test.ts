@@ -380,6 +380,110 @@ describe("deterministic Telegram counterparty harness", () => {
     expect(persisted).toMatchObject({ stage: "completion_sent", lastUpdateId: 3 });
   });
 
+  it("replays the exact NONMATCH only after baseline and then resumes in-scope", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({
+      updateBatches: [[{ update_id: 1 }], [], []],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+
+    const replayed = await runCounterpartyHarness("replay-nonmatch-after-baseline", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    expect(replayed.stage).toBe("replay_sent");
+
+    const sendCountAfterReplay = api.calls.filter((call) => call.method === "sendMessage").length;
+    await expect(
+      runCounterpartyHarness("replay-nonmatch-after-baseline", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).resolves.toMatchObject({ stage: "replay_sent" });
+    expect(api.calls.filter((call) => call.method === "sendMessage")).toHaveLength(
+      sendCountAfterReplay,
+    );
+
+    const replaySilent = await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    expect(replaySilent.stage).toBe("replay_silent");
+
+    const pollCountAfterSilence = api.calls.filter((call) => call.method === "getUpdates").length;
+    await expect(
+      runCounterpartyHarness("assert-nonmatch-silence", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).resolves.toMatchObject({ stage: "replay_silent" });
+    expect(api.calls.filter((call) => call.method === "getUpdates")).toHaveLength(
+      pollCountAfterSilence,
+    );
+
+    await expect(
+      runCounterpartyHarness("emit-in-scope", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).resolves.toMatchObject({ stage: "in_scope_sent" });
+
+    expect(
+      api.calls.filter((call) => call.method === "sendMessage").map((call) => call.body),
+    ).toEqual([
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.nonmatch },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.nonmatch },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: COUNTERPARTY_TEXT.inScope },
+    ]);
+  });
+
+  it("fails closed when the post-baseline NONMATCH replay send is ambiguous", async () => {
+    const env = await ownedEnvironment();
+    const setupApi = fakeBotApi({ updateBatches: [[], []] });
+    await runCounterpartyHarness("preflight", {
+      env,
+      fetchImpl: setupApi.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-nonmatch", {
+      env,
+      fetchImpl: setupApi.fetchImpl,
+    });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: setupApi.fetchImpl,
+      waitMs: 0,
+    });
+
+    await expect(
+      runCounterpartyHarness("replay-nonmatch-after-baseline", {
+        env,
+        fetchImpl: fakeBotApi({ failSend: true }).fetchImpl,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    expect(JSON.parse(fs.readFileSync(resolveCounterpartyStatePath(env), "utf8"))).toMatchObject({
+      stage: "replay_sending",
+    });
+
+    const retryApi = fakeBotApi();
+    await expect(
+      runCounterpartyHarness("replay-nonmatch-after-baseline", {
+        env,
+        fetchImpl: retryApi.fetchImpl,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    expect(retryApi.calls.filter((call) => call.method === "sendMessage")).toHaveLength(0);
+  });
+
   it("rejects wrong stage, sender, chat, and reply text", async () => {
     const stageEnv = await ownedEnvironment();
     await runCounterpartyHarness("preflight", {
@@ -389,6 +493,12 @@ describe("deterministic Telegram counterparty harness", () => {
     });
     await expect(
       runCounterpartyHarness("emit-in-scope", {
+        env: stageEnv,
+        fetchImpl: fakeBotApi().fetchImpl,
+      }),
+    ).rejects.toThrow(/expected nonmatch_silent/);
+    await expect(
+      runCounterpartyHarness("replay-nonmatch-after-baseline", {
         env: stageEnv,
         fetchImpl: fakeBotApi().fetchImpl,
       }),

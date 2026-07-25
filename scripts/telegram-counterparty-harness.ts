@@ -53,6 +53,7 @@ const ENV = {
 export type CounterpartyCommand =
   | "preflight"
   | "emit-nonmatch"
+  | "replay-nonmatch-after-baseline"
   | "assert-nonmatch-silence"
   | "emit-in-scope"
   | "wait-in-scope-reply"
@@ -68,6 +69,9 @@ export type CounterpartyStage =
   | "nonmatch_sending"
   | "nonmatch_sent"
   | "nonmatch_silent"
+  | "replay_sending"
+  | "replay_sent"
+  | "replay_silent"
   | "in_scope_sending"
   | "in_scope_sent"
   | "in_scope_replied"
@@ -217,6 +221,9 @@ function isValidStage(value: unknown): value is CounterpartyStage {
       "nonmatch_sending",
       "nonmatch_sent",
       "nonmatch_silent",
+      "replay_sending",
+      "replay_sent",
+      "replay_silent",
       "in_scope_sending",
       "in_scope_sent",
       "in_scope_replied",
@@ -417,10 +424,14 @@ async function runPreflight(
   return state;
 }
 
-function expectStage(state: CounterpartyHarnessState, expected: CounterpartyStage): void {
-  if (state.stage !== expected) {
+function expectStage(
+  state: CounterpartyHarnessState,
+  expected: CounterpartyStage | CounterpartyStage[],
+): void {
+  const allowed = Array.isArray(expected) ? expected : [expected];
+  if (!allowed.includes(state.stage)) {
     throw new Error(
-      `Counterparty stage ${state.stage} cannot perform this command; expected ${expected}.`,
+      `Counterparty stage ${state.stage} cannot perform this command; expected ${allowed.join(" or ")}.`,
     );
   }
 }
@@ -428,7 +439,7 @@ function expectStage(state: CounterpartyHarnessState, expected: CounterpartyStag
 async function sendTransition(params: {
   context: HarnessContext;
   state: CounterpartyHarnessState;
-  expected: CounterpartyStage;
+  expected: CounterpartyStage | CounterpartyStage[];
   sending: CounterpartyStage;
   sent: CounterpartyStage;
   text: string;
@@ -582,7 +593,29 @@ async function runLockedCommand(params: {
         sent: "nonmatch_sent",
         text: COUNTERPARTY_TEXT.nonmatch,
       });
+    case "replay-nonmatch-after-baseline":
+      return sendTransition({
+        context: params.context,
+        state,
+        expected: "nonmatch_silent",
+        sending: "replay_sending",
+        sent: "replay_sent",
+        text: COUNTERPARTY_TEXT.nonmatch,
+      });
     case "assert-nonmatch-silence":
+      // The replay is deliberately a second branch of the same silence check.
+      // Its distinct durable states preserve the original run while allowing
+      // the listener to baseline first and observe the exact fresh NONMATCH.
+      if (state.stage === "replay_sent" || state.stage === "replay_silent") {
+        return waitTransition({
+          context: params.context,
+          state,
+          expected: "replay_sent",
+          next: "replay_silent",
+          silence: true,
+          waitMs: params.waitMs,
+        });
+      }
       return waitTransition({
         context: params.context,
         state,
@@ -595,7 +628,9 @@ async function runLockedCommand(params: {
       return sendTransition({
         context: params.context,
         state,
-        expected: "nonmatch_silent",
+        // Both paths prove the same silence contract. The replay path exists
+        // only for a listener that baselined the first NONMATCH as history.
+        expected: ["nonmatch_silent", "replay_silent"],
         sending: "in_scope_sending",
         sent: "in_scope_sent",
         text: COUNTERPARTY_TEXT.inScope,
@@ -705,6 +740,7 @@ function parseCommand(value: string | undefined): CounterpartyCommand {
   const allowed: CounterpartyCommand[] = [
     "preflight",
     "emit-nonmatch",
+    "replay-nonmatch-after-baseline",
     "assert-nonmatch-silence",
     "emit-in-scope",
     "wait-in-scope-reply",
