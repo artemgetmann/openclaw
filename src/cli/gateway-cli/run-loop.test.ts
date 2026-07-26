@@ -325,6 +325,55 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("preserves SIGTERM during blocked final validation and stops the serving gateway", async () => {
+    vi.clearAllMocks();
+    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      let resolveValidation!: () => void;
+      const validationBlocked = new Promise<void>((resolve) => {
+        resolveValidation = resolve;
+      });
+      const validate = vi.fn(async () => {
+        await validationBlocked;
+      });
+      const prepareRestart = vi.fn(async () => ({
+        prepared: { id: "prepared" },
+        validate,
+      }));
+      const close = vi.fn(async () => {});
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      vi.resetModules();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        prepareRestart,
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForStart(started);
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await vi.waitFor(() => expect(validate).toHaveBeenCalledTimes(1));
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+
+      // A late provider result must not resurrect the cancelled restart.
+      resolveValidation();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("cancels a failed restart preflight without closing the serving gateway", async () => {
     vi.clearAllMocks();
 

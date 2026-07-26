@@ -70,6 +70,8 @@ export async function runGatewayLoop<TPrepared = never>(params: {
   let pendingPreparedRestart: TPrepared | undefined;
   let restartPreparationGeneration = 0;
   let activeRestartPreparationGeneration: number | null = null;
+  let cancelActiveRestartValidation: (() => void) | null = null;
+  let pendingStopSignal: string | null = null;
 
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
@@ -148,6 +150,22 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         request("stop", signal);
         return;
       }
+      if (action === "stop" && cancelActiveRestartValidation) {
+        // Final credential refresh is intentionally fallible and may wait on
+        // an external provider. Interrupt its await immediately, then let the
+        // restart coroutine reopen ingress before it begins bounded shutdown.
+        pendingStopSignal = signal;
+        cancelActiveRestartValidation();
+        gatewayLog.info(`received ${signal} during restart validation; cancelling restart`);
+        return;
+      }
+      if (action === "stop") {
+        // Once listener close has begun it cannot be rolled back. Preserve the
+        // explicit stop so the completion path exits instead of restarting.
+        pendingStopSignal = signal;
+        gatewayLog.info(`received ${signal} during restart cutover; stopping after close`);
+        return;
+      }
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
@@ -193,7 +211,10 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           // Exit non-zero on restart timeout so launchd/systemd treats it as a
           // failure and triggers a clean process restart instead of assuming the
           // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-          exitProcess(isRestart ? 1 : 0);
+          // A stop signal may arrive after restart cutover begins. Consult the
+          // live pending action so a slow close stops cleanly instead of
+          // exiting as a restart failure and inviting supervisor relaunch.
+          exitProcess(isRestart && !pendingStopSignal ? 1 : 0);
         }, timeoutMs);
       };
       // A staged restart keeps the serving listener open through its bounded
@@ -202,6 +223,18 @@ export async function runGatewayLoop<TPrepared = never>(params: {
       if (!restartPreparation) {
         armForceExit(isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS);
       }
+      const continueWithPendingStop = (): boolean => {
+        if (!pendingStopSignal) {
+          return false;
+        }
+        const stopSignal = pendingStopSignal;
+        pendingStopSignal = null;
+        shuttingDown = false;
+        // Finish this restart coroutine (including its finally block) before
+        // starting a separate stop coroutine against the same server.
+        queueMicrotask(() => request("stop", stopSignal));
+        return true;
+      };
 
       try {
         let drainTimedOut = false;
@@ -241,15 +274,30 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           }
         }
 
+        if (restartPreparation && pendingStopSignal) {
+          cancelGatewayDraining();
+          continueWithPendingStop();
+          return;
+        }
+
         if (restartPreparation) {
           try {
             // Re-read config after draining and immediately before close. This
             // rejects a staged context made stale during the preflight window.
+            let cancelValidation!: () => void;
+            const validationCancelled = new Promise<never>((_, reject) => {
+              cancelValidation = () => reject(new Error("gateway restart validation cancelled"));
+            });
+            cancelActiveRestartValidation = cancelValidation;
             const refreshedPreparation = await withTimeout(
-              restartPreparation.validate(),
+              Promise.race([restartPreparation.validate(), validationCancelled]),
               FINAL_RESTART_VALIDATION_TIMEOUT_MS,
               "gateway restart final validation",
-            );
+            ).finally(() => {
+              if (cancelActiveRestartValidation === cancelValidation) {
+                cancelActiveRestartValidation = null;
+              }
+            });
             if (refreshedPreparation !== undefined) {
               restartPreparation.prepared = refreshedPreparation;
             }
@@ -257,6 +305,9 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             // The old listener and any timed-out active tasks are still alive.
             // Re-open ingress without clearing their lane bookkeeping.
             cancelGatewayDraining();
+            if (continueWithPendingStop()) {
+              return;
+            }
             const classified = formatGatewayStartupPreflightFailure(err);
             gatewayLog.error(
               classified
@@ -289,9 +340,10 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         }
         if (shuttingDown) {
           server = null;
-          if (isRestart) {
+          if (isRestart && !pendingStopSignal) {
             await handleRestartAfterServerClose();
           } else {
+            pendingStopSignal = null;
             await handleStopAfterServerClose();
           }
         }
