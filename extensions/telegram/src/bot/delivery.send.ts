@@ -184,7 +184,12 @@ export async function sendTelegramText(
     }
     return await sendPlainFallback();
   }
-  if (opts?.richMessages !== false) {
+  // Telegram currently accepts `reply_markup` beside `sendRichMessage` but
+  // drops the keyboard in the delivered message. Approval cards must therefore
+  // stay on the proven `sendMessage` transport so the one-time decision is
+  // visible and actionable. Rich formatting remains available for buttonless
+  // replies such as tables.
+  if (opts?.richMessages !== false && !opts?.replyMarkup) {
     const richRawApi = getTelegramRichRawApi(bot.api);
     if (richRawApi) {
       try {
