@@ -1324,6 +1324,8 @@ type TelegramEditOpts = {
   richMessages?: boolean;
   /** Markdown table mode for both rich edits and legacy fallback rendering. */
   tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
+  /** Render Markdown blockquotes as one-tap-copy code blocks during edits. */
+  copySafeBlockquotes?: boolean;
   /** Controls whether link previews are shown in the edited message. */
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
@@ -1430,7 +1432,11 @@ export async function editMessageTelegram(
       accountId: account.accountId,
       supportsBlockTables: true,
     });
-  const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+  const htmlText = renderTelegramHtmlText(text, {
+    textMode,
+    tableMode,
+    copySafeBlockquotes: opts.copySafeBlockquotes,
+  });
 
   // Reply markup semantics:
   // - buttons === undefined → don't send reply_markup (keep existing)

@@ -2172,6 +2172,25 @@ describe("editMessageTelegram", () => {
     }
   });
 
+  it("preserves one-tap-copy draft blocks during legacy message edits", async () => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "> First paragraph.\n>\n> Second paragraph.", {
+      token: "tok",
+      cfg: {},
+      richMessages: false,
+      copySafeBlockquotes: true,
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledWith(
+      "123",
+      1,
+      expect.stringContaining("<pre><code>"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect((botApi.editMessageText.mock.calls[0] ?? [])[2]).not.toContain("<blockquote>");
+  });
+
   it("prefers rich_message edits for markdown tables and keeps legacy edit fallback available", async () => {
     const richEdit = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     (botApi as Record<string, unknown>).raw = { editMessageText: richEdit };

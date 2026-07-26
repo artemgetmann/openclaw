@@ -1743,6 +1743,15 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(answerStream.update).toHaveBeenCalledWith(draftText);
     expectFinalPreviewEditedInPlace(9103, draftText);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9103,
+      draftText,
+      expect.objectContaining({
+        richMessages: false,
+        copySafeBlockquotes: true,
+      }),
+    );
   });
 
   it("suppresses raw tool traces when preview streaming is on", async () => {
