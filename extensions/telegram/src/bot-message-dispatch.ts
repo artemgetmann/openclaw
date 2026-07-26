@@ -2209,6 +2209,10 @@ export const dispatchTelegramMessage = async ({
         // on legacy HTML; durable final sends are guarded separately.
         richMessages: false,
         tableMode,
+        // The preview renderer already exposes recipient drafts as copyable
+        // code blocks. Preserve that contract on the final in-place edit
+        // instead of downgrading the same bubble back to a blockquote.
+        copySafeBlockquotes: true,
       });
       logPreviewLedger({
         lane: laneName,
