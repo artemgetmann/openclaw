@@ -202,7 +202,23 @@ export function createOpenClawTools(
       allowHostControl: options?.allowHostBrowserControl,
       agentSessionKey: options?.agentSessionKey,
     }),
-    ...(options?.enableGuiControlTool ? [createGuiControlTool()] : []),
+    ...(options?.enableGuiControlTool
+      ? [
+          createGuiControlTool({
+            approvalOrigin: {
+              agentId: resolveSessionAgentId({
+                sessionKey: options?.agentSessionKey,
+                config: options?.config,
+              }),
+              sessionKey: options?.agentSessionKey,
+              channel: options?.agentChannel,
+              to: options?.agentTo ?? options?.currentChannelId,
+              accountId: options?.agentAccountId,
+              threadId: options?.agentThreadId ?? options?.currentThreadTs,
+            },
+          }),
+        ]
+      : []),
     createCanvasTool({ config: options?.config }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,

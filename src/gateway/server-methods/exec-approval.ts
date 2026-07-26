@@ -53,6 +53,7 @@ export function createExecApprovalHandlers(
         turnSourceTo?: string;
         turnSourceAccountId?: string;
         turnSourceThreadId?: string | number;
+        allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -149,6 +150,7 @@ export function createExecApprovalHandlers(
         turnSourceAccountId:
           typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
         turnSourceThreadId: p.turnSourceThreadId ?? null,
+        allowedDecisions: p.allowedDecisions,
       };
       const record = manager.create(request, timeoutMs, explicitId);
       record.requestedByConnId = client?.connId ?? null;

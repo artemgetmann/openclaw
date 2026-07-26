@@ -9,12 +9,9 @@ function fitsCallbackData(value: string): boolean {
 
 export function buildTelegramExecApprovalButtons(
   approvalId: string,
+  allowedDecisions: readonly ExecApprovalReplyDecision[] = ["allow-once", "allow-always", "deny"],
 ): TelegramInlineButtons | undefined {
-  return buildTelegramExecApprovalButtonsForDecisions(approvalId, [
-    "allow-once",
-    "allow-always",
-    "deny",
-  ]);
+  return buildTelegramExecApprovalButtonsForDecisions(approvalId, allowedDecisions);
 }
 
 function buildTelegramExecApprovalButtonsForDecisions(

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getGuiTaskPolicyProfile } from "./policy.js";
 import type {
   ActionResult,
@@ -71,11 +71,141 @@ function snapshot(params: Partial<GuiSnapshot> = {}): GuiSnapshot {
 }
 
 describe("performVerifiedAction", () => {
+  it("executes no sensitive mutation when one-time approval is denied", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "System Settings", windowTitle: "Sign-In Required" },
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      actionType: "click",
+      reason: "Sign in.",
+      approvedPolicyRisk: true,
+      requestSensitiveApproval: async () => "deny",
+      verify: () => ({ ok: true, summary: "must not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stats.actionCount).toBe(0);
+    expect(runtime.actions).toHaveLength(1);
+  });
+
+  it("does not request user approval when static mutation intent is missing", async () => {
+    const requestSensitiveApproval = vi.fn(async () => "allow-once" as const);
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "System Settings", windowTitle: "Sign-In Required" },
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      actionType: "click",
+      reason: "Sign in.",
+      requestSensitiveApproval,
+      verify: () => ({ ok: true, summary: "must not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("requires explicit task approval");
+    expect(requestSensitiveApproval).not.toHaveBeenCalled();
+  });
+
+  it("executes no mutation when the approved control changes before execution", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          elements: [{ ref: "@action", role: "button", label: "Sign In" }],
+        }),
+        snapshot({
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          elements: [{ ref: "@action", role: "button", label: "Pay Now" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "System Settings", windowTitle: "Sign-In Required" },
+      element: { ref: "@action", role: "button", label: "Sign In" },
+      actionType: "click",
+      reason: "Sign in.",
+      approvedPolicyRisk: true,
+      requestSensitiveApproval: async () => "allow-once",
+      verify: () => ({ ok: true, summary: "must not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stats.actionCount).toBe(0);
+    expect(runtime.actions).toHaveLength(1);
+  });
+
+  it("does not reuse sensitive approval after the surface becomes non-sensitive", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          elements: [{ ref: "@action", role: "button", label: "Sign In" }],
+        }),
+        snapshot({
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          elements: [{ ref: "@action", role: "button", label: "Continue" }],
+        }),
+      ],
+      actions: [{ ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "System Settings", windowTitle: "Sign-In Required" },
+      element: { ref: "@action", role: "button", label: "Sign In" },
+      actionType: "click",
+      reason: "Sign in.",
+      approvedPolicyRisk: true,
+      requestSensitiveApproval: async () => "allow-once",
+      verify: () => ({ ok: true, summary: "must not run" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("changed during approval");
+    expect(result.stats.actionCount).toBe(0);
+  });
+
   it("re-observes and retries once when the runtime reports a stale ref", async () => {
     const runtime = new MockGuiRuntime({
       observations: [
-        snapshot({ id: "pre", elements: [{ ref: "@input", value: "" }] }),
-        snapshot({ id: "refresh", elements: [{ ref: "@input", value: "" }] }),
+        snapshot({
+          id: "pre",
+          visibleText: ["unrelated counter 1"],
+          elements: [{ ref: "@input", value: "" }],
+        }),
+        snapshot({
+          id: "refresh",
+          visibleText: ["unrelated counter 2"],
+          elements: [{ ref: "@input", value: "" }],
+        }),
         snapshot({ id: "post", elements: [{ ref: "@input", value: "hello" }] }),
       ],
       actions: [{ ok: false, staleRef: true }, { ok: true }],
@@ -100,6 +230,51 @@ describe("performVerifiedAction", () => {
     expect(result.stats.staleRefs).toBe(1);
     expect(result.stats.retries).toBe(1);
     expect(result.stats.actionCount).toBe(2);
+  });
+
+  it("requires fresh approval when a stale ref changes the approved sensitive action", async () => {
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          visibleText: ["Tap continue and sign in to redeem code."],
+          elements: [{ ref: "@confirm", role: "button", label: "Sign In" }],
+        }),
+        snapshot({
+          id: "approved-pre",
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          visibleText: ["Tap continue and sign in to redeem code."],
+          elements: [{ ref: "@confirm", role: "button", label: "Sign In" }],
+        }),
+        snapshot({
+          id: "refresh",
+          appName: "System Settings",
+          windowTitle: "Sign-In Required",
+          visibleText: ["Payment authorization", "Card details"],
+          elements: [{ ref: "@confirm", role: "button", label: "Pay Now" }],
+        }),
+      ],
+      actions: [{ ok: false, staleRef: true }, { ok: true }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "System Settings", windowTitle: "Sign-In Required" },
+      element: { ref: "@confirm", role: "button", label: "Sign In" },
+      actionType: "click",
+      reason: "Click the exact Sign In button approved by the user.",
+      approvedPolicyRisk: true,
+      requestSensitiveApproval: async () => "allow-once",
+      verify: () => ({ ok: true, summary: "should not run after the approval scope changes" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureReason).toContain("fresh explicit approval");
+    expect(result.stats.actionCount).toBe(1);
+    expect(result.stats.staleRefs).toBe(1);
   });
 
   it("treats executor success as advisory and fails when post-state verification fails", async () => {

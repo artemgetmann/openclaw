@@ -5,6 +5,10 @@ Last updated: 2026-06-26
 
 ## Current Implementation Truth
 
+- Sensitive GUI actions keep model intent (`--approve-policy-risk`) separate
+  from user authority. The verifier requests an authenticated, one-time user
+  approval for the freshly observed app/window/control and invalidates it if a
+  pre-action re-observation or stale-ref retry changes the scope.
 - `read_only_web_context` remains read-only.
 - `safe_local_settings_navigation` remains narrow. It allows safe local
   settings row navigation, but not operator controls, app quit, account changes,
@@ -16,10 +20,10 @@ Last updated: 2026-06-26
   progress until payment or final confirmation.
 - `software_update_flow` allows update discovery such as `Check for Updates`.
   Download, install, replacement, restart, and relaunch controls remain blocked.
-- `software_update_install_approved` is a narrow current-approval profile for
+- `software_update_install_approved` remains a narrow task profile for
   visible Sparkle-style install controls such as `Install and Relaunch` and
-  `Install on Quit`. It still requires explicit mutation approval and does not
-  unblock replacement, move-to-Applications, or broad updater flows.
+  `Install on Quit`. Sensitive execution still requires one authenticated
+  `allow-once`; the profile alone grants no approval.
 
 ## First-Principles Boundary
 
@@ -116,26 +120,14 @@ forwarding and explicit Telegram buttons:
 - command approval runtime: `src/agents/bash-tools.exec-runtime.ts`
 - Telegram button delivery: `src/infra/outbound/deliver.test.ts`
 
-Do not bolt GUI final-action approval onto `--approve-policy-risk` directly.
-That flag only says the current mutation is intentional; it is not enough for
-money movement or app installation.
-
-Recommended next slice:
-
-1. Add a GUI approval request type that records app, window, element ref,
-   element label, task policy, action type, value summary, reason, expiry, and a
-   nonce.
-2. Add an approval lifecycle helper parallel to exec approvals, or extend exec
-   approvals with a non-command request kind only if the storage/API shape stays
-   clear.
-3. Render Telegram approval cards with `Approve` and `Cancel` inline buttons
-   when Telegram inline buttons are enabled.
-4. Restrict approval callbacks to configured approvers.
-5. Fall back to exact nonce text such as `Approve JX7K`; never accept bare
-   `yes` for payment, booking, or update installation.
-6. Resume only the exact blocked action after approval. If the element label,
-   app, window, amount/version/source, or final-control text changes, require a
-   new approval.
+Do not treat `--approve-policy-risk` as user approval. It only says the model
+intends the mutation. Money movement, credential use, destructive actions, and
+app installation cause the same foreground command to pause and request an
+authenticated `allow-once` decision through the existing approval channel.
+Configured approver checks remain authoritative. Bare `yes` is never approval:
+the user must resolve the exact generated request. If the element label, app,
+window, action parameters, task policy, or visible risk changes before
+execution, the verifier requires a fresh request.
 
 Approval card facts should include:
 

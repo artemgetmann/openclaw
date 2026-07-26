@@ -295,9 +295,10 @@ export class TelegramExecApprovalHandler {
       nodeId: request.request.nodeId ?? undefined,
       expiresAtMs: request.expiresAtMs,
       nowMs: this.nowMs(),
+      allowedDecisions: request.request.allowedDecisions,
     };
     const payload = buildExecApprovalPendingReplyPayload(payloadParams);
-    const buttons = buildTelegramExecApprovalButtons(request.id);
+    const buttons = buildTelegramExecApprovalButtons(request.id, request.request.allowedDecisions);
     const sentMessages: PendingMessage[] = [];
 
     for (const target of resolvedTargets) {

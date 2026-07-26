@@ -12,6 +12,7 @@ import {
   getGuiTaskPolicyProfile,
   type GuiTaskPolicyProfile,
 } from "../gui-control/policy.js";
+import { requestGuiSensitiveApproval } from "../gui-control/sensitive-approval.js";
 import type { GuiRuntimeName } from "../gui-control/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
@@ -223,6 +224,10 @@ async function runAction(action: GuiControlAction, opts: GuiControlCliOptions) {
       scrollAmount: readScrollAmount(opts),
       reason: opts.reason,
       approvedPolicyRisk: opts.approvePolicyRisk === true,
+      // CLI subprocesses cannot safely inherit conversation routing through
+      // model-controlled shell state. The gateway uses configured approvers;
+      // native gui_control calls carry trusted session routing separately.
+      requestSensitiveApproval: requestGuiSensitiveApproval,
       taskPolicy: readTaskPolicy(opts),
       verifyText: opts.verifyText,
       allowObservedClick: opts.allowObservedClick === true,

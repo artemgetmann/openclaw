@@ -1,6 +1,6 @@
 ---
 name: jarvis-computer-use
-description: "Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with reversible pre-auth navigation allowed but hard stops for credential use, payment, final purchase/booking, destructive delete, account/security settings, and software install/update."
+description: "Use for Jarvis Computer Use tasks: operating visible macOS apps, proving GUI actions, typing into local apps, or inspecting native app state. Prefer this over Peekaboo for app operation: use the installed `openclaw gui-control` CLI backed by OpenComputerUse, with explicit one-action approval before credential use, payment, final purchase/booking, destructive delete, account/security settings, or software install/update."
 metadata:
   {
     "openclaw":
@@ -98,10 +98,10 @@ openclaw gui-control set-value \
 openclaw gui-control observe --runtime open-computer-use --app TextEdit --json
 ```
 
-## Safety
+## Sensitive-action approval
 
-Founder-local trusted mode allows useful local GUI progress by default, but the
-following are hard stops unless the user has explicitly approved the exact step:
+Founder-local trusted mode allows useful local GUI progress by default. Ask for
+explicit approval immediately before each of these sensitive actions:
 
 - entering or submitting a password, passkey assertion, OTP/verification-code
   entry or submission, CAPTCHA, security-key assertion, or sign-in approval
@@ -111,13 +111,38 @@ following are hard stops unless the user has explicitly approved the exact step:
 - account, privacy, security, permission, or profile-setting changes
 - software install, update, relaunch-to-update, or package-manager mutation
 
+Execute the exact visible action in one foreground invocation. For a sensitive
+surface, the verifier pauses this command, sends an approval request to a
+configured authenticated approver (the originating conversation for the native
+tool path), and proceeds only after an authenticated `allow-once`:
+
+```bash
+openclaw gui-control click \
+  --runtime open-computer-use \
+  --app "<app>" \
+  --ref "<fresh-ref>" \
+  --reason "<exact approved action>" \
+  --approve-policy-risk \
+  --verify-text "<expected post-state>" \
+  --json
+```
+
+`--approve-policy-risk` confirms only that the mutation is intentional; it is
+not user authority. Sensitive approval stays inside this verifier invocation
+and never becomes a model-controlled flag or reusable receipt. The verifier
+re-observes before acting. If the app, window, control, action parameters, task
+policy, or visible risk context changes, it fails closed and asks again on a
+fresh invocation. Never infer approval from the original task, an earlier
+approval, or approval of a neighboring control.
+
 Reversible navigation before an authentication act is allowed. This includes
 selecting a known signed-out account on an account chooser, using
 `Try another way` to discover available methods, and dismissing an
 unavailable-passkey dialog with `Close`, `Cancel`, or `Back`. This does not
-authorize generic `Next` or `Continue` controls on a password, passkey, OTP,
-CAPTCHA, security-key, or approval challenge; those controls may submit an
-autofilled or already-entered credential and remain hard stops.
+silently authorize generic `Next` or `Continue` controls on a password, passkey,
+OTP, CAPTCHA, security-key, or approval challenge; those controls may submit an
+autofilled or already-entered credential and require their own explicit
+sensitive-action approval.
 
 If a command reports the wrong app/window, ambiguous target, stale element ref,
 blocked policy risk, or missing post-state verification, stop and report the

@@ -15,4 +15,11 @@ describe("telegram approval buttons", () => {
   it("skips buttons when callback_data exceeds Telegram limit", () => {
     expect(buildTelegramExecApprovalButtons(`a${"b".repeat(60)}`)).toBeUndefined();
   });
+
+  it("omits allow-always for one-shot-only requests", () => {
+    expect(buildTelegramExecApprovalButtons("fbd8daf7", ["allow-once", "deny"])).toEqual([
+      [{ text: "Allow Once", callback_data: "/approve fbd8daf7 allow-once" }],
+      [{ text: "Deny", callback_data: "/approve fbd8daf7 deny" }],
+    ]);
+  });
 });

@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { evaluateGuiPolicy, type GuiTaskPolicy } from "./policy.js";
+import {
+  evaluateGuiPolicy,
+  guiApprovalScopesMatch,
+  type GuiApprovalScope,
+  type GuiTaskPolicy,
+} from "./policy.js";
 import { describeGuiTargetMismatch, guiTargetMatchesSnapshot } from "./targeting.js";
 import type {
   AppTarget,
@@ -26,6 +31,10 @@ export type VerifiedActionInput = {
   scroll?: { direction?: "up" | "down" | "left" | "right"; amount?: number };
   reason: string;
   approvedPolicyRisk?: boolean;
+  requestSensitiveApproval?: (request: {
+    scope: GuiApprovalScope;
+    reason: string;
+  }) => Promise<"allow-once" | "deny">;
   taskPolicy?: GuiTaskPolicy;
   verificationTimeoutMs?: number;
   verificationIntervalMs?: number;
@@ -310,7 +319,7 @@ export async function performVerifiedAction(
   input: VerifiedActionInput,
 ): Promise<VerifiedActionResult> {
   const stats = newStats();
-  const pre = await input.runtime.observe(input.target);
+  let pre = await input.runtime.observe(input.target);
 
   if (!guiTargetMatchesSnapshot(input.target, pre)) {
     return failedResult({
@@ -347,17 +356,99 @@ export async function performVerifiedAction(
     });
   }
 
-  const policy = evaluateGuiPolicy({
+  let approvedSensitiveScope: GuiApprovalScope | undefined;
+  let policy = evaluateGuiPolicy({
     actionType: input.actionType,
+    runtimeName: input.runtime.name,
     target: input.target,
     snapshot: pre,
     element,
     secondaryAction: input.secondaryAction,
+    keys: input.keys,
+    scroll: input.scroll,
     reason: input.reason,
     approvedPolicyRisk: input.approvedPolicyRisk,
     taskPolicy: input.taskPolicy,
     verificationMode: "post_state",
   });
+  if (!policy.allowed && policy.requiredSensitiveApproval && input.requestSensitiveApproval) {
+    const decision = await input.requestSensitiveApproval({
+      scope: policy.requiredSensitiveApproval,
+      reason: input.reason,
+    });
+    if (decision !== "allow-once") {
+      return failedResult({
+        input,
+        risk: "blocked",
+        stats,
+        pre,
+        failureReason: "Sensitive GUI action was not approved for one-time execution.",
+      });
+    }
+
+    // Approval can take minutes. Bind it to the pre-approval scope, then obtain
+    // a fresh screen and re-run every target, element, and policy check before
+    // the first mutation. No approval token is exposed to the model or CLI.
+    approvedSensitiveScope = policy.requiredSensitiveApproval;
+    pre = await input.runtime.observe(input.target);
+    if (!guiTargetMatchesSnapshot(input.target, pre)) {
+      return failedResult({
+        input,
+        risk: "blocked",
+        stats,
+        pre,
+        failureReason: describeGuiTargetMismatch(input.target, pre),
+      });
+    }
+    element = elementlessAction || !input.element ? undefined : findElement(pre, input.element);
+    if (!elementlessAction && !element) {
+      return failedResult({
+        input,
+        risk: "blocked",
+        stats,
+        pre,
+        failureReason: "The approved GUI element changed before execution.",
+      });
+    }
+    const postApprovalSecondaryActionBlock = blockedSecondaryActionReason(input, element);
+    if (postApprovalSecondaryActionBlock) {
+      return failedResult({
+        input,
+        risk: "blocked",
+        stats,
+        pre,
+        failureReason: postApprovalSecondaryActionBlock,
+      });
+    }
+    policy = evaluateGuiPolicy({
+      actionType: input.actionType,
+      runtimeName: input.runtime.name,
+      target: input.target,
+      snapshot: pre,
+      element,
+      secondaryAction: input.secondaryAction,
+      keys: input.keys,
+      scroll: input.scroll,
+      reason: input.reason,
+      approvedPolicyRisk: input.approvedPolicyRisk,
+      approvedSensitiveScope,
+      taskPolicy: input.taskPolicy,
+      verificationMode: "post_state",
+    });
+  }
+  if (
+    approvedSensitiveScope &&
+    !guiApprovalScopesMatch(policy.approvalScope, approvedSensitiveScope)
+  ) {
+    return failedResult({
+      input,
+      risk: "blocked",
+      stats,
+      pre,
+      failureReason:
+        "The GUI target, transaction details, or risk context changed during approval; fresh explicit approval is required.",
+    });
+  }
   if (!policy.allowed) {
     return {
       ok: false,
@@ -375,6 +466,7 @@ export async function performVerifiedAction(
       failureReason: policy.reason ?? "Blocked by GUI policy.",
     };
   }
+  const approvedScope = policy.approvalScope;
 
   const ambiguousActivation = ambiguousBrowserActivationReason(input, pre, element);
   if (ambiguousActivation) {
@@ -419,6 +511,48 @@ export async function performVerifiedAction(
         stats,
         pre,
         failureReason: refreshedSecondaryActionBlock,
+      });
+    }
+    // A stale accessibility ref is a new execution attempt. Re-run the complete
+    // policy on the fresh snapshot, then ensure the user's one-action approval
+    // still describes the same semantic control and visible risk context.
+    const refreshedPolicy = evaluateGuiPolicy({
+      actionType: input.actionType,
+      runtimeName: input.runtime.name,
+      target: input.target,
+      snapshot: refreshed,
+      element,
+      secondaryAction: input.secondaryAction,
+      keys: input.keys,
+      scroll: input.scroll,
+      reason: input.reason,
+      approvedPolicyRisk: input.approvedPolicyRisk,
+      approvedSensitiveScope,
+      taskPolicy: input.taskPolicy,
+      verificationMode: "post_state",
+    });
+    if (!refreshedPolicy.allowed) {
+      return failedResult({
+        input,
+        risk: refreshedPolicy.risk,
+        stats,
+        pre,
+        failureReason: refreshedPolicy.requiredSensitiveApproval
+          ? "The GUI target or risk context changed after a stale ref; fresh explicit approval is required."
+          : (refreshedPolicy.reason ?? "Blocked by refreshed GUI policy."),
+      });
+    }
+    if (
+      approvedSensitiveScope &&
+      !guiApprovalScopesMatch(refreshedPolicy.approvalScope, approvedScope)
+    ) {
+      return failedResult({
+        input,
+        risk: "blocked",
+        stats,
+        pre,
+        failureReason:
+          "The GUI target or risk context changed after a stale ref; fresh explicit approval is required.",
       });
     }
     const refreshedAmbiguousActivation = ambiguousBrowserActivationReason(

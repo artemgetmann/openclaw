@@ -41,8 +41,8 @@ describe("evaluateGuiPolicy", () => {
     ["Delete account", "delete"],
     ["Security settings", "security settings"],
     ["Install and Relaunch", "install"],
-  ])("keeps trusted local default blocked on hard-stop surface %s", (label, blockedTerm) => {
-    const decision = evaluateGuiPolicy({
+  ])("requires exact approval for sensitive trusted-local surface %s", (label, blockedTerm) => {
+    const input = {
       actionType: "click",
       target: { appName: "Safari", windowTitle: "Local task" },
       snapshot: snapshot({
@@ -52,12 +52,172 @@ describe("evaluateGuiPolicy", () => {
       }),
       element: { ref: "@blocked", role: "button", label },
       reason: `Click ${label}.`,
-      approvedPolicyRisk: true,
       verificationMode: "post_state",
+    } as const;
+    const blocked = evaluateGuiPolicy({
+      ...input,
+      approvedPolicyRisk: true,
+    });
+    const approved = evaluateGuiPolicy({
+      ...input,
+      approvedPolicyRisk: true,
+      approvedSensitiveScope: blocked.requiredSensitiveApproval,
     });
 
-    expect(decision.allowed).toBe(false);
-    expect(decision.reason).toContain(`Blocked sensitive GUI surface: ${blockedTerm}`);
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toContain(`Blocked sensitive GUI surface: ${blockedTerm}`);
+    expect(blocked.reason).toContain("explicit sensitive-action approval required");
+    expect(approved.allowed).toBe(true);
+    expect(approved.risk).toBe("allowed-mutation");
+    expect(approved.approvalScope).toBeTruthy();
+  });
+
+  it("binds sensitive approval to visible transaction amounts", () => {
+    const base = {
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Checkout" },
+      element: { ref: "@pay", role: "button", label: "Pay Now" },
+      reason: "Pay the displayed total.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    } as const;
+    const first = evaluateGuiPolicy({
+      ...base,
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Checkout",
+        visibleText: ["Order total $10.00"],
+      }),
+    });
+    const changed = evaluateGuiPolicy({
+      ...base,
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Checkout",
+        visibleText: ["Order total $1,000.00"],
+      }),
+      approvedSensitiveScope: first.requiredSensitiveApproval,
+    });
+
+    expect(first.requiredSensitiveApproval?.visibleTransactionDetails).toContain("$10.00");
+    expect(changed.allowed).toBe(false);
+    expect(changed.requiredSensitiveApproval?.visibleTransactionDetails).toContain("$1,000.00");
+  });
+
+  it("binds generic confirmation controls to redacted visible transaction identity", () => {
+    const base = {
+      actionType: "click",
+      target: { appName: "Safari", windowTitle: "Checkout" },
+      element: { ref: "@confirm", role: "button", label: "Confirm" },
+      reason: "Confirm the displayed order.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    } as const;
+    const first = evaluateGuiPolicy({
+      ...base,
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Checkout",
+        visibleText: [
+          "Merchant: Alpha",
+          "Item: Blue travel bag",
+          "Visa ending 4242",
+          "Total $50.00",
+          "Offer expires in 30 seconds",
+        ],
+      }),
+    });
+    const changed = evaluateGuiPolicy({
+      ...base,
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Checkout",
+        visibleText: [
+          "Merchant: Alpha",
+          "Item: Blue travel bag",
+          "Visa ending 9999",
+          "Total $50.00",
+          "Offer expires in 29 seconds",
+        ],
+      }),
+      approvedSensitiveScope: first.requiredSensitiveApproval,
+    });
+    const volatileOnly = evaluateGuiPolicy({
+      ...base,
+      snapshot: snapshot({
+        appName: "Safari",
+        windowTitle: "Checkout",
+        visibleText: [
+          "Merchant: Alpha",
+          "Item: Blue travel bag",
+          "Visa ending 4242",
+          "Total $50.00",
+          "Offer expires in 29 seconds",
+        ],
+      }),
+      approvedSensitiveScope: first.requiredSensitiveApproval,
+    });
+
+    expect(volatileOnly.allowed).toBe(true);
+    expect(changed.allowed).toBe(false);
+    expect(changed.requiredSensitiveApproval?.visibleContextFingerprint).not.toBe(
+      first.requiredSensitiveApproval?.visibleContextFingerprint,
+    );
+    expect(first.requiredSensitiveApproval?.visibleContextSummary).toEqual(
+      expect.arrayContaining([
+        "merchant: alpha",
+        "item: blue travel bag",
+        "visa ending [number]",
+        "total $50.00",
+      ]),
+    );
+    expect(first.requiredSensitiveApproval?.visibleContextSummary).not.toContain(
+      "offer expires in 30 seconds",
+    );
+  });
+
+  it("binds accessibility descriptions without exposing them in the approval card", () => {
+    const base = {
+      actionType: "setValue",
+      target: {
+        appName: "System Settings",
+        windowTitle: "Sign-In Required artem@example.com 123456",
+      },
+      snapshot: snapshot({
+        appName: "System Settings",
+        windowTitle: "Sign-In Required artem@example.com 123456",
+        visibleText: ["Enter your password"],
+      }),
+      reason: "Fill the approved credential field.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    } as const;
+    const first = evaluateGuiPolicy({
+      ...base,
+      element: {
+        ref: "@password",
+        role: "secure text field",
+        label: "Password",
+        description: "current secret alpha",
+      },
+    });
+    const changed = evaluateGuiPolicy({
+      ...base,
+      element: {
+        ref: "@password",
+        role: "secure text field",
+        label: "Password",
+        description: "current secret beta",
+      },
+      approvedSensitiveScope: first.requiredSensitiveApproval,
+    });
+
+    expect(first.requiredSensitiveApproval?.selectedControl).not.toContain("current secret alpha");
+    expect(first.requiredSensitiveApproval?.windowTitle).toBe("sign-in required [email] [number]");
+    expect(changed.allowed).toBe(false);
+    expect(changed.requiredSensitiveApproval?.visibleContextFingerprint).not.toBe(
+      first.requiredSensitiveApproval?.visibleContextFingerprint,
+    );
   });
 
   it("allows a signed-out chooser row when Remove an account is a visible sibling", () => {
@@ -346,7 +506,9 @@ describe("evaluateGuiPolicy", () => {
       });
 
       expect(decision.allowed).toBe(false);
-      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+      expect(decision.reason).toMatch(
+        /Blocked sensitive GUI surface|only allows install or relaunch controls/,
+      );
     },
   );
 
@@ -1206,9 +1368,9 @@ describe("evaluateGuiPolicy", () => {
   );
 
   it.each(["Install Update", "Install on Quit", "Install and Relaunch", "Install Now"])(
-    "allows explicitly approved software update install control %s under the install-approved profile",
+    "requires one-time approval for software update install control %s under the install-approved profile",
     (label) => {
-      const decision = evaluateGuiPolicy({
+      const input = {
         actionType: "click",
         target: { appName: "ExampleApp", windowTitle: "Software Update" },
         snapshot: snapshot({
@@ -1221,11 +1383,18 @@ describe("evaluateGuiPolicy", () => {
         approvedPolicyRisk: true,
         taskPolicy: getGuiTaskPolicyProfile("software_update_install_approved"),
         verificationMode: "post_state",
+      } as const;
+      const blocked = evaluateGuiPolicy(input);
+      const approved = evaluateGuiPolicy({
+        ...input,
+        approvedSensitiveScope: blocked.requiredSensitiveApproval,
       });
 
-      expect(decision.allowed).toBe(true);
-      expect(decision.risk).toBe("allowed-mutation");
-      expect(decision.requiredCapability).toBe("click_verified_button");
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.requiredSensitiveApproval).toBeTruthy();
+      expect(approved.allowed).toBe(true);
+      expect(approved.risk).toBe("allowed-mutation");
+      expect(approved.requiredCapability).toBe("click_verified_button");
     },
   );
 
@@ -1360,7 +1529,9 @@ describe("evaluateGuiPolicy", () => {
       });
 
       expect(decision.allowed).toBe(false);
-      expect(decision.reason).toContain("Blocked sensitive GUI surface");
+      expect(decision.reason).toMatch(
+        /Blocked sensitive GUI surface|only allows install or relaunch controls/,
+      );
     },
   );
 

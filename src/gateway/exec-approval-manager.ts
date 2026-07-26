@@ -106,6 +106,12 @@ export class ExecApprovalManager {
     if (!pending) {
       return false;
     }
+    if (
+      pending.record.request.allowedDecisions &&
+      !pending.record.request.allowedDecisions.includes(decision)
+    ) {
+      return false;
+    }
     // Prevent double-resolve (e.g., if called after timeout already resolved)
     if (pending.record.resolvedAtMs !== undefined) {
       return false;

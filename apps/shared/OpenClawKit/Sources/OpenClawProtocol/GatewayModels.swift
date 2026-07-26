@@ -3382,6 +3382,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let turnsourceto: AnyCodable?
     public let turnsourceaccountid: AnyCodable?
     public let turnsourcethreadid: AnyCodable?
+    public let alloweddecisions: [AnyCodable]?
     public let timeoutms: Int?
     public let twophase: Bool?
 
@@ -3403,6 +3404,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         turnsourceto: AnyCodable?,
         turnsourceaccountid: AnyCodable?,
         turnsourcethreadid: AnyCodable?,
+        alloweddecisions: [AnyCodable]?,
         timeoutms: Int?,
         twophase: Bool?)
     {
@@ -3423,6 +3425,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
         self.turnsourcethreadid = turnsourcethreadid
+        self.alloweddecisions = alloweddecisions
         self.timeoutms = timeoutms
         self.twophase = twophase
     }
@@ -3445,6 +3448,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
         case turnsourcethreadid = "turnSourceThreadId"
+        case alloweddecisions = "allowedDecisions"
         case timeoutms = "timeoutMs"
         case twophase = "twoPhase"
     }

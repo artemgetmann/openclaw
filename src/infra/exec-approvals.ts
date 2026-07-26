@@ -79,6 +79,7 @@ export type ExecApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
+  allowedDecisions?: ExecApprovalDecision[];
 };
 
 export type ExecApprovalRequest = {
