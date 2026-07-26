@@ -28,9 +28,33 @@ const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export type GatewayRestartPreparation<TPrepared> = {
   prepared: TPrepared;
-  validate: () => Promise<void>;
+  /**
+   * Revalidate staged inputs immediately before cutover. Validators may return
+   * a refreshed preparation when an input is too old to activate safely.
+   */
+  validate: () => Promise<TPrepared | void>;
 };
 
 export async function runGatewayLoop<TPrepared = never>(params: {
@@ -108,6 +132,7 @@ export async function runGatewayLoop<TPrepared = never>(params: {
   };
 
   const DRAIN_TIMEOUT_MS = 90_000;
+  const FINAL_RESTART_VALIDATION_TIMEOUT_MS = 180_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -161,14 +186,22 @@ export async function runGatewayLoop<TPrepared = never>(params: {
         activeRestartPreparationGeneration = null;
       }
 
-      const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
-      const forceExitTimer = setTimeout(() => {
-        gatewayLog.error("shutdown timed out; exiting without full cleanup");
-        // Exit non-zero on restart timeout so launchd/systemd treats it as a
-        // failure and triggers a clean process restart instead of assuming the
-        // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-        exitProcess(isRestart ? 1 : 0);
-      }, forceExitMs);
+      let forceExitTimer: NodeJS.Timeout | undefined;
+      const armForceExit = (timeoutMs: number) => {
+        forceExitTimer = setTimeout(() => {
+          gatewayLog.error("shutdown timed out; exiting without full cleanup");
+          // Exit non-zero on restart timeout so launchd/systemd treats it as a
+          // failure and triggers a clean process restart instead of assuming the
+          // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
+          exitProcess(isRestart ? 1 : 0);
+        }, timeoutMs);
+      };
+      // A staged restart keeps the serving listener open through its bounded
+      // drain and final credential refresh. Arm the destructive shutdown timer
+      // only after those safe-to-cancel phases have committed to cutover.
+      if (!restartPreparation) {
+        armForceExit(isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS);
+      }
 
       try {
         let drainTimedOut = false;
@@ -212,7 +245,14 @@ export async function runGatewayLoop<TPrepared = never>(params: {
           try {
             // Re-read config after draining and immediately before close. This
             // rejects a staged context made stale during the preflight window.
-            await restartPreparation.validate();
+            const refreshedPreparation = await withTimeout(
+              restartPreparation.validate(),
+              FINAL_RESTART_VALIDATION_TIMEOUT_MS,
+              "gateway restart final validation",
+            );
+            if (refreshedPreparation !== undefined) {
+              restartPreparation.prepared = refreshedPreparation;
+            }
           } catch (err) {
             // The old listener and any timed-out active tasks are still alive.
             // Re-open ingress without clearing their lane bookkeeping.
@@ -227,6 +267,7 @@ export async function runGatewayLoop<TPrepared = never>(params: {
             return;
           }
           pendingPreparedRestart = restartPreparation.prepared;
+          armForceExit(SHUTDOWN_TIMEOUT_MS);
         }
 
         if (drainTimedOut) {
@@ -243,7 +284,9 @@ export async function runGatewayLoop<TPrepared = never>(params: {
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
       } finally {
-        clearTimeout(forceExitTimer);
+        if (forceExitTimer) {
+          clearTimeout(forceExitTimer);
+        }
         if (shuttingDown) {
           server = null;
           if (isRestart) {

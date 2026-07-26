@@ -225,6 +225,7 @@ describe("runGatewayLoop", () => {
         resolvePreflight = resolve;
       });
       const prepared = { id: "prepared-restart" };
+      const refreshedPrepared = { id: "refreshed-prepared-restart" };
       const prepareRestart = vi.fn(async () => {
         order.push("prepare");
         await preflightBlocked;
@@ -232,6 +233,7 @@ describe("runGatewayLoop", () => {
           prepared,
           validate: async () => {
             order.push("validate");
+            return refreshedPrepared;
           },
         };
       });
@@ -244,7 +246,7 @@ describe("runGatewayLoop", () => {
         .mockResolvedValueOnce({ close: closeFirst })
         .mockImplementationOnce(async (receivedPrepared) => {
           order.push("start");
-          expect(receivedPrepared).toBe(prepared);
+          expect(receivedPrepared).toBe(refreshedPrepared);
           return { close: closeSecond };
         });
       const { runtime, exited } = createRuntimeWithExitSignal();
