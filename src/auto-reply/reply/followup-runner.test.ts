@@ -35,6 +35,7 @@ import {
   hydrateDurableFollowup,
   loadDurableFollowups,
   persistDurableFollowup,
+  persistDurableFollowupDelivery,
 } from "./queue/durable-store.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -678,40 +679,6 @@ describe("createFollowupRunner typing cleanup", () => {
     expectTypingCleanup(typing);
   });
 
-  it("rejects model failures in recovery mode so durable work is not acknowledged", async () => {
-    const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
-    const runner = createFollowupRunner({
-      opts: { onBlockReply: vi.fn(async () => {}) },
-      typing,
-      typingMode: "never",
-      defaultModel: "anthropic/claude-opus-4-5",
-      failureMode: "throw-durable",
-    });
-
-    await expect(
-      runner({ ...baseQueuedRun(), durableId: "durable-model-failure" }),
-    ).rejects.toThrow("agent exploded");
-    expectTypingCleanup(typing);
-  });
-
-  it("rejects model failures for a synthetic turn backed by constituent durable records", async () => {
-    const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("synthetic agent exploded"));
-    const runner = createFollowupRunner({
-      opts: { onBlockReply: vi.fn(async () => {}) },
-      typing,
-      typingMode: "never",
-      defaultModel: "anthropic/claude-opus-4-5",
-      failureMode: "throw-durable",
-    });
-
-    await expect(
-      runner({ ...baseQueuedRun(), durableIds: ["durable-a", "durable-b"] }),
-    ).rejects.toThrow("synthetic agent exploded");
-    expectTypingCleanup(typing);
-  });
-
   it("keeps absorbing non-durable model failures in durable-only recovery mode", async () => {
     const typing = createMockTypingController();
     runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("legacy agent failure"));
@@ -797,6 +764,250 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("rejects model failures after staging a visible restart receipt", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun();
+    const input = await persistDurableFollowup({
+      queueKey: "durable-model-failure",
+      run: queued,
+      settings,
+    });
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow("agent exploded");
+    const [record] = await loadDurableFollowups();
+    expect(record?.delivery?.payloads).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+    ]);
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("stages one restart receipt for a synthetic durable batch before model work", async () => {
+    const settings = { mode: "collect" as const, debounceMs: 0, cap: 20 };
+    const firstRun = createQueuedRun({ messageId: "first" });
+    const secondRun = createQueuedRun({ messageId: "second" });
+    const first = await persistDurableFollowup({
+      queueKey: "synthetic-model-failure",
+      run: firstRun,
+      settings,
+    });
+    const second = await persistDurableFollowup({
+      queueKey: "synthetic-model-failure",
+      run: secondRun,
+      settings,
+    });
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("synthetic agent exploded"));
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner({ ...secondRun, durableIds: [first.id, second.id] })).rejects.toThrow(
+      "synthetic agent exploded",
+    );
+    const [carrier] = await loadDurableFollowups();
+    expect(carrier?.delivery?.sourceDurableIds).toEqual([first.id, second.id]);
+    expect(carrier?.delivery?.payloads).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+    ]);
+  });
+
+  it("routes a staged restart blocker without replaying model or tool work", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const directTurn = createQueuedRun({
+      messageId: "telegram:25606",
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+      originatingAccountId: "default",
+      originatingThreadId: 21876,
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "direct-turn-restart-blocker",
+      run: directTurn,
+      settings,
+    });
+    const staged = await persistDurableFollowupDelivery({
+      run: { ...directTurn, durableId: input.id },
+      payloads: [
+        {
+          text: "I was interrupted by a Jarvis restart. Send Continue so I can inspect state.",
+          isError: true,
+        },
+      ],
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner(hydrateDurableFollowup(staged!, {}));
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("interrupted"),
+        }),
+        channel: "telegram",
+        to: "-1003783709877",
+        accountId: "default",
+        threadId: 21876,
+      }),
+    );
+  });
+
+  it("awaits explicit provider routing for a durable same-channel followup", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+      originatingAccountId: "default",
+      originatingThreadId: 24176,
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "durable-same-channel-provider-ack",
+      run: queued,
+      settings,
+    });
+    let acceptProviderDelivery: (() => void) | undefined;
+    routeReplyMock.mockImplementationOnce(
+      async () =>
+        await new Promise<{ ok: true }>((resolve) => {
+          acceptProviderDelivery = () => resolve({ ok: true });
+        }),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Visible queued final." }],
+      meta: {},
+    });
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      liveReplyRoute: {
+        originatingChannel: "telegram",
+        originatingTo: "-1003783709877",
+        originatingAccountId: "default",
+        originatingThreadId: 24176,
+      },
+      failureMode: "throw-durable",
+    });
+
+    let completed = false;
+    const running = runner({ ...queued, durableId: input.id }).then(() => {
+      completed = true;
+    });
+    await vi.waitFor(() => expect(routeReplyMock).toHaveBeenCalledTimes(1));
+
+    expect(completed).toBe(false);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    acceptProviderDelivery?.();
+    await running;
+    expect(completed).toBe(true);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mirror: false, skipQueue: true }),
+    );
+  });
+
+  it("keeps the restart receipt while durable model and tool work is running", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+      originatingThreadId: 24176,
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "durable-running-restart-receipt",
+      run: queued,
+      settings,
+    });
+    let finishAgent: (() => void) | undefined;
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async () =>
+        await new Promise<{ payloads: Array<{ text: string }>; meta: Record<string, never> }>(
+          (resolve) => {
+            finishAgent = () => resolve({ payloads: [{ text: "Exact final." }], meta: {} });
+          },
+        ),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    const running = runner({ ...queued, durableId: input.id });
+    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1));
+    const [active] = await loadDurableFollowups();
+    expect(active?.delivery?.payloads).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+    ]);
+
+    finishAgent?.();
+    await running;
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: { text: "Exact final." } }),
+    );
+  });
+
+  it("never treats live-dispatch enqueue as durable delivery fallback", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+      originatingAccountId: "default",
+      originatingThreadId: 24176,
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "durable-same-channel-route-failure",
+      run: queued,
+      settings,
+    });
+    const staged = await persistDurableFollowupDelivery({
+      run: { ...queued, durableId: input.id },
+      payloads: [{ text: "Provider-confirmed final only." }],
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "provider unavailable" });
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      liveReplyRoute: {
+        originatingChannel: "telegram",
+        originatingTo: "-1003783709877",
+        originatingAccountId: "default",
+        originatingThreadId: 24176,
+      },
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner(hydrateDurableFollowup(staged!, {}))).rejects.toThrow(
+      "provider unavailable",
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+    const [record] = await loadDurableFollowups();
+    expect(record?.delivery?.payloads).toEqual([{ text: "Provider-confirmed final only." }]);
+  });
+
   it.each([
     { label: "empty", payloads: [] },
     { label: "partial", payloads: [{ text: "incomplete result" }] },
@@ -828,7 +1039,9 @@ describe("createFollowupRunner durable delivery recovery", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
     const [record] = await loadDurableFollowups();
     expect(record?.id).toBe(input.id);
-    expect(record?.delivery).toBeUndefined();
+    expect(record?.delivery?.payloads).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+    ]);
   });
 
   it("restores model-complete output and retries delivery without rerunning the agent", async () => {
@@ -1012,8 +1225,23 @@ describe("createFollowupRunner durable delivery recovery", () => {
     routeReplyMock.mockResolvedValue({ ok: true });
 
     scheduleFollowupDrain(queueKey, runner);
-    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2));
-    await expect(loadDurableFollowups()).resolves.toEqual([later]);
+    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2), {
+      // The durable retry floor is one second; leave headroom for a busy CI
+      // worker instead of racing the test framework's one-second default.
+      timeout: 5_000,
+    });
+    await expect(loadDurableFollowups()).resolves.toEqual([
+      expect.objectContaining({
+        id: later.id,
+        delivery: expect.objectContaining({
+          payloads: [
+            expect.objectContaining({
+              text: expect.stringContaining("interrupted after accepting"),
+            }),
+          ],
+        }),
+      }),
+    ]);
     expect(getExistingFollowupQueue(queueKey)?.items.map((item) => item.durableId)).toEqual([
       later.id,
     ]);

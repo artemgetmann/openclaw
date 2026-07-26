@@ -47,7 +47,10 @@ import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./i
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { hasFollowupQueueOwnership, resolveQueueSettings } from "./queue.js";
-import { isDurableFollowupMessageProcessed } from "./queue/durable-store.js";
+import {
+  isDurableFollowupMessagePending,
+  isDurableFollowupMessageProcessed,
+} from "./queue/durable-store.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
@@ -388,11 +391,13 @@ export async function runPreparedReply(
   };
   // Processed provider redeliveries must stop before any one-shot state is
   // consumed. Both deferred queueing and immediate execution pass this gate.
+  const durableMessageIdentity = {
+    queueKey: sessionKey,
+    run: processedMessageIdentity,
+  };
   if (
-    await isDurableFollowupMessageProcessed({
-      queueKey: sessionKey,
-      run: processedMessageIdentity,
-    })
+    (await isDurableFollowupMessageProcessed(durableMessageIdentity)) ||
+    (await isDurableFollowupMessagePending(durableMessageIdentity))
   ) {
     typing.cleanup();
     return undefined;

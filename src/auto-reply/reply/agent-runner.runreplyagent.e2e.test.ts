@@ -19,6 +19,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { loadDurableFollowups } from "./queue/durable-store.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -305,6 +306,60 @@ async function runReplyAgentWithBase(params: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("persists a restart blocker before a direct turn enters model or tool work", async () => {
+    await withStateDirEnv("openclaw-direct-turn-restart-blocker-", async () => {
+      let finishRun: (() => void) | undefined;
+      const runFinished = new Promise<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, never>;
+      }>((resolve) => {
+        finishRun = () => resolve({ payloads: [{ text: "exact final" }], meta: {} });
+      });
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => await runFinished);
+      const onDurableReplyAccepted = vi.fn();
+      const direct = createMinimalRun({
+        opts: { onDurableReplyAccepted },
+      });
+      Object.assign(direct.followupRun, {
+        messageId: "telegram:25606",
+        originatingChannel: "telegram",
+        originatingTo: "-1003783709877",
+        originatingAccountId: "default",
+        originatingThreadId: 21876,
+      });
+
+      const resultPromise = direct.run();
+      await vi.waitFor(() => expect(onDurableReplyAccepted).toHaveBeenCalledTimes(1));
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+
+      const [runningRecord] = await loadDurableFollowups();
+      expect(runningRecord?.delivery?.payloads).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("interrupted after accepting"),
+        }),
+      ]);
+
+      finishRun?.();
+      await expect(resultPromise).resolves.toEqual(
+        expect.objectContaining({ text: "exact final" }),
+      );
+
+      // The live transport has not acknowledged delivery yet. A restart in
+      // this window must deliver the conservative recovery receipt without
+      // rerunning model or tool work. Provider acceptance can be ambiguous,
+      // so replaying even a completed final would be less safe.
+      const [completedRecord] = await loadDurableFollowups();
+      expect(completedRecord?.id).toBe(runningRecord?.id);
+      expect(completedRecord?.delivery?.payloads).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("did not repeat the unfinished actions"),
+        }),
+      ]);
+    });
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
