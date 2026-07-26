@@ -202,6 +202,70 @@ function isConsumerJarvisRuntime(params: {
   );
 }
 
+export async function runGatewayStartupSharedSkillsSync(params: {
+  config: OpenClawConfig;
+  configPath: string;
+  isNixMode: boolean;
+  log: Pick<GatewayStartupPreflightDeps["log"], "info" | "warn">;
+  env?: NodeJS.ProcessEnv;
+  syncBundledSkills?: typeof syncBundledSkillsToSharedPersonalRoot;
+}): Promise<void> {
+  const env = params.env ?? process.env;
+  if (
+    params.isNixMode ||
+    !isConsumerJarvisRuntime({
+      config: params.config,
+      configPath: params.configPath,
+      env,
+    })
+  ) {
+    return;
+  }
+  try {
+    const sharedSkillsHome = env.HOME?.trim() || os.homedir();
+    // This phase can write/remove managed mirrors. Staged restarts therefore
+    // invoke it only after the old listener closes.
+    const syncResult = await (params.syncBundledSkills ?? syncBundledSkillsToSharedPersonalRoot)({
+      sharedSkillsDir: path.join(sharedSkillsHome, ".agents", "skills"),
+    });
+    const changed = syncResult.entries.filter((entry) =>
+      ["copied", "updated", "adopted", "removed"].includes(entry.status),
+    );
+    const conflicts = syncResult.entries.filter((entry) => entry.status === "skipped-local");
+    const failures = syncResult.entries.filter(
+      (entry) => entry.status === "failed" || entry.status === "missing-source",
+    );
+    if (changed.length > 0 || conflicts.length > 0) {
+      params.log.info(
+        [
+          `gateway: synced bundled skills to shared personal root (${syncResult.targetDir})`,
+          changed.length > 0 ? `- changed: ${changed.length}` : undefined,
+          conflicts.length > 0 ? `- local overrides skipped: ${conflicts.length}` : undefined,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
+      );
+    }
+    if (failures.length > 0) {
+      params.log.warn(
+        [
+          `gateway: failed to sync bundled skills to shared personal root (${syncResult.targetDir})`,
+          ...failures
+            .slice(0, 10)
+            .map((entry) => `- ${entry.name}: ${entry.message ?? entry.status}`),
+          failures.length > 10 ? `- ...and ${failures.length - 10} more` : undefined,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
+      );
+    }
+  } catch (err) {
+    params.log.warn(
+      `gateway: failed to sync bundled skills to shared personal root: ${String(err)}`,
+    );
+  }
+}
+
 /**
  * Startup phase: normalize and validate config before runtime boot.
  * This keeps startup-side writes explicit and phase-scoped.
@@ -307,59 +371,14 @@ export async function runGatewayStartupConfigPreflight(
     }
   }
 
-  if (
-    !deps.isNixMode &&
-    isConsumerJarvisRuntime({
-      config: configSnapshot.config,
-      configPath: configSnapshot.path,
-      env,
-    })
-  ) {
-    try {
-      const sharedSkillsHome = env.HOME?.trim() || os.homedir();
-      // Startup preflight can be run against profile-isolated HOME values in
-      // tests and recovery lanes. Mirror into that effective home, not
-      // blindly into the operator account returned by os.homedir().
-      const syncResult = await syncSharedBundledSkills({
-        sharedSkillsDir: path.join(sharedSkillsHome, ".agents", "skills"),
-      });
-      const changed = syncResult.entries.filter((entry) =>
-        ["copied", "updated", "adopted", "removed"].includes(entry.status),
-      );
-      const conflicts = syncResult.entries.filter((entry) => entry.status === "skipped-local");
-      const failures = syncResult.entries.filter(
-        (entry) => entry.status === "failed" || entry.status === "missing-source",
-      );
-      if (changed.length > 0 || conflicts.length > 0) {
-        deps.log.info(
-          [
-            `gateway: synced bundled skills to shared personal root (${syncResult.targetDir})`,
-            changed.length > 0 ? `- changed: ${changed.length}` : undefined,
-            conflicts.length > 0 ? `- local overrides skipped: ${conflicts.length}` : undefined,
-          ]
-            .filter((line): line is string => Boolean(line))
-            .join("\n"),
-        );
-      }
-      if (failures.length > 0) {
-        deps.log.warn(
-          [
-            `gateway: failed to sync bundled skills to shared personal root (${syncResult.targetDir})`,
-            ...failures
-              .slice(0, 10)
-              .map((entry) => `- ${entry.name}: ${entry.message ?? entry.status}`),
-            failures.length > 10 ? `- ...and ${failures.length - 10} more` : undefined,
-          ]
-            .filter((line): line is string => Boolean(line))
-            .join("\n"),
-        );
-      }
-    } catch (err) {
-      deps.log.warn(
-        `gateway: failed to sync bundled skills to shared personal root: ${String(err)}`,
-      );
-    }
-  }
+  await runGatewayStartupSharedSkillsSync({
+    config: configSnapshot.config,
+    configPath: configSnapshot.path,
+    isNixMode: deps.isNixMode,
+    log: deps.log,
+    env,
+    syncBundledSkills: syncSharedBundledSkills,
+  });
 
   if (configSnapshot.exists && !configSnapshot.valid) {
     throw new GatewayStartupPreflightError(
@@ -453,6 +472,12 @@ type GatewayStartupRuntimePolicyDeps = {
   seedControlUiAllowedOrigins: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   env?: NodeJS.ProcessEnv;
   runtimeFingerprint?: RuntimeFingerprint;
+  preparedPolicy?: GatewayStartupRuntimePolicyPreparation;
+};
+
+export type GatewayStartupRuntimePolicyPreparation = {
+  diagnosticsEnabled: boolean;
+  allowExternalRestart: boolean;
 };
 
 type GatewayStartupPluginBootstrapPhaseDeps<TBootstrapResult> = {
@@ -587,6 +612,91 @@ export function createGatewayStartupContext(
   };
 }
 
+/**
+ * Restart-only config preflight. Unlike the normal startup phase, this path is
+ * intentionally read-only because the currently serving gateway still owns
+ * the runtime. Any migration or auto-repair requirement aborts staging and is
+ * left for a conventional startup where mutation is safe.
+ */
+export async function runGatewayStagedRestartConfigPreflight(deps: {
+  readSnapshot: () => Promise<ConfigFileSnapshot>;
+  env?: NodeJS.ProcessEnv;
+}): Promise<GatewayStartupContext> {
+  const env = deps.env ?? process.env;
+  const snapshot = await deps.readSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    throw new GatewayStartupPreflightError(
+      "config_validation",
+      buildInvalidConfigMessage(snapshot),
+    );
+  }
+  if (snapshot.legacyIssues.length > 0) {
+    throw new GatewayStartupPreflightError(
+      "config_legacy_migration",
+      "Config requires legacy migration; refusing to mutate it while the current gateway is serving.",
+    );
+  }
+
+  const jarvisWorkspaceMigration = migrateJarvisWorkspacePointers({
+    config: snapshot.config,
+    configPath: snapshot.path,
+    env,
+  });
+  const consumerSkillRepair = isConsumerJarvisRuntime({
+    config: snapshot.config,
+    configPath: snapshot.path,
+    env,
+  })
+    ? repairConsumerDefaultBundledSkillAllowlist(snapshot.config)
+    : { changes: [] };
+  const pluginAutoEnable = applyPluginAutoEnable({ config: snapshot.config, env });
+  if (
+    jarvisWorkspaceMigration.changes.length > 0 ||
+    consumerSkillRepair.changes.length > 0 ||
+    pluginAutoEnable.changes.length > 0
+  ) {
+    throw new GatewayStartupPreflightError(
+      "config_legacy_migration",
+      "Config requires startup repair; refusing to mutate it while the current gateway is serving.",
+    );
+  }
+
+  const protectedTokenConflict = detectProtectedTelegramTokenConflict({
+    config: snapshot.config,
+    configPath: snapshot.path,
+    env,
+  });
+  if (protectedTokenConflict) {
+    throw new GatewayStartupPreflightError(
+      "config_validation",
+      buildProtectedTelegramTokenConflictMessage({
+        configPath: snapshot.path,
+        tokens: protectedTokenConflict.tokens,
+        protectedBy: protectedTokenConflict.protectedBy,
+      }),
+    );
+  }
+  return createGatewayStartupContext(snapshot);
+}
+
+export function assertGatewayStagedRestartSnapshotFresh(params: {
+  prepared: ConfigFileSnapshot;
+  current: ConfigFileSnapshot;
+}): void {
+  const preparedIdentity = params.prepared.hash ?? params.prepared.raw ?? "";
+  const currentIdentity = params.current.hash ?? params.current.raw ?? "";
+  if (
+    params.current.path !== params.prepared.path ||
+    !params.current.valid ||
+    currentIdentity !== preparedIdentity
+  ) {
+    throw new GatewayStartupPreflightError(
+      "config_validation",
+      "Gateway config changed after restart preflight; keeping the current gateway running.",
+    );
+  }
+}
+
 function normalizePathForComparison(targetPath: string | null | undefined): string | null {
   const trimmed = targetPath?.trim();
   if (!trimmed) {
@@ -692,45 +802,23 @@ export async function runGatewayStartupRuntimePolicyPhase(
   deps: GatewayStartupRuntimePolicyDeps,
 ): Promise<GatewayStartupContext> {
   try {
-    const env = deps.env ?? process.env;
-    const runtimeFingerprint =
-      deps.runtimeFingerprint ?? resolveRuntimeFingerprint({ env, moduleUrl: import.meta.url });
-    const canonicalMainRepo = resolveCanonicalMainRepoRoot(env);
-    const canonicalSharedConfig = isCanonicalSharedGatewayConfigPath(
-      deps.context.preflightSnapshot.path,
-      env,
-    );
-    const defaultSharedServiceIdentity = isDefaultSharedServiceIdentity({
-      env,
-      runtimeFingerprint,
+    // Auth bootstrap may activate a config written after restart staging.
+    // Recompute these cheap policy flags from the final startup config instead
+    // of applying a stale staged value.
+    const preparedPolicy = prepareGatewayStartupRuntimePolicy({
+      context: deps.context,
+      isDiagnosticsEnabled: deps.isDiagnosticsEnabled,
+      isRestartEnabled: deps.isRestartEnabled,
+      env: deps.env,
+      runtimeFingerprint: deps.runtimeFingerprint,
     });
-    const noncanonicalSharedRuntime =
-      (canonicalSharedConfig || defaultSharedServiceIdentity) &&
-      !isPackagedPublicJarvisRuntime({ env, runtimeFingerprint }) &&
-      canonicalMainRepo &&
-      normalizePathForComparison(runtimeFingerprint.worktree) !==
-        normalizePathForComparison(canonicalMainRepo);
-    if (
-      noncanonicalSharedRuntime &&
-      !isTruthyEnvFlag(env.OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME)
-    ) {
-      throw new GatewayStartupPreflightError(
-        "runtime_policy",
-        buildNoncanonicalSharedRuntimeMessage({
-          canonicalMainRepo,
-          runtimeFingerprint,
-          configPath: deps.context.preflightSnapshot.path,
-        }),
-      );
-    }
-
-    const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.context.config);
+    const diagnosticsEnabled = preparedPolicy.diagnosticsEnabled;
     if (diagnosticsEnabled) {
       deps.startDiagnosticHeartbeat();
     }
 
     deps.setGatewaySigusr1RestartPolicy({
-      allowExternal: deps.isRestartEnabled(deps.context.config),
+      allowExternal: preparedPolicy.allowExternalRestart,
     });
     deps.setPreRestartDeferralCheck(deps.getPendingWorkCount);
 
@@ -749,6 +837,55 @@ export async function runGatewayStartupRuntimePolicyPhase(
       { cause: err },
     );
   }
+}
+
+/**
+ * Resolve the expensive, read-only portion of runtime policy before cutover.
+ * Global hooks, heartbeat startup, and config seeding remain in the apply phase
+ * above because they mutate the live process.
+ */
+export function prepareGatewayStartupRuntimePolicy(deps: {
+  context: GatewayStartupContext;
+  isDiagnosticsEnabled: (config: OpenClawConfig) => boolean;
+  isRestartEnabled: (config: OpenClawConfig) => boolean;
+  env?: NodeJS.ProcessEnv;
+  runtimeFingerprint?: RuntimeFingerprint;
+}): GatewayStartupRuntimePolicyPreparation {
+  const env = deps.env ?? process.env;
+  const runtimeFingerprint =
+    deps.runtimeFingerprint ?? resolveRuntimeFingerprint({ env, moduleUrl: import.meta.url });
+  const canonicalMainRepo = resolveCanonicalMainRepoRoot(env);
+  const canonicalSharedConfig = isCanonicalSharedGatewayConfigPath(
+    deps.context.preflightSnapshot.path,
+    env,
+  );
+  const defaultSharedServiceIdentity = isDefaultSharedServiceIdentity({
+    env,
+    runtimeFingerprint,
+  });
+  const noncanonicalSharedRuntime =
+    (canonicalSharedConfig || defaultSharedServiceIdentity) &&
+    !isPackagedPublicJarvisRuntime({ env, runtimeFingerprint }) &&
+    canonicalMainRepo &&
+    normalizePathForComparison(runtimeFingerprint.worktree) !==
+      normalizePathForComparison(canonicalMainRepo);
+  if (
+    noncanonicalSharedRuntime &&
+    !isTruthyEnvFlag(env.OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME)
+  ) {
+    throw new GatewayStartupPreflightError(
+      "runtime_policy",
+      buildNoncanonicalSharedRuntimeMessage({
+        canonicalMainRepo,
+        runtimeFingerprint,
+        configPath: deps.context.preflightSnapshot.path,
+      }),
+    );
+  }
+  return {
+    diagnosticsEnabled: deps.isDiagnosticsEnabled(deps.context.config),
+    allowExternalRestart: deps.isRestartEnabled(deps.context.config),
+  };
 }
 
 /**

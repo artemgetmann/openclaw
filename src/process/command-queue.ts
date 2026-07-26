@@ -158,6 +158,16 @@ export function markGatewayDraining(): void {
   queueState.gatewayDraining = true;
 }
 
+/**
+ * Re-open ingress when a restart is cancelled before listener cutover.
+ *
+ * Active task IDs and lane generations must remain intact because the old
+ * server is still serving and those tasks may still be running.
+ */
+export function cancelGatewayDraining(): void {
+  queueState.gatewayDraining = false;
+}
+
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = lane.trim() || CommandLane.Main;
   const state = getLaneState(cleaned);

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
+import { PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
@@ -343,9 +344,10 @@ function resolveCurrentLaunchdLabel(env: NodeJS.ProcessEnv = process.env): strin
 
 export function isCanonicalSharedMainLaunchdRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
   // The detached helper reinstalls and boots out a lane-local launch agent.
-  // That is safe for isolated profiles, but it is not safe for the canonical
-  // shared main service because it can tear down ai.openclaw.gateway in-place.
-  return resolveCurrentLaunchdLabel(env) === GATEWAY_LAUNCH_AGENT_LABEL;
+  // That is safe for isolated profiles, but not for either shared managed
+  // service because it can replace the runtime owned by an external supervisor.
+  const label = resolveCurrentLaunchdLabel(env);
+  return label === GATEWAY_LAUNCH_AGENT_LABEL || label === PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL;
 }
 
 export function isSafeLocalRestartScriptAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -475,10 +477,13 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   const shouldPreferLocalScript = opts?.preferLocalScript === true;
   let localScriptFailure: string | undefined;
   if (shouldPreferLocalScript) {
-    // When the gateway is already running under launchd, restart the existing
-    // service registration in-place instead of delegating to a checkout-local
-    // helper that may rewrite the plist from ambient worktree env.
-    if (isCurrentProcessLaunchdServiceLabel(label)) {
+    const isSharedManagedRuntime = isCanonicalSharedMainLaunchdRuntime(
+      daemonEnv as NodeJS.ProcessEnv,
+    );
+    // Shared managed labels always belong to their external supervisor. The
+    // label check remains decisive even if launchd's process markers are absent
+    // or incomplete; isolated lane labels retain marker-based handoff behavior.
+    if (isSharedManagedRuntime || isCurrentProcessLaunchdServiceLabel(label)) {
       const handoffRestart = triggerDetachedLaunchdRestartHandoff(label);
       tried.push(handoffRestart.command);
       if (handoffRestart.ok) {
@@ -489,14 +494,20 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
           tried,
         };
       }
+      if (isSharedManagedRuntime) {
+        // Do not downgrade a supervisor-owned service to a direct kickstart or
+        // checkout-local helper when scheduling its safe handoff fails.
+        return {
+          ok: false,
+          method: "launchctl",
+          detail: handoffRestart.detail,
+          tried,
+        };
+      }
       localScriptFailure = handoffRestart.detail;
     }
 
-    const localRestartScriptPath = isCanonicalSharedMainLaunchdRuntime(
-      daemonEnv as NodeJS.ProcessEnv,
-    )
-      ? null
-      : resolveLocalRestartScriptPath();
+    const localRestartScriptPath = isSharedManagedRuntime ? null : resolveLocalRestartScriptPath();
     if (localRestartScriptPath) {
       const scriptRestart = triggerDetachedLocalRestartScript(localRestartScriptPath);
       tried.push(`local-restart-script ${scriptRestart.command}`);
@@ -602,11 +613,11 @@ function normalizeRestartReason(reasonRaw: string | undefined): string | undefin
 /**
  * Select the live-chat restart path.
  *
- * The canonical shared main LaunchAgent must be restarted by an external
- * supervisor handoff. A naked in-process SIGUSR1 can strand launchd in a
- * running-but-not-listening state, which is exactly the failure this guard
- * prevents. Non-canonical tester/worktree runtimes keep the existing SIGUSR1
- * path so lane-local behavior remains unchanged.
+ * Shared OpenClaw and public Jarvis LaunchAgents must be restarted by an
+ * external supervisor handoff. A naked in-process SIGUSR1 can strand launchd
+ * in a running-but-not-listening state, which is exactly the failure this
+ * guard prevents. Tester/worktree runtimes keep the existing SIGUSR1 path so
+ * lane-local behavior remains unchanged.
  */
 export function requestGatewayToolRestart(opts?: {
   delayMs?: number;

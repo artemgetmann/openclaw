@@ -88,40 +88,42 @@ afterEach(() => {
 });
 
 describe("triggerOpenClawRestart local script mode", () => {
-  it("prefers detached launchd handoff over the local script for managed services", async () => {
-    setPlatform("darwin");
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-    process.env.OPENCLAW_PROFILE = "consumer";
+  it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
+    "prefers detached launchd handoff over the local script for managed service %s",
+    async (expectedLabel) => {
+      setPlatform("darwin");
+      delete process.env.VITEST;
+      delete process.env.NODE_ENV;
+      process.env.OPENCLAW_LAUNCHD_LABEL = expectedLabel;
 
-    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
-    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
-    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
-    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
-    isCurrentProcessLaunchdServiceLabelMock.mockReturnValue(true);
-    const expectedLabel = "ai.openclaw.gateway";
+      const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+      const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+      await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+      isCurrentProcessLaunchdServiceLabelMock.mockReturnValue(true);
 
-    try {
-      const result = triggerOpenClawRestart({ preferLocalScript: true });
-      expect(result).toMatchObject({
-        ok: true,
-        method: "launchctl",
-      });
-      expect(result.detail).toContain(
-        `scheduled detached launchd restart handoff for ${expectedLabel}`,
-      );
-      expect(result.tried).toContain(`launchd-handoff kickstart ${expectedLabel}`);
-      expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
-        env: process.env,
-        mode: "kickstart",
-        waitForPid: process.pid,
-      });
-      expect(spawnMock).not.toHaveBeenCalled();
-      expect(spawnSyncMock).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(scriptDir, { recursive: true, force: true });
-    }
-  });
+      try {
+        const result = triggerOpenClawRestart({ preferLocalScript: true });
+        expect(result).toMatchObject({
+          ok: true,
+          method: "launchctl",
+        });
+        expect(result.detail).toContain(
+          `scheduled detached launchd restart handoff for ${expectedLabel}`,
+        );
+        expect(result.tried).toContain(`launchd-handoff kickstart ${expectedLabel}`);
+        expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
+          env: process.env,
+          mode: "kickstart",
+          waitForPid: process.pid,
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(spawnSyncMock).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(scriptDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("prefers detached local restart script on macOS when requested", async () => {
     setPlatform("darwin");
@@ -170,6 +172,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     setPlatform("darwin");
     delete process.env.VITEST;
     delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.consumer.test.gateway";
     process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = "/tmp/definitely-missing-openclaw-restart.sh";
 
     spawnSyncMock.mockReturnValue({
@@ -191,7 +194,7 @@ describe("triggerOpenClawRestart local script mode", () => {
       expect.arrayContaining([
         "kickstart",
         "-k",
-        expect.stringMatching(/^gui\/\d+\/ai\.openclaw\.gateway$/),
+        expect.stringMatching(/^gui\/\d+\/ai\.openclaw\.consumer\.test\.gateway$/),
       ]),
       expect.objectContaining({
         encoding: "utf8",
@@ -293,93 +296,125 @@ describe("triggerOpenClawRestart local script mode", () => {
     }
   });
 
-  it("treats the canonical shared main launchd label as unsafe for the local restart helper", async () => {
-    setPlatform("darwin");
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+  it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
+    "treats shared managed launchd label %s as unsafe for the local restart helper",
+    async (launchdLabel) => {
+      setPlatform("darwin");
+      delete process.env.VITEST;
+      delete process.env.NODE_ENV;
+      process.env.OPENCLAW_LAUNCHD_LABEL = launchdLabel;
 
-    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
-    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
-    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
-    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+      const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+      const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+      await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
 
-    try {
-      expect(isCanonicalSharedMainLaunchdRuntime()).toBe(true);
-      expect(isSafeLocalRestartScriptAvailable()).toBe(false);
-    } finally {
-      await fs.rm(scriptDir, { recursive: true, force: true });
-    }
-  });
+      try {
+        expect(isCanonicalSharedMainLaunchdRuntime()).toBe(true);
+        expect(isSafeLocalRestartScriptAvailable()).toBe(false);
+      } finally {
+        await fs.rm(scriptDir, { recursive: true, force: true });
+      }
+    },
+  );
 
-  it("falls back to launchctl instead of the detached helper for the canonical shared main launchd label", async () => {
-    setPlatform("darwin");
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+  it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
+    "uses detached launchd handoff for shared managed label %s even without launchd markers",
+    async (launchdLabel) => {
+      setPlatform("darwin");
+      delete process.env.VITEST;
+      delete process.env.NODE_ENV;
+      process.env.OPENCLAW_LAUNCHD_LABEL = launchdLabel;
 
-    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
-    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
-    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
-    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+      const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+      const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+      await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
 
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stdout: "",
-      stderr: "",
-    });
+      try {
+        const result = triggerOpenClawRestart({ preferLocalScript: true });
+        expect(result).toMatchObject({
+          ok: true,
+          method: "launchctl",
+        });
+        expect(result.detail).toContain(
+          `scheduled detached launchd restart handoff for ${launchdLabel}`,
+        );
+        expect(result.tried).toContain(`launchd-handoff kickstart ${launchdLabel}`);
+        expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
+          env: process.env,
+          mode: "kickstart",
+          waitForPid: process.pid,
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(spawnSyncMock).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(scriptDir, { recursive: true, force: true });
+      }
+    },
+  );
 
-    try {
-      const result = triggerOpenClawRestart({ preferLocalScript: true });
+  it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
+    "does not downgrade shared managed label %s when detached handoff fails",
+    async (launchdLabel) => {
+      setPlatform("darwin");
+      delete process.env.VITEST;
+      delete process.env.NODE_ENV;
+      process.env.OPENCLAW_LAUNCHD_LABEL = launchdLabel;
+      scheduleDetachedLaunchdRestartHandoffMock.mockReturnValue({
+        ok: false,
+        detail: "handoff unavailable",
+      });
+
+      const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+      const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+      await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+
+      try {
+        const result = triggerOpenClawRestart({ preferLocalScript: true });
+        expect(result).toEqual({
+          ok: false,
+          method: "launchctl",
+          detail: "handoff unavailable",
+          tried: [`launchd-handoff kickstart ${launchdLabel}`],
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(spawnSyncMock).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(scriptDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["ai.openclaw.gateway", "ai.jarvis.gateway"])(
+    "routes live-tool shared managed restart for %s through external launchd handoff",
+    (launchdLabel) => {
+      setPlatform("darwin");
+      delete process.env.VITEST;
+      delete process.env.NODE_ENV;
+      process.env.OPENCLAW_LAUNCHD_LABEL = launchdLabel;
+
+      const result = requestGatewayToolRestart({
+        delayMs: 25,
+        reason: "live chat restart",
+      });
+
       expect(result).toMatchObject({
         ok: true,
-        method: "launchctl",
+        method: "launchd-handoff",
+        restartMode: "external-supervised",
+        delayMs: 25,
+        reason: "live chat restart",
+        verified: false,
       });
-      expect(result.detail).toBeUndefined();
+      expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
+        env: process.env,
+        mode: "kickstart",
+        delayMs: 25,
+      });
       expect(spawnMock).not.toHaveBeenCalled();
-      expect(spawnSyncMock).toHaveBeenCalledWith(
-        "launchctl",
-        expect.arrayContaining([
-          "kickstart",
-          "-k",
-          expect.stringMatching(/^gui\/\d+\/ai\.openclaw\.gateway$/),
-        ]),
-        expect.objectContaining({
-          encoding: "utf8",
-          timeout: 2000,
-        }),
-      );
-    } finally {
-      await fs.rm(scriptDir, { recursive: true, force: true });
-    }
-  });
-
-  it("routes live-tool canonical shared main restarts through external launchd handoff", () => {
-    setPlatform("darwin");
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-
-    const result = requestGatewayToolRestart({
-      delayMs: 25,
-      reason: "live chat restart",
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      method: "launchd-handoff",
-      restartMode: "external-supervised",
-      delayMs: 25,
-      reason: "live chat restart",
-      verified: false,
-    });
-    expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
-      env: process.env,
-      mode: "kickstart",
-      delayMs: 25,
-    });
-    expect(spawnMock).not.toHaveBeenCalled();
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-  });
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    },
+  );
 });

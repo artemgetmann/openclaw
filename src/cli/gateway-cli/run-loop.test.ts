@@ -19,6 +19,7 @@ const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?
 }));
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
+const cancelGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
@@ -53,6 +54,7 @@ vi.mock("../../infra/process-respawn.js", () => ({
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
+  cancelGatewayDraining: () => cancelGatewayDraining(),
   getActiveTaskCount: () => getActiveTaskCount(),
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs: number) => waitForActiveTasks(timeoutMs),
@@ -209,6 +211,191 @@ describe("runGatewayLoop", () => {
         restartExpectedMs: null,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("keeps the old server open until restart preflight and freshness validation finish", async () => {
+    vi.clearAllMocks();
+    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const order: string[] = [];
+      let resolvePreflight!: () => void;
+      const preflightBlocked = new Promise<void>((resolve) => {
+        resolvePreflight = resolve;
+      });
+      const prepared = { id: "prepared-restart" };
+      const prepareRestart = vi.fn(async () => {
+        order.push("prepare");
+        await preflightBlocked;
+        return {
+          prepared,
+          validate: async () => {
+            order.push("validate");
+          },
+        };
+      });
+      const closeFirst = vi.fn(async () => {
+        order.push("close");
+      });
+      const closeSecond = vi.fn(async () => {});
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce({ close: closeFirst })
+        .mockImplementationOnce(async (receivedPrepared) => {
+          order.push("start");
+          expect(receivedPrepared).toBe(prepared);
+          return { close: closeSecond };
+        });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      vi.resetModules();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        prepareRestart,
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(prepareRestart).toHaveBeenCalledTimes(1);
+      expect(closeFirst).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      resolvePreflight();
+      await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+      expect(order).toEqual(["prepare", "validate", "close", "start"]);
+      expect(prepareRestart).toHaveBeenCalledTimes(1);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("lets SIGTERM preempt a blocked restart preflight and prevents the later restart", async () => {
+    vi.clearAllMocks();
+    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      let resolvePreflight!: () => void;
+      const preflightBlocked = new Promise<void>((resolve) => {
+        resolvePreflight = resolve;
+      });
+      const prepareRestart = vi.fn(async () => {
+        await preflightBlocked;
+        return {
+          prepared: { id: "too-late" },
+          validate: vi.fn(async () => {}),
+        };
+      });
+      const close = vi.fn(async () => {});
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      vi.resetModules();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        prepareRestart,
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForStart(started);
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await vi.waitFor(() => expect(prepareRestart).toHaveBeenCalledTimes(1));
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+
+      resolvePreflight();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+    });
+  });
+
+  it("cancels a failed restart preflight without closing the serving gateway", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = vi.fn(async () => {});
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const prepareRestart = vi.fn(async () => {
+        throw new Error("secret backend unavailable");
+      });
+      vi.resetModules();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        prepareRestart,
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForStart(started);
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await vi.waitFor(() => expect(prepareRestart).toHaveBeenCalledTimes(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("Restart cancelled; current gateway remains running"),
+      );
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reopens ingress without resetting active lanes when restart freshness validation fails", async () => {
+    vi.clearAllMocks();
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1);
+    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: false });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = vi.fn(async () => {});
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const prepareRestart = vi.fn(async () => ({
+        prepared: { id: "stale" },
+        validate: vi.fn(async () => {
+          throw new Error("config changed");
+        }),
+      }));
+      vi.resetModules();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        prepareRestart,
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForStart(started);
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await vi.waitFor(() => expect(cancelGatewayDraining).toHaveBeenCalledTimes(1));
+
+      expect(resetAllLanes).not.toHaveBeenCalled();
+      expect(abortEmbeddedPiRun).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

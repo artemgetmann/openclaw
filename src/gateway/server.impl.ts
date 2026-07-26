@@ -1,4 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
@@ -51,6 +53,7 @@ import {
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
 import {
+  type PreparedSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
@@ -96,6 +99,8 @@ import { logGatewayStartup } from "./server-startup-log.js";
 import { runLoggedGatewayStartupPhase } from "./server-startup-phase-log.js";
 import {
   runGatewayStartupAuthBootstrap,
+  assertGatewayStagedRestartSnapshotFresh,
+  prepareGatewayStartupRuntimePolicy,
   runGatewayStartupConfigPreflight,
   runGatewayStartupControlUiRootPhase,
   runGatewayStartupPluginBootstrapPhase,
@@ -103,12 +108,20 @@ import {
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupDiscoveryPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupSharedSkillsSync,
+  runGatewayStagedRestartConfigPreflight,
   runGatewayStartupSidecarPhase,
   runGatewayStartupTailscaleExposurePhase,
   runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
+  type GatewayStartupContext,
+  type GatewayStartupRuntimePolicyPreparation,
 } from "./server-startup-preflight.js";
-import { createGatewaySecretsActivationController } from "./server-startup-secrets.js";
+import {
+  createGatewaySecretsActivationController,
+  createGatewayStartupSecretsActivator,
+  resolvePreparedGatewayAuthOverride,
+} from "./server-startup-secrets.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -289,7 +302,90 @@ export type GatewayServerOptions = {
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  /**
+   * Internal restart handoff prepared while the previous listener is serving.
+   * Callers must obtain this from prepareGatewayServerRestart().
+   */
+  preparedRestart?: PreparedGatewayRestart;
 };
+
+export type PreparedGatewayRestart = Readonly<{
+  startupContext: GatewayStartupContext;
+  secretsSnapshot: PreparedSecretsRuntimeSnapshot;
+  runtimePolicy: GatewayStartupRuntimePolicyPreparation;
+}>;
+
+const consumedPreparedRestarts = new WeakSet<PreparedGatewayRestart>();
+
+/**
+ * Prepare only read-only startup work while the old gateway still serves.
+ * Auth persistence, secrets activation, global policy hooks, and listeners are
+ * deliberately deferred until startGatewayServer owns the cutover.
+ */
+export async function prepareGatewayServerRestart(
+  _port = 18789,
+  opts: Omit<GatewayServerOptions, "preparedRestart"> = {},
+): Promise<PreparedGatewayRestart> {
+  let startupContext = await runLoggedGatewayStartupPhase({
+    phase: "config_preflight",
+    log: logStartup,
+    run: async () =>
+      await runGatewayStagedRestartConfigPreflight({
+        readSnapshot: readConfigFileSnapshot,
+      }),
+  });
+  const preparedConfig = applyGatewayAuthOverridesForStartupPreflight(startupContext.config, {
+    auth: opts.auth,
+    tailscale: opts.tailscale,
+  });
+  const secretsSnapshot = await runLoggedGatewayStartupPhase({
+    phase: "secrets_precheck",
+    log: logStartup,
+    run: async () => {
+      if (!isDeepStrictEqual(preparedConfig, startupContext.config)) {
+        // CLI auth/tailscale overrides must still be validated, but they are
+        // ephemeral and must not become the activated runtime config.
+        await prepareSecretsRuntimeSnapshot({
+          config: preparedConfig,
+          loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+        });
+      }
+      // The activation snapshot includes read-only external CLI overlays.
+      // Loading this path does not persist auth-store changes.
+      return await prepareSecretsRuntimeSnapshot({
+        config: startupContext.config,
+      });
+    },
+  });
+  startupContext = {
+    ...startupContext,
+    secretsPrechecked: true,
+  };
+  const runtimePolicy = await runLoggedGatewayStartupPhase({
+    phase: "runtime_policy",
+    log: logStartup,
+    run: () =>
+      prepareGatewayStartupRuntimePolicy({
+        context: startupContext,
+        isDiagnosticsEnabled,
+        isRestartEnabled,
+      }),
+  });
+  return Object.freeze({
+    startupContext,
+    secretsSnapshot,
+    runtimePolicy,
+  });
+}
+
+export async function validatePreparedGatewayServerRestart(
+  prepared: PreparedGatewayRestart,
+): Promise<void> {
+  assertGatewayStagedRestartSnapshotFresh({
+    prepared: prepared.startupContext.preflightSnapshot,
+    current: await readConfigFileSnapshot(),
+  });
+}
 
 export async function startGatewayServer(
   port = 18789,
@@ -311,17 +407,37 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
-  let startupContext = await runLoggedGatewayStartupPhase({
-    phase: "config_preflight",
-    log: logStartup,
-    run: async () =>
-      await runGatewayStartupConfigPreflight({
-        readSnapshot: readConfigFileSnapshot,
-        writeConfig: writeConfigFile,
-        log,
-        isNixMode,
-      }),
-  });
+  const preparedRestart = opts.preparedRestart;
+  if (preparedRestart) {
+    if (consumedPreparedRestarts.has(preparedRestart)) {
+      throw new Error("Prepared gateway restart context has already been consumed.");
+    }
+    consumedPreparedRestarts.add(preparedRestart);
+    await runLoggedGatewayStartupPhase({
+      phase: "config_preflight",
+      log: logStartup,
+      run: async () =>
+        await runGatewayStartupSharedSkillsSync({
+          config: preparedRestart.startupContext.config,
+          configPath: preparedRestart.startupContext.preflightSnapshot.path,
+          isNixMode,
+          log,
+        }),
+    });
+  }
+  let startupContext = preparedRestart
+    ? preparedRestart.startupContext
+    : await runLoggedGatewayStartupPhase({
+        phase: "config_preflight",
+        log: logStartup,
+        run: async () =>
+          await runGatewayStartupConfigPreflight({
+            readSnapshot: readConfigFileSnapshot,
+            writeConfig: writeConfigFile,
+            log,
+            isNixMode,
+          }),
+      });
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -347,25 +463,47 @@ export async function startGatewayServer(
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
-  startupContext = await runLoggedGatewayStartupPhase({
-    phase: "secrets_precheck",
-    log: logStartup,
-    run: async () =>
-      await runGatewayStartupSecretsPrecheck({
-        context: startupContext,
-        readSnapshot: readConfigFileSnapshot,
-        prepareConfig: (config) =>
-          applyGatewayAuthOverridesForStartupPreflight(config, {
-            auth: opts.auth,
-            tailscale: opts.tailscale,
-          }),
-        activateRuntimeSecrets: async (config) => {
-          await activateRuntimeSecrets(config, {
-            reason: "startup",
-            activate: false,
-          });
-        },
+  if (!preparedRestart) {
+    startupContext = await runLoggedGatewayStartupPhase({
+      phase: "secrets_precheck",
+      log: logStartup,
+      run: async () =>
+        await runGatewayStartupSecretsPrecheck({
+          context: startupContext,
+          readSnapshot: readConfigFileSnapshot,
+          prepareConfig: (config) =>
+            applyGatewayAuthOverridesForStartupPreflight(config, {
+              auth: opts.auth,
+              tailscale: opts.tailscale,
+            }),
+          activateRuntimeSecrets: async (config) => {
+            await activateRuntimeSecrets(config, {
+              reason: "startup",
+              activate: false,
+            });
+          },
+        }),
+    });
+  }
+
+  const activateStartupSecrets = createGatewayStartupSecretsActivator({
+    preparedSnapshot: preparedRestart?.secretsSnapshot,
+    activatePrepared: (snapshot) => {
+      runtimeState.secretsRuntime.activate(snapshot);
+      logGatewayAuthSurfaceDiagnostics(snapshot);
+      for (const warning of snapshot.warnings) {
+        logSecrets.warn(`[${warning.code}] ${warning.message}`);
+      }
+    },
+    activateFresh: async (config) =>
+      await activateRuntimeSecrets(config, {
+        reason: "startup",
+        activate: true,
       }),
+  });
+  const startupAuthOverride = resolvePreparedGatewayAuthOverride({
+    snapshot: preparedRestart?.secretsSnapshot,
+    authOverride: opts.auth,
   });
 
   startupContext = await runLoggedGatewayStartupPhase({
@@ -376,13 +514,11 @@ export async function startGatewayServer(
         loadConfig,
         context: startupContext,
         ensureGatewayStartupAuth,
-        activateRuntimeSecrets: async (config) =>
-          await activateRuntimeSecrets(config, {
-            reason: "startup",
-            activate: true,
-          }),
+        // Auth persistence happens first; activation then consumes the staged
+        // snapshot without re-resolving external secrets after cutover.
+        activateRuntimeSecrets: activateStartupSecrets,
         log,
-        authOverride: opts.auth,
+        authOverride: startupAuthOverride,
         tailscaleOverride: opts.tailscale,
       }),
   });
@@ -407,6 +543,7 @@ export async function startGatewayServer(
             writeConfig: writeConfigFile,
             log,
           }),
+        preparedPolicy: preparedRestart?.runtimePolicy,
       }),
   });
   cfgAtStart = startupContext.config;

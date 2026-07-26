@@ -13,6 +13,7 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import {
+  assertGatewayStagedRestartSnapshotFresh,
   classifyGatewayStartupPreflightError,
   createGatewayStartupContext,
   formatGatewayStartupPreflightFailure,
@@ -21,6 +22,7 @@ import {
   runGatewayStartupConfigPreflight,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStagedRestartConfigPreflight,
 } from "./server-startup-preflight.js";
 
 function createSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
@@ -43,6 +45,38 @@ function createSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFile
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-preflight-"));
 }
+
+describe("staged gateway restart preflight", () => {
+  it("builds a read-only startup context and rejects changed config before cutover", async () => {
+    const preparedSnapshot = createSnapshot({ raw: '{"gateway":{}}', hash: "prepared-hash" });
+    const readSnapshot = vi.fn(async () => preparedSnapshot);
+    const context = await runGatewayStagedRestartConfigPreflight({ readSnapshot });
+
+    expect(context.preflightSnapshot).toBe(preparedSnapshot);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(() =>
+      assertGatewayStagedRestartSnapshotFresh({
+        prepared: preparedSnapshot,
+        current: createSnapshot({ raw: '{"gateway":{"port":1}}', hash: "changed-hash" }),
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        name: "GatewayStartupPreflightError",
+        phase: "config_validation",
+      }),
+    );
+  });
+
+  it("accepts an unchanged config snapshot for the prepared cutover", () => {
+    const preparedSnapshot = createSnapshot({ hash: "stable-hash" });
+    expect(() =>
+      assertGatewayStagedRestartSnapshotFresh({
+        prepared: preparedSnapshot,
+        current: createSnapshot({ hash: "stable-hash" }),
+      }),
+    ).not.toThrow();
+  });
+});
 
 const jarvisComputerUseEntry: SkillEntry = {
   skill: {
@@ -868,6 +902,32 @@ describe("runGatewayStartupAuthBootstrap", () => {
 });
 
 describe("runGatewayStartupRuntimePolicyPhase", () => {
+  it("recomputes policy from the final startup config after cutover", async () => {
+    const isDiagnosticsEnabled = vi.fn(() => false);
+    const isRestartEnabled = vi.fn(() => false);
+    const setGatewaySigusr1RestartPolicy = vi.fn();
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      context: createGatewayStartupContext(createSnapshot()),
+      preparedPolicy: {
+        diagnosticsEnabled: true,
+        allowExternalRestart: true,
+      },
+      isDiagnosticsEnabled,
+      startDiagnosticHeartbeat: vi.fn(),
+      isRestartEnabled,
+      setGatewaySigusr1RestartPolicy,
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+    });
+
+    expect(isDiagnosticsEnabled).toHaveBeenCalled();
+    expect(isRestartEnabled).toHaveBeenCalled();
+    expect(setGatewaySigusr1RestartPolicy).toHaveBeenCalledWith({ allowExternal: false });
+    expect(result.diagnosticsEnabled).toBe(false);
+  });
+
   it("enables diagnostics and applies runtime policies", async () => {
     const config: OpenClawConfig = { gateway: {} };
     const seededConfig: OpenClawConfig = {

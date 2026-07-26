@@ -13,7 +13,11 @@ import {
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
-import { startGatewayServer } from "../../gateway/server.js";
+import {
+  prepareGatewayServerRestart,
+  startGatewayServer,
+  validatePreparedGatewayServerRestart,
+} from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
@@ -426,11 +430,23 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
-      start: async () =>
+      prepareRestart: async () => {
+        const prepared = await prepareGatewayServerRestart(port, {
+          bind,
+          auth: authOverride,
+          tailscale: tailscaleOverride,
+        });
+        return {
+          prepared,
+          validate: async () => await validatePreparedGatewayServerRestart(prepared),
+        };
+      },
+      start: async (preparedRestart) =>
         await startGatewayServer(port, {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
+          preparedRestart,
         }),
     });
 
