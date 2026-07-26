@@ -269,7 +269,8 @@ describe("shouldRunAuditForChangedPaths", () => {
         }),
       ).toEqual({
         shouldRun: false,
-        reason: "pnpm-lock.yaml changed patch metadata only; registry package data is unchanged",
+        reason:
+          "pnpm-lock.yaml changed only in audit-neutral metadata; registry package data is unchanged",
       });
     } finally {
       process.chdir(cwd);
@@ -390,7 +391,66 @@ describe("shouldRunAuditForChangedPaths", () => {
     });
   });
 
-  it("fails closed when a package manifest is added or removed", () => {
+  it("skips a newly added metadata-only package manifest", () => {
+    const { root, base } = createRepo();
+    const lockfile = createBaseLockfile();
+    lockfile.importers["extensions/metadata-only"] = {};
+    writeYaml(path.join(root, "pnpm-lock.yaml"), lockfile);
+    writeJson(path.join(root, "extensions/metadata-only/package.json"), {
+      name: "@openclaw/metadata-only",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.ts"] },
+    });
+    runGit(root, ["add", "extensions/metadata-only/package.json", "pnpm-lock.yaml"]);
+    runGit(root, ["commit", "-q", "-m", "metadata-only package"]);
+
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      expect(
+        shouldRunAuditForChangedPaths(["extensions/metadata-only/package.json", "pnpm-lock.yaml"], {
+          base,
+          head: "HEAD",
+        }),
+      ).toEqual({
+        shouldRun: false,
+        reason:
+          "pnpm-lock.yaml changed only in audit-neutral metadata; registry package data is unchanged",
+      });
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it("runs when a newly added package manifest declares dependencies", () => {
+    const { root, base } = createRepo();
+    writeJson(path.join(root, "extensions/with-dependency/package.json"), {
+      name: "@openclaw/with-dependency",
+      version: "1.0.0",
+      dependencies: { express: "1.0.0" },
+    });
+    runGit(root, ["add", "extensions/with-dependency/package.json"]);
+    runGit(root, ["commit", "-q", "-m", "package with dependency"]);
+
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      expect(
+        shouldRunAuditForChangedPaths(["extensions/with-dependency/package.json"], {
+          base,
+          head: "HEAD",
+        }),
+      ).toEqual({
+        shouldRun: true,
+        reason: "extensions/with-dependency/package.json was added with dependency-relevant fields",
+      });
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it("fails closed when a package manifest is removed", () => {
     const { root, base } = createRepo();
     fs.rmSync(path.join(root, "package.json"));
     runGit(root, ["add", "package.json"]);
@@ -402,7 +462,7 @@ describe("shouldRunAuditForChangedPaths", () => {
       expect(shouldRunAuditForChangedPaths(["package.json"], { base, head: "HEAD" })).toMatchObject(
         {
           shouldRun: true,
-          reason: "package.json was added or removed",
+          reason: "package.json was removed",
         },
       );
     } finally {

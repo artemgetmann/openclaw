@@ -18,6 +18,7 @@ struct ConsumerBundledRuntimeTests {
     private static let requiredTelegramUserToolingPaths = [
         "scripts/telegram-e2e/.env.example",
         "scripts/telegram-e2e/requirements.txt",
+        "scripts/telegram-e2e/session_owner.py",
         "scripts/telegram-e2e/telethon_cli.py",
         "scripts/telegram-e2e/telethon_compat.py",
     ]

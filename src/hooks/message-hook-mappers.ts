@@ -240,6 +240,7 @@ export function toPluginInboundClaimEvent(
   canonical: CanonicalInboundMessageHookContext,
   extras?: {
     commandAuthorized?: boolean;
+    senderIsOwner?: boolean;
     wasMentioned?: boolean;
   },
 ): PluginHookInboundClaimEvent {
@@ -261,6 +262,7 @@ export function toPluginInboundClaimEvent(
     messageId: canonical.messageId,
     isGroup: canonical.isGroup,
     commandAuthorized: extras?.commandAuthorized,
+    senderIsOwner: extras?.senderIsOwner,
     wasMentioned: extras?.wasMentioned,
     metadata: {
       from: canonical.from,

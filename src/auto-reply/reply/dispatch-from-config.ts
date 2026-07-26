@@ -55,6 +55,7 @@ import {
   resolveTtsPrefsPath,
 } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import { maybeResolveTextAlias, normalizeCommandBody } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -521,9 +522,17 @@ export async function dispatchReplyFromConfig(params: {
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
   const inboundClaimContext = toPluginInboundClaimContext(hookContext);
+  // Bound native runtimes must make their own owner decision from trusted
+  // ingress identity. CommandAuthorized alone only answers allowlist access.
+  const inboundAuthorization = resolveCommandAuthorization({
+    ctx,
+    cfg,
+    commandAuthorized: ctx.CommandAuthorized,
+  });
   const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
     commandAuthorized:
       typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+    senderIsOwner: inboundAuthorization.senderIsOwner,
     wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
   });
 
@@ -648,7 +657,14 @@ export async function dispatchReplyFromConfig(params: {
       ? await hookRunner.runInboundClaimForPluginOutcome(
           pluginOwnedBinding.pluginId,
           inboundClaimEvent,
-          inboundClaimContext,
+          {
+            ...inboundClaimContext,
+            pluginBinding: pluginOwnedBinding,
+            // Keep channel delivery in core. The plugin can request concise
+            // progress, but only core decides whether that means dispatcher
+            // tool output or cross-provider route-reply.
+            replyProgress: async (payload) => await sendBindingNotice(payload, "additive"),
+          },
         )
       : (() => {
           const pluginLoaded =
@@ -662,12 +678,24 @@ export async function dispatchReplyFromConfig(params: {
 
     switch (targetedClaimOutcome.status) {
       case "handled": {
+        if (targetedClaimOutcome.result.reply) {
+          await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+        }
         markIdle("plugin_binding_dispatch");
         recordProcessed("completed", { reason: "plugin-bound-handled" });
         return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
       }
       case "missing_plugin":
       case "no_handler": {
+        if (pluginOwnedBinding.failClosed) {
+          await sendBindingNotice(
+            { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
+            "terminal",
+          );
+          markIdle("plugin_binding_unavailable");
+          recordProcessed("completed", { reason: "plugin-bound-fail-closed" });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        }
         pluginFallbackReason =
           targetedClaimOutcome.status === "missing_plugin"
             ? "plugin-bound-fallback-missing-plugin"

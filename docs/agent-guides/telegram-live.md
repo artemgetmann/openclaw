@@ -85,11 +85,16 @@ erasure.
   - Copy `.env.bots` from the main checkout if needed
   - Run `bash scripts/assign-bot.sh`
 - Telegram-as-user uses one machine-local canonical session and one shared
-  machine lock. Bootstrap may copy non-session compatibility configuration, but
-  it must never copy the SQLite session database into a worktree.
+  machine lock. The owner is an absolute reference in
+  `~/.openclaw/telegram-user/canonical-session.path`; bootstrap may adopt an
+  existing legacy database by reference, but it must never copy the SQLite
+  session database into a worktree.
 - Explicit session and lock overrides remain available for hermetic tests or a
-  deliberately separate account. If legacy and canonical implicit sessions
-  disagree, stop on the ambiguity diagnostic; do not copy, delete, rotate, or
+  deliberately separate account. Exact duplicate authorizations collapse
+  automatically. If candidates differ, use the diagnostic's one-time
+  `openclaw telegram-user owner claim --source <label>` action. The claim checks
+  authorization and account identity under the machine lock and fails closed
+  when authorized accounts differ. Do not copy, delete, rotate, or
   reauthenticate either database as an automatic repair.
 - `.env.bots` is the tester-bot pool. Each `BOT_TOKEN=...` entry is one
   tester-only bot that can be claimed by one active worktree lane.

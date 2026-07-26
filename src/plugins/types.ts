@@ -875,6 +875,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Whether the trusted inbound identity is an owner. */
+  senderIsOwner: boolean;
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -899,6 +901,15 @@ export type PluginCommandContext = {
 export type PluginConversationBindingRequestParams = {
   summary?: string;
   detachHint?: string;
+  /** Opaque plugin-owned state restored with every bound inbound turn. */
+  data?: Record<string, unknown>;
+  /**
+   * Prevent normal-agent fallback when the bound plugin is unavailable.
+   *
+   * Native runtimes use this so a missing bridge can never silently execute
+   * the same request with the default Pi runtime.
+   */
+  failClosed?: boolean;
 };
 
 export type PluginConversationBinding = {
@@ -914,6 +925,8 @@ export type PluginConversationBinding = {
   boundAt: number;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
+  failClosed?: boolean;
 };
 
 export type PluginConversationBindingRequestResult =
@@ -1502,6 +1515,15 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   parentConversationId?: string;
   senderId?: string;
   messageId?: string;
+  /** Durable plugin-owned state for a conversation explicitly bound to this plugin. */
+  pluginBinding?: PluginConversationBinding;
+  /**
+   * Sends a non-terminal update into the bound conversation.
+   *
+   * This is intentionally available only during targeted bound routing so a
+   * native runtime can acknowledge long work without owning channel delivery.
+   */
+  replyProgress?: (payload: ReplyPayload) => Promise<boolean>;
 };
 
 export type PluginHookInboundClaimEvent = {
@@ -1521,12 +1543,16 @@ export type PluginHookInboundClaimEvent = {
   messageId?: string;
   isGroup: boolean;
   commandAuthorized?: boolean;
+  /** Trusted owner decision resolved from the current inbound identity. */
+  senderIsOwner?: boolean;
   wasMentioned?: boolean;
   metadata?: Record<string, unknown>;
 };
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+  /** Stable terminal payload for a claimed bound turn. */
+  reply?: ReplyPayload;
 };
 
 // message_received hook

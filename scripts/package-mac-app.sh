@@ -342,6 +342,7 @@ verify_required_telegram_user_tooling() {
   local required_tooling_files=(
     ".env.example"
     "requirements.txt"
+    "session_owner.py"
     "telethon_cli.py"
     "telethon_compat.py"
   )
@@ -1181,6 +1182,7 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
       hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
       hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
+      hash_consumer_runtime_path "scripts/telegram-e2e/session_owner.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_cli.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_compat.py"
       hash_consumer_runtime_path "dist"
@@ -1390,7 +1392,7 @@ prepare_bundled_consumer_runtime() {
   local telegram_user_tooling_file=""
   rm -rf "$telegram_user_tooling_dest"
   mkdir -p "$telegram_user_tooling_dest"
-  for telegram_user_tooling_file in ".env.example" "requirements.txt" "telethon_cli.py" "telethon_compat.py"; do
+  for telegram_user_tooling_file in ".env.example" "requirements.txt" "session_owner.py" "telethon_cli.py" "telethon_compat.py"; do
     cp "$ROOT_DIR/scripts/telegram-e2e/$telegram_user_tooling_file" \
       "$telegram_user_tooling_dest/$telegram_user_tooling_file"
   done

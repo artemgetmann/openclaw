@@ -74,6 +74,8 @@ current mission needs the history.
   public-release acceleration design; implemented P0-P2 and archived.
 - `docs/consumer/archive/telegram-managed-onboarding-tracker-20260525.md` -
   historical Telegram onboarding proof tracker.
+- `docs/consumer/archive/jarvis-x-connector-deferred-20260725.md` - X/Twitter,
+  xurl, MCP, OAuth, and Birdclaw decision trigger for later productization.
 
 ## Private Docs Boundary
 

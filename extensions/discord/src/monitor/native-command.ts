@@ -1560,6 +1560,7 @@ async function dispatchDiscordCommandInteraction(params: {
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
+      senderIsOwner: ownerOk,
       commandBody: prompt,
       config: cfg,
       from: isDirectMessage
