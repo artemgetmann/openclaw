@@ -3,6 +3,15 @@ import Testing
 
 @MainActor
 struct ExecApprovalsGatewayPrompterTests {
+    @Test func `restricted decisions force explicit user interaction`() {
+        #expect(
+            ExecApprovalsGatewayPrompter._testRequiresExplicitUserInteraction(
+                allowedDecisions: ["allow-once", "deny"]))
+        #expect(
+            !ExecApprovalsGatewayPrompter._testRequiresExplicitUserInteraction(
+                allowedDecisions: nil))
+    }
+
     @Test func `session match prefers active session`() {
         let matches = ExecApprovalsGatewayPrompter._testShouldPresent(
             mode: .remote,

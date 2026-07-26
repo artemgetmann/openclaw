@@ -565,8 +565,12 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         nodeId: request.request.nodeId ?? undefined,
         expiresAtMs: request.expiresAtMs,
         nowMs,
+        allowedDecisions: request.request.allowedDecisions,
       });
-      const buttons = buildTelegramExecApprovalButtons(request.id);
+      const buttons = buildTelegramExecApprovalButtons(
+        request.id,
+        request.request.allowedDecisions,
+      );
       if (!buttons) {
         return payload;
       }

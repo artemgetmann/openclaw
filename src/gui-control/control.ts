@@ -1,5 +1,5 @@
 import { resolveElementRef, type ElementIntent } from "./element-resolution.js";
-import type { GuiTaskPolicy } from "./policy.js";
+import type { GuiApprovalScope, GuiTaskPolicy } from "./policy.js";
 import { describeGuiTargetMismatch, guiTargetMatchesSnapshot } from "./targeting.js";
 import type {
   AppTarget,
@@ -39,6 +39,10 @@ export type GuiControlInput = {
   scrollAmount?: number;
   reason?: string;
   approvedPolicyRisk?: boolean;
+  requestSensitiveApproval?: (request: {
+    scope: GuiApprovalScope;
+    reason: string;
+  }) => Promise<"allow-once" | "deny">;
   taskPolicy?: GuiTaskPolicy;
   verifyText?: string;
   allowObservedClick?: boolean;
@@ -284,6 +288,7 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
       keys: input.keys,
       reason: input.reason ?? "Press a scoped key combo in a GUI app.",
       approvedPolicyRisk: input.approvedPolicyRisk === true,
+      requestSensitiveApproval: input.requestSensitiveApproval,
       taskPolicy: input.taskPolicy,
       verify: (post, context) =>
         input.verifyText
@@ -359,6 +364,7 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
       value: input.value,
       reason: input.reason ?? "Set a GUI element value.",
       approvedPolicyRisk: input.approvedPolicyRisk === true,
+      requestSensitiveApproval: input.requestSensitiveApproval,
       taskPolicy: input.taskPolicy,
       verificationTimeoutMs: 10_000,
       verificationIntervalMs: 750,
@@ -400,6 +406,7 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
       actionType: "click",
       reason: input.reason ?? "Click a GUI element.",
       approvedPolicyRisk: input.approvedPolicyRisk === true,
+      requestSensitiveApproval: input.requestSensitiveApproval,
       taskPolicy: input.taskPolicy,
       verify: (post, context) =>
         input.verifyText
@@ -481,6 +488,7 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
       secondaryAction,
       reason: input.reason ?? `Perform GUI secondary action ${secondaryAction}.`,
       approvedPolicyRisk: input.approvedPolicyRisk === true,
+      requestSensitiveApproval: input.requestSensitiveApproval,
       taskPolicy: input.taskPolicy,
       verify: (post, context) =>
         input.verifyText
@@ -514,6 +522,7 @@ export async function runGuiControl(input: GuiControlInput): Promise<GuiControlR
       scroll: { direction: input.scrollDirection, amount: input.scrollAmount },
       reason: input.reason ?? "Scroll a GUI element.",
       approvedPolicyRisk: input.approvedPolicyRisk === true,
+      requestSensitiveApproval: input.requestSensitiveApproval,
       taskPolicy: input.taskPolicy,
       verify: (post, context) =>
         input.verifyText

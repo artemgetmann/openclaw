@@ -172,27 +172,28 @@ class ExecApprovalActionButton extends Button {
 }
 
 class ExecApprovalActionRow extends Row<Button> {
-  constructor(approvalId: string) {
-    super([
-      new ExecApprovalActionButton({
-        approvalId,
-        action: "allow-once",
-        label: "Allow once",
-        style: ButtonStyle.Success,
-      }),
-      new ExecApprovalActionButton({
-        approvalId,
-        action: "allow-always",
-        label: "Always allow",
-        style: ButtonStyle.Primary,
-      }),
-      new ExecApprovalActionButton({
-        approvalId,
-        action: "deny",
-        label: "Deny",
-        style: ButtonStyle.Danger,
-      }),
-    ]);
+  constructor(approvalId: string, allowedDecisions?: readonly ExecApprovalDecision[]) {
+    const allowed = allowedDecisions ?? ["allow-once", "allow-always", "deny"];
+    const buttons: Array<{
+      action: ExecApprovalDecision;
+      label: string;
+      style: ButtonStyle;
+    }> = [
+      { action: "allow-once", label: "Allow once", style: ButtonStyle.Success },
+      { action: "allow-always", label: "Always allow", style: ButtonStyle.Primary },
+      { action: "deny", label: "Deny", style: ButtonStyle.Danger },
+    ];
+    super(
+      buttons
+        .filter((button) => allowed.includes(button.action))
+        .map(
+          (button) =>
+            new ExecApprovalActionButton({
+              approvalId,
+              ...button,
+            }),
+        ),
+    );
   }
 }
 
@@ -513,7 +514,7 @@ export class DiscordExecApprovalHandler {
       this.opts.cfg,
     );
 
-    const actionRow = new ExecApprovalActionRow(request.id);
+    const actionRow = new ExecApprovalActionRow(request.id, request.request.allowedDecisions);
     const container = createExecApprovalRequestContainer({
       request,
       cfg: this.opts.cfg,

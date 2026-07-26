@@ -1,4 +1,9 @@
-import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecAsk,
+  ExecSecurity,
+  SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -23,6 +28,7 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  allowedDecisions?: ExecApprovalDecision[];
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -51,6 +57,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    allowedDecisions: params.allowedDecisions,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };

@@ -2,6 +2,10 @@ import { Type } from "@sinclair/typebox";
 import { AgentDesktopRuntime } from "../../gui-control/agent-desktop-runtime.js";
 import { runGuiControl, type GuiControlAction } from "../../gui-control/control.js";
 import type { ElementIntent } from "../../gui-control/element-resolution.js";
+import {
+  requestGuiSensitiveApproval,
+  type GuiApprovalOrigin,
+} from "../../gui-control/sensitive-approval.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 
@@ -97,7 +101,9 @@ function normalizeAction(action: string): GuiControlAction {
   throw new Error(`Unsupported gui_control action: ${action}`);
 }
 
-export function createGuiControlTool(): AnyAgentTool {
+export function createGuiControlTool(options?: {
+  approvalOrigin?: GuiApprovalOrigin;
+}): AnyAgentTool {
   return {
     label: "Computer Use",
     name: "gui_control",
@@ -150,6 +156,11 @@ export function createGuiControlTool(): AnyAgentTool {
               : undefined,
           reason: readStringParam(params, "reason"),
           approvedPolicyRisk: params.approvedPolicyRisk === true,
+          requestSensitiveApproval: (request) =>
+            requestGuiSensitiveApproval({
+              ...request,
+              origin: options?.approvalOrigin,
+            }),
           verifyText: readStringParam(params, "verifyText"),
           allowObservedClick: params.allowObservedClick === true,
           maxElements,
