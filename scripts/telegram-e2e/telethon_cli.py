@@ -1289,9 +1289,19 @@ async def run_logout(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
     removed_paths = clear_session_artifacts(session_path)
+    # Logout revokes the credentials, but the machine ownership reference must
+    # keep pointing at the same location for the next intentional login. An
+    # empty SQLite path is safe for Telethon to initialize and distinguishes
+    # logout from a vanished worktree target that bootstrap should recover.
+    session_path.touch(mode = 0o600, exist_ok = True)
+    try:
+      os.chmod(session_path, 0o600)
+    except OSError:
+      pass
   return emit(
     {
       "cleared": len(removed_paths) > 0,
+      "owner_path_preserved": True,
       "removed_paths": removed_paths,
       "session_path": str(session_path),
     }

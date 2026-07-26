@@ -903,6 +903,7 @@ export function resolveTelegramUserOwnerCandidates(env: NodeJS.ProcessEnv): Arra
   path: string;
   source:
     | "machine"
+    | "machine-selector"
     | "jarvis-state-legacy"
     | "lane-legacy"
     | "main-canonical-legacy"
@@ -911,7 +912,12 @@ export function resolveTelegramUserOwnerCandidates(env: NodeJS.ProcessEnv): Arra
 }> {
   const homeDir = readNonEmpty(env.HOME) ?? os.homedir();
   const mainRepo = resolveTelegramUserMainRepo(env);
+  const machineSelector = readMachineSessionSelector(env);
   const candidates = [
+    // A previously claimed owner may live outside every historical fixed
+    // location. It must participate in every later online account comparison
+    // or a new claim could silently replace it with a different account.
+    ...(machineSelector ? [{ path: machineSelector, source: "machine-selector" as const }] : []),
     {
       path: resolveTelegramUserMachineSessionPath(env),
       source: "machine" as const,

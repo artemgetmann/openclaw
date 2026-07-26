@@ -85,6 +85,7 @@ export type TelegramUserLoginResult = {
 export type TelegramUserLogoutResult = {
   backend_meta?: TelegramUserBackendMeta;
   cleared: boolean;
+  owner_path_preserved: boolean;
   removed_paths: string[];
   session_path: string;
 };

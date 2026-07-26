@@ -37,6 +37,7 @@ SOURCE_PATTERN = frozenset(
     "machine",
     "jarvis-state-legacy",
     "lane-legacy",
+    "machine-selector",
     "main-canonical-legacy",
     "main-legacy",
     "state-legacy",

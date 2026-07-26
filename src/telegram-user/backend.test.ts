@@ -347,6 +347,25 @@ describe("telegram-user backend defaults", () => {
     });
   });
 
+  it("includes a custom machine-selector owner in later account comparisons", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-selected-owner-"));
+    tempToolingRoots.push(homeDir);
+    const selectorPath = path.join(homeDir, ".openclaw", "telegram-user", "canonical-session.path");
+    const selectedSession = path.join(homeDir, "retained-owner", "operator.session");
+    await fs.mkdir(path.dirname(selectorPath), { recursive: true });
+    await fs.mkdir(path.dirname(selectedSession), { recursive: true });
+    await fs.writeFile(selectedSession, "selected-owner-fixture\n");
+    await fs.writeFile(selectorPath, `${selectedSession}\n`, { mode: 0o600 });
+
+    const { resolveTelegramUserOwnerCandidates } = await import("./backend.js");
+    expect(
+      resolveTelegramUserOwnerCandidates({ HOME: homeDir } as NodeJS.ProcessEnv),
+    ).toContainEqual({
+      path: selectedSession,
+      source: "machine-selector",
+    });
+  });
+
   it("lets a process lock pin override the env-file selector and validates the winner", async () => {
     const { resolveTelegramUserLockSelection } = await import("./backend.js");
 

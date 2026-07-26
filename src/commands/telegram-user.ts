@@ -582,6 +582,9 @@ function logLogoutText(runtime: RuntimeEnv, result: TelegramUserLogoutResult) {
   if (result.removed_paths.length > 0) {
     runtime.log(`removed=${result.removed_paths.join(",")}`);
   }
+  if (result.owner_path_preserved) {
+    runtime.log("owner_path_preserved=true");
+  }
 }
 
 function logOwnerClaimText(runtime: RuntimeEnv, result: TelegramUserOwnerClaimResult) {

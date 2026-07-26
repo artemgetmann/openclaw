@@ -1488,6 +1488,7 @@ describe("telegram-user commands", () => {
     backendMocks.runTelegramUserLogout.mockResolvedValueOnce({
       backend_meta: backendMeta,
       cleared: true,
+      owner_path_preserved: true,
       removed_paths: [
         "scripts/telegram-e2e/tmp/userbot.session",
         "scripts/telegram-e2e/tmp/userbot.session.openclaw-login.json",
@@ -1501,5 +1502,6 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("userbot.session.openclaw-login.json"),
     );
+    expect(runtime.log).toHaveBeenCalledWith("owner_path_preserved=true");
   });
 });

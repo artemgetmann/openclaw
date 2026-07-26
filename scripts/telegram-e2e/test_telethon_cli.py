@@ -579,6 +579,30 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       self.assertNotIn("fixture path", str(failure))
       self.assertFalse(selector.exists())
 
+  async def test_logout_preserves_empty_owner_path_for_intentional_relogin(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      session_path = root / "adopted" / "userbot.session"
+      lock_path = root / "machine.lock"
+      session_path.parent.mkdir(parents = True)
+      session_path.write_bytes(b"credential-fixture")
+      emitted: dict[str, object] = {}
+
+      with patch.object(
+        telethon_cli,
+        "emit",
+        side_effect = lambda payload, **kwargs: emitted.update(payload) or 0,
+      ):
+        exit_code = await telethon_cli.run_logout(
+          argparse.Namespace(session = str(session_path), lock = str(lock_path))
+        )
+
+      self.assertEqual(exit_code, 0)
+      self.assertTrue(emitted["cleared"])
+      self.assertTrue(emitted["owner_path_preserved"])
+      self.assertEqual(session_path.read_bytes(), b"")
+      self.assertEqual(stat.S_IMODE(session_path.stat().st_mode), 0o600)
+
   async def test_run_login_reads_password_from_env_instead_of_args(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
       session_path = Path(temp_dir) / "userbot.session"
