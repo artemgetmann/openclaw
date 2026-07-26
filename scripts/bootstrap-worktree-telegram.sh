@@ -61,6 +61,7 @@ copy_if_exists "$MAIN_REPO/scripts/telegram-e2e/.env.local" "./scripts/telegram-
 # legacy locations remain usable, but multiple implicit owners fail closed
 # instead of silently selecting whichever checkout happened to run first.
 SESSION_SELECTOR="./scripts/telegram-e2e/tmp/userbot.session.path"
+SESSION_SELECTOR_SCOPE="./scripts/telegram-e2e/tmp/userbot.session.scope"
 DEFAULT_MACHINE_SESSION="$HOME/.openclaw/telegram-user/userbot.session"
 MACHINE_SESSION_SELECTOR="$HOME/.openclaw/telegram-user/canonical-session.path"
 JARVIS_SESSION="$HOME/Library/Application Support/Jarvis/.jarvis/telegram-user/userbot.session"
@@ -128,6 +129,14 @@ selector_tmp="${SESSION_SELECTOR}.$$"
 printf '%s\n' "$canonical_session" > "$selector_tmp"
 chmod 600 "$selector_tmp"
 mv "$selector_tmp" "$SESSION_SELECTOR"
+selector_scope="machine-reference"
+if [[ "$canonical_session_source" == "explicit-canonical" ]]; then
+  selector_scope="explicit-canonical"
+fi
+scope_tmp="${SESSION_SELECTOR_SCOPE}.$$"
+printf '%s\n' "$selector_scope" > "$scope_tmp"
+chmod 600 "$scope_tmp"
+mv "$scope_tmp" "$SESSION_SELECTOR_SCOPE"
 echo "telegram_session_source=$canonical_session_source"
 echo "telegram_session_migration=$canonical_session_migration"
 echo "telegram_lock_scope=machine"

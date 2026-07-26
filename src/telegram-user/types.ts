@@ -196,6 +196,7 @@ export type TelegramUserBackendMeta = {
     | "explicit"
     | "monitor-binding"
     | "env-file"
+    | "explicit-repo-selector"
     | "process-env"
     | "legacy-repo"
     | "machine-selector"

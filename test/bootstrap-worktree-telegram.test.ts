@@ -293,6 +293,12 @@ describe("bootstrap-worktree-telegram", () => {
         "utf8",
       ),
     ).toBe(`${explicitSession}\n`);
+    expect(
+      readFileSync(
+        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session.scope"),
+        "utf8",
+      ),
+    ).toBe("explicit-canonical\n");
     expect(existsSync(explicitSession)).toBe(false);
   });
 });

@@ -97,6 +97,7 @@ const requirementsPath = path.join(telegramE2eDir, "requirements.txt");
 const repoLocalEnvFilePath = path.join(telegramE2eDir, ".env.local");
 const repoLocalSessionPath = path.join(telegramE2eDir, "tmp", "userbot.session");
 const repoLocalSessionSelectorPath = path.join(telegramE2eDir, "tmp", "userbot.session.path");
+const repoLocalSessionSelectorScopePath = path.join(telegramE2eDir, "tmp", "userbot.session.scope");
 function resolveTelegramUserMachineDir(env: NodeJS.ProcessEnv): string {
   return path.join(readNonEmpty(env.HOME) ?? os.homedir(), ".openclaw", "telegram-user");
 }
@@ -124,6 +125,7 @@ type TelegramUserSessionSource =
   | "explicit"
   | "monitor-binding"
   | "env-file"
+  | "explicit-repo-selector"
   | "process-env"
   | "legacy-repo"
   | "machine-selector"
@@ -154,6 +156,19 @@ function readRepoLocalSessionSelector(): string | undefined {
     repoLocalSessionSelectorPath,
     "worktree Telegram session selector",
   );
+}
+
+function readExplicitRepoSessionSelector(): string | undefined {
+  if (!fsSync.existsSync(repoLocalSessionSelectorScopePath)) {
+    return undefined;
+  }
+  const scope = fsSync.readFileSync(repoLocalSessionSelectorScopePath, "utf8").trim();
+  if (scope !== "explicit-canonical" && scope !== "machine-reference") {
+    throw new Error(
+      "E_INVALID_SESSION_SELECTOR: worktree Telegram session selector scope is invalid.",
+    );
+  }
+  return scope === "explicit-canonical" ? readRepoLocalSessionSelector() : undefined;
 }
 
 function readMachineSessionSelector(env: NodeJS.ProcessEnv): string | undefined {
@@ -248,44 +263,51 @@ function resolveTelegramUserDefaultPaths(
     throw new Error("OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION must be an absolute path.");
   }
   const repoSessionSelector = readRepoLocalSessionSelector();
+  const explicitRepoSessionSelector = readExplicitRepoSessionSelector();
   const machineSessionSelector = readMachineSessionSelector(env);
   const machineSession = resolveTelegramUserMachineSessionPath(env);
   const selectedMachineSession =
-    explicitCanonicalSession ?? machineSessionSelector ?? repoSessionSelector ?? machineSession;
+    explicitCanonicalSession ??
+    explicitRepoSessionSelector ??
+    machineSessionSelector ??
+    repoSessionSelector ??
+    machineSession;
   const stateLegacySession = path.join(telegramUserStateDir, "userbot.session");
   const implicitCandidates = dedupeImplicitSessionCandidates(
     explicitCanonicalSession
       ? [{ path: explicitCanonicalSession, source: "explicit-canonical" }]
-      : machineSessionSelector
-        ? [
-            // A machine-wide claim is the durable migration boundary. Legacy
-            // files remain untouched as recovery inputs, but normal callers no
-            // longer reinterpret their mere existence as a fresh ownership
-            // decision on every worktree or restart.
-            { path: machineSessionSelector, source: "machine-selector" },
-          ]
-        : repoSessionSelector
+      : explicitRepoSessionSelector
+        ? [{ path: explicitRepoSessionSelector, source: "explicit-repo-selector" }]
+        : machineSessionSelector
           ? [
-              // A persisted selector is an ownership claim even before its SQLite
-              // database exists. Keep it authoritative over state-local legacy,
-              // but still detect a later-created machine default as a competing
-              // owner instead of silently following a stale selector forever.
-              { path: repoSessionSelector, source: "repo-selector" },
-              ...(fsSync.existsSync(machineSession)
-                ? [{ path: machineSession, source: "machine" }]
-                : []),
+              // A machine-wide claim is the durable migration boundary. Legacy
+              // files remain untouched as recovery inputs, but normal callers no
+              // longer reinterpret their mere existence as a fresh ownership
+              // decision on every worktree or restart.
+              { path: machineSessionSelector, source: "machine-selector" },
             ]
-          : [
-              ...(fsSync.existsSync(machineSession)
-                ? [{ path: machineSession, source: "machine" }]
-                : []),
-              ...(fsSync.existsSync(stateLegacySession)
-                ? [{ path: stateLegacySession, source: "state-legacy" }]
-                : []),
-              ...(preferRepoLocalCompat && fsSync.existsSync(repoLocalSessionPath)
-                ? [{ path: repoLocalSessionPath, source: "legacy-repo" }]
-                : []),
-            ],
+          : repoSessionSelector
+            ? [
+                // A persisted selector is an ownership claim even before its SQLite
+                // database exists. Keep it authoritative over state-local legacy,
+                // but still detect a later-created machine default as a competing
+                // owner instead of silently following a stale selector forever.
+                { path: repoSessionSelector, source: "repo-selector" },
+                ...(fsSync.existsSync(machineSession)
+                  ? [{ path: machineSession, source: "machine" }]
+                  : []),
+              ]
+            : [
+                ...(fsSync.existsSync(machineSession)
+                  ? [{ path: machineSession, source: "machine" }]
+                  : []),
+                ...(fsSync.existsSync(stateLegacySession)
+                  ? [{ path: stateLegacySession, source: "state-legacy" }]
+                  : []),
+                ...(preferRepoLocalCompat && fsSync.existsSync(repoLocalSessionPath)
+                  ? [{ path: repoLocalSessionPath, source: "legacy-repo" }]
+                  : []),
+              ],
   );
   if (options.checkSessionAmbiguity !== false) {
     assertNoImplicitSessionAmbiguity(implicitCandidates);
@@ -560,9 +582,11 @@ export function resolveTelegramUserSessionSelection(params: {
     const configuredCanonicalSession =
       readNonEmpty(params.canonicalSession) ??
       readNonEmpty(env.OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION);
+    const explicitRepoSessionSelector = readExplicitRepoSessionSelector();
     const machineSessionSelector = readMachineSessionSelector(env);
     const canonicalSession =
       configuredCanonicalSession ??
+      explicitRepoSessionSelector ??
       machineSessionSelector ??
       readRepoLocalSessionSelector() ??
       runtimeDefaultSessionPath;
@@ -574,11 +598,13 @@ export function resolveTelegramUserSessionSelection(params: {
     return {
       sessionPath: path.resolve(canonicalSession),
       source:
-        !configuredCanonicalSession &&
-        machineSessionSelector &&
-        path.resolve(canonicalSession) === path.resolve(machineSessionSelector)
-          ? "machine-selector"
-          : candidate.source,
+        !configuredCanonicalSession && explicitRepoSessionSelector
+          ? "explicit-repo-selector"
+          : !configuredCanonicalSession &&
+              machineSessionSelector &&
+              path.resolve(canonicalSession) === path.resolve(machineSessionSelector)
+            ? "machine-selector"
+            : candidate.source,
     };
   }
   // Runtime identity normalization can replace a raw profile state directory
@@ -593,17 +619,21 @@ export function resolveTelegramUserSessionSelection(params: {
     "userbot.session",
   );
   const machineSessionSelector = readMachineSessionSelector(env);
+  const explicitRepoSessionSelector = readExplicitRepoSessionSelector();
   const source: TelegramUserSessionSource =
-    machineSessionSelector &&
-    path.resolve(runtimeDefaultSessionPath) === path.resolve(machineSessionSelector)
-      ? "machine-selector"
-      : path.resolve(runtimeDefaultSessionPath) === path.resolve(repoLocalSessionPath)
-        ? "legacy-repo"
-        : path.resolve(runtimeDefaultSessionPath) === path.resolve(runtimeStateSessionPath) &&
-            path.resolve(runtimeDefaultSessionPath) !==
-              path.resolve(resolveTelegramUserMachineSessionPath(env))
-          ? "state-default"
-          : "machine-default";
+    explicitRepoSessionSelector &&
+    path.resolve(runtimeDefaultSessionPath) === path.resolve(explicitRepoSessionSelector)
+      ? "explicit-repo-selector"
+      : machineSessionSelector &&
+          path.resolve(runtimeDefaultSessionPath) === path.resolve(machineSessionSelector)
+        ? "machine-selector"
+        : path.resolve(runtimeDefaultSessionPath) === path.resolve(repoLocalSessionPath)
+          ? "legacy-repo"
+          : path.resolve(runtimeDefaultSessionPath) === path.resolve(runtimeStateSessionPath) &&
+              path.resolve(runtimeDefaultSessionPath) !==
+                path.resolve(resolveTelegramUserMachineSessionPath(env))
+            ? "state-default"
+            : "machine-default";
   return { sessionPath: path.resolve(runtimeDefaultSessionPath), source };
 }
 

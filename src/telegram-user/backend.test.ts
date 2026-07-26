@@ -18,6 +18,13 @@ const hostRepoSelectorPath = path.join(
   "tmp",
   "userbot.session.path",
 );
+const hostRepoSelectorScopePath = path.join(
+  process.cwd(),
+  "scripts",
+  "telegram-e2e",
+  "tmp",
+  "userbot.session.scope",
+);
 const realExistsSync = fsSync.existsSync.bind(fsSync);
 
 async function makeTelegramToolingRoot(prefix: string): Promise<string> {
@@ -39,7 +46,9 @@ describe("telegram-user backend defaults", () => {
     // Unit tests must not inherit the developer machine's live ownership
     // decision. Temp-HOME selectors created by individual tests remain visible.
     vi.spyOn(fsSync, "existsSync").mockImplementation((target) =>
-      String(target) === hostMachineSelectorPath || String(target) === hostRepoSelectorPath
+      String(target) === hostMachineSelectorPath ||
+      String(target) === hostRepoSelectorPath ||
+      String(target) === hostRepoSelectorScopePath
         ? false
         : realExistsSync(target),
     );
@@ -272,6 +281,53 @@ describe("telegram-user backend defaults", () => {
     ).toEqual({
       sessionPath: pinnedSession,
       source: "machine-default",
+    });
+  });
+
+  it("keeps a tagged explicit lane owner above an existing machine owner", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-explicit-lane-"));
+    tempToolingRoots.push(homeDir);
+    const explicitSession = path.join(homeDir, "separate-account.session");
+    const machineSession = path.join(homeDir, "machine-account.session");
+    const machineSelectorPath = path.join(
+      homeDir,
+      ".openclaw",
+      "telegram-user",
+      "canonical-session.path",
+    );
+    await fs.mkdir(path.dirname(machineSelectorPath), { recursive: true });
+    await fs.writeFile(machineSelectorPath, `${machineSession}\n`, { mode: 0o600 });
+
+    const originalReadFileSync = fsSync.readFileSync;
+    vi.mocked(fsSync.existsSync).mockImplementation((target) => {
+      if (String(target) === hostMachineSelectorPath) {
+        return false;
+      }
+      return String(target) === hostRepoSelectorPath || String(target) === hostRepoSelectorScopePath
+        ? true
+        : realExistsSync(target);
+    });
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(((
+      target: fsSync.PathOrFileDescriptor,
+      options?: unknown,
+    ) => {
+      if (String(target) === hostRepoSelectorPath) {
+        return `${explicitSession}\n`;
+      }
+      if (String(target) === hostRepoSelectorScopePath) {
+        return "explicit-canonical\n";
+      }
+      return originalReadFileSync(target, options as never);
+    }) as typeof fsSync.readFileSync);
+
+    const { resolveTelegramUserSessionSelection } = await import("./backend.js");
+    expect(
+      resolveTelegramUserSessionSelection({
+        env: { HOME: homeDir } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      sessionPath: explicitSession,
+      source: "explicit-repo-selector",
     });
   });
 
