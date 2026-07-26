@@ -23,7 +23,7 @@ import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
 import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { loadWebMedia } from "../../../whatsapp/src/media.js";
-import type { TelegramInlineButtons } from "../button-types.js";
+import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -770,7 +770,17 @@ export async function deliverReplies(params: {
         params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
-      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
+      // Plugin commands and other shared reply producers use the channel-
+      // neutral `interactive` contract. Telegram-native `channelData` buttons
+      // remain authoritative when present, but otherwise project the shared
+      // buttons here so inbound replies do not silently deliver text-only
+      // approval cards.
+      const replyMarkup = buildInlineKeyboard(
+        resolveTelegramInlineButtons({
+          buttons: telegramData?.buttons,
+          interactive: reply.interactive,
+        }),
+      );
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({

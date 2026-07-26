@@ -189,6 +189,7 @@ describe("registerPluginCommand", () => {
       channel: "slack",
       senderId: "U123",
       isAuthorizedSender: true,
+      senderIsOwner: true,
       commandBody: "/bindcheck",
       config: {} as never,
       from: "slack:U123",
