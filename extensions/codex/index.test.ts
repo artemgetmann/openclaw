@@ -73,6 +73,7 @@ describe("Codex natural-language delegation", () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
     let factory: OpenClawPluginToolFactory | undefined;
+    let toolOptions: { name?: string; optional?: boolean } | undefined;
     let beforePromptBuild: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
 
     registerCodex(
@@ -83,7 +84,8 @@ describe("Codex natural-language delegation", () => {
         config: {},
         pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
         runtime: {} as never,
-        registerTool(next) {
+        registerTool(next, options) {
+          toolOptions = options;
           if (typeof next === "function") {
             factory = next;
           }
@@ -99,6 +101,9 @@ describe("Codex natural-language delegation", () => {
     await expect(beforePromptBuild?.({}, {})).resolves.toMatchObject({
       prependSystemContext: expect.stringContaining("ordinary language"),
     });
+    // The production agent must receive this tool without a separate
+    // allowlist; owner and sandbox checks live in the factory below.
+    expect(toolOptions).toEqual({ name: "codex_threads" });
 
     const tool = factory?.({ senderIsOwner: true, sandboxed: false }) as AnyAgentTool;
     const result = await tool.execute("delegate-1", {

@@ -93,6 +93,11 @@ export default function register(api: OpenClawPluginApi) {
   });
   const approvals = new CodexApprovalStore();
 
+  // This is deliberately not an optional plugin tool. Optional tools are
+  // removed before the primary agent sees them unless an operator maintains a
+  // separate allowlist, which made the normal natural-language delegation path
+  // impossible in production. The factory remains the security boundary: only
+  // the owner in a non-sandboxed session receives this capability.
   api.registerTool(
     ((ctx) => {
       if (ctx.senderIsOwner !== true || ctx.sandboxed) {
@@ -100,7 +105,7 @@ export default function register(api: OpenClawPluginApi) {
       }
       return createCodexTool(service) as AnyAgentTool;
     }) as OpenClawPluginToolFactory,
-    { name: "codex_threads", optional: true },
+    { name: "codex_threads" },
   );
 
   // The normal consumer route is natural-language delegation through Jarvis.
@@ -540,7 +545,7 @@ function codexHelp(): string {
 
 const CODEX_DELEGATION_GUIDANCE = [
   "Native Codex delegation:",
-  "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the optional `codex_threads` tool with action `delegate`.",
+  "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the owner-only `codex_threads` tool with action `delegate`.",
   "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
   "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
