@@ -98,6 +98,7 @@ import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { runLoggedGatewayStartupPhase } from "./server-startup-phase-log.js";
 import {
+  GatewayStartupPreflightError,
   runGatewayStartupAuthBootstrap,
   assertGatewayStagedRestartSnapshotFresh,
   prepareGatewayStartupRuntimePolicy,
@@ -329,6 +330,9 @@ export async function prepareGatewayServerRestart(
   _port = 18789,
   opts: Omit<GatewayServerOptions, "preparedRestart"> = {},
 ): Promise<PreparedGatewayRestart> {
+  // Age begins before any credential is read. In a multi-provider snapshot,
+  // one credential may resolve long before the slowest provider finishes.
+  const preparedAtMs = Date.now();
   let startupContext = await runLoggedGatewayStartupPhase({
     phase: "config_preflight",
     log: logStartup,
@@ -378,7 +382,7 @@ export async function prepareGatewayServerRestart(
     startupContext,
     secretsSnapshot,
     runtimePolicy,
-    preparedAtMs: Date.now(),
+    preparedAtMs,
   });
 }
 
@@ -400,6 +404,7 @@ export async function validatePreparedGatewayServerRestart(
   if (Date.now() - prepared.preparedAtMs <= MAX_STAGED_RESTART_CREDENTIAL_AGE_MS) {
     return prepared;
   }
+  const refreshStartedAtMs = Date.now();
   const preparedConfig = applyGatewayAuthOverridesForStartupPreflight(
     prepared.startupContext.config,
     {
@@ -416,6 +421,17 @@ export async function validatePreparedGatewayServerRestart(
   const secretsSnapshot = await prepareSecretsRuntimeSnapshot({
     config: prepared.startupContext.config,
   });
+  const refreshAgeMs = Date.now() - refreshStartedAtMs;
+  if (refreshAgeMs > MAX_STAGED_RESTART_CREDENTIAL_AGE_MS) {
+    // A multi-provider refresh has no atomic backend snapshot. If collection
+    // itself exceeds the freshness budget, an early credential may already
+    // have rotated. Keep the current listener running rather than activating
+    // a result we cannot prove fresh.
+    throw new GatewayStartupPreflightError(
+      "secrets_precheck",
+      `Gateway credential refresh took ${refreshAgeMs}ms and exceeded the ${MAX_STAGED_RESTART_CREDENTIAL_AGE_MS}ms freshness bound.`,
+    );
+  }
   assertGatewayStagedRestartSnapshotFresh({
     prepared: prepared.startupContext.preflightSnapshot,
     current: await readConfigFileSnapshot(),
@@ -423,7 +439,7 @@ export async function validatePreparedGatewayServerRestart(
   return Object.freeze({
     ...prepared,
     secretsSnapshot,
-    preparedAtMs: Date.now(),
+    preparedAtMs: refreshStartedAtMs,
   });
 }
 
