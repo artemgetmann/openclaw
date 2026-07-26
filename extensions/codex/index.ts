@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -31,23 +30,26 @@ type ToolParams = {
 const APPROVAL_NAMESPACE = "codexpilot";
 const BINDING_KIND = "codex-app-server-pilot";
 
-const ToolSchema = Type.Object(
-  {
-    action: Type.Unsafe<
-      "status" | "list" | "search" | "read" | "create" | "message" | "resume" | "fork"
-    >({
+// Keep this bundled extension dependency-free. The plugin API accepts standard
+// JSON Schema, so pulling TypeBox into a new workspace package would add no
+// runtime value and would unnecessarily change the production dependency graph.
+const ToolSchema = {
+  type: "object",
+  properties: {
+    action: {
       type: "string",
       enum: ["status", "list", "search", "read", "create", "message", "resume", "fork"],
-    }),
-    thread_id: Type.Optional(Type.String()),
-    text: Type.Optional(Type.String()),
-    search: Type.Optional(Type.String()),
-    archived: Type.Optional(Type.Boolean()),
-    include_turns: Type.Optional(Type.Boolean()),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    },
+    thread_id: { type: "string" },
+    text: { type: "string" },
+    search: { type: "string" },
+    archived: { type: "boolean" },
+    include_turns: { type: "boolean" },
+    limit: { type: "integer", minimum: 1, maximum: 100 },
   },
-  { additionalProperties: false },
-);
+  required: ["action"],
+  additionalProperties: false,
+} as const;
 
 /**
  * Selective compatibility port of the official Codex extension.

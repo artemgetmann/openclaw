@@ -298,11 +298,7 @@ importers:
 
   extensions/cloudflare-ai-gateway: {}
 
-  extensions/codex:
-    dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.48
-        version: 0.34.48
+  extensions/codex: {}
 
   extensions/copilot-proxy: {}
 

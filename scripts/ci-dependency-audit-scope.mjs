@@ -63,7 +63,12 @@ function normalizeLockfilePatchMetadata(raw) {
   const lines = normalizedNewlines.split("\n");
   const normalized = [];
   let skippingTopLevelPatchBlock = false;
+  let topLevelSection = "";
   for (const line of lines) {
+    const topLevelMatch = line.match(/^([^\s][^:]*):\s*$/u);
+    if (topLevelMatch) {
+      topLevelSection = topLevelMatch[1] ?? "";
+    }
     if (line === "patchedDependencies:") {
       skippingTopLevelPatchBlock = true;
       continue;
@@ -73,6 +78,12 @@ function normalizeLockfilePatchMetadata(raw) {
         continue;
       }
       skippingTopLevelPatchBlock = false;
+    }
+    // pnpm records every workspace as an importer, including packages with no
+    // dependencies. Adding an empty importer changes no installable inventory;
+    // package and snapshot entries remain significant and are never ignored.
+    if (topLevelSection === "importers" && /^  [^ ].*: \{\}\s*$/u.test(line)) {
+      continue;
     }
     // Blank-line and trailing-space churn has no dependency audit meaning.
     // Removing it also keeps deletion of the patch block's separator neutral.
@@ -194,8 +205,27 @@ export function shouldRunAuditForChangedPaths(changedPaths, { base = "", head = 
   for (const filePath of auditScopePaths.filter(isPackageManifestPath)) {
     const beforeRaw = gitShowFile(base, filePath);
     const afterRaw = gitShowFile(head, filePath);
-    if (beforeRaw === null || afterRaw === null) {
-      return { shouldRun: true, reason: `${filePath} was added or removed` };
+    if (afterRaw === null) {
+      // Removing a manifest can remove or reshape installed packages. Keep
+      // that case fail-closed because there is no resulting manifest to
+      // inspect for dependency-relevant fields.
+      return { shouldRun: true, reason: `${filePath} was removed` };
+    }
+    if (beforeRaw === null) {
+      const afterPackage = parseJson(afterRaw);
+      if (afterPackage === null) {
+        return { shouldRun: true, reason: `${filePath} could not be parsed` };
+      }
+      // A newly added extension may have a manifest containing only package
+      // identity and OpenClaw metadata. That does not change what the package
+      // manager installs, so do not make it inherit unrelated audit debt.
+      if (packageJsonHasAuditRelevantChange({}, afterPackage)) {
+        return {
+          shouldRun: true,
+          reason: `${filePath} was added with dependency-relevant fields`,
+        };
+      }
+      continue;
     }
     const beforePackage = parseJson(beforeRaw);
     const afterPackage = parseJson(afterRaw);
@@ -213,7 +243,8 @@ export function shouldRunAuditForChangedPaths(changedPaths, { base = "", head = 
   if (skippedPatchOnlyLockfileChange) {
     return {
       shouldRun: false,
-      reason: "pnpm-lock.yaml changed patch metadata only; registry package data is unchanged",
+      reason:
+        "pnpm-lock.yaml changed only in audit-neutral metadata; registry package data is unchanged",
     };
   }
   return { shouldRun: false, reason: "package.json changes are script or metadata only" };

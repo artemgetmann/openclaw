@@ -3,9 +3,6 @@
   "version": "2026.3.14",
   "description": "Native Codex App Server thread-control compatibility pilot.",
   "type": "module",
-  "dependencies": {
-    "@sinclair/typebox": "0.34.48"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
