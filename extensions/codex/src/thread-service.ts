@@ -124,7 +124,11 @@ export class CodexThreadService {
     return response;
   }
 
-  async message(threadId: string, text: string): Promise<CodexThreadRunResult> {
+  async message(
+    threadId: string,
+    text: string,
+    cwd = this.options.defaultWorkspaceDir,
+  ): Promise<CodexThreadRunResult> {
     const normalizedThreadId = requireId(threadId);
     const prompt = text.trim();
     if (!prompt) {
@@ -149,7 +153,9 @@ export class CodexThreadService {
         const response = await client.request<JsonObject>("turn/start", {
           threadId: normalizedThreadId,
           input: [{ type: "text", text: prompt, text_elements: [] }],
-          cwd: this.options.defaultWorkspaceDir,
+          // A delegate can target the current project explicitly. Existing
+          // binding/message callers retain the configured default workspace.
+          cwd,
           approvalPolicy: "never",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "readOnly", networkAccess: false },

@@ -21,6 +21,7 @@ type ToolParams = {
   action?: string;
   thread_id?: string;
   text?: string;
+  workspace_dir?: string;
   search?: string;
   archived?: boolean;
   include_turns?: boolean;
@@ -38,10 +39,11 @@ const ToolSchema = {
   properties: {
     action: {
       type: "string",
-      enum: ["status", "list", "search", "read", "create", "message", "resume", "fork"],
+      enum: ["status", "list", "search", "read", "create", "message", "delegate", "resume", "fork"],
     },
     thread_id: { type: "string" },
     text: { type: "string" },
+    workspace_dir: { type: "string" },
     search: { type: "string" },
     archived: { type: "boolean" },
     include_turns: { type: "boolean" },
@@ -100,6 +102,15 @@ export default function register(api: OpenClawPluginApi) {
     }) as OpenClawPluginToolFactory,
     { name: "codex_threads", optional: true },
   );
+
+  // The normal consumer route is natural-language delegation through Jarvis.
+  // Keep this policy in the cached system prompt so the primary agent can
+  // gather context and formulate a self-contained task before it calls the
+  // native thread tool; a raw inbound hook cannot safely reconstruct prior
+  // conversational context such as "the browser issue you just identified".
+  api.on("before_prompt_build", async () => ({
+    prependSystemContext: CODEX_DELEGATION_GUIDANCE,
+  }));
 
   api.registerCommand({
     name: "codex",
@@ -232,12 +243,33 @@ function createCodexTool(service: CodexThreadService) {
           raw.include_turns === true,
         );
       } else if (action === "create") {
-        result = await service.create();
+        result = await service.create(raw.workspace_dir);
       } else if (action === "message") {
         result = await service.message(
           required(raw.thread_id, "thread_id"),
           required(raw.text, "text"),
+          raw.workspace_dir,
         );
+      } else if (action === "delegate") {
+        // A single action makes the intended Jarvis UX atomic from the
+        // primary agent's perspective: select/create the durable native
+        // thread, then run the concrete task there. The service preserves the
+        // one-active-turn fence and native fail-closed errors underneath.
+        const threadId = raw.thread_id
+          ? requireThreadId(await service.resume(raw.thread_id))
+          : requireThreadId(await service.create(raw.workspace_dir));
+        const delegated = await service.message(
+          threadId,
+          required(raw.text, "text"),
+          raw.workspace_dir,
+        );
+        result = {
+          mode: "native-codex-delegate",
+          threadId: delegated.threadId,
+          turnId: delegated.turnId,
+          finalText: delegated.finalText,
+          progress: delegated.progress,
+        };
       } else if (action === "resume") {
         result = await service.resume(required(raw.thread_id, "thread_id"));
       } else if (action === "fork") {
@@ -292,6 +324,12 @@ async function handleCodexCommand(
         return { text: formatCodexFinal(threadId, result.finalText, result.progress) };
       }
       return { text: `Created native Codex thread ${threadId}.` };
+    }
+    if (parsed.action === "delegate") {
+      const created = await service.create();
+      const threadId = requireThreadId(created);
+      const result = await service.message(threadId, required(parsed.rest, "task"));
+      return { text: formatCodexFinal(result.threadId, result.finalText, result.progress) };
     }
     if (parsed.action === "message") {
       const result = await service.message(
@@ -489,6 +527,7 @@ function codexHelp(): string {
     "/codex search <text>",
     "/codex read <thread-id>",
     "/codex create [first prompt]",
+    "/codex delegate <task>",
     "/codex message <thread-id> <text>",
     "/codex resume <thread-id>",
     "/codex fork <thread-id>",
@@ -498,3 +537,12 @@ function codexHelp(): string {
     "/codex unarchive <thread-id>",
   ].join("\n");
 }
+
+const CODEX_DELEGATION_GUIDANCE = [
+  "Native Codex delegation:",
+  "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the optional `codex_threads` tool with action `delegate`.",
+  "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
+  "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
+  "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
+  "- After the tool returns, relay one concise Jarvis summary containing the native thread id and final result. If the tool fails, say that native Codex was unavailable and do not claim the task ran with Pi.",
+].join("\n");
