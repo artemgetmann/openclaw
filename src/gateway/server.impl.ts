@@ -313,9 +313,12 @@ export type PreparedGatewayRestart = Readonly<{
   startupContext: GatewayStartupContext;
   secretsSnapshot: PreparedSecretsRuntimeSnapshot;
   runtimePolicy: GatewayStartupRuntimePolicyPreparation;
+  /** Wall-clock age bounds how long resolved credentials may remain staged. */
+  preparedAtMs: number;
 }>;
 
 const consumedPreparedRestarts = new WeakSet<PreparedGatewayRestart>();
+const MAX_STAGED_RESTART_CREDENTIAL_AGE_MS = 1_000;
 
 /**
  * Prepare only read-only startup work while the old gateway still serves.
@@ -326,6 +329,9 @@ export async function prepareGatewayServerRestart(
   _port = 18789,
   opts: Omit<GatewayServerOptions, "preparedRestart"> = {},
 ): Promise<PreparedGatewayRestart> {
+  // Age begins before any credential is read. In a multi-provider snapshot,
+  // one credential may resolve long before the slowest provider finishes.
+  const preparedAtMs = Date.now();
   let startupContext = await runLoggedGatewayStartupPhase({
     phase: "config_preflight",
     log: logStartup,
@@ -375,15 +381,52 @@ export async function prepareGatewayServerRestart(
     startupContext,
     secretsSnapshot,
     runtimePolicy,
+    preparedAtMs,
   });
 }
 
 export async function validatePreparedGatewayServerRestart(
   prepared: PreparedGatewayRestart,
-): Promise<void> {
+  opts: Omit<GatewayServerOptions, "preparedRestart"> = {},
+): Promise<PreparedGatewayRestart> {
   assertGatewayStagedRestartSnapshotFresh({
     prepared: prepared.startupContext.preflightSnapshot,
     current: await readConfigFileSnapshot(),
+  });
+
+  // A drain can last up to 90 seconds. Activating credentials resolved before
+  // that window could resurrect an OAuth token or external secret that was
+  // rotated while active work drained. Preserve the fast staged path for an
+  // idle cutover, but refresh aged credentials while the old listener is still
+  // open. The second config check closes the race where config changes during
+  // the external secret lookup.
+  if (Date.now() - prepared.preparedAtMs <= MAX_STAGED_RESTART_CREDENTIAL_AGE_MS) {
+    return prepared;
+  }
+  const preparedConfig = applyGatewayAuthOverridesForStartupPreflight(
+    prepared.startupContext.config,
+    {
+      auth: opts.auth,
+      tailscale: opts.tailscale,
+    },
+  );
+  if (!isDeepStrictEqual(preparedConfig, prepared.startupContext.config)) {
+    await prepareSecretsRuntimeSnapshot({
+      config: preparedConfig,
+      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+    });
+  }
+  const secretsSnapshot = await prepareSecretsRuntimeSnapshot({
+    config: prepared.startupContext.config,
+  });
+  assertGatewayStagedRestartSnapshotFresh({
+    prepared: prepared.startupContext.preflightSnapshot,
+    current: await readConfigFileSnapshot(),
+  });
+  return Object.freeze({
+    ...prepared,
+    secretsSnapshot,
+    preparedAtMs: Date.now(),
   });
 }
 
