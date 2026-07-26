@@ -294,9 +294,10 @@ export function createImageTool(options?: {
 
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
-  const description = options?.modelHasVision
+  const baseDescription = options?.modelHasVision
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
+  const description = `${baseDescription} When reviewing a generated or edited deliverable, judge the whole user request, including readability, composition, fidelity, usefulness, and safety. Do not rubber-stamp a narrow check; call out obvious quality failures and require revision before send.`;
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
     workspaceOnly: options?.fsPolicy?.workspaceOnly === true,

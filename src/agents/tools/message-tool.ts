@@ -940,7 +940,8 @@ function buildMessageToolDescription(options?: {
   currentChannel?: string;
   currentChannelId?: string;
 }): string {
-  const baseDescription = "Send, delete, and manage messages via channel plugins.";
+  const baseDescription =
+    "Send, delete, and manage messages via channel plugins. Before sending a user-facing local attachment you created or edited, inspect the exact final artifact after the last change and ensure it satisfies the full request. Transport success does not prove artifact quality.";
 
   // If we have a current channel, show its actions and list other configured channels
   if (options?.currentChannel) {
