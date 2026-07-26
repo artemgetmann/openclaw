@@ -12,6 +12,7 @@ import { isCopySafeDraftReplyPayload } from "../../../src/auto-reply/reply/copy-
 import { isCaptionlessFinalMediaSupplement } from "../../../src/auto-reply/reply/final-media-supplement.js";
 import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
+import { completeDurableFollowup } from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { buildFinalTtsCaptionPreview } from "../../../src/auto-reply/reply/tts-caption-preview.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
@@ -2505,6 +2506,7 @@ export const dispatchTelegramMessage = async ({
   });
 
   let dispatchError: unknown;
+  let durableDirectTurnId: string | undefined;
   try {
     latencyTrace?.mark("reply_dispatch_started", {
       streamMode,
@@ -2993,6 +2995,12 @@ export const dispatchTelegramMessage = async ({
             }
           : undefined,
         onModelSelected: tracedOnModelSelected,
+        onDurableReplyAccepted: (durableId) => {
+          // The runner persists restart recovery before invoking this callback.
+          // Keep only the opaque id in the transport lifecycle; no prompt,
+          // route, credential, or generated text is duplicated here.
+          durableDirectTurnId = durableId;
+        },
       },
     }));
   } catch (err) {
@@ -3148,6 +3156,18 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
+  const reachedIntentionalSilentTerminal =
+    !dispatchError &&
+    !deliverySummary.delivered &&
+    deliverySummary.skippedNonSilent === 0 &&
+    deliverySummary.failedNonSilent === 0;
+  const confirmedTerminalDelivery = deliverySummary.delivered || sentFallback;
+  if (durableDirectTurnId && (confirmedTerminalDelivery || reachedIntentionalSilentTerminal)) {
+    // Publish the processed-message receipt before Telegram middleware may
+    // advance its update offset. If the process dies earlier, startup delivers
+    // the conservative blocker without replaying tools or ambiguous actions.
+    await completeDurableFollowup(durableDirectTurnId);
+  }
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {

@@ -26,6 +26,7 @@ import {
   completeDurableFollowup,
   DurableFollowupCancelledError,
   hydrateDurableFollowup,
+  isDurableFollowupMessagePending,
   isDurableFollowupMessageProcessed,
   isDurableFollowupRecordProcessed,
   loadDurableFollowupDelivery,
@@ -214,6 +215,19 @@ describe("durable followup queue", () => {
     await expect(fs.readdir(path.join(stateDir, "followup-queue-processed"))).resolves.toHaveLength(
       2,
     );
+  });
+
+  it("suppresses provider redelivery while the accepted message is still pending", async () => {
+    const queueKey = "pending-message-redelivery";
+    const firstRun = createRun("accepted input");
+    const differentMessage = { ...createRun("new input"), messageId: "telegram:102" };
+
+    await persistDurableFollowup({ queueKey, run: firstRun, settings });
+
+    await expect(isDurableFollowupMessagePending({ queueKey, run: firstRun })).resolves.toBe(true);
+    await expect(
+      isDurableFollowupMessagePending({ queueKey, run: differentMessage }),
+    ).resolves.toBe(false);
   });
 
   it("prunes expired processed receipts during startup load", async () => {

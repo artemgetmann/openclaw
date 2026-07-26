@@ -1,7 +1,13 @@
 import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isDurableFollowupMessageProcessed,
+  loadDurableFollowups,
+  persistDurableFollowup,
+} from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
@@ -206,6 +212,60 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   function allowDeterministicPreviewDeletes() {
     guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: true });
   }
+
+  it("completes a direct-turn recovery record only after visible final delivery", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-complete-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input",
+        messageId: "telegram:456",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          await dispatcherOptions.deliver({ text: "Visible final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [expect.objectContaining({ text: "Visible final." })],
+        }),
+      );
+      await expect(loadDurableFollowups()).resolves.toEqual([]);
+      await expect(isDurableFollowupMessageProcessed({ queueKey, run })).resolves.toBe(true);
+    });
+  });
 
   it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);

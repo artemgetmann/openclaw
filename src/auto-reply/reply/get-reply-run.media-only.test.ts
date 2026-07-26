@@ -73,6 +73,7 @@ vi.mock("./queue.js", () => ({
 }));
 
 vi.mock("./queue/durable-store.js", () => ({
+  isDurableFollowupMessagePending: vi.fn().mockResolvedValue(false),
   isDurableFollowupMessageProcessed: vi.fn().mockResolvedValue(false),
 }));
 

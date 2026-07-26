@@ -197,6 +197,31 @@ export async function isDurableFollowupMessageProcessed(params: {
   );
 }
 
+/**
+ * Suppress provider redelivery while the first accepted copy is still live.
+ *
+ * Telegram serializes one route before reaching this gate, so the read followed
+ * by the direct-turn durable write cannot race another copy in the same topic.
+ * Completed records use the cheaper receipt lookup above.
+ */
+export async function isDurableFollowupMessagePending(params: {
+  queueKey: string;
+  run: DurableFollowupMessageIdentity;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const key = buildDurableFollowupMessageKey(params.queueKey, params.run);
+  if (!key) {
+    return false;
+  }
+  const records = await loadDurableFollowups({ env: params.env });
+  return records.some(
+    (record) =>
+      record.queueKey === params.queueKey &&
+      (record.processedMessageKey === key ||
+        record.delivery?.processedMessageKeys.includes(key) === true),
+  );
+}
+
 async function pruneDurableProcessedMessages(
   env: NodeJS.ProcessEnv,
   now: number,

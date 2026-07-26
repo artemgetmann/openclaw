@@ -35,6 +35,7 @@ import {
   hydrateDurableFollowup,
   loadDurableFollowups,
   persistDurableFollowup,
+  persistDurableFollowupDelivery,
 } from "./queue/durable-store.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -795,6 +796,53 @@ describe("createFollowupRunner durable delivery recovery", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("routes a staged restart blocker without replaying model or tool work", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const directTurn = createQueuedRun({
+      messageId: "telegram:25606",
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+      originatingAccountId: "default",
+      originatingThreadId: 21876,
+    });
+    const input = await persistDurableFollowup({
+      queueKey: "direct-turn-restart-blocker",
+      run: directTurn,
+      settings,
+    });
+    const staged = await persistDurableFollowupDelivery({
+      run: { ...directTurn, durableId: input.id },
+      payloads: [
+        {
+          text: "I was interrupted by a Jarvis restart. Send Continue so I can inspect state.",
+          isError: true,
+        },
+      ],
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await runner(hydrateDurableFollowup(staged!, {}));
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("interrupted by a Jarvis restart"),
+        }),
+        channel: "telegram",
+        to: "-1003783709877",
+        accountId: "default",
+        threadId: 21876,
+      }),
+    );
   });
 
   it.each([
