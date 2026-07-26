@@ -307,6 +307,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
             { text: "The intermediate tool reported a warning.", isError: true },
             { kind: "block" },
           );
+          dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "block" });
           await dispatcherOptions.deliver({ text: "Invisible final." }, { kind: "final" });
           return { queuedFinal: false };
         },
