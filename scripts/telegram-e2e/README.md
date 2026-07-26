@@ -314,8 +314,10 @@ that file for compatibility.
 Use one machine-local Telegram-as-user session. Worktrees share it; they do not
 receive SQLite snapshots.
 
-1. The canonical operator session is
-   `~/.openclaw/telegram-user/userbot.session`.
+1. The canonical operator session is the absolute database referenced by
+   `~/.openclaw/telegram-user/canonical-session.path`. A fresh machine starts
+   with `~/.openclaw/telegram-user/userbot.session`; migration may reference an
+   authorized legacy database in place.
 2. Never commit, print, copy between worktrees, rotate, delete, or
    automatically reauthenticate real credentials or session contents.
 3. For every new worktree, run:
@@ -763,13 +765,23 @@ Scope note:
   - Run the read-only status/doctor diagnostic. Do not copy a legacy database
     or reauthenticate automatically.
 - `E_UNAUTHORIZED_SESSION`: session exists but is not logged in.
-  - Re-auth once through the internal Python backend, then retry the CLI command.
+  - If this came from owner claim, claim one of the authorized sources named by
+    the diagnostic. Reauthentication is offered only when no candidate is
+    authorized.
+- `E_SESSION_CANDIDATE_UNREADABLE`: one or more migration inputs could not be
+  inspected safely.
+  - Ownership remains unchanged. Repair access to the named non-secret source
+    before retrying; do not delete or ignore it because its account identity is
+    unknown.
 - `E_CHAT_NOT_RESOLVABLE`: precheck cannot resolve `--chat`.
   - Verify chat id/username and account access.
-- `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.
-  - Inspect the reported non-secret candidate sources and choose an explicit
-    session for that invocation. Do not delete or overwrite either file as an
-    automatic repair.
+- `E_AMBIGUOUS_SESSION`: legacy candidates contain different authorization
+  records and no machine owner has been claimed.
+  - Run the exact `openclaw telegram-user owner claim --source <label>` action
+    from the diagnostic. The claim checks every candidate online under the
+    machine lock, persists only an absolute reference, and refuses authorized
+    candidates from different accounts. Do not delete, copy, overwrite, or
+    reauthenticate a candidate to make the error disappear.
 - HTTP `503` or no bot replies usually means gateway is not fully started yet.
   - Wait for provider-start logs and retry.
 - If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
@@ -778,10 +790,12 @@ Scope note:
 
 - Thread targeting uses `reply_to` anchoring.
 - For private topics, thread id can appear as `message_thread_id` or `direct_messages_topic.topic_id`.
-- Normal runners resolve `~/.openclaw/telegram-user/userbot.session` and the
-  machine-wide operator lock.
+- Normal runners resolve the machine owner reference and the machine-wide
+  operator lock. Worktrees keep only their own absolute reference to that same
+  owner.
 - Explicit `--session`/selector and lock overrides remain available for
   hermetic tests or deliberately separate accounts.
 - Recognized legacy repo-relative selectors are migration inputs, not a reason
-  to create another worktree database. Divergent implicit candidates fail
-  loudly with `E_AMBIGUOUS_SESSION`.
+  to create another worktree database. Exact duplicate authorizations collapse
+  automatically; divergent implicit candidates require one explicit owner
+  claim.

@@ -89,6 +89,15 @@ export type TelegramUserLogoutResult = {
   session_path: string;
 };
 
+export type TelegramUserOwnerClaimResult = {
+  authorized_same_account_sources: string[];
+  backend_meta?: TelegramUserBackendMeta;
+  claimed: true;
+  session_path: string;
+  source: string;
+  unauthorized_sources: string[];
+};
+
 export type TelegramUserSendResult = {
   backend_meta?: TelegramUserBackendMeta;
   message: TelegramUserMessage;
@@ -188,6 +197,7 @@ export type TelegramUserBackendMeta = {
     | "env-file"
     | "process-env"
     | "legacy-repo"
+    | "machine-selector"
     | "machine-default"
     | "state-default";
   session_path: string;

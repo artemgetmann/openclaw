@@ -2,9 +2,23 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tempToolingRoots: string[] = [];
+const hostMachineSelectorPath = path.join(
+  os.homedir(),
+  ".openclaw",
+  "telegram-user",
+  "canonical-session.path",
+);
+const hostRepoSelectorPath = path.join(
+  process.cwd(),
+  "scripts",
+  "telegram-e2e",
+  "tmp",
+  "userbot.session.path",
+);
+const realExistsSync = fsSync.existsSync.bind(fsSync);
 
 async function makeTelegramToolingRoot(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -13,6 +27,7 @@ async function makeTelegramToolingRoot(prefix: string): Promise<string> {
   await fs.mkdir(toolingDir, { recursive: true });
   await Promise.all([
     fs.writeFile(path.join(toolingDir, "requirements.txt"), "telethon>=1.43.1\n"),
+    fs.writeFile(path.join(toolingDir, "session_owner.py"), "# owner\n"),
     fs.writeFile(path.join(toolingDir, "telethon_cli.py"), "print('ok')\n"),
     fs.writeFile(path.join(toolingDir, "telethon_compat.py"), "# compat\n"),
   ]);
@@ -20,6 +35,16 @@ async function makeTelegramToolingRoot(prefix: string): Promise<string> {
 }
 
 describe("telegram-user backend defaults", () => {
+  beforeEach(() => {
+    // Unit tests must not inherit the developer machine's live ownership
+    // decision. Temp-HOME selectors created by individual tests remain visible.
+    vi.spyOn(fsSync, "existsSync").mockImplementation((target) =>
+      String(target) === hostMachineSelectorPath || String(target) === hostRepoSelectorPath
+        ? false
+        : realExistsSync(target),
+    );
+  });
+
   afterEach(async () => {
     vi.resetModules();
     vi.restoreAllMocks();
@@ -208,10 +233,9 @@ describe("telegram-user backend defaults", () => {
     );
     await fs.mkdir(path.dirname(stateSession), { recursive: true });
     await fs.writeFile(stateSession, "fixture-state\n");
-    const originalExistsSync = fsSync.existsSync;
     const originalReadFileSync = fsSync.readFileSync;
-    vi.spyOn(fsSync, "existsSync").mockImplementation((target) =>
-      String(target) === selectorPath ? true : originalExistsSync(target),
+    vi.mocked(fsSync.existsSync).mockImplementation((target) =>
+      String(target) === selectorPath ? true : realExistsSync(target),
     );
     vi.spyOn(fsSync, "readFileSync").mockImplementation(((
       target: fsSync.PathOrFileDescriptor,
@@ -248,6 +272,78 @@ describe("telegram-user backend defaults", () => {
     ).toEqual({
       sessionPath: pinnedSession,
       source: "machine-default",
+    });
+  });
+
+  it("keeps a machine-wide owner claim authoritative across divergent legacy files", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-owner-home-"));
+    const stateDir = path.join(homeDir, "jarvis-state");
+    tempToolingRoots.push(homeDir);
+    const machineSession = path.join(homeDir, ".openclaw", "telegram-user", "userbot.session");
+    const claimedSession = path.join(stateDir, "telegram-user", "userbot.session");
+    const selectorPath = path.join(homeDir, ".openclaw", "telegram-user", "canonical-session.path");
+    await fs.mkdir(path.dirname(machineSession), { recursive: true });
+    await fs.mkdir(path.dirname(claimedSession), { recursive: true });
+    await fs.writeFile(machineSession, "unauthorized-machine-fixture\n");
+    await fs.writeFile(claimedSession, "authorized-jarvis-fixture\n");
+    await fs.writeFile(selectorPath, `${claimedSession}\n`, { mode: 0o600 });
+
+    const { resolveTelegramUserSessionSelection } = await import("./backend.js");
+    expect(
+      resolveTelegramUserSessionSelection({
+        env: { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+        loadedEnv: { USERBOT_SESSION: claimedSession },
+      }),
+    ).toEqual({
+      sessionPath: claimedSession,
+      source: "machine-selector",
+    });
+  });
+
+  it("ignores a machine owner selector after its target is removed", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-stale-owner-"));
+    const stateDir = path.join(homeDir, "stable-state");
+    tempToolingRoots.push(homeDir);
+    const selectorPath = path.join(homeDir, ".openclaw", "telegram-user", "canonical-session.path");
+    const deletedSession = path.join(homeDir, "deleted-worktree", "userbot.session");
+    const stableSession = path.join(stateDir, "telegram-user", "userbot.session");
+    await fs.mkdir(path.dirname(selectorPath), { recursive: true });
+    await fs.mkdir(path.dirname(stableSession), { recursive: true });
+    await fs.writeFile(selectorPath, `${deletedSession}\n`, { mode: 0o600 });
+    await fs.writeFile(stableSession, "stable-fixture\n");
+
+    const { resolveTelegramUserSessionSelection } = await import("./backend.js");
+    expect(
+      resolveTelegramUserSessionSelection({
+        env: { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      sessionPath: stableSession,
+      source: "state-default",
+    });
+  });
+
+  it("discovers the sacred-main owner source without an env override", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-main-owner-"));
+    tempToolingRoots.push(homeDir);
+    const mainSession = path.join(
+      homeDir,
+      "Programming_Projects",
+      "openclaw",
+      "scripts",
+      "telegram-e2e",
+      "tmp",
+      "userbot.session",
+    );
+    await fs.mkdir(path.dirname(mainSession), { recursive: true });
+    await fs.writeFile(mainSession, "main-owner-fixture\n");
+
+    const { resolveTelegramUserOwnerCandidates } = await import("./backend.js");
+    expect(
+      resolveTelegramUserOwnerCandidates({ HOME: homeDir } as NodeJS.ProcessEnv),
+    ).toContainEqual({
+      path: mainSession,
+      source: "main-canonical-legacy",
     });
   });
 

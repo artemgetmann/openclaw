@@ -722,6 +722,24 @@ ensure_tester_bot_claim() {
   fi
 }
 
+ensure_telegram_user_owner() {
+  local bootstrap_output=""
+  if [[ ! -x "$BOOTSTRAP_TELEGRAM_SCRIPT" ]]; then
+    add_failure "telegram_session_owner_bootstrap_missing"
+    return
+  fi
+  # Ownership is independent from tester-token availability. Resolve it on
+  # every ensure so stale worktree selectors self-heal from the machine-wide
+  # reference before token claim or runtime mutation begins.
+  if ! bootstrap_output="$(
+    cd "$REPO_ROOT" && bash "$BOOTSTRAP_TELEGRAM_SCRIPT" --copy-only 2>&1
+  )"; then
+    add_failure "telegram_session_owner_resolution_failed"
+    printf '%s\n' "$bootstrap_output" >&2
+    return
+  fi
+}
+
 prepare_isolated_runtime_config() {
   if [[ -z "$RUNTIME_STATE_DIR" ]]; then
     add_failure "runtime_state_dir_missing"
@@ -1628,7 +1646,12 @@ ensure_command_unlocked() {
     reset_acp_validation_runtime_state_if_needed
   fi
 
-  ensure_tester_bot_claim
+  if [[ "$FAIL" -eq 0 ]]; then
+    ensure_telegram_user_owner
+  fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    ensure_tester_bot_claim
+  fi
   if [[ "$FAIL" -eq 0 ]]; then
     prepare_isolated_runtime_config
   fi

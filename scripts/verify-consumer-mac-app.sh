@@ -135,6 +135,7 @@ assert_required_telegram_user_tooling() {
   local required_tooling_files=(
     ".env.example"
     "requirements.txt"
+    "session_owner.py"
     "telethon_cli.py"
     "telethon_compat.py"
   )

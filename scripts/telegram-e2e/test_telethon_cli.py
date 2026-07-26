@@ -40,6 +40,32 @@ class FakeAuthorizedClient:
     return True
 
 
+class FakeOwnerProbeClient:
+  def __init__(self, user_id: int | None) -> None:
+    self.disconnected = False
+    self.user_id = user_id
+
+  async def connect(self) -> None:
+    return None
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+  async def get_me(self):
+    return SimpleNamespace(id=self.user_id)
+
+  async def is_user_authorized(self) -> bool:
+    return self.user_id is not None
+
+
+class FakeUnreadableOwnerProbeClient:
+  async def connect(self) -> None:
+    raise OSError("fixture path that must not leak")
+
+  async def disconnect(self) -> None:
+    return None
+
+
 class FakePasswordLoginClient:
   def __init__(self) -> None:
     self.authorized = False
@@ -386,6 +412,172 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       self.assertIsNone(emitted["pending_auth"])
       self.assertFalse(telethon_cli.resolve_pending_auth_path(session_path).exists())
       self.assertTrue(fake_client.disconnected)
+
+  async def test_owner_claim_adopts_authorized_jarvis_when_machine_is_unauthorized(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      machine = root / "machine.session"
+      jarvis = root / "jarvis.session"
+      main = root / "main.session"
+      selector = root / "owner" / "canonical-session.path"
+      for candidate in (machine, jarvis, main):
+        candidate.touch()
+      clients = iter(
+        [
+          FakeOwnerProbeClient(None),
+          FakeOwnerProbeClient(99),
+          FakeOwnerProbeClient(99),
+        ]
+      )
+      emitted: dict[str, object] = {}
+
+      with (
+        patch.object(telethon_cli, "create_telegram_client", side_effect=lambda *args, **kwargs: next(clients)),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value=(123, "hash")),
+        patch.object(telethon_cli, "emit", side_effect=lambda payload: emitted.update(payload) or 0),
+      ):
+        exit_code = await telethon_cli.run_owner_claim(
+          argparse.Namespace(
+            candidate=[
+              f"machine={machine}",
+              f"jarvis-state-legacy={jarvis}",
+              f"main-canonical-legacy={main}",
+            ],
+            lock=None,
+            selector=str(selector),
+            source="jarvis-state-legacy",
+          )
+        )
+
+      self.assertEqual(exit_code, 0)
+      self.assertTrue(emitted["claimed"])
+      self.assertEqual(emitted["unauthorized_sources"], ["machine"])
+      self.assertNotIn("user_id", emitted)
+      self.assertEqual(
+        selector.read_text(encoding="utf-8"),
+        f"{Path(os.path.realpath(jarvis))}\n",
+      )
+
+  async def test_owner_claim_fails_closed_for_two_authorized_accounts(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      machine = root / "machine.session"
+      jarvis = root / "jarvis.session"
+      selector = root / "owner" / "canonical-session.path"
+      machine.touch()
+      jarvis.touch()
+      clients = iter([FakeOwnerProbeClient(101), FakeOwnerProbeClient(202)])
+      failure: dict[str, object] = {}
+
+      with (
+        patch.object(telethon_cli, "create_telegram_client", side_effect=lambda *args, **kwargs: next(clients)),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value=(123, "hash")),
+        patch.object(
+          telethon_cli,
+          "fail",
+          side_effect=lambda code, message, **kwargs: failure.update(
+            {"code": code, "message": message, **kwargs}
+          ) or 1,
+        ),
+      ):
+        exit_code = await telethon_cli.run_owner_claim(
+          argparse.Namespace(
+            candidate=[
+              f"machine={machine}",
+              f"jarvis-state-legacy={jarvis}",
+            ],
+            lock=None,
+            selector=str(selector),
+            source="jarvis-state-legacy",
+          )
+        )
+
+      self.assertEqual(exit_code, 1)
+      self.assertEqual(failure["code"], "E_DIVERGENT_SESSION_ACCOUNTS")
+      self.assertFalse(selector.exists())
+
+  async def test_owner_claim_reauth_hint_appears_only_when_none_are_authorized(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      machine = root / "machine.session"
+      jarvis = root / "jarvis.session"
+      selector = root / "owner" / "canonical-session.path"
+      machine.touch()
+      jarvis.touch()
+      clients = iter([FakeOwnerProbeClient(None), FakeOwnerProbeClient(None)])
+      failure: dict[str, object] = {}
+
+      with (
+        patch.object(telethon_cli, "create_telegram_client", side_effect=lambda *args, **kwargs: next(clients)),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value=(123, "hash")),
+        patch.object(
+          telethon_cli,
+          "fail",
+          side_effect=lambda code, message, **kwargs: failure.update(
+            {"code": code, "message": message, **kwargs}
+          ) or 1,
+        ),
+      ):
+        exit_code = await telethon_cli.run_owner_claim(
+          argparse.Namespace(
+            candidate=[
+              f"machine={machine}",
+              f"jarvis-state-legacy={jarvis}",
+            ],
+            lock=None,
+            selector=str(selector),
+            source="jarvis-state-legacy",
+          )
+        )
+
+      self.assertEqual(exit_code, 1)
+      self.assertEqual(failure["code"], "E_NO_AUTHORIZED_SESSION")
+      self.assertIn("Reauthenticate", failure["message"])
+      self.assertFalse(selector.exists())
+
+  async def test_owner_claim_fails_closed_when_any_candidate_is_unreadable(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      machine = root / "machine.session"
+      jarvis = root / "jarvis.session"
+      selector = root / "owner" / "canonical-session.path"
+      machine.touch()
+      jarvis.touch()
+      clients = iter([FakeUnreadableOwnerProbeClient(), FakeOwnerProbeClient(99)])
+      failure: dict[str, object] = {}
+
+      with (
+        patch.object(
+          telethon_cli,
+          "create_telegram_client",
+          side_effect=lambda *args, **kwargs: next(clients),
+        ),
+        patch.object(telethon_cli, "resolve_api_credentials", return_value=(123, "hash")),
+        patch.object(
+          telethon_cli,
+          "fail",
+          side_effect=lambda code, message, **kwargs: failure.update(
+            {"code": code, "message": message, **kwargs}
+          ) or 1,
+        ),
+      ):
+        exit_code = await telethon_cli.run_owner_claim(
+          argparse.Namespace(
+            candidate=[
+              f"machine={machine}",
+              f"jarvis-state-legacy={jarvis}",
+            ],
+            lock=None,
+            selector=str(selector),
+            source="jarvis-state-legacy",
+          )
+        )
+
+      self.assertEqual(exit_code, 1)
+      self.assertEqual(failure["code"], "E_SESSION_CANDIDATE_UNREADABLE")
+      self.assertEqual(failure["details"], {"sources": ["machine"]})
+      self.assertNotIn("fixture path", str(failure))
+      self.assertFalse(selector.exists())
 
   async def test_run_login_reads_password_from_env_instead_of_args(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:

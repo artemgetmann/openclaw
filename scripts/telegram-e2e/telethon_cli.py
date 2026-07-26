@@ -21,6 +21,8 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
+import session_owner
+
 try:
   import fcntl
 except Exception:  # pragma: no cover - Windows fallback
@@ -288,17 +290,20 @@ def resolve_session_lock_paths(
 
 
 @contextmanager
-def acquire_session_lock(
-  session_path: Path,
+def acquire_session_locks(
+  session_paths: list[Path],
   timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS,
   *,
   lock_path_override: str | Path | None = None,
 ):
-  # Keep accepting the exact session path so call sites cannot accidentally
-  # normalize or replace the Telethon database path while selecting the lock.
-  # The primary identity is independent from it for cross-worktree safety, while
-  # the legacy bridge protects against already-running older callers.
-  lock_paths = resolve_session_lock_paths(session_path, lock_path_override)
+  # Acquire the machine lock once plus every candidate's legacy lock. That
+  # serializes new callers across worktrees while also fencing older clients
+  # that still lock only beside one SQLite database.
+  unique_lock_paths: dict[str, Path] = {}
+  for session_path in session_paths:
+    for lock_path in resolve_session_lock_paths(session_path, lock_path_override):
+      unique_lock_paths.setdefault(os.path.abspath(os.fspath(lock_path)), lock_path)
+  lock_paths = [unique_lock_paths[key] for key in sorted(unique_lock_paths)]
   lock_scope = resolve_session_lock_scope(lock_path_override)
   deadline = time.time() + max(1, timeout_seconds)
   acquired_handles = []
@@ -351,6 +356,23 @@ def acquire_session_lock(
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         except OSError:
           pass
+
+
+@contextmanager
+def acquire_session_lock(
+  session_path: Path,
+  timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS,
+  *,
+  lock_path_override: str | Path | None = None,
+):
+  # Keep accepting the exact session path so call sites cannot accidentally
+  # normalize or replace the Telethon database path while selecting the lock.
+  with acquire_session_locks(
+    [session_path],
+    timeout_seconds,
+    lock_path_override=lock_path_override,
+  ):
+    yield
 
 
 def build_chat_payload(chat) -> dict[str, object | None]:
@@ -682,6 +704,19 @@ def build_parser() -> argparse.ArgumentParser:
   inbox.add_argument("--dm-only", action = "store_true", help = "Only include direct messages")
   inbox.add_argument("--contains", default = "", help = "Only include matching title, username, or last text")
 
+  owner_claim = subparsers.add_parser(
+    "owner-claim",
+    help="Claim one authorized machine-wide session owner by recognized source",
+  )
+  owner_claim.add_argument("--source", required=True, help="Recognized candidate source")
+  owner_claim.add_argument("--selector", required=True, help="Machine-wide selector path")
+  owner_claim.add_argument(
+    "--candidate",
+    action="append",
+    default=[],
+    help="Recognized source=absolute-path candidate",
+  )
+
   subparsers.add_parser("logout", help = "Clear the Telegram user session")
   return parser
 
@@ -920,6 +955,112 @@ async def run_login(args: argparse.Namespace) -> int:
       )
     finally:
       await client.disconnect()
+
+
+async def probe_owner_candidate(session_path: Path) -> int | None:
+  """Return only the stable account id internally; never emit it from claim."""
+
+  api_id, api_hash = resolve_api_credentials()
+  client = create_telegram_client(
+    session_path,
+    api_id,
+    api_hash,
+    flood_sleep_threshold=0,
+  )
+  try:
+    await client.connect()
+    if not await client.is_user_authorized():
+      return None
+    me = await client.get_me()
+    user_id = int(getattr(me, "id", 0) or 0)
+    return user_id or None
+  finally:
+    await client.disconnect()
+
+
+async def run_owner_claim(args: argparse.Namespace) -> int:
+  selector_path = session_owner.validate_absolute_path(
+    args.selector,
+    context="machine owner selector",
+  )
+  parsed_candidates = [session_owner.parse_candidate(raw) for raw in args.candidate]
+  candidates = session_owner.dedupe_candidates(parsed_candidates)
+  selected = next(
+    ((source, path) for source, path in candidates if args.source in source.split("+")),
+    None,
+  )
+  if selected is None:
+    return fail(
+      "E_UNKNOWN_SESSION_SOURCE",
+      f"Telegram session source {args.source!r} is not an existing candidate.",
+    )
+
+  with acquire_session_locks(
+    [candidate for _, candidate in candidates],
+    lock_path_override=getattr(args, "lock", None),
+  ):
+    identities: dict[str, int | None] = {}
+    unreadable_sources: list[str] = []
+    for source, candidate in candidates:
+      try:
+        identities[source] = await probe_owner_candidate(candidate)
+      except Exception:
+        # Do not leak paths, SQLite errors, or provider text. An unreadable
+        # candidate might still contain a different authorized account, so it
+        # cannot be ignored while publishing a machine-wide owner.
+        unreadable_sources.append(source)
+
+    if unreadable_sources:
+      return fail(
+        "E_SESSION_CANDIDATE_UNREADABLE",
+        "One or more Telegram session candidates could not be safely inspected; ownership is unchanged.",
+        details={"sources": unreadable_sources},
+      )
+
+    selected_source, selected_path = selected
+    selected_identity = identities[selected_source]
+    authorized_sources = [
+      source for source, identity in identities.items() if identity is not None
+    ]
+    if selected_identity is None:
+      if authorized_sources:
+        actions = " or ".join(
+          f"openclaw telegram-user owner claim --source {source.split('+')[0]}"
+          for source in authorized_sources
+        )
+        return fail(
+          "E_UNAUTHORIZED_SESSION",
+          f"Selected source {args.source!r} is unauthorized. Claim an authorized owner with: {actions}",
+        )
+      return fail(
+        "E_NO_AUTHORIZED_SESSION",
+        "No Telegram session candidate is authorized. Reauthenticate only the intended owner, then retry its owner claim.",
+      )
+
+    divergent_sources = [
+      source
+      for source, identity in identities.items()
+      if identity is not None and identity != selected_identity
+    ]
+    if divergent_sources:
+      return fail(
+        "E_DIVERGENT_SESSION_ACCOUNTS",
+        "Authorized Telegram session candidates belong to different accounts; refusing to choose.",
+        details={"sources": [selected_source, *divergent_sources]},
+      )
+
+    session_owner.atomic_write_selector(selector_path, selected_path)
+    return emit(
+      {
+        "authorized_same_account_sources": authorized_sources,
+        "claimed": True,
+        "session_path": str(selected_path),
+        "source": args.source,
+        "unauthorized_sources": [
+          source for source, identity in identities.items() if identity is None
+        ],
+      }
+    )
 
 
 async def run_send(args: argparse.Namespace) -> int:
@@ -1166,6 +1307,8 @@ async def run() -> int:
     if args.command == "logout":
       return await run_logout(args)
     resolve_api_credentials()
+    if args.command == "owner-claim":
+      return await run_owner_claim(args)
     if args.command == "precheck":
       return await run_precheck(args)
     if args.command == "login":

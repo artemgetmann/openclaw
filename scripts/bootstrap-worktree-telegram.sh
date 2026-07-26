@@ -62,7 +62,9 @@ copy_if_exists "$MAIN_REPO/scripts/telegram-e2e/.env.local" "./scripts/telegram-
 # instead of silently selecting whichever checkout happened to run first.
 SESSION_SELECTOR="./scripts/telegram-e2e/tmp/userbot.session.path"
 DEFAULT_MACHINE_SESSION="$HOME/.openclaw/telegram-user/userbot.session"
+MACHINE_SESSION_SELECTOR="$HOME/.openclaw/telegram-user/canonical-session.path"
 JARVIS_SESSION="$HOME/Library/Application Support/Jarvis/.jarvis/telegram-user/userbot.session"
+SESSION_OWNER_HELPER="./scripts/telegram-e2e/session_owner.py"
 ENV_FILE_SESSION=""
 if [[ -f "./scripts/telegram-e2e/.env.local" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -92,44 +94,29 @@ elif [[ -n "$ENV_FILE_SESSION" && "$ENV_FILE_SESSION" != /* ]]; then
 fi
 EXPLICIT_MACHINE_SESSION="${OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION:-$ENV_FILE_SESSION}"
 MACHINE_SESSION="${EXPLICIT_MACHINE_SESSION:-$DEFAULT_MACHINE_SESSION}"
-declare -a session_candidates=()
-declare -a session_candidate_labels=()
-
-add_session_candidate() {
-  local label="$1"
-  local candidate="$2"
-  local existing=""
-  [[ -f "$candidate" ]] || return 0
-  candidate="$(cd "$(dirname "$candidate")" && pwd -P)/$(basename "$candidate")"
-  for existing in "${session_candidates[@]:-}"; do
-    [[ "$existing" == "$candidate" ]] && return 0
-  done
-  session_candidates+=("$candidate")
-  session_candidate_labels+=("$label")
-}
-
-if [[ -z "$EXPLICIT_MACHINE_SESSION" ]]; then
-  add_session_candidate "machine" "$MACHINE_SESSION"
-  add_session_candidate "jarvis-state-legacy" "$JARVIS_SESSION"
-  add_session_candidate "main-canonical-legacy" "$MAIN_REPO/scripts/telegram-e2e/tmp/userbot.session"
-  add_session_candidate "main-legacy" "$MAIN_REPO/scripts/telegram-e2e/userbot.session"
-  add_session_candidate "lane-legacy" "./scripts/telegram-e2e/tmp/userbot.session"
-fi
-
-if [[ "${#session_candidates[@]}" -gt 1 ]]; then
-  printf 'E_AMBIGUOUS_SESSION: divergent implicit Telegram session owners exist (%s). Set an absolute USERBOT_SESSION or OPENCLAW_TELEGRAM_USER_CANONICAL_SESSION.\n' \
-    "$(IFS=,; printf '%s' "${session_candidate_labels[*]}")" >&2
-  exit 1
-fi
 
 canonical_session="$MACHINE_SESSION"
 canonical_session_source="machine-default"
+canonical_session_migration="explicit"
 if [[ -n "$EXPLICIT_MACHINE_SESSION" ]]; then
   canonical_session_source="explicit-canonical"
-fi
-if [[ "${#session_candidates[@]}" -eq 1 ]]; then
-  canonical_session="${session_candidates[0]}"
-  canonical_session_source="${session_candidate_labels[0]}"
+else
+  if [[ ! -f "$SESSION_OWNER_HELPER" ]]; then
+    echo "Error: Telegram session owner helper is missing: $SESSION_OWNER_HELPER" >&2
+    exit 1
+  fi
+  owner_output="$(
+    python3 "$SESSION_OWNER_HELPER" \
+      --selector "$MACHINE_SESSION_SELECTOR" \
+      --default-session "$DEFAULT_MACHINE_SESSION" \
+      --candidate "machine=$DEFAULT_MACHINE_SESSION" \
+      --candidate "jarvis-state-legacy=$JARVIS_SESSION" \
+      --candidate "main-canonical-legacy=$MAIN_REPO/scripts/telegram-e2e/tmp/userbot.session" \
+      --candidate "main-legacy=$MAIN_REPO/scripts/telegram-e2e/userbot.session" \
+      --candidate "lane-legacy=$PWD/scripts/telegram-e2e/tmp/userbot.session"
+  )" || exit $?
+  IFS=$'\t' read -r canonical_session_source canonical_session_migration canonical_session \
+    <<<"$owner_output"
 fi
 if [[ "$canonical_session" != /* ]]; then
   echo "Error: canonical Telegram session path must be absolute." >&2
@@ -142,6 +129,7 @@ printf '%s\n' "$canonical_session" > "$selector_tmp"
 chmod 600 "$selector_tmp"
 mv "$selector_tmp" "$SESSION_SELECTOR"
 echo "telegram_session_source=$canonical_session_source"
+echo "telegram_session_migration=$canonical_session_migration"
 echo "telegram_lock_scope=machine"
 
 # Bot token pool for worktree assignment.

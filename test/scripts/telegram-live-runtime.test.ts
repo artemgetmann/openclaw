@@ -164,6 +164,29 @@ describe("telegram-live-runtime.sh", () => {
     );
   });
 
+  it("resolves the machine session owner before tester token claim", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-owner-order-"));
+    const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");
+    const scriptSource = readFileSync(SCRIPT_PATH, "utf8").replace(/\nmain "\$@"\s*$/, "\n");
+    writeFileSync(sourcePath, scriptSource, "utf8");
+
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        "--noprofile",
+        "--norc",
+        "-lc",
+        `source ${JSON.stringify(sourcePath)}; resolve_profile() { :; }; resolve_base_config_path() { :; }; resolve_runtime_owner() { RUNTIME_PID=""; RUNTIME_OWNERSHIP=ok; }; reset_acp_validation_runtime_state_if_needed() { :; }; ensure_telegram_user_owner() { printf 'owner\\n'; }; ensure_tester_bot_claim() { printf 'token\\n'; FAIL=1; }; emit_ensure_proof_lines() { :; }; BRANCH=main FAIL=0 FAIL_REASONS=(); ensure_command_unlocked || true`,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(stdout).toBe("owner\ntoken\n");
+  });
+
   it("releases the exact reservation generation and local claim as one safe boundary", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "telegram-live-runtime-release-"));
     const sourcePath = path.join(tempDir, "telegram-live-runtime-source.sh");

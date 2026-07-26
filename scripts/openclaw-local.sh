@@ -93,6 +93,10 @@ is_telegram_user_command() {
   [[ $# -ge 1 && "$1" == "telegram-user" ]]
 }
 
+is_telegram_user_owner_claim_command() {
+  [[ $# -ge 3 && "$1" == "telegram-user" && "$2" == "owner" && "$3" == "claim" ]]
+}
+
 ensure_telegram_user_lane_assets() {
   local env_file="$ROOT/scripts/telegram-e2e/.env.local"
   local session_selector="$ROOT/scripts/telegram-e2e/tmp/userbot.session.path"
@@ -161,7 +165,10 @@ ensure_telegram_user_lane_assets() {
     return 0
   fi
 
-  bash "$bootstrap_script" --strict >/dev/null
+  # Telegram-as-user commands need only credentials and the owner reference.
+  # Claiming a tester bot here couples unrelated user-session diagnostics to
+  # scarce bot-pool availability and can block recovery before it even starts.
+  bash "$bootstrap_script" --copy-only >/dev/null
 }
 
 if [[ -x "$PREFLIGHT" ]]; then
@@ -243,7 +250,12 @@ if [[ -x "$LOCAL_RESTART" ]]; then
 fi
 
 if is_telegram_user_command "$@"; then
-  ensure_telegram_user_lane_assets "$@"
+  # Owner claim is the recovery command for an ambiguous legacy lane. Let it
+  # reach the backend directly; bootstrapping first would fail on the exact
+  # ambiguity the command is designed to resolve.
+  if ! is_telegram_user_owner_claim_command "$@"; then
+    ensure_telegram_user_lane_assets "$@"
+  fi
   export OPENCLAW_TELEGRAM_USER_REPO_LOCAL_COMPAT=1
 fi
 
