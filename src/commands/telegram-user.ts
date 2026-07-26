@@ -10,6 +10,7 @@ import {
   runTelegramUserLogout,
   runTelegramUserMarkRead,
   runTelegramUserMarkUnread,
+  runTelegramUserOwnerClaim,
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserDownload,
@@ -34,6 +35,7 @@ import type {
   TelegramUserLoginResult,
   TelegramUserMarkReadResult,
   TelegramUserMarkUnreadResult,
+  TelegramUserOwnerClaimResult,
   TelegramUserMessage,
   TelegramUserLogoutResult,
   TelegramUserPrecheck,
@@ -580,6 +582,21 @@ function logLogoutText(runtime: RuntimeEnv, result: TelegramUserLogoutResult) {
   if (result.removed_paths.length > 0) {
     runtime.log(`removed=${result.removed_paths.join(",")}`);
   }
+  if (result.owner_path_preserved) {
+    runtime.log("owner_path_preserved=true");
+  }
+}
+
+function logOwnerClaimText(runtime: RuntimeEnv, result: TelegramUserOwnerClaimResult) {
+  const rich = isRich();
+  const colorize = rich ? theme.success : (text: string) => text;
+  runtime.log(
+    colorize(`Telegram user owner claimed: source=${result.source} session=${result.session_path}`),
+  );
+  runtime.log(
+    `authorized_same_account_sources=${result.authorized_same_account_sources.join(",") || "none"}`,
+  );
+  runtime.log(`unauthorized_sources=${result.unauthorized_sources.join(",") || "none"}`);
 }
 
 function logSendText(runtime: RuntimeEnv, result: TelegramUserSendResult) {
@@ -898,6 +915,25 @@ export async function telegramUserLogoutCommand(
     return;
   }
   logLogoutText(runtime, result);
+}
+
+export async function telegramUserOwnerClaimCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const source = readStringOpt(opts, "source");
+  if (!source) {
+    throw new Error("Telegram user owner claim requires --source.");
+  }
+  const result = await runTelegramUserOwnerClaim({
+    envFile: readStringOpt(opts, "envFile"),
+    source,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logOwnerClaimText(runtime, result);
 }
 
 export async function telegramUserSendCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

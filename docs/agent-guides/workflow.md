@@ -208,9 +208,10 @@ ready`.
 - Warm mode is intentionally conservative:
   - it may copy local-only Telegram compatibility configuration, but it never
     copies the Telegram-as-user SQLite session database
-  - every worktree resolves the same machine-local canonical operator session
-    and shared lock; explicit overrides are reserved for hermetic tests or a
-    deliberately separate account
+  - every worktree resolves the same machine-local canonical operator-session
+    reference and shared lock; legacy databases are adopted only by reference,
+    and explicit overrides are reserved for hermetic tests or a deliberately
+    separate account
   - it does not auto-claim tester bot/runtime/browser state
   - it does not symlink or copy `node_modules`
   - it does not share Swift `.build` artifacts

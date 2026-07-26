@@ -152,7 +152,7 @@ describe("scripts/openclaw-local.sh restart routing", () => {
       const calls = fs.readFileSync(harness.callsPath, "utf8");
 
       expect(result.status).toBe(0);
-      expect(calls).toContain("bootstrap:--strict");
+      expect(calls).toContain("bootstrap:--copy-only");
       expect(calls).toContain("telegram-compat:1");
       expect(calls).toContain(
         `node:${fs.realpathSync(path.join(harness.root, "openclaw.mjs"))} telegram-user status --json`,
@@ -165,6 +165,29 @@ describe("scripts/openclaw-local.sh restart routing", () => {
           path.join(harness.root, "scripts", "telegram-e2e", "tmp", "userbot.session.path"),
         ),
       ).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("lets owner claim resolve ambiguity before lane bootstrap", () => {
+    const harness = createOpenclawLocalHarness();
+    try {
+      const result = harness.run([
+        "telegram-user",
+        "owner",
+        "claim",
+        "--source",
+        "jarvis-state-legacy",
+        "--json",
+      ]);
+      const calls = fs.readFileSync(harness.callsPath, "utf8");
+
+      expect(result.status).toBe(0);
+      expect(calls).not.toContain("bootstrap:");
+      expect(calls).toContain(
+        `node:${fs.realpathSync(path.join(harness.root, "openclaw.mjs"))} telegram-user owner claim --source jarvis-state-legacy --json`,
+      );
     } finally {
       harness.cleanup();
     }
@@ -254,7 +277,7 @@ describe("scripts/openclaw-local.sh restart routing", () => {
       const calls = fs.readFileSync(harness.callsPath, "utf8");
 
       expect(result.status).toBe(0);
-      expect(calls).toContain("bootstrap:--strict");
+      expect(calls).toContain("bootstrap:--copy-only");
     } finally {
       harness.cleanup();
     }

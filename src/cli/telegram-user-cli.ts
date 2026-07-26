@@ -141,6 +141,26 @@ export function registerTelegramUserCli(program: Command) {
       });
     });
 
+  const owner = telegramUser
+    .command("owner")
+    .description("Inspect or claim the one machine-wide Telegram user-session owner")
+    .action(() => {
+      owner.help({ error: true });
+    });
+
+  owner
+    .command("claim")
+    .description("Claim one existing authorized owner without moving credentials")
+    .requiredOption("--source <name>", "Recognized candidate source from an ambiguity diagnostic")
+    .option("--env-file <path>", "Read Telegram user creds from this env file")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserOwnerClaimCommand } = await import("../commands/telegram-user.js");
+        await telegramUserOwnerClaimCommand(opts, defaultRuntime);
+      });
+    });
+
   withTelegramUserBase(
     telegramUser
       .command("login")
