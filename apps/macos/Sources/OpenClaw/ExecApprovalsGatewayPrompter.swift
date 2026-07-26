@@ -57,6 +57,12 @@ final class ExecApprovalsGatewayPrompter {
                 return
             }
             guard presentation.canPresent else {
+                // A restricted request can also be routed to the originating
+                // chat. If this client cannot present it, abstain instead of
+                // racing that valid approver with a synthetic denial.
+                if Self.requiresExplicitUserInteraction(request.request) {
+                    return
+                }
                 let decision = Self.fallbackDecision(
                     request: request.request,
                     askFallback: presentation.askFallback,
@@ -97,6 +103,10 @@ final class ExecApprovalsGatewayPrompter {
         }
     }
 
+    private static func requiresExplicitUserInteraction(_ request: ExecApprovalPromptRequest) -> Bool {
+        request.allowedDecisions != nil
+    }
+
     struct PresentationDecision {
         /// Whether the ask policy requires prompting the user (not whether the action is allowed).
         var shouldAsk: Bool
@@ -119,7 +129,11 @@ final class ExecApprovalsGatewayPrompter {
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         
-        let shouldAsk = Self.shouldAsk(security: security, ask: ask)
+        // A request-level decision restriction is stronger than local exec
+        // defaults. It forces an actual user interaction even in full/ask-off.
+        let shouldAsk =
+            Self.requiresExplicitUserInteraction(request.request) ||
+            Self.shouldAsk(security: security, ask: ask)
         
         let canPresent = shouldAsk && Self.shouldPresent(
             mode: mode,
@@ -219,6 +233,20 @@ extension ExecApprovalsGatewayPrompter {
 
     static func _testShouldAsk(security: ExecSecurity, ask: ExecAsk) -> Bool {
         self.shouldAsk(security: security, ask: ask)
+    }
+
+    static func _testRequiresExplicitUserInteraction(allowedDecisions: [String]?) -> Bool {
+        self.requiresExplicitUserInteraction(
+            ExecApprovalPromptRequest(
+                command: "gui-control sensitive action",
+                cwd: nil,
+                host: "gateway",
+                security: "full",
+                ask: "always",
+                agentId: "main",
+                resolvedPath: nil,
+                sessionKey: nil,
+                allowedDecisions: allowedDecisions))
     }
 
     static func _testFallbackDecision(

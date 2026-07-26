@@ -246,7 +246,7 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
-    /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
+    /** Heartbeat interval (duration string, default unit: minutes; default: 1h). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
@@ -257,6 +257,14 @@ export type AgentDefaultsConfig = {
       /** Timezone for the window ("user", "local", or IANA TZ id). Default: "user". */
       timezone?: string;
     };
+    /**
+     * Weekend behavior for ambient sweeps.
+     * - normal: use ordinary attention rules
+     * - urgent-only: check, but surface only urgent/time-sensitive attention
+     * - off: skip ambient weekend sweeps
+     * Default: urgent-only.
+     */
+    weekendMode?: "normal" | "urgent-only" | "off";
     /** Heartbeat model override (provider/model). */
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */
@@ -269,7 +277,7 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
-    /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK."). */
+    /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. Surface at most three items that genuinely need the user's attention now, and do not repeat an unchanged blocker even as a shorter nudge. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK."). */
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;

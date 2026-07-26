@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTelegramLiveRuntimeChildEnv } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -76,7 +77,16 @@ describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL", "HOME", "OPENCLAW_CONFIG_PATH"]);
+    envSnapshot = captureEnv([
+      "PATH",
+      "SHELL",
+      "HOME",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_FORK_ROOT",
+      "OPENCLAW_TELEGRAM_USER_ENV_FILE",
+      "OPENCLAW_TELEGRAM_USER_SESSION",
+      "ZDOTDIR",
+    ]);
   });
 
   afterEach(() => {
@@ -165,6 +175,59 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(value).toBe("exec");
+  });
+
+  it("isolates Telegram selectors from host zsh startup files", async () => {
+    if (isWin || !fs.existsSync("/bin/zsh")) {
+      return;
+    }
+
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-isolated-zsh-home-"));
+    const expectedRoot = "/tmp/openclaw-isolated-worktree";
+    const expectedEnvFile = `${expectedRoot}/scripts/telegram-e2e/.env.local`;
+    const expectedSession = `${expectedRoot}/scripts/telegram-e2e/tmp/userbot.session`;
+    fs.writeFileSync(
+      path.join(homeDir, ".zshenv"),
+      [
+        "export OPENCLAW_FORK_ROOT=/tmp/sacred-clone",
+        "unset OPENCLAW_TELEGRAM_USER_ENV_FILE",
+        "export OPENCLAW_TELEGRAM_USER_SESSION=/tmp/sacred-session",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const runtimeEnv = buildTelegramLiveRuntimeChildEnv({
+        repoRoot: expectedRoot,
+        parentEnv: {
+          HOME: homeDir,
+          PATH: process.env.PATH,
+          SHELL: "/bin/zsh",
+        },
+      });
+      process.env.HOME = String(runtimeEnv.HOME);
+      process.env.SHELL = String(runtimeEnv.SHELL);
+      process.env.OPENCLAW_FORK_ROOT = String(runtimeEnv.OPENCLAW_FORK_ROOT);
+      process.env.OPENCLAW_TELEGRAM_USER_ENV_FILE = String(
+        runtimeEnv.OPENCLAW_TELEGRAM_USER_ENV_FILE,
+      );
+      process.env.OPENCLAW_TELEGRAM_USER_SESSION = String(
+        runtimeEnv.OPENCLAW_TELEGRAM_USER_SESSION,
+      );
+      process.env.ZDOTDIR = String(runtimeEnv.ZDOTDIR);
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-isolated-zsh-selectors", {
+        command:
+          'printf "%s\\n%s\\n%s\\n%s\\n" "$OPENCLAW_FORK_ROOT" "$OPENCLAW_TELEGRAM_USER_ENV_FILE" "$OPENCLAW_TELEGRAM_USER_SESSION" "$ZSH_VERSION"',
+      });
+      const values = normalizeText(result.content.find((c) => c.type === "text")?.text).split("\n");
+
+      expect(values.slice(0, 3)).toEqual([expectedRoot, expectedEnvFile, expectedSession]);
+      expect(values[3]).not.toBe("");
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("throws security violation when env.PATH is provided", async () => {

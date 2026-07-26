@@ -60,6 +60,8 @@ type PendingPluginBindingRequest = {
   requestedBySenderId?: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
+  failClosed?: boolean;
 };
 
 type PluginBindingApprovalAction = {
@@ -80,6 +82,8 @@ type PluginBindingMetadata = {
   pluginRoot: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
+  failClosed?: boolean;
 };
 
 type PluginBindingResolveResult =
@@ -346,6 +350,8 @@ function buildBindingMetadata(params: {
   pluginRoot: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
+  failClosed?: boolean;
 }): PluginBindingMetadata {
   return {
     pluginBindingOwner: PLUGIN_BINDING_OWNER,
@@ -354,6 +360,8 @@ function buildBindingMetadata(params: {
     pluginRoot: params.pluginRoot,
     summary: params.summary?.trim() || undefined,
     detachHint: params.detachHint?.trim() || undefined,
+    data: params.data ? { ...params.data } : undefined,
+    failClosed: params.failClosed === true,
   };
 }
 
@@ -407,6 +415,8 @@ export function toPluginConversationBinding(
     boundAt: record.boundAt,
     summary: metadata.summary,
     detachHint: metadata.detachHint,
+    data: metadata.data ? { ...metadata.data } : undefined,
+    failClosed: metadata.failClosed === true,
   };
 }
 
@@ -415,6 +425,8 @@ async function bindConversationNow(params: {
   conversation: PluginBindingConversation;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
+  failClosed?: boolean;
 }): Promise<PluginConversationBinding> {
   const ref = toConversationRef(params.conversation);
   const targetSessionKey = buildPluginBindingSessionKey({
@@ -434,6 +446,8 @@ async function bindConversationNow(params: {
       pluginRoot: params.identity.pluginRoot,
       summary: params.summary,
       detachHint: params.detachHint,
+      data: params.data,
+      failClosed: params.failClosed,
     }),
   });
   const binding = toPluginConversationBinding(record);
@@ -476,7 +490,11 @@ function buildDetachHintSuffix(detachHint?: string): string {
 }
 
 export function buildPluginBindingUnavailableText(binding: PluginConversationBinding): string {
-  return `The bound plugin ${resolvePluginBindingDisplayName(binding)} is not currently loaded. Routing this message to OpenClaw instead.${buildDetachHintSuffix(binding.detachHint)}`;
+  const pluginName = resolvePluginBindingDisplayName(binding);
+  if (binding.failClosed) {
+    return `The bound native runtime ${pluginName} is unavailable. This request was not run with OpenClaw's default agent.${buildDetachHintSuffix(binding.detachHint)}`;
+  }
+  return `The bound plugin ${pluginName} is not currently loaded. Routing this message to OpenClaw instead.${buildDetachHintSuffix(binding.detachHint)}`;
 }
 
 export function buildPluginBindingDeclinedText(binding: PluginConversationBinding): string {
@@ -609,6 +627,8 @@ export async function requestPluginConversationBinding(params: {
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
+      data: params.binding?.data,
+      failClosed: params.binding?.failClosed,
     });
     log.info(
       `plugin binding auto-refresh plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
@@ -632,6 +652,8 @@ export async function requestPluginConversationBinding(params: {
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
+      data: params.binding?.data,
+      failClosed: params.binding?.failClosed,
     });
     log.info(
       `plugin binding auto-approved plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
@@ -649,6 +671,8 @@ export async function requestPluginConversationBinding(params: {
     requestedBySenderId: params.requestedBySenderId?.trim() || undefined,
     summary: params.binding?.summary?.trim() || undefined,
     detachHint: params.binding?.detachHint?.trim() || undefined,
+    data: params.binding?.data ? { ...params.binding.data } : undefined,
+    failClosed: params.binding?.failClosed === true,
   };
   pendingRequests.set(request.id, request);
   log.info(
@@ -741,6 +765,8 @@ export async function resolvePluginConversationBindingApproval(params: {
     conversation: request.conversation,
     summary: request.summary,
     detachHint: request.detachHint,
+    data: request.data,
+    failClosed: request.failClosed,
   });
   log.info(
     `plugin binding approved plugin=${request.pluginId} root=${request.pluginRoot} decision=${params.decision} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,

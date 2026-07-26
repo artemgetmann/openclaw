@@ -849,6 +849,29 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     clearPendingTimeouts(handler);
   });
 
+  it("omits allow-always from one-shot-only approval cards", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "channel",
+    });
+    const internals = getHandlerInternals(handler);
+    mockSuccessfulDmDelivery();
+
+    await internals.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:main:discord:dm:123",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    const renderedCalls = JSON.stringify(mockRestPost.mock.calls);
+    expect(renderedCalls).toContain("allow-once");
+    expect(renderedCalls).toContain("deny");
+    expect(renderedCalls).not.toContain("allow-always");
+    clearPendingTimeouts(handler);
+  });
+
   it("posts an in-channel note when target is dm and the request came from a non-DM discord conversation", async () => {
     const handler = createHandler({
       enabled: true,

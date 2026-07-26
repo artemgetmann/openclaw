@@ -26,7 +26,6 @@ vi.mock("../daemon/whatsapp-monitor-service.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfig: readConfigMock,
   resolveGatewayPort: resolveGatewayPortMock,
 }));
 
@@ -35,7 +34,11 @@ vi.mock("../commands/whatsapp-monitor-service-install-helpers.js", async (import
     await importOriginal<
       typeof import("../commands/whatsapp-monitor-service-install-helpers.js")
     >();
-  return { ...actual, buildWhatsAppMonitorServiceInstallPlan: buildInstallPlanMock };
+  return {
+    ...actual,
+    buildWhatsAppMonitorServiceInstallPlan: buildInstallPlanMock,
+    readWhatsAppMonitorConfigForEnv: readConfigMock,
+  };
 });
 
 let runWhatsAppMonitorServiceStatus: typeof import("./whatsapp-monitor-service.js").runWhatsAppMonitorServiceStatus;
@@ -295,6 +298,7 @@ describe("whatsapp-monitor monitor-service cli", () => {
       storePath: path.join(root, "listener-health.json"),
     });
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    readConfigMock.mockResolvedValue({ cron: { store: path.join(root, "jobs.json") } });
     service.isLoaded.mockResolvedValueOnce(true);
     service.readCommand.mockResolvedValueOnce({
       programArguments: [
@@ -342,6 +346,52 @@ describe("whatsapp-monitor monitor-service cli", () => {
           healthy: false,
           unavailable: { configured: true, loaded: true, runtime: true },
         },
+      },
+    });
+  });
+
+  it("rejects a live heartbeat bound to a different monitor store", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-selector-status-"));
+    const installedCronStore = path.join(root, "installed", "jobs.json");
+    const expectedCronStore = path.join(root, "expected", "jobs.json");
+    await updateListenerHealth({
+      check: "success",
+      owner: { pid: 1234 },
+      pollIntervalMs: 1_000,
+      service: "whatsapp",
+      storePath: path.join(path.dirname(installedCronStore), "listener-health.json"),
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    readConfigMock.mockResolvedValueOnce({ cron: { store: expectedCronStore } });
+    service.isLoaded.mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: [
+        "openclaw",
+        "whatsapp-monitor",
+        "poll",
+        "--db-path",
+        "/private/wacli.db",
+        "--hook-url",
+        "http://127.0.0.1:18789/hooks/monitor-event",
+        "--cron-store",
+        installedCronStore,
+        "--poll-interval-ms",
+        "1000",
+      ],
+    });
+    service.readRuntime.mockResolvedValueOnce({ pid: 1234, status: "running" });
+
+    await runWhatsAppMonitorServiceStatus({ json: true });
+
+    expect(readLoggedJson(log)).toMatchObject({
+      service: {
+        acceptance: {
+          healthy: false,
+          ownership: {
+            selectors: { configured: true, matches: false },
+          },
+        },
+        listenerHealth: { state: "healthy" },
       },
     });
   });

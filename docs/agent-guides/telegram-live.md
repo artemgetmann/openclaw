@@ -28,12 +28,27 @@ and more reliable default.
 - Never replace tester lanes with the daily bot, and never let multiple agents
   use the daily bot concurrently.
 
-For an approved managed-Jarvis canary, preview the zero-mutation plan first:
+For an approved daily-Jarvis canary, select the deployed source and preview the
+zero-mutation plan first. Managed bundle remains the strict default:
 
 ```bash
 bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
   --expected-commit <deployed-commit>
 ```
+
+After `scripts/ship-jarvis-hotfix.sh`, use the explicit protected source instead:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --runtime-source jarvis-break-glass-hotfix \
+  --expected-commit <deployed-commit>
+```
+
+Never retry a managed-source rejection by warming a tester lane. Packaged
+releases use `jarvis-managed-bundle`; protected break-glass deployments use
+`jarvis-break-glass-hotfix`; isolated worktree bots use
+`telegram-live-runtime.sh ensure`. The canary never auto-falls back between
+sources.
 
 Run `--execute` only with fresh approval after the expected commit is deployed.
 The harness targets `ai.jarvis.gateway`, acquires the machine-wide canary lock,
@@ -70,11 +85,16 @@ erasure.
   - Copy `.env.bots` from the main checkout if needed
   - Run `bash scripts/assign-bot.sh`
 - Telegram-as-user uses one machine-local canonical session and one shared
-  machine lock. Bootstrap may copy non-session compatibility configuration, but
-  it must never copy the SQLite session database into a worktree.
+  machine lock. The owner is an absolute reference in
+  `~/.openclaw/telegram-user/canonical-session.path`; bootstrap may adopt an
+  existing legacy database by reference, but it must never copy the SQLite
+  session database into a worktree.
 - Explicit session and lock overrides remain available for hermetic tests or a
-  deliberately separate account. If legacy and canonical implicit sessions
-  disagree, stop on the ambiguity diagnostic; do not copy, delete, rotate, or
+  deliberately separate account. Exact duplicate authorizations collapse
+  automatically. If candidates differ, use the diagnostic's one-time
+  `openclaw telegram-user owner claim --source <label>` action. The claim checks
+  authorization and account identity under the machine lock and fails closed
+  when authorized accounts differ. Do not copy, delete, rotate, or
   reauthenticate either database as an automatic repair.
 - `.env.bots` is the tester-bot pool. Each `BOT_TOKEN=...` entry is one
   tester-only bot that can be claimed by one active worktree lane.
@@ -84,6 +104,57 @@ erasure.
 - One active Telegram runtime lane equals one exclusive tester bot token. Do
   not share a bot token across two live runtimes; Telegram long-polling is
   single-owner and the loser will produce fake failures.
+- Tester tokens also carry a durable scenario reservation above the live PID
+  polling lease. For a multi-step scripted flow, pin the scenario explicitly:
+
+  ```bash
+  OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=<stable-run-id> \
+    bash scripts/telegram-live-runtime.sh ensure
+  ```
+
+  Reusing that ID from the same worktree resumes the same bot across gateway
+  or subprocess restarts. A different worktree/scenario cannot take it merely
+  because the poller exited. Without an explicit ID, the first assignment
+  creates a fresh UUID-backed run ID and persists it in `.env.local`; process
+  restarts resume it, while a newly recreated worktree at the same path cannot
+  impersonate the old run.
+
+- End the ownership lifecycle only through
+  `bash scripts/telegram-live-runtime.sh release`. Release validates the exact
+  token, scenario, canonical worktree, and reservation generation; clears the
+  local claim while holding the reservation lock; then makes the bot
+  claimable. Do not hand-edit `.env.local` or reservation files.
+- A pre-reservation lane whose `.env.local` has a token but no scenario
+  generation must perform a one-time canonical `release`, then `ensure`.
+  Likewise, the exact owner of an expired generation must `release`, then
+  `ensure`; it cannot replace its generation in place. Ensure, release, and
+  handoff-main share one worktree-profile lifecycle lock across normal and ACP
+  modes and custom runtime-state roots, so the reset cannot race a restart.
+  Release preserves unrelated local env settings.
+- If assignment stops after publishing a reservation but before publishing the
+  local token credentials, rerunning `ensure` resumes that exact token even if
+  pool eligibility changed. A different scenario override is rejected until
+  the stored scenario is recovered and released. Multiple reservations for the
+  same scenario/worktree fail closed instead of choosing one by file order.
+- Reservations renew on `ensure` and expire after seven days by default.
+  An unassigned scenario/worktree may reclaim an expired reservation only when
+  the process-level polling lease is known absent; the exact prior owner uses
+  the explicit release boundary above. Malformed reservation/lock state fails
+  closed. A crash-persistent lock is never auto-deleted because a read/remove
+  recovery race can erase a newer owner's lock. Stop and inspect its
+  `owner.json`; recovery is an explicit operator action after proving no owner
+  or polling lease is active.
+- The first runtime for a new reservation generation performs a transport-only
+  negative-offset `getUpdates` fence before starting the runner or any model
+  dispatch. Its receipt is scoped to token hash, account, and reservation
+  generation, so old pending updates cannot reach another full-parity tester
+  runtime while same-scenario restarts do not repeatedly discard new messages.
+  An in-progress marker is durable before the tail request; an ambiguous
+  response fails closed for manual recovery instead of rereading Telegram's
+  mutable tail. A successful tail is then recorded as pending before cutoff
+  persistence, so a crash during completion replays that exact cutoff.
+  Safe-reuse generations fail closed in webhook mode until an equivalent
+  pre-dispatch webhook fence exists.
 - Worktree tester baselines strip inherited Telegram secrets on purpose. If the
   source config had named Telegram accounts, the bootstrap writes non-secret
   strip metadata to the baseline `auth-sync.json`, and

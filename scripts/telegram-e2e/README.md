@@ -31,13 +31,28 @@ answer your messages and waste an hour on fake regressions.
   post-deployment acceptance canary. Its disposable Jarvis Lab topic does not
   isolate the gateway, bot token, polling cursor, config, or provider quota.
 
-Preview the managed canary without runtime, network, lock, filesystem, topic,
-message, or session mutation:
+Preview the packaged managed canary without runtime, network, lock, filesystem,
+topic, message, or session mutation. This strict default never accepts a
+protected hotfix:
 
 ```bash
 bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
   --expected-commit <deployed-commit>
 ```
+
+After `scripts/ship-jarvis-hotfix.sh`, preview the protected-hotfix canary:
+
+```bash
+bash scripts/prove-jarvis-telegram-runtime.sh --dry-run \
+  --runtime-source jarvis-break-glass-hotfix \
+  --expected-commit <deployed-commit>
+```
+
+The protected lane verifies the full protection/compatibility/backup receipt,
+`ai.jarvis.gateway`, Jarvis Application Support paths, PID/listener ownership,
+and deep RPC health before it acquires the canary lock or touches Telegram.
+There is no source auto-fallback. Tester-lane warm-up is only for isolated
+worktree bots.
 
 Use `--execute` only after fresh approval. The harness records runtime,
 transport, message, and cleanup evidence; deletes only its exact topic and
@@ -299,8 +314,10 @@ that file for compatibility.
 Use one machine-local Telegram-as-user session. Worktrees share it; they do not
 receive SQLite snapshots.
 
-1. The canonical operator session is
-   `~/.openclaw/telegram-user/userbot.session`.
+1. The canonical operator session is the absolute database referenced by
+   `~/.openclaw/telegram-user/canonical-session.path`. A fresh machine starts
+   with `~/.openclaw/telegram-user/userbot.session`; migration may reference an
+   authorized legacy database in place.
 2. Never commit, print, copy between worktrees, rotate, delete, or
    automatically reauthenticate real credentials or session contents.
 3. For every new worktree, run:
@@ -527,6 +544,61 @@ When a worktree is done with Telegram live testing, free its claim explicitly:
 scripts/telegram-live-runtime.sh release
 ```
 
+### Scenario reservation rule
+
+The PID lease prevents simultaneous polling. The scenario reservation prevents
+sequential transfer while a multi-step acceptance run is unfinished.
+
+Pin scripted runs to one stable ID:
+
+```bash
+OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID=booking-acceptance-20260724 \
+  scripts/telegram-live-runtime.sh ensure
+```
+
+The same scenario and canonical worktree retain the same bot and reservation
+generation across subprocess or gateway restart. Other scenarios/worktrees
+must use another bot until the owner runs the canonical release command:
+
+```bash
+scripts/telegram-live-runtime.sh release
+```
+
+When no ID is supplied, first assignment generates and persists a fresh run
+UUID. Keeping `.env.local` resumes that run after a process restart; recreating
+a worktree at the same filesystem path without the old owner file creates a
+new run/generation and therefore requires a new backlog fence.
+
+Release validates the exact generation and clears `.env.local` ownership while
+the global reservation lock is held before deleting the reservation. Do not
+change scenario IDs or edit reservation state by hand. Old lanes with a token
+but no scenario generation require one explicit `release`, then `ensure`.
+The exact owner of an expired generation uses the same release-then-ensure
+boundary; only an unassigned scenario/worktree can reclaim expiry after proving
+the polling lease absent. Ensure, release, and handoff-main serialize on one
+worktree-profile lock even when ACP or a custom root uses a different runtime
+state directory.
+An interrupted assignment resumes the scenario/worktree's durable token
+reservation even if pool eligibility changes before retry. A different
+scenario override fails closed until that owner is recovered and released.
+Duplicate durable owners for that scenario/worktree fail closed.
+Crash-persistent locks are never auto-deleted: inspect their `owner.json` and
+recover manually only after proving no owner or polling lease is active.
+Malformed or ambiguous state fails closed.
+
+New reservation generations also run a transport-only backlog fence before
+the runner or any model dispatch starts. Telegram's negative offset forgets earlier queued
+updates; the returned tail ID is persisted as the local skip cutoff, and a
+receipt scoped to token hash, account, and reservation generation prevents
+repeated fencing on same-scenario restart. An in-progress marker is written
+before the tail request; an ambiguous response fails closed for manual recovery
+instead of repeating the destructive read. A successful tail ID is then written
+as pending, so a crash during cutoff/receipt completion replays that recorded
+cutoff. Webhook startup fails closed while this fence is required because no
+equivalent webhook cutoff exists yet. This changes ownership/cursor safety only:
+the tester runtime still inherits the main runtime's browser, email, WhatsApp,
+messaging, plugin, and tool capabilities.
+
 ### Tester parity note (important)
 
 The canonical worktree live runtime should behave like main except for explicit isolation fields: bot token, port, state dir, config path, logs, service/profile id, and staged upload path. `ensure` now fails closed when model, browser, plugin-slot, or tool parity drifts.
@@ -693,13 +765,23 @@ Scope note:
   - Run the read-only status/doctor diagnostic. Do not copy a legacy database
     or reauthenticate automatically.
 - `E_UNAUTHORIZED_SESSION`: session exists but is not logged in.
-  - Re-auth once through the internal Python backend, then retry the CLI command.
+  - If this came from owner claim, claim one of the authorized sources named by
+    the diagnostic. Reauthentication is offered only when no candidate is
+    authorized.
+- `E_SESSION_CANDIDATE_UNREADABLE`: one or more migration inputs could not be
+  inspected safely.
+  - Ownership remains unchanged. Repair access to the named non-secret source
+    before retrying; do not delete or ignore it because its account identity is
+    unknown.
 - `E_CHAT_NOT_RESOLVABLE`: precheck cannot resolve `--chat`.
   - Verify chat id/username and account access.
-- `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.
-  - Inspect the reported non-secret candidate sources and choose an explicit
-    session for that invocation. Do not delete or overwrite either file as an
-    automatic repair.
+- `E_AMBIGUOUS_SESSION`: legacy candidates contain different authorization
+  records and no machine owner has been claimed.
+  - Run the exact `openclaw telegram-user owner claim --source <label>` action
+    from the diagnostic. The claim checks every candidate online under the
+    machine lock, persists only an absolute reference, and refuses authorized
+    candidates from different accounts. Do not delete, copy, overwrite, or
+    reauthenticate a candidate to make the error disappear.
 - HTTP `503` or no bot replies usually means gateway is not fully started yet.
   - Wait for provider-start logs and retry.
 - If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
@@ -708,10 +790,12 @@ Scope note:
 
 - Thread targeting uses `reply_to` anchoring.
 - For private topics, thread id can appear as `message_thread_id` or `direct_messages_topic.topic_id`.
-- Normal runners resolve `~/.openclaw/telegram-user/userbot.session` and the
-  machine-wide operator lock.
+- Normal runners resolve the machine owner reference and the machine-wide
+  operator lock. Worktrees keep only their own absolute reference to that same
+  owner.
 - Explicit `--session`/selector and lock overrides remain available for
   hermetic tests or deliberately separate accounts.
 - Recognized legacy repo-relative selectors are migration inputs, not a reason
-  to create another worktree database. Divergent implicit candidates fail
-  loudly with `E_AMBIGUOUS_SESSION`.
+  to create another worktree database. Exact duplicate authorizations collapse
+  automatically; divergent implicit candidates require one explicit owner
+  claim.

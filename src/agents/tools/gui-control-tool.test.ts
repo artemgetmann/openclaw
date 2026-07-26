@@ -9,4 +9,14 @@ describe("createGuiControlTool", () => {
     expect(properties.action.enum).not.toContain("secondary_action");
     expect(Object.keys(properties)).not.toContain("secondaryAction");
   });
+
+  it("keeps sensitive approval authority out of model-controlled parameters", () => {
+    const tool = createGuiControlTool();
+    const properties = tool.parameters.properties as Record<string, unknown>;
+
+    expect(properties).toHaveProperty("approvedPolicyRisk");
+    expect(properties).not.toHaveProperty("approvedSensitiveAction");
+    expect(properties).not.toHaveProperty("approvedSensitiveScope");
+    expect(properties).not.toHaveProperty("approvalId");
+  });
 });

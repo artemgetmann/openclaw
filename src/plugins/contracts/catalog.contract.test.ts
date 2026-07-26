@@ -28,7 +28,7 @@ describe("provider catalog contract", () => {
           listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
         },
       }),
-    ).toContain("openai-codex/gpt-5.5");
+    ).toContain("openai-codex/gpt-5.6-sol");
   });
 
   it("keeps built-in model suppression wired through the provider runtime", () => {
@@ -97,9 +97,23 @@ describe("provider catalog contract", () => {
         },
       }),
     ).resolves.toEqual([
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
       { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.4 Pro" },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      },
       { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
       {

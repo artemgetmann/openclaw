@@ -19,6 +19,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { loadDurableFollowups } from "./queue/durable-store.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -305,6 +306,60 @@ async function runReplyAgentWithBase(params: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("persists a restart blocker before a direct turn enters model or tool work", async () => {
+    await withStateDirEnv("openclaw-direct-turn-restart-blocker-", async () => {
+      let finishRun: (() => void) | undefined;
+      const runFinished = new Promise<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, never>;
+      }>((resolve) => {
+        finishRun = () => resolve({ payloads: [{ text: "exact final" }], meta: {} });
+      });
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => await runFinished);
+      const onDurableReplyAccepted = vi.fn();
+      const direct = createMinimalRun({
+        opts: { onDurableReplyAccepted },
+      });
+      Object.assign(direct.followupRun, {
+        messageId: "telegram:25606",
+        originatingChannel: "telegram",
+        originatingTo: "-1003783709877",
+        originatingAccountId: "default",
+        originatingThreadId: 21876,
+      });
+
+      const resultPromise = direct.run();
+      await vi.waitFor(() => expect(onDurableReplyAccepted).toHaveBeenCalledTimes(1));
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+
+      const [runningRecord] = await loadDurableFollowups();
+      expect(runningRecord?.delivery?.payloads).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("interrupted after accepting"),
+        }),
+      ]);
+
+      finishRun?.();
+      await expect(resultPromise).resolves.toEqual(
+        expect.objectContaining({ text: "exact final" }),
+      );
+
+      // The live transport has not acknowledged delivery yet. A restart in
+      // this window must deliver the conservative recovery receipt without
+      // rerunning model or tool work. Provider acceptance can be ambiguous,
+      // so replaying even a completed final would be less safe.
+      const [completedRecord] = await loadDurableFollowups();
+      expect(completedRecord?.id).toBe(runningRecord?.id);
+      expect(completedRecord?.delivery?.payloads).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("did not repeat the unfinished actions"),
+        }),
+      ]);
+    });
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
@@ -1583,6 +1638,81 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persisted[sessionKey].totalTokens).toBeUndefined();
       expect(persisted[sessionKey].totalTokensFresh).toBe(false);
       expect(persisted[sessionKey].cliSessionIds?.["openai-codex"]).toBeUndefined();
+    });
+  });
+
+  it("continues after transcript reconciliation replaces stale cumulative prompt usage", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "stale-cumulative-usage-session";
+      const sessionKey = "agent:main:telegram:group:-1003783709877:topic:21876";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "openai-codex": { command: "codex" },
+            },
+            compaction: {
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        totalTokens: 177_807,
+        totalTokensFresh: false,
+        inputTokens: 4_061_906,
+        contextTokens: 272_000,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        JSON.stringify({ usage: { input: 177_807, output: 7_807 } }),
+        "utf-8",
+      );
+
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "The conversation continued." }],
+        meta: { agentMeta: { usage: { input: 171_000, output: 20, total: 171_020 } } },
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        agentCfgContextTokens: 272_000,
+        runOverrides: {
+          agentId: "main",
+          agentDir: stateDir,
+          sessionId,
+          sessionFile: transcriptPath,
+          messageProvider: "telegram",
+          provider: "openai-codex",
+          model: "gpt-5.6-sol",
+          config: cfg,
+          persistedPromptTokens: 4_061_906,
+        },
+      });
+      const res = await run();
+
+      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        sessionId,
+      });
+      expect(res).toMatchObject({ text: "The conversation continued." });
+      expect(sessionStore[sessionKey].sessionId).toBe(sessionId);
+      expect(sessionStore[sessionKey].totalTokens).toBe(177_807);
+      expect(sessionStore[sessionKey].totalTokensFresh).toBe(true);
     });
   });
 

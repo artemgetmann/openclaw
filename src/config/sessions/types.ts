@@ -96,6 +96,24 @@ export type RecentHeartbeatEntry = {
   status: "sent";
 };
 
+export type HeartbeatAttentionStateEntry = {
+  /** Stable model-owned identity for one attention item across heartbeat runs. */
+  key: string;
+  /**
+   * Material-state fingerprint, not a hash of prose. Reusing it lets the runner suppress
+   * paraphrased repeats without trusting exact message equality.
+   */
+  fingerprint: string;
+  /** Short human label retained for prompt history and operator diagnostics. */
+  title: string;
+  /** Delivery timestamp (epoch ms) for the latest materially changed version. */
+  deliveredAt: number;
+  /** Urgency at delivery time; escalation to urgent is itself a material change. */
+  urgency: "normal" | "urgent";
+  /** Compact destination label; detailed channel metadata remains in the delivered message. */
+  destination: string;
+};
+
 export type SessionPendingRestartConfirmation = {
   /**
    * Session-scoped restart authorization only applies to restart-capable gateway
@@ -156,6 +174,11 @@ export type SessionEntry = {
   lastHeartbeatSentAt?: number;
   /** Small bounded buffer of recent delivered heartbeats for repeat-aware reasoning. */
   recentHeartbeats?: RecentHeartbeatEntry[];
+  /**
+   * Per-item attention state used by typed heartbeat delivery. This is separate from the
+   * human-readable recent-heartbeat previews because item dedupe must survive paraphrasing.
+   */
+  heartbeatAttentionState?: HeartbeatAttentionStateEntry[];
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -437,6 +460,10 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Runtime eligibility note preserved when the prompt is reranked on later turns. */
+  remoteNote?: string;
+  /** Skills whose configured/product priority must stay ahead of relevance sorting. */
+  protectedSkillNames?: string[];
   resolvedSkills?: Skill[];
   version?: number;
 };

@@ -1,8 +1,10 @@
+import { createHmac, randomBytes } from "node:crypto";
 import type {
   AppTarget,
   ElementRef,
   GuiActionType,
   GuiMutationRisk,
+  GuiRuntimeName,
   GuiSnapshot,
 } from "./types.js";
 
@@ -19,6 +21,12 @@ export const GUI_VERIFICATION_MODES = ["observe_only", "post_state"] as const;
 
 export type GuiCapability = (typeof GUI_CAPABILITIES)[number];
 export type GuiVerificationMode = (typeof GUI_VERIFICATION_MODES)[number];
+
+// The verifier needs a stable identity digest during one process lifetime, but
+// must not expose a reusable hash of passwords, OTPs, or account identifiers.
+// A process-local HMAC binds the raw observed context without making low-
+// entropy secrets guessable from the approval scope.
+const GUI_APPROVAL_SCOPE_HMAC_KEY = randomBytes(32);
 
 export type GuiTaskPolicy = {
   taskId: string;
@@ -499,16 +507,44 @@ export type GuiPolicyDecision = {
   reason?: string;
   requiredCapability?: GuiCapability;
   taskPolicy?: GuiTaskPolicy;
+  approvalScope?: GuiApprovalScope;
+  requiredSensitiveApproval?: GuiApprovalScope;
+};
+
+/**
+ * The semantic target covered by one explicit GUI approval.
+ *
+ * Refs and bounds are deliberately excluded because accessibility runtimes can
+ * renumber or reposition the same control. Secrets and current field values are
+ * also excluded so an approval scope is safe to retain in audit/debug output.
+ */
+export type GuiApprovalScope = {
+  actionType: GuiActionType;
+  runtimeName: GuiRuntimeName | "unknown";
+  appName: string;
+  windowTitle: string;
+  windowId: string;
+  taskPolicyId: string;
+  selectedControl: string[];
+  actionParameters: string[];
+  visibleTransactionDetails: string[];
+  visibleContextSummary: string[];
+  visibleContextFingerprint: string;
+  sensitiveTerms: string[];
 };
 
 export type GuiPolicyInput = {
   actionType: GuiActionType;
+  runtimeName?: GuiRuntimeName;
   target: AppTarget;
   snapshot?: GuiSnapshot;
   element?: ElementRef;
   secondaryAction?: string;
+  keys?: string[];
+  scroll?: { direction?: "up" | "down" | "left" | "right"; amount?: number };
   reason: string;
   approvedPolicyRisk?: boolean;
+  approvedSensitiveScope?: GuiApprovalScope;
   taskPolicy?: GuiTaskPolicy;
   verificationMode?: GuiVerificationMode;
 };
@@ -842,6 +878,180 @@ function hasAnyTerm(haystack: string, terms: string[]): string | undefined {
   return terms.find((term) => surfaceTermPattern(term).test(haystack));
 }
 
+function redactApprovalDisplayText(value: string | undefined): string {
+  return normalizeText(value)
+    .replace(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/gi, "[email]")
+    .replace(/\b(?:[a-z0-9_-]{24,})\b/gi, "[token]")
+    .replace(/\b\d{4,}\b/g, "[number]");
+}
+
+function nonEditableApprovalValue(input: GuiPolicyInput): string {
+  if (input.actionType === "setValue") {
+    return "";
+  }
+  const role = normalizeText(input.element?.role);
+  if (!/\b(button|checkbox|radio|menu item|row|cell|link|static text)\b/.test(role)) {
+    return "";
+  }
+  return normalizeText(input.element?.value);
+}
+
+function extractApprovalFact(value: string | undefined): string {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return "";
+  }
+  if (
+    /^(?:merchant|seller|vendor|item|product|route|flight|passenger|traveler|shipping(?: address)?|delivery(?: address)?|payment method|card|source|publisher|developer|version|total|price|amount|quantity|order|booking)\b(?:\s*[:#=-]\s*|\s+).+/.test(
+      normalized,
+    ) ||
+    /\b(?:visa|mastercard|amex|american express|discover)\b.*\bending\s+\d{2,}\b/.test(normalized)
+  ) {
+    return normalized;
+  }
+  return "";
+}
+
+function createGuiApprovalScope(
+  input: GuiPolicyInput,
+  taskPolicy: GuiTaskPolicy,
+): GuiApprovalScope {
+  // Bind approval to both the selected control and the risk classes visible in
+  // its current window. A stale ref may keep the same identifier while a page
+  // changes from "Sign In" to "Pay Now"; the changed risk set must invalidate
+  // the old approval before any retry.
+  const context = [
+    sensitiveSurfaceText(input, taskPolicy.deniedSurfaceTerms),
+    preAuthHardStopContextText(input),
+    commerceHardStopContextText(input),
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+  const sensitiveTerms = [
+    ...new Set([
+      ...taskPolicy.deniedSurfaceTerms,
+      ...TRUSTED_LOCAL_GUI_HARD_STOP_TERMS,
+      ...COMMERCE_HARD_STOP_CONTEXT_TERMS,
+    ]),
+  ]
+    .filter((term) => surfaceTermPattern(term).test(context))
+    .map(normalizeText)
+    .toSorted();
+  const observedDetailParts = [
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.summary,
+    ...(input.snapshot?.visibleText ?? []),
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    input.element?.description,
+    nonEditableApprovalValue(input),
+    input.secondaryAction,
+  ]
+    .map(normalizeText)
+    .filter(Boolean);
+  const approvalDetailContext = observedDetailParts.join(" ");
+  const visibleTransactionDetails = [
+    // Currency amounts and version identifiers are material approval facts but
+    // are not credentials. Bind them without retaining arbitrary visible text,
+    // passwords, OTPs, account identifiers, or field values.
+    ...approvalDetailContext.matchAll(
+      /(?:[$€£¥₹]\s?\d[\d,.]*|\b(?:usd|eur|gbp|jpy|inr|idr|aed|cad|aud)\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:usd|eur|gbp|jpy|inr|idr|aed|cad|aud)\b)/gi,
+    ),
+    ...approvalDetailContext.matchAll(
+      /\b(?:version|ver\.?|v)\s*\d+(?:\.\d+){1,4}(?:[-+][a-z0-9.-]+)?\b/gi,
+    ),
+  ]
+    .map((match) => normalizeText(match[0]))
+    .filter(Boolean)
+    .toSorted();
+  const stableVisibleFacts = [
+    input.snapshot?.summary,
+    ...(input.snapshot?.visibleText ?? []),
+    nonEditableApprovalValue(input),
+  ]
+    .map(extractApprovalFact)
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 8);
+  const stableIdentityContext = [
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    input.snapshot?.windowId,
+    input.element?.role,
+    input.element?.name,
+    input.element?.title,
+    input.element?.label,
+    nonEditableApprovalValue(input),
+    input.secondaryAction,
+    ...(input.actionType === "setValue" ? [input.element?.description, input.element?.value] : []),
+    ...visibleTransactionDetails,
+    ...stableVisibleFacts,
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join(" ");
+  const visibleContextFingerprint = createHmac("sha256", GUI_APPROVAL_SCOPE_HMAC_KEY)
+    .update(stableIdentityContext)
+    .digest("hex");
+  const withholdVisibleContext =
+    sensitiveTerms.some((term) =>
+      /password|passkey|otp|one-time password|verification code|token|secret|security code|cvv|cvc/.test(
+        term,
+      ),
+    ) || input.actionType === "setValue";
+  const visibleContextSummary = withholdVisibleContext
+    ? []
+    : stableVisibleFacts
+        .map(redactApprovalDisplayText)
+        .filter(Boolean)
+        .map((value) => value.slice(0, 160));
+
+  return {
+    actionType: input.actionType,
+    runtimeName: input.runtimeName ?? "unknown",
+    appName: redactApprovalDisplayText(input.snapshot?.appName ?? input.target.appName),
+    windowTitle: redactApprovalDisplayText(input.snapshot?.windowTitle ?? input.target.windowTitle),
+    windowId: normalizeText(input.snapshot?.windowId ?? input.target.windowId),
+    taskPolicyId: taskPolicy.taskId,
+    selectedControl: [
+      input.element?.role,
+      input.element?.name,
+      input.element?.title,
+      input.element?.label,
+      redactApprovalDisplayText(nonEditableApprovalValue(input)),
+      input.secondaryAction,
+    ]
+      .map(redactApprovalDisplayText)
+      .filter(Boolean),
+    actionParameters: [
+      ...(input.keys ?? []).map((key) => `key:${normalizeText(key)}`),
+      ...(input.secondaryAction
+        ? [`secondary-action:${normalizeText(input.secondaryAction)}`]
+        : []),
+      ...(input.scroll?.direction ? [`scroll-direction:${input.scroll.direction}`] : []),
+      ...(input.scroll?.amount !== undefined ? [`scroll-amount:${input.scroll.amount}`] : []),
+    ],
+    visibleTransactionDetails: [...new Set(visibleTransactionDetails)],
+    visibleContextSummary,
+    visibleContextFingerprint,
+    sensitiveTerms,
+  };
+}
+
+export function guiApprovalScopesMatch(
+  left: GuiApprovalScope | undefined,
+  right: GuiApprovalScope | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function isAllowedNonCommittalUiCardContext(haystack: string): boolean {
   return (
     /\b(fare|flight|result|search|suggestion)\s+card\b/.test(haystack) &&
@@ -1026,9 +1236,10 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     };
   }
 
-  // Denied surfaces are capability-proof. Login, payment, account settings,
-  // and destructive surfaces stay blocked even when a caller has mutation
-  // approval, because those require a higher-trust flow than this verifier.
+  // Sensitive surfaces are approval gates, not permanent capability bans. The
+  // user owns this personal computer and may explicitly authorize the exact
+  // action. Capability and post-state checks below still constrain what the
+  // selected task profile and runtime can execute.
   const text = sensitiveSurfaceText(input, taskPolicy.deniedSurfaceTerms);
   let blockedSurface = hasAnyTerm(text, taskPolicy.deniedSurfaceTerms);
   if (
@@ -1063,14 +1274,14 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     // discovery, and dismissal remain reversible until a credential is used.
     blockedSurface = undefined;
   }
-  if (blockedSurface) {
-    return {
-      allowed: false,
-      risk: "blocked",
-      reason: `Blocked sensitive GUI surface: ${blockedSurface}`,
-      requiredCapability,
-      taskPolicy,
-    };
+  const approvalScope = createGuiApprovalScope(input, taskPolicy);
+  let sensitiveApprovalReason =
+    blockedSurface && input.actionType !== "observe"
+      ? `Blocked sensitive GUI surface: ${blockedSurface}; explicit sensitive-action approval required.`
+      : undefined;
+  if (taskPolicy.taskId === "software_update_install_approved" && input.actionType !== "observe") {
+    sensitiveApprovalReason ??=
+      "Software update installation or relaunch requires explicit sensitive-action approval.";
   }
 
   if (commerceDetailEntryRequiresExplicitSource(input)) {
@@ -1117,13 +1328,7 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
       hardStopContext = undefined;
     }
     if (hardStopContext) {
-      return {
-        allowed: false,
-        risk: "blocked",
-        reason: `Blocked sensitive GUI context: ${hardStopContext}`,
-        requiredCapability,
-        taskPolicy,
-      };
+      sensitiveApprovalReason ??= `Blocked sensitive GUI context: ${hardStopContext}; explicit sensitive-action approval required.`;
     }
   }
 
@@ -1166,5 +1371,28 @@ export function evaluateGuiPolicy(input: GuiPolicyInput): GuiPolicyDecision {
     };
   }
 
-  return { allowed: true, risk: "allowed-mutation", requiredCapability, taskPolicy };
+  // Ask only after every static capability, target, task-profile, and
+  // verification check has passed. This prevents prompting the user for an
+  // action that the same invocation could never execute.
+  if (
+    sensitiveApprovalReason &&
+    !guiApprovalScopesMatch(input.approvedSensitiveScope, approvalScope)
+  ) {
+    return {
+      allowed: false,
+      risk: "blocked",
+      reason: sensitiveApprovalReason,
+      requiredCapability,
+      taskPolicy,
+      requiredSensitiveApproval: approvalScope,
+    };
+  }
+
+  return {
+    allowed: true,
+    risk: "allowed-mutation",
+    requiredCapability,
+    taskPolicy,
+    approvalScope,
+  };
 }

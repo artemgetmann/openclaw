@@ -77,6 +77,34 @@ describe("markdownToTelegramHtml", () => {
     expect(res).not.toContain("<a href");
   });
 
+  it("keeps a multi-paragraph recipient draft in one tap-to-copy block", () => {
+    const res = markdownToTelegramHtml(
+      [
+        "Ready to send (Italian)",
+        "",
+        "> Raffaele, voglio separare chiaramente due argomenti.",
+        ">",
+        "> Il primo riguarda il Suo utilizzo personale di Jarvis.",
+        ">",
+        "> Poi può scegliere un orario qui:",
+        "> https://calendar.app.google/example",
+      ].join("\n"),
+      { copySafeBlockquotes: true },
+    );
+
+    expect(res.match(/<pre><code>/g)).toHaveLength(1);
+    expect(res).toContain(
+      [
+        "Raffaele, voglio separare chiaramente due argomenti.",
+        "",
+        "Il primo riguarda il Suo utilizzo personale di Jarvis.",
+        "",
+        "Poi può scegliere un orario qui:",
+        "https://calendar.app.google/example",
+      ].join("\n"),
+    );
+  });
+
   it("can render rich-message draft blockquotes as copyable code blocks", () => {
     const res = markdownToTelegramRichHtml(
       [

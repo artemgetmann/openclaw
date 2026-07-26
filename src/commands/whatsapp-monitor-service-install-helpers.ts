@@ -1,4 +1,7 @@
-import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import path from "node:path";
+import { createConfigIO, resolveGatewayPort } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import {
   formatWhatsAppMonitorServiceDescription,
   resolveWhatsAppMonitorLaunchAgentLabel,
@@ -22,6 +25,31 @@ export type WhatsAppMonitorServiceInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;
 };
+
+export async function readWhatsAppMonitorConfigForEnv(env: Record<string, string | undefined>) {
+  // Service identity normalization can select a consumer/profile config that
+  // differs from the caller's process.env. Read through an isolated config IO
+  // instance so cron.store and gateway.port come from the service we install.
+  const configIO = createConfigIO({ env: env as NodeJS.ProcessEnv });
+  const snapshot = await configIO.readConfigFileSnapshot();
+  return snapshot.valid ? configIO.loadConfigReadOnly() : snapshot.config;
+}
+
+export function resolveWhatsAppMonitorCronStorePath(params: {
+  configuredStore?: string;
+  env: Record<string, string | undefined>;
+  explicitStore?: string;
+}): string {
+  const explicitStore = readFirstNonEmpty(params.explicitStore, params.configuredStore);
+  if (explicitStore) {
+    return resolveCronStorePath(explicitStore);
+  }
+
+  // The gateway keeps monitor records beside its cron store. Derive the
+  // default from the normalized service environment instead of module-level
+  // CONFIG_DIR so consumer/profile installs cannot inherit the caller's store.
+  return path.join(resolveStateDir(params.env as NodeJS.ProcessEnv), "cron", "jobs.json");
+}
 
 function readFirstNonEmpty(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
@@ -61,14 +89,19 @@ export async function buildWhatsAppMonitorServiceInstallPlan(params: {
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
-  const cfg = await readBestEffortConfig();
+  const cfg = await readWhatsAppMonitorConfigForEnv(daemonEnv);
   const gatewayPort = resolveGatewayPort(cfg, daemonEnv as NodeJS.ProcessEnv);
+  const cronStore = resolveWhatsAppMonitorCronStorePath({
+    configuredStore: cfg.cron?.store,
+    env: daemonEnv,
+    explicitStore: params.cronStore,
+  });
   const hookUrl = resolveLocalWhatsAppMonitorHookUrl(
     params.hookUrl?.trim() ||
       resolveDefaultWhatsAppMonitorHookUrl({ env: daemonEnv, port: gatewayPort }),
   );
   const { programArguments, workingDirectory } = await resolveWhatsAppMonitorProgramArguments({
-    cronStore: params.cronStore,
+    cronStore,
     cursorStore: params.cursorStore,
     dbPath: params.dbPath,
     hookUrl,

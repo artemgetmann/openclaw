@@ -172,7 +172,7 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults"],
     message:
-      "Jarvis consumer model allowlist is missing current GPT-5.5/Sonnet defaults (auto-migrated on load).",
+      "Jarvis consumer model allowlist is missing current GPT-5.6 Sol/Sonnet defaults (auto-migrated on load).",
     match: (_value, root) => shouldMigrateJarvisConsumerModelDefaults(root),
   },
   {

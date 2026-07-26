@@ -1,11 +1,6 @@
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
-import {
-  classifyFatalListenerHealthError,
-  resolveListenerHealthStorePath,
-  updateListenerHealth,
-  type ListenerHealthSnapshot,
-} from "../monitor/listener-health.js";
+import type { ListenerHealthSnapshot } from "../monitor/listener-health.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   getTelegramUserDefaultPollIntervalMs,
@@ -15,6 +10,7 @@ import {
   runTelegramUserLogout,
   runTelegramUserMarkRead,
   runTelegramUserMarkUnread,
+  runTelegramUserOwnerClaim,
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserDownload,
@@ -24,14 +20,9 @@ import {
   runTelegramUserTopicDelete,
   sleep,
 } from "../telegram-user/backend.js";
-import {
-  buildTelegramUserMonitorEventEnvelope,
-  pickTelegramUserMonitorMessage,
-} from "../telegram-user/monitor-event.js";
-import { resolveLocalTelegramMonitorHookUrl } from "../telegram-user/monitor-hook-url.js";
-import {
-  pollTelegramUserMonitorEvents,
-  type TelegramUserMonitorPollDispatchContext,
+import type {
+  TelegramUserMonitorPollDispatchContext,
+  TelegramUserMonitorPollResult,
 } from "../telegram-user/monitor-listener.js";
 import type {
   TelegramUserAuthStatus,
@@ -44,6 +35,7 @@ import type {
   TelegramUserLoginResult,
   TelegramUserMarkReadResult,
   TelegramUserMarkUnreadResult,
+  TelegramUserOwnerClaimResult,
   TelegramUserMessage,
   TelegramUserLogoutResult,
   TelegramUserPrecheck,
@@ -54,7 +46,6 @@ import type {
   TelegramUserWaitParams,
   TelegramUserWaitResult,
 } from "../telegram-user/types.js";
-import { runTelegramUserWait } from "../telegram-user/wait.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -369,7 +360,7 @@ async function postTelegramUserMonitorEventHook(
 }
 
 function formatTelegramMonitorPollText(
-  result: Awaited<ReturnType<typeof pollTelegramUserMonitorEvents>>,
+  result: TelegramUserMonitorPollResult,
   runNumber?: number,
 ): string {
   const lines = [
@@ -591,6 +582,21 @@ function logLogoutText(runtime: RuntimeEnv, result: TelegramUserLogoutResult) {
   if (result.removed_paths.length > 0) {
     runtime.log(`removed=${result.removed_paths.join(",")}`);
   }
+  if (result.owner_path_preserved) {
+    runtime.log("owner_path_preserved=true");
+  }
+}
+
+function logOwnerClaimText(runtime: RuntimeEnv, result: TelegramUserOwnerClaimResult) {
+  const rich = isRich();
+  const colorize = rich ? theme.success : (text: string) => text;
+  runtime.log(
+    colorize(`Telegram user owner claimed: source=${result.source} session=${result.session_path}`),
+  );
+  runtime.log(
+    `authorized_same_account_sources=${result.authorized_same_account_sources.join(",") || "none"}`,
+  );
+  runtime.log(`unauthorized_sources=${result.unauthorized_sources.join(",") || "none"}`);
 }
 
 function logSendText(runtime: RuntimeEnv, result: TelegramUserSendResult) {
@@ -911,6 +917,25 @@ export async function telegramUserLogoutCommand(
   logLogoutText(runtime, result);
 }
 
+export async function telegramUserOwnerClaimCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const source = readStringOpt(opts, "source");
+  if (!source) {
+    throw new Error("Telegram user owner claim requires --source.");
+  }
+  const result = await runTelegramUserOwnerClaim({
+    envFile: readStringOpt(opts, "envFile"),
+    source,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logOwnerClaimText(runtime, result);
+}
+
 export async function telegramUserSendCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
   const chat = readStringOpt(opts, "chat");
   const message = readStringOpt(opts, "message");
@@ -1090,6 +1115,11 @@ export async function telegramUserMonitorListenCommand(
   opts: Record<string, unknown>,
   runtime: RuntimeEnv,
 ) {
+  // Keep the normal read/send/status path free of monitor-store and routing
+  // dependencies. Those modules pull in a large gateway-oriented graph that a
+  // one-shot MTProto command never uses and previously paid to load on every run.
+  const { buildTelegramUserMonitorEventEnvelope, pickTelegramUserMonitorMessage } =
+    await import("../telegram-user/monitor-event.js");
   const chat = readStringOpt(opts, "chat");
   if (!chat) {
     throw new Error("Telegram user monitor-listen requires --chat.");
@@ -1150,6 +1180,18 @@ export async function telegramUserMonitorPollCommand(
   opts: Record<string, unknown>,
   runtime: RuntimeEnv,
 ) {
+  // Monitor polling genuinely needs the durable store, listener health, and
+  // hook routing graph. Load it only after this specific command is selected so
+  // read/send/doctor startup remains proportional to the work requested.
+  const [listenerHealth, monitorHook, monitorListener] = await Promise.all([
+    import("../monitor/listener-health.js"),
+    import("../telegram-user/monitor-hook-url.js"),
+    import("../telegram-user/monitor-listener.js"),
+  ]);
+  const { classifyFatalListenerHealthError, resolveListenerHealthStorePath, updateListenerHealth } =
+    listenerHealth;
+  const { resolveLocalTelegramMonitorHookUrl } = monitorHook;
+  const { pollTelegramUserMonitorEvents } = monitorListener;
   const hookUrl = readStringOpt(opts, "hookUrl");
   const localHookUrl = hookUrl ? resolveLocalTelegramMonitorHookUrl(hookUrl) : undefined;
   const commitWithoutDispatch = readBooleanOpt(opts, "commitWithoutDispatch");
@@ -1223,7 +1265,7 @@ export async function telegramUserMonitorPollCommand(
   };
 
   for (let runNumber = 1; ; runNumber += 1) {
-    let result: Awaited<ReturnType<typeof pollTelegramUserMonitorEvents>>;
+    let result: TelegramUserMonitorPollResult;
     try {
       result = await pollTelegramUserMonitorEvents(basePollOptions);
     } catch (err) {
@@ -1281,6 +1323,9 @@ export async function telegramUserMonitorPollCommand(
 }
 
 export async function telegramUserWaitCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
+  // Waiting adds polling semantics that ordinary one-shot commands do not need.
+  // Defer that module until `wait` is actually invoked.
+  const { runTelegramUserWait } = await import("../telegram-user/wait.js");
   const chat = readStringOpt(opts, "chat");
   if (!chat) {
     throw new Error("Telegram user wait requires --chat.");

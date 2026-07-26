@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -18,6 +19,32 @@ const runResult = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.P
     encoding: "utf8",
     env: env ? { ...process.env, ...env } : process.env,
   });
+
+function writeSessionFixture(sessionPath: string, authKey: string, marker: string): void {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import sqlite3,sys",
+        "connection=sqlite3.connect(sys.argv[1])",
+        "connection.execute('CREATE TABLE sessions (dc_id INTEGER PRIMARY KEY, auth_key BLOB)')",
+        "connection.execute('INSERT INTO sessions (dc_id, auth_key) VALUES (?, ?)', (2, sys.argv[2].encode()))",
+        "connection.execute('CREATE TABLE fixture_metadata (marker TEXT)')",
+        "connection.execute('INSERT INTO fixture_metadata (marker) VALUES (?)', (sys.argv[3],))",
+        "connection.commit()",
+        "connection.close()",
+      ].join(";"),
+      sessionPath,
+      authKey,
+      marker,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(`failed to create session fixture: ${result.stderr}`);
+  }
+}
 
 const initFixture = () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-bootstrap-telegram-"));
@@ -43,6 +70,11 @@ const initFixture = () => {
   symlinkSync(
     path.join(process.cwd(), "scripts", "bootstrap-worktree-telegram.sh"),
     path.join(worktree, "scripts", "bootstrap-worktree-telegram.sh"),
+  );
+  mkdirSync(path.join(worktree, "scripts", "telegram-e2e"), { recursive: true });
+  symlinkSync(
+    path.join(process.cwd(), "scripts", "telegram-e2e", "session_owner.py"),
+    path.join(worktree, "scripts", "telegram-e2e", "session_owner.py"),
   );
   writeFileSync(
     path.join(worktree, "scripts", "assign-bot.sh"),
@@ -70,6 +102,7 @@ describe("bootstrap-worktree-telegram", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("telegram bootstrap complete");
     expect(result.stdout).toContain("telegram_session_source=main-canonical-legacy");
+    expect(result.stdout).toContain("telegram_session_migration=adopted");
     expect(result.stdout).toContain("telegram_lock_scope=machine");
     expect(readFileSync(path.join(worktree, ".env.bots"), "utf8")).toContain(
       "BOT_TOKEN=111:exhausted",
@@ -158,7 +191,55 @@ describe("bootstrap-worktree-telegram", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("E_AMBIGUOUS_SESSION");
     expect(result.stderr).toContain("machine,main-canonical-legacy");
+    expect(result.stderr).toContain("owner claim --source machine");
+    expect(result.stderr).toContain("owner claim --source main-canonical-legacy");
     expect(result.stderr).not.toContain("session-bytes");
+  });
+
+  it("collapses identical machine and legacy copies into one durable owner", () => {
+    const { home, mainRepo, worktree } = initFixture();
+    const machineSession = path.join(home, ".openclaw", "telegram-user", "userbot.session");
+    const mainSession = path.join(mainRepo, "scripts", "telegram-e2e", "tmp", "userbot.session");
+    mkdirSync(path.dirname(machineSession), { recursive: true });
+    writeFileSync(mainSession, "");
+    writeSessionFixture(mainSession, "same-auth-key", "main-copy");
+    writeSessionFixture(machineSession, "same-auth-key", "machine-copy");
+
+    const result = runResult(
+      worktree,
+      "bash",
+      ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("telegram_session_source=machine");
+    expect(result.stdout).toContain("telegram_session_migration=duplicates-collapsed");
+    expect(
+      readFileSync(path.join(home, ".openclaw", "telegram-user", "canonical-session.path"), "utf8"),
+    ).toBe(`${realpathSync(machineSession)}\n`);
+  });
+
+  it("keeps a lane-local legacy session discoverable as a migration input", () => {
+    const { home, mainRepo, worktree } = initFixture();
+    const mainSession = path.join(mainRepo, "scripts", "telegram-e2e", "tmp", "userbot.session");
+    const laneSession = path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session");
+    unlinkSync(mainSession);
+    mkdirSync(path.dirname(laneSession), { recursive: true });
+    writeSessionFixture(laneSession, "lane-auth-key", "legacy-worktree");
+
+    const result = runResult(
+      worktree,
+      "bash",
+      ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
+      { HOME: home, OPENCLAW_MAIN_REPO: mainRepo },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("telegram_session_source=lane-legacy");
+    expect(
+      readFileSync(path.join(home, ".openclaw", "telegram-user", "canonical-session.path"), "utf8"),
+    ).toBe(`${realpathSync(laneSession)}\n`);
   });
 
   it("reports the known Jarvis app-support session as an implicit divergent owner", () => {
@@ -212,6 +293,12 @@ describe("bootstrap-worktree-telegram", () => {
         "utf8",
       ),
     ).toBe(`${explicitSession}\n`);
+    expect(
+      readFileSync(
+        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session.scope"),
+        "utf8",
+      ),
+    ).toBe("explicit-canonical\n");
     expect(existsSync(explicitSession)).toBe(false);
   });
 });

@@ -20,7 +20,18 @@ import {
 } from "./network-errors.js";
 import { TelegramPollingSession } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
+import {
+  readTelegramSafeReuseFenceState,
+  resolveTelegramSafeReuseFenceRequest,
+  writeCompletedTelegramSafeReuseFence,
+  writePendingTelegramSafeReuseFence,
+  writeReadingTelegramSafeReuseFence,
+} from "./safe-reuse-fence-store.js";
+import {
+  deleteTelegramUpdateOffset,
+  readTelegramUpdateOffset,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -201,6 +212,40 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         );
       }
     };
+    const persistSafeReuseCutoff = async (updateId: number | null) => {
+      // Unlike normal best-effort progress persistence, a safe-reuse receipt
+      // is a promise that pre-claim backlog cannot dispatch after restart.
+      // Therefore the offset reset/write must succeed before the receipt is
+      // allowed to become durable.
+      if (updateId === null) {
+        await deleteTelegramUpdateOffset({ accountId: account.accountId });
+        lastUpdateId = null;
+        return;
+      }
+      const normalizedUpdateId = normalizePersistedUpdateId(updateId);
+      if (normalizedUpdateId === null) {
+        throw new Error(`Telegram safe-reuse cutoff is invalid: ${String(updateId)}`);
+      }
+      await writeTelegramUpdateOffset({
+        accountId: account.accountId,
+        updateId: normalizedUpdateId,
+        botToken: token,
+      });
+      lastUpdateId = normalizedUpdateId;
+    };
+
+    const safeReuseRequest = resolveTelegramSafeReuseFenceRequest({
+      botToken: token,
+      accountId: account.accountId,
+    });
+    if (opts.useWebhook && safeReuseRequest) {
+      // The tester safe-reuse contract currently fences Bot API polling only.
+      // Starting a webhook here would bypass the pre-dispatch cutoff and could
+      // deliver the previous scenario's pending updates to the model.
+      throw new Error(
+        "Telegram safe-reuse backlog fencing is unavailable in webhook mode; refusing startup.",
+      );
+    }
 
     if (opts.useWebhook) {
       await startTelegramWebhook({
@@ -264,6 +309,66 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       runnerOptions: createTelegramRunnerOptions(cfg),
       getLastUpdateId: () => lastUpdateId,
       persistUpdateId,
+      safeReuseFence: (() => {
+        if (!safeReuseRequest) {
+          return undefined;
+        }
+        return {
+          generation: safeReuseRequest.generation,
+          persistCutoff: persistSafeReuseCutoff,
+          resolveState: async () => {
+            const state = await readTelegramSafeReuseFenceState({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+              persistedLastUpdateId: lastUpdateId,
+              persistedOffsetIgnored: ignorePersistedOffset,
+            });
+            if (!state) {
+              return null;
+            }
+            // ACP ignores ordinary progress offsets, but it must retain the
+            // reservation fence's minimum cutoff so the previous scenario's
+            // returned tail can never reach model dispatch.
+            if (
+              state.phase === "complete" &&
+              ignorePersistedOffset &&
+              state.lastUpdateId !== null
+            ) {
+              lastUpdateId = state.lastUpdateId;
+            }
+            return {
+              phase: state.phase,
+              lastUpdateId: state.lastUpdateId,
+              // The first bot was constructed before the restored minimum
+              // cutoff was known. Recreate it so middleware receives the
+              // fence cutoff before any runner or model dispatch starts.
+              recreateBot:
+                state.phase === "complete" && ignorePersistedOffset && state.lastUpdateId !== null,
+            };
+          },
+          markReading: () =>
+            writeReadingTelegramSafeReuseFence({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+            }),
+          markPending: (lastUpdateId: number | null) =>
+            writePendingTelegramSafeReuseFence({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+              lastUpdateId,
+            }),
+          markComplete: (lastUpdateId: number | null) =>
+            writeCompletedTelegramSafeReuseFence({
+              accountId: account.accountId,
+              botToken: token,
+              generation: safeReuseRequest.generation,
+              lastUpdateId,
+            }),
+        };
+      })(),
       log,
       proxyFetchFactory,
       setStatus: opts.setStatus,

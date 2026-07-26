@@ -276,6 +276,33 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("does not rerun message_sending for a prepared reply while still reporting message_sent", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Adjusted once before transport." }],
+      runtime,
+      bot,
+      skipMessageSendingHooks: true,
+    });
+
+    expect(messageHookRunner.runMessageSending).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Adjusted once before transport.",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, content: "Adjusted once before transport." }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
   it("records one outbound activity timestamp after a successful reply payload", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
     const runtime = createRuntime(false);
@@ -792,6 +819,73 @@ describe("deliverReplies", () => {
       }),
     );
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("projects shared interactive buttons onto legacy Telegram messages", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Plugin bind approval required",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Allow once",
+                    value: "pluginbind:approval-123:o",
+                    style: "success",
+                  },
+                  {
+                    label: "Deny",
+                    value: "pluginbind:approval-123:d",
+                    style: "danger",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Plugin bind approval required"),
+      expect.objectContaining({
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "Allow once",
+                callback_data: "pluginbind:approval-123:o",
+                style: "success",
+              },
+              {
+                text: "Deny",
+                callback_data: "pluginbind:approval-123:d",
+                style: "danger",
+              },
+            ],
+          ],
+        },
+      }),
+    );
   });
 
   it("sends structured final-style text to rich messages with block tags", async () => {

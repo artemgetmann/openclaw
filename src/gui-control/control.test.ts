@@ -66,6 +66,7 @@ function snapshot(params: Partial<GuiSnapshot> = {}): GuiSnapshot {
     appName: params.appName ?? "Claude",
     windowTitle: params.windowTitle ?? "Claude",
     summary: params.summary ?? "Claude composer",
+    visibleText: params.visibleText,
     elements: params.elements ?? [{ ref: "@input", role: "textArea", label: "Message", value: "" }],
   };
 }
@@ -130,6 +131,68 @@ describe("runGuiControl", () => {
     expect(result.ok).toBe(false);
     expect(result.blocked).toBe(true);
     expect(result.failureReason).toContain("--verify-text");
+  });
+
+  it("executes the exact sensitive button only after dedicated user approval", async () => {
+    const createRuntime = () =>
+      new MockGuiRuntime({
+        observations: [
+          snapshot({
+            id: "resolve",
+            appName: "System Settings",
+            windowTitle: "Sign-In Required",
+            visibleText: ["Tap continue and sign in to redeem code."],
+            elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
+          }),
+          snapshot({
+            id: "pre",
+            appName: "System Settings",
+            windowTitle: "Sign-In Required",
+            visibleText: ["Tap continue and sign in to redeem code."],
+            elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
+          }),
+          snapshot({
+            id: "approved-pre",
+            appName: "System Settings",
+            windowTitle: "Sign-In Required",
+            visibleText: ["Tap continue and sign in to redeem code."],
+            elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
+          }),
+          snapshot({
+            id: "post",
+            appName: "System Settings",
+            windowTitle: "Redeem Code",
+            visibleText: ["Redeem Code"],
+            elements: [{ ref: "@code", role: "text field", label: "Code" }],
+          }),
+        ],
+        actions: [{ ok: true }],
+      });
+    const blockedRuntime = createRuntime();
+    const approvedRuntime = createRuntime();
+    const baseInput = {
+      action: "click",
+      appName: "System Settings",
+      ref: "@sign-in",
+      approvedPolicyRisk: true,
+      verifyText: "Redeem Code",
+      reason: "Click the exact Sign In button approved by the user.",
+    } as const;
+
+    const blocked = await runGuiControl({ ...baseInput, runtime: blockedRuntime });
+    const approved = await runGuiControl({
+      ...baseInput,
+      runtime: approvedRuntime,
+      requestSensitiveApproval: async () => "allow-once",
+    });
+
+    expect(blocked.ok).toBe(false);
+    expect(blocked.failureReason).toContain("explicit sensitive-action approval required");
+    expect(blockedRuntime.clicks).toEqual([]);
+    expect(approved.ok).toBe(true);
+    expect(approvedRuntime.clicks).toEqual([
+      expect.objectContaining({ ref: "@sign-in", label: "Sign In" }),
+    ]);
   });
 
   it("verifies set-value through the shared verifier path", async () => {

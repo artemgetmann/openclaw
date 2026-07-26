@@ -63,6 +63,45 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("<location>~/");
   });
 
+  it("uses a shorter canonical absolute path for symlink-backed workspace skills", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const targetDir = path.join(workspaceDir, "s");
+      const targetSkillDir = path.join(targetDir, "shared-skill");
+      const linkedSkillsDir = path.join(
+        workspaceDir,
+        "a-very-long-application-support-workspace-prefix",
+        "skills",
+      );
+      await writeSkill({
+        dir: targetSkillDir,
+        name: "shared-skill",
+        description: "Shared personal skill",
+      });
+      await fs.mkdir(path.dirname(linkedSkillsDir), { recursive: true });
+      await fs.symlink(targetDir, linkedSkillsDir, "dir");
+
+      const linkedFilePath = path.join(linkedSkillsDir, "shared-skill", "SKILL.md");
+      const canonicalFilePath = await fs.realpath(linkedFilePath);
+      const entry: SkillEntry = {
+        skill: {
+          name: "shared-skill",
+          description: "Shared personal skill",
+          filePath: linkedFilePath,
+          baseDir: path.dirname(linkedFilePath),
+          source: "openclaw-workspace",
+          disableModelInvocation: false,
+        },
+        frontmatter: {},
+      };
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, { entries: [entry] });
+
+      expect(prompt).toContain(`<location>${canonicalFilePath}</location>`);
+      expect(prompt).not.toContain(linkedFilePath);
+      expect(prompt).not.toContain("<location>~/");
+    });
+  });
+
   it("keeps product-managed and bundled skill locations absolute under the home directory", () => {
     const home = os.homedir();
     const productPath = path.join(

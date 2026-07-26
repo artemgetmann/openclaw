@@ -120,6 +120,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
+    expect(prompt).not.toContain("For Telegram comparison or data tables");
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
@@ -173,12 +174,10 @@ describe("buildAgentSystemPrompt", () => {
       "If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it before any generic discovery.",
     );
     expect(prompt).toContain(
-      "do not run `openclaw skills list`, grep/search local skill directories, or inspect skill registries as your first discovery step",
+      "do not claim the skill is unavailable; say the active catalog is incomplete",
     );
     expect(prompt).toContain("<name>telegram-user</name>");
-    expect(prompt.indexOf("<name>telegram-user</name>")).toBeLessThan(
-      prompt.indexOf("openclaw skills list"),
-    );
+    expect(prompt).not.toContain("openclaw skills list");
   });
 
   it("separates Telegram status updates from Telegram-as-me topic handoffs", () => {
@@ -418,6 +417,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("do not inspect Telethon internals");
   });
 
+  it("formats Telegram data tables as native rich tables in full prompts only", () => {
+    const fullPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+    const minimalPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+    });
+
+    expect(fullPrompt).toContain("For Telegram comparison or data tables");
+    expect(fullPrompt).toContain("standard unfenced Markdown pipe table");
+    expect(fullPrompt).toContain("one header row and one delimiter row");
+    expect(fullPrompt).toContain("Never wrap data tables in code fences");
+    expect(fullPrompt).toContain("literal copy text instead of native rich tables");
+    expect(minimalPrompt).not.toContain("For Telegram comparison or data tables");
+  });
+
   it("uses consumer terminology for reminders and explicit monitors", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -472,6 +488,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
+  });
+
+  it("removes the isolated browser fallback from the Jarvis system prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/jarvis",
+      toolNames: ["browser"],
+      jarvisBrowserPolicy: true,
+    });
+
+    expect(prompt).toContain("use the selected Chrome account for normal work");
+    expect(prompt).toContain("without offering another browser or exposing internal profile names");
+    expect(prompt).not.toContain('profile="openclaw"');
+    expect(prompt).not.toContain("clean openclaw");
+  });
+
+  it("keeps the isolated browser guidance for generic OpenClaw", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["browser"],
+    });
+
+    expect(prompt).toContain('profile="openclaw"');
+    expect(prompt).toContain("clean openclaw");
   });
 
   it("describes image_generate when the tool is available", () => {

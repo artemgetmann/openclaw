@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { resolveDeterministicContextTokensForModel } from "./context-resolver.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS,
+  OPENAI_GPT_5_6_SOL_EFFECTIVE_CONTEXT_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
@@ -180,6 +182,34 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS);
+  });
+
+  it.each(["openai-codex", "openai"])(
+    "uses GPT-5.6 Sol's 272K consumer window for %s runtime and deterministic status paths",
+    (provider) => {
+      const params = {
+        provider,
+        model: "gpt-5.6-sol",
+        fallbackContextTokens: 200_000,
+      };
+
+      expect(resolveContextTokensForModel(params)).toBe(
+        OPENAI_GPT_5_6_SOL_EFFECTIVE_CONTEXT_TOKENS,
+      );
+      expect(resolveDeterministicContextTokensForModel(params)).toBe(
+        OPENAI_GPT_5_6_SOL_EFFECTIVE_CONTEXT_TOKENS,
+      );
+    },
+  );
+
+  it("keeps the existing Codex GPT-5.5 effective window after Sol registration", () => {
+    expect(
+      resolveDeterministicContextTokensForModel({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        fallbackContextTokens: 200_000,
+      }),
+    ).toBe(OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS);
   });
 
   it("keeps unknown Codex models on the generic fallback when metadata is unavailable", () => {

@@ -3,6 +3,9 @@ import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js
 import {
   DEFAULT_HEARTBEAT_ACTIVE_HOURS,
   DEFAULT_HEARTBEAT_EVERY,
+  DEFAULT_HEARTBEAT_ISOLATED_SESSION,
+  DEFAULT_HEARTBEAT_LIGHT_CONTEXT,
+  DEFAULT_HEARTBEAT_WEEKEND_MODE,
 } from "../auto-reply/heartbeat.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
@@ -28,7 +31,7 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
-  gpt: "openai/gpt-5.5",
+  gpt: "openai/gpt-5.6-sol",
   "gpt-mini": "openai/gpt-5-mini",
 
   // Google Gemini (3.x are preview ids in the catalog)
@@ -36,6 +39,7 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gemini-flash": "google/gemini-3-flash-preview",
   "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
 };
+const LEGACY_GPT_ALIAS_TARGET = "openai/gpt-5.5";
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -337,6 +341,21 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     mutated = true;
   }
 
+  // Existing non-consumer configs may only allowlist GPT-5.5 and rely on its
+  // implicit alias. Keep that compatibility unless Sol is available to own it.
+  const solTarget = DEFAULT_MODEL_ALIASES.gpt;
+  const solEntry = nextModels[solTarget];
+  const solAlias = solEntry?.alias?.trim().toLowerCase();
+  const legacyGptEntry = nextModels[LEGACY_GPT_ALIAS_TARGET];
+  const legacyGptAlias = legacyGptEntry?.alias?.trim().toLowerCase();
+  if (solAlias === "gpt" && legacyGptEntry && legacyGptAlias === "gpt") {
+    nextModels[LEGACY_GPT_ALIAS_TARGET] = { ...legacyGptEntry, alias: undefined };
+    mutated = true;
+  } else if (!solEntry && legacyGptEntry && legacyGptEntry.alias === undefined) {
+    nextModels[LEGACY_GPT_ALIAS_TARGET] = { ...legacyGptEntry, alias: "gpt" };
+    mutated = true;
+  }
+
   if (!mutated) {
     return cfg;
   }
@@ -422,11 +441,20 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
 
   // Heartbeat defaults are product behavior, not Anthropic-specific tuning.
   // Apply them whenever agent defaults exist so fresh configs do not ping at night.
-  if (defaults.heartbeat?.every === undefined || defaults.heartbeat?.activeHours === undefined) {
+  if (
+    defaults.heartbeat?.every === undefined ||
+    defaults.heartbeat?.activeHours === undefined ||
+    defaults.heartbeat?.weekendMode === undefined ||
+    defaults.heartbeat?.lightContext === undefined ||
+    defaults.heartbeat?.isolatedSession === undefined
+  ) {
     nextDefaults.heartbeat = {
       ...heartbeat,
       every: defaults.heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY,
       activeHours: defaults.heartbeat?.activeHours ?? { ...DEFAULT_HEARTBEAT_ACTIVE_HOURS },
+      weekendMode: defaults.heartbeat?.weekendMode ?? DEFAULT_HEARTBEAT_WEEKEND_MODE,
+      lightContext: defaults.heartbeat?.lightContext ?? DEFAULT_HEARTBEAT_LIGHT_CONTEXT,
+      isolatedSession: defaults.heartbeat?.isolatedSession ?? DEFAULT_HEARTBEAT_ISOLATED_SESSION,
     };
     mutated = true;
   }

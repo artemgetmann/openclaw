@@ -520,11 +520,13 @@ describe("routeReply", () => {
       to: "channel:C123",
       sessionKey: "agent:main:main",
       mirror: false,
+      skipQueue: true,
       cfg: {} as never,
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: undefined,
+        skipQueue: true,
       }),
     );
   });

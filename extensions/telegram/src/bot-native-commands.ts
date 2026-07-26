@@ -1057,6 +1057,19 @@ export const registerTelegramNativeCommands = ({
             ? buildTelegramGroupFrom(chatId, threadSpec.id)
             : `telegram:${chatId}`;
           const to = `telegram:${chatId}`;
+          const senderIsOwner = resolveCommandAuthorization({
+            ctx: {
+              Provider: "telegram",
+              Surface: "telegram",
+              From: from,
+              To: to,
+              SenderId: senderId,
+              AccountId: route.accountId,
+              CommandAuthorized: commandAuthorized,
+            },
+            cfg,
+            commandAuthorized,
+          }).senderIsOwner;
 
           const result = await executePluginCommand({
             command: match.command,
@@ -1064,6 +1077,7 @@ export const registerTelegramNativeCommands = ({
             senderId,
             channel: "telegram",
             isAuthorizedSender: commandAuthorized,
+            senderIsOwner,
             commandBody,
             config: cfg,
             from,

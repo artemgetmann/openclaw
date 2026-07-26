@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONSUMER_CHATGPT_MODEL_REGISTRY,
+  formatConsumerChatGptModelId,
+} from "../../../src/consumer/model-registry.js";
+import {
   buildConfirmedModelSelectionCallbackData,
   buildModelSelectionCallbackData,
   buildModelFamilyKeyboard,
@@ -495,25 +499,35 @@ describe("buildModelFamilyKeyboard", () => {
     ]);
   });
 
-  it("prefers ChatGPT GPT 5.5 and keeps mini models out of normal More", () => {
+  it("shows only GPT-5.6 Sol in the normal ChatGPT family picker", () => {
     const byProvider = new Map([
-      ["openai-codex", new Set(["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5"])],
-      ["openai", new Set(["gpt-5.4", "gpt-5.4-mini", "gpt-image-2"])],
+      ["openai-codex", new Set(["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol"])],
+      ["openai", new Set(["gpt-5.4", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-image-2"])],
     ]);
 
     const recommended = buildModelFamilyKeyboard({ family: "chatgpt", byProvider });
     expect(recommended[0]?.[0]).toEqual({
-      text: "GPT-5.5",
-      callback_data: "mdl_sel_openai-codex/gpt-5.5",
+      text: "GPT-5.6 Sol",
+      callback_data: "mdl_sel_openai-codex/gpt-5.6-sol",
     });
+    expect(recommended.map((row) => row[0]?.text)).toEqual(["GPT-5.6 Sol", "<< Back"]);
 
     const more = buildModelFamilyKeyboard({ family: "chatgpt", byProvider, more: true });
-    expect(more.map((row) => row[0]?.text)).toEqual(["GPT-5.4", "GPT-5.3 Codex Spark", "<< Back"]);
-    expect(more.map((row) => row[0]?.callback_data)).toEqual([
-      "mdl_sel_openai-codex/gpt-5.4",
-      "mdl_sel_openai-codex/gpt-5.3-codex-spark",
-      "mdl_home",
-    ]);
+    expect(more.map((row) => row[0]?.text)).toEqual(["<< Back"]);
+  });
+
+  it("mirrors shared consumer ChatGPT registry labels and callbacks", () => {
+    for (const choice of CONSUMER_CHATGPT_MODEL_REGISTRY) {
+      for (const ref of choice.refs) {
+        const byProvider = new Map([[ref.provider, new Set([ref.model])]]);
+        const rows = buildModelFamilyKeyboard({ family: "chatgpt", byProvider });
+
+        expect(rows[0]?.[0], formatConsumerChatGptModelId(ref)).toEqual({
+          text: choice.label,
+          callback_data: `mdl_sel_${formatConsumerChatGptModelId(ref)}`,
+        });
+      }
+    }
   });
 });
 

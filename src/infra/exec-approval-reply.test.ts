@@ -87,6 +87,23 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("Expires in:");
   });
 
+  it("renders only decisions supported by a sensitive one-shot request", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-sensitive",
+      approvalSlug: "sensitive",
+      command: "gui-control sensitive action",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    expect(payload.text).toContain("/approve sensitive allow-once");
+    expect(payload.text).toContain("/approve sensitive deny");
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.channelData?.execApproval).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
+  });
+
   it("clamps pending reply expiration to zero seconds", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-3",

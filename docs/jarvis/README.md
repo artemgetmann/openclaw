@@ -37,6 +37,8 @@ Jarvis docs should create action, not emotional debt.
   artifact truth.
 - `docs/consumer/jarvis-identity-migration-checklist.md` - active identity
   migration proof checklist.
+- `docs/jarvis/browser-profile-retirement.md` - short-lived two-browser rollout
+  and owner-confirmed old-data cleanup gate.
 
 ## Reference
 
@@ -72,6 +74,8 @@ current mission needs the history.
   public-release acceleration design; implemented P0-P2 and archived.
 - `docs/consumer/archive/telegram-managed-onboarding-tracker-20260525.md` -
   historical Telegram onboarding proof tracker.
+- `docs/consumer/archive/jarvis-x-connector-deferred-20260725.md` - X/Twitter,
+  xurl, MCP, OAuth, and Birdclaw decision trigger for later productization.
 
 ## Private Docs Boundary
 

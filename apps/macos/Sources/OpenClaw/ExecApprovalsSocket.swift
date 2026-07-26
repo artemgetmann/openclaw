@@ -14,6 +14,7 @@ struct ExecApprovalPromptRequest: Codable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
+    var allowedDecisions: [String]? = nil
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -221,17 +222,20 @@ enum ExecApprovalsPromptPresenter {
         alert.informativeText = "Review the command details before allowing."
         alert.accessoryView = self.buildAccessoryView(request)
 
+        let allowedDecisions = request.allowedDecisions ?? ["allow-once", "allow-always", "deny"]
         alert.addButton(withTitle: "Allow Once")
-        alert.addButton(withTitle: "Always Allow")
+        if allowedDecisions.contains("allow-always") {
+            alert.addButton(withTitle: "Always Allow")
+        }
         alert.addButton(withTitle: "Don't Allow")
-        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
-            alert.buttons[2].hasDestructiveAction = true
+        if #available(macOS 11.0, *), let denyButton = alert.buttons.last {
+            denyButton.hasDestructiveAction = true
         }
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             return .allowOnce
-        case .alertSecondButtonReturn:
+        case .alertSecondButtonReturn where allowedDecisions.contains("allow-always"):
             return .allowAlways
         default:
             return .deny

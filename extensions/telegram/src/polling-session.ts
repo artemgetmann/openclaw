@@ -6,6 +6,10 @@ import { formatDurationPrecise } from "../../../src/infra/format-time/format-dur
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot, waitForTelegramBotTransportClose } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import {
+  runTelegramSafeReuseFenceTransaction,
+  TelegramSafeReuseManualRecoveryError,
+} from "./safe-reuse-fence.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
   initialMs: 2000,
@@ -109,6 +113,18 @@ type TelegramPollingSessionOpts = {
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
+  safeReuseFence?: {
+    generation: string;
+    resolveState: () => Promise<{
+      phase: "reading" | "pending" | "complete";
+      lastUpdateId: number | null;
+      recreateBot: boolean;
+    } | null>;
+    markReading: () => Promise<void>;
+    markPending: (lastUpdateId: number | null) => Promise<void>;
+    persistCutoff: (lastUpdateId: number | null) => Promise<void>;
+    markComplete: (lastUpdateId: number | null) => Promise<void>;
+  };
   log: (line: string) => void;
   setStatus?: (next: Partial<ChannelAccountSnapshot>) => void;
 };
@@ -137,6 +153,7 @@ export class TelegramPollingSession {
   #lastTimerGapMs: number | null = null;
   #lastTimerDelayMs: number | null = null;
   #watchdogEscalation: string | null = null;
+  #safeReuseFenceCompleted = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {}
 
@@ -213,6 +230,22 @@ export class TelegramPollingSession {
       }
       if (cleanupState === "exit") {
         return;
+      }
+
+      const fenceState = await this.#ensureSafeReuseFence(bot);
+      if (fenceState === "retry") {
+        continue;
+      }
+      if (fenceState === "exit") {
+        return;
+      }
+      if (fenceState === "recreate") {
+        // The first bot was deliberately transport-only: it consumed the
+        // server-side tail marker without installing the model-dispatch
+        // runner. Recreate after persisting the cutoff so even a repeated tail
+        // update is skipped by middleware before any agent turn can start.
+        await this.#disposeSetupBot(bot);
+        continue;
       }
 
       const state = await this.#runPollingCycle(bot);
@@ -324,6 +357,50 @@ export class TelegramPollingSession {
       );
       return shouldRetry ? "retry" : "exit";
     }
+  }
+
+  async #ensureSafeReuseFence(bot: TelegramBot): Promise<"ready" | "retry" | "exit" | "recreate"> {
+    const fence = this.opts.safeReuseFence;
+    if (!fence) {
+      return "ready";
+    }
+
+    try {
+      if (this.#safeReuseFenceCompleted) {
+        return "ready";
+      }
+      const outcome = await runTelegramSafeReuseFenceTransaction({
+        ...fence,
+        readTail: () =>
+          withTelegramApiErrorLogging({
+            operation: "getUpdates",
+            runtime: this.opts.runtime,
+            fn: () => bot.api.getUpdates({ offset: -1, limit: 1, timeout: 0 }),
+          }),
+        log: this.opts.log,
+      });
+      this.#safeReuseFenceCompleted = true;
+      return outcome;
+    } catch (err) {
+      await this.#disposeSetupBot(bot);
+      // Message-based network classification is intentionally broad and can
+      // match words such as "timeout" inside this terminal diagnostic. The
+      // explicit type is the authority: an ambiguous destructive read must
+      // never enter the ordinary setup retry loop.
+      if (err instanceof TelegramSafeReuseManualRecoveryError) {
+        throw err;
+      }
+      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+        err,
+        "Telegram safe-reuse backlog fence failed",
+      );
+      return shouldRetry ? "retry" : "exit";
+    }
+  }
+
+  async #disposeSetupBot(bot: TelegramBot): Promise<void> {
+    await Promise.resolve(bot.stop()).catch(() => {});
+    await waitForTelegramBotTransportClose(bot).catch(() => {});
   }
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {

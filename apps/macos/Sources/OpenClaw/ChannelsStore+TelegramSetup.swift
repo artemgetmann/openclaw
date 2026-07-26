@@ -128,11 +128,11 @@ extension ChannelsStore {
             let response = try await self.pollManagedTelegramSetupStatus(
                 client: client,
                 setupId: setupId,
-                attempts: 1)
+                attempts: 8)
             self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername
             self.telegramManagedExpiresAt = response.expiresAt
             guard response.status == "connected" else {
-                self.telegramSetupStatus = self.managedTelegramPendingStatus(
+                self.telegramSetupStatus = Self.managedTelegramPendingStatus(
                     suggestedUsername: response.suggestedBotUsername)
                 return
             }
@@ -524,9 +524,9 @@ extension ChannelsStore {
                 return response
             }
 
-            // Some callers may intentionally wait briefly for Telegram's
-            // manager-bot webhook. The visible Check status button passes one
-            // attempt so the UI never looks stuck while still pending.
+            // Telegram's manager-bot webhook can land just after the user
+            // returns to Jarvis. Keep the visible check bounded, but tolerate
+            // that short delivery gap instead of reporting a false failure.
             guard attempt + 1 < attempts else { break }
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
@@ -538,11 +538,12 @@ extension ChannelsStore {
     }
 
     private func managedTelegramApprovalStatus(suggestedUsername: String) -> String {
-        "Telegram is opening. Approve @\(suggestedUsername), use Jarvis or edit the bot name, click Create, then come back and check status."
+        "Telegram is opening. Approve @\(suggestedUsername), use Jarvis or edit the bot name, " +
+            "click Create, open the new bot, and press Start. Then come back and click Check status."
     }
 
-    private func managedTelegramPendingStatus(suggestedUsername: String) -> String {
-        "Still waiting for Telegram approval for @\(suggestedUsername). In Telegram, approve it, use Jarvis or edit the bot name, click Create, then check again."
+    static func managedTelegramPendingStatus(suggestedUsername: String) -> String {
+        "Jarvis has not received @\(suggestedUsername) yet. Finish the Telegram steps above, wait a moment, then click Check status again."
     }
 
     private func managedTelegramConnectedStatus(botUsername: String?) -> String {

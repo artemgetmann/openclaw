@@ -26,6 +26,7 @@ import {
   completeDurableFollowup,
   DurableFollowupCancelledError,
   hydrateDurableFollowup,
+  isDurableFollowupMessagePending,
   isDurableFollowupMessageProcessed,
   isDurableFollowupRecordProcessed,
   loadDurableFollowupDelivery,
@@ -111,6 +112,44 @@ describe("durable followup queue", () => {
 
     const currentConfig = { channels: { telegram: { enabled: true } } };
     expect(hydrateDurableFollowup(record, currentConfig).run.config).toBe(currentConfig);
+  });
+
+  it("atomically persists accepted direct work as delivery-only recovery", async () => {
+    const run = createRun("accepted direct input");
+    const record = await persistDurableFollowup({
+      queueKey: "atomic-direct-recovery",
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+    });
+
+    expect(record.delivery).toEqual({
+      sourceDurableIds: [record.id],
+      processedMessageKeys: [expect.any(String)],
+      payloads: [{ text: "Visible recovery receipt.", isError: true }],
+    });
+    const [loaded] = await loadDurableFollowups();
+    expect(hydrateDurableFollowup(loaded, {}).deliveryPayloads).toEqual([
+      { text: "Visible recovery receipt.", isError: true },
+    ]);
+  });
+
+  it("does not let a malformed legacy delivery identity block inbound dedupe", async () => {
+    const queueKey = "legacy-malformed-delivery-identity";
+    const run = createRun("accepted direct input");
+    const record = await persistDurableFollowup({
+      queueKey,
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+    });
+    const filePath = path.join(stateDir, "followup-queue", `${record.id}.json`);
+    const malformed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    delete malformed.processedMessageKey;
+    delete malformed.delivery.processedMessageKeys;
+    await fs.writeFile(filePath, JSON.stringify(malformed), "utf8");
+
+    await expect(isDurableFollowupMessagePending({ queueKey, run })).resolves.toBe(false);
   });
 
   it("transitions constituent inputs into one delivery-only carrier", async () => {
@@ -214,6 +253,19 @@ describe("durable followup queue", () => {
     await expect(fs.readdir(path.join(stateDir, "followup-queue-processed"))).resolves.toHaveLength(
       2,
     );
+  });
+
+  it("suppresses provider redelivery while the accepted message is still pending", async () => {
+    const queueKey = "pending-message-redelivery";
+    const firstRun = createRun("accepted input");
+    const differentMessage = { ...createRun("new input"), messageId: "telegram:102" };
+
+    await persistDurableFollowup({ queueKey, run: firstRun, settings });
+
+    await expect(isDurableFollowupMessagePending({ queueKey, run: firstRun })).resolves.toBe(true);
+    await expect(
+      isDurableFollowupMessagePending({ queueKey, run: differentMessage }),
+    ).resolves.toBe(false);
   });
 
   it("prunes expired processed receipts during startup load", async () => {

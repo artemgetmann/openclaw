@@ -8,6 +8,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
 source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"
+source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
+source "$ROOT_DIR/scripts/lib/consumer-gog-runtime.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -340,6 +342,7 @@ verify_required_telegram_user_tooling() {
   local required_tooling_files=(
     ".env.example"
     "requirements.txt"
+    "session_owner.py"
     "telethon_cli.py"
     "telethon_compat.py"
   )
@@ -370,10 +373,11 @@ verify_required_capabilities_manifest() {
   local runtime_root="$1"
   local context_label="$2"
   local manifest_path="$runtime_root/openclaw/capabilities.manifest.json"
-  local gog_path="$runtime_root/openclaw/tools/gog"
+  local gog_arm64_path="$runtime_root/openclaw/tools/gog/darwin-arm64/gog"
+  local gog_x86_64_path="$runtime_root/openclaw/tools/gog/darwin-x86_64/gog"
+  local gog_host_path=""
   local gog_license_path="$runtime_root/openclaw/tools/gog.LICENSE"
   local gog_version=""
-  local gog_archs=""
 
   if [[ ! -f "$manifest_path" ]]; then
     echo "ERROR: ${context_label} is missing capabilities.manifest.json." >&2
@@ -392,9 +396,9 @@ verify_required_capabilities_manifest() {
   # payload. Otherwise a cache hit can silently regress clean installs back to
   # "gog must already exist somewhere on the user's PATH."
   gog_version="$(managed_tool_recommended_version "$manifest_path" "gog" "gog")" || return 1
-  if [[ ! -x "$gog_path" ]]; then
-    echo "ERROR: ${context_label} is missing the app-managed Google Workspace CLI." >&2
-    echo "Expected executable: $gog_path" >&2
+  if [[ ! -x "$gog_arm64_path" || ! -x "$gog_x86_64_path" ]]; then
+    echo "ERROR: ${context_label} is missing an architecture-specific app-managed Google Workspace CLI." >&2
+    echo "Expected executables: $gog_arm64_path and $gog_x86_64_path" >&2
     return 1
   fi
   if [[ ! -s "$gog_license_path" ]]; then
@@ -402,14 +406,26 @@ verify_required_capabilities_manifest() {
     echo "Expected file: $gog_license_path" >&2
     return 1
   fi
-  if [[ "$("$gog_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
+  case "$(uname -m)" in
+    arm64)
+      gog_host_path="$gog_arm64_path"
+      ;;
+    x86_64)
+      gog_host_path="$gog_x86_64_path"
+      ;;
+    *)
+      echo "ERROR: unsupported macOS architecture while verifying Gog: $(uname -m)" >&2
+      return 1
+      ;;
+  esac
+  if [[ "$("$gog_host_path" --version 2>/dev/null || true)" != *"v${gog_version}"* ]]; then
     echo "ERROR: ${context_label} has the wrong Google Workspace CLI version." >&2
     echo "Expected version: $gog_version" >&2
     return 1
   fi
-  gog_archs="$(/usr/bin/lipo -archs "$gog_path" 2>/dev/null || true)"
-  if [[ "$gog_archs" != *"arm64"* || "$gog_archs" != *"x86_64"* ]]; then
-    echo "ERROR: ${context_label} Google Workspace CLI is not universal: ${gog_archs:-unknown}" >&2
+  if ! openclaw_verify_vendor_signed_gog "$gog_arm64_path" \
+    || ! openclaw_verify_vendor_signed_gog "$gog_x86_64_path"; then
+    echo "ERROR: ${context_label} Google Workspace CLI vendor identity is invalid." >&2
     return 1
   fi
 }
@@ -927,123 +943,24 @@ NODE
 }
 
 ensure_consumer_gog_runtime() {
-  local version="$1"
-  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/gog-v${version}-darwin-universal"
-  local universal_bin="${cache_root}/gog"
-  local license_path="${cache_root}/LICENSE"
-  local download_root=""
-  local release_arch=""
-  local archive=""
-  local expected_sha256=""
-  local extracted_bin=""
-  local expected_arch=""
-  local extracted_archs=""
-  local thin_bins=()
-
-  if [[ -x "$universal_bin" ]] \
-    && [[ -s "$license_path" ]] \
-    && [[ "$("$universal_bin" --version 2>/dev/null || true)" == *"v${version}"* ]] \
-    && [[ "$(/usr/bin/lipo -archs "$universal_bin" 2>/dev/null || true)" == *"arm64"* ]] \
-    && [[ "$(/usr/bin/lipo -archs "$universal_bin" 2>/dev/null || true)" == *"x86_64"* ]]; then
-    printf '%s\n' "$universal_bin"
-    return 0
-  fi
-
-  # gog is a self-contained Go CLI, so the app can own it without Homebrew.
-  # Build one universal payload from the two official release archives, then
-  # let the normal app codesigning pass sign that payload with Jarvis.
-  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-gog.XXXXXX")"
-  for release_arch in arm64 amd64; do
-    # Release asset digests are pinned with the product version. A metadata bump
-    # without reviewed payload hashes must fail closed instead of downloading
-    # unverified executable code into a signed Jarvis release.
-    case "${version}:${release_arch}" in
-      0.33.0:arm64)
-        expected_sha256="d73b324fa3a35a08175432761c8bfd410896b1a22365aa89890ac4fbfdf7c66e"
-        ;;
-      0.33.0:amd64)
-        expected_sha256="259c4bf1f41bc725936eb816aac9d5c95df9eaf21be0a8df93a9c42fe55f83a4"
-        ;;
-      *)
-        echo "ERROR: no reviewed gog release digest for v${version} darwin_${release_arch}." >&2
-        echo "Update ensure_consumer_gog_runtime with the official release asset digest." >&2
-        rm -rf "$download_root"
-        exit 1
-        ;;
-    esac
-    archive="${download_root}/gogcli_${version}_darwin_${release_arch}.tar.gz"
-    echo "📥 Downloading Google Workspace CLI ${version} (darwin_${release_arch})" >&2
-    curl -fsSL \
-      "https://github.com/openclaw/gogcli/releases/download/v${version}/$(basename "$archive")" \
-      -o "$archive"
-    if ! printf '%s  %s\n' "$expected_sha256" "$archive" | shasum -a 256 -c - >/dev/null; then
-      echo "ERROR: downloaded gog checksum mismatch: $archive" >&2
-      rm -rf "$download_root"
-      exit 1
-    fi
-    mkdir -p "${download_root}/${release_arch}"
-    tar -xzf "$archive" -C "${download_root}/${release_arch}"
-    extracted_bin="${download_root}/${release_arch}/gog"
-    if [[ ! -x "$extracted_bin" ]]; then
-      echo "ERROR: downloaded gog archive is missing its executable: $archive" >&2
-      rm -rf "$download_root"
-      exit 1
-    fi
-    expected_arch="$release_arch"
-    if [[ "$expected_arch" == "amd64" ]]; then
-      expected_arch="x86_64"
-    fi
-    extracted_archs="$(/usr/bin/lipo -archs "$extracted_bin" 2>/dev/null || true)"
-    if [[ "$extracted_archs" != "$expected_arch" ]]; then
-      echo "ERROR: downloaded gog architecture mismatch for darwin_${release_arch}: ${extracted_archs:-unknown}." >&2
-      rm -rf "$download_root"
-      exit 1
-    fi
-    thin_bins+=("$extracted_bin")
-  done
-
-  mkdir -p "$cache_root"
-  /usr/bin/lipo -create "${thin_bins[@]}" -output "${universal_bin}.tmp"
-  chmod 0755 "${universal_bin}.tmp"
-  mv "${universal_bin}.tmp" "$universal_bin"
-  if [[ ! -s "${download_root}/arm64/LICENSE" ]]; then
-    echo "ERROR: pinned Gog release archive is missing its MIT license notice." >&2
-    exit 1
-  fi
-  cp "${download_root}/arm64/LICENSE" "$license_path"
-  rm -rf "$download_root"
-
-  local packaged_archs
-  packaged_archs="$(/usr/bin/lipo -archs "$universal_bin")"
-  if [[ "$packaged_archs" != *"arm64"* || "$packaged_archs" != *"x86_64"* ]]; then
-    echo "ERROR: universal gog payload is missing a required architecture: $packaged_archs" >&2
-    exit 1
-  fi
-  # Execute only the universal output so the build host selects its native
-  # slice. Thin cross-architecture execution would require Rosetta on arm64 and
-  # cannot work at all when an Intel release host validates the arm64 archive.
-  if [[ "$("$universal_bin" --version 2>/dev/null || true)" != *"v${version}"* ]]; then
-    echo "ERROR: universal gog payload does not report expected version v${version}." >&2
-    exit 1
-  fi
-  printf '%s\n' "$universal_bin"
+  openclaw_ensure_consumer_gog_runtime "$1"
 }
 
 bundle_consumer_managed_tool_payloads() {
   local manifest_path="$1"
   local gog_version=""
-  local gog_runtime=""
+  local gog_runtime_root=""
   local tools_dir="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/tools"
 
   # Keep app-owned mutation intentionally narrow. summarize is version-tracked
   # but remains Homebrew-managed because its supported install also requires
   # node, ffmpeg, tesseract, and yt-dlp.
   gog_version="$(managed_tool_recommended_version "$manifest_path" "gog" "gog")"
-  gog_runtime="$(ensure_consumer_gog_runtime "$gog_version")"
+  gog_runtime_root="$(ensure_consumer_gog_runtime "$gog_version")"
   mkdir -p "$tools_dir"
-  cp "$gog_runtime" "$tools_dir/gog"
-  cp "$(dirname "$gog_runtime")/LICENSE" "$tools_dir/gog.LICENSE"
-  chmod 0755 "$tools_dir/gog"
+  rm -rf "$tools_dir/gog"
+  cp -R "$gog_runtime_root/gog" "$tools_dir/gog"
+  cp "$gog_runtime_root/LICENSE" "$tools_dir/gog.LICENSE"
 }
 
 resolve_matrix_crypto_package_root() {
@@ -1260,9 +1177,12 @@ consumer_runtime_input_key() {
       hash_consumer_runtime_path "scripts/materialize-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/verify-consumer-packaged-artifacts.sh"
       hash_consumer_runtime_path "scripts/package-mac-app.sh"
+      hash_consumer_runtime_path "scripts/lib/consumer-gog-runtime.sh"
+      hash_consumer_runtime_path "scripts/lib/openclaw-runtime-payloads.sh"
       hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
       hash_consumer_runtime_path "scripts/telegram-e2e/.env.example"
       hash_consumer_runtime_path "scripts/telegram-e2e/requirements.txt"
+      hash_consumer_runtime_path "scripts/telegram-e2e/session_owner.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_cli.py"
       hash_consumer_runtime_path "scripts/telegram-e2e/telethon_compat.py"
       hash_consumer_runtime_path "dist"
@@ -1427,7 +1347,13 @@ prepare_bundled_consumer_runtime() {
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
   trap 'rm -rf "$deploy_root"' RETURN
   echo "📦 Staging bundled consumer runtime node_modules"
-  openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
+  # pnpm prepares git-hosted dependencies through npm before it writes the
+  # deployment. npm otherwise inherits the production-only request and omits
+  # package-local build tools, so a clean store cannot prepare @tloncorp/api.
+  # Include devDependencies only in npm's disposable preparation directory;
+  # pnpm's --prod flag still controls the dependencies copied into the app.
+  npm_config_include=dev \
+    openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
@@ -1466,7 +1392,7 @@ prepare_bundled_consumer_runtime() {
   local telegram_user_tooling_file=""
   rm -rf "$telegram_user_tooling_dest"
   mkdir -p "$telegram_user_tooling_dest"
-  for telegram_user_tooling_file in ".env.example" "requirements.txt" "telethon_cli.py" "telethon_compat.py"; do
+  for telegram_user_tooling_file in ".env.example" "requirements.txt" "session_owner.py" "telethon_cli.py" "telethon_compat.py"; do
     cp "$ROOT_DIR/scripts/telegram-e2e/$telegram_user_tooling_file" \
       "$telegram_user_tooling_dest/$telegram_user_tooling_file"
   done

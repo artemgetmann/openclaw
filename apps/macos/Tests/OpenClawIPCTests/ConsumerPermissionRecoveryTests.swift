@@ -1,3 +1,4 @@
+import CoreGraphics
 import OpenClawIPC
 import Testing
 @testable import OpenClaw
@@ -186,13 +187,6 @@ struct ConsumerPermissionRecoveryTests {
         #expect(presentation.detailText?.contains("Turn on") == true)
     }
 
-    @Test func `recovery sheet maps only manual privacy capabilities`() {
-        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .accessibility)?.capability == .accessibility)
-        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .screenRecording)?.capability == .screenRecording)
-        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .location) == nil)
-        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .appleScript) == nil)
-    }
-
     @Test func `bulk grant excludes manual privacy permissions`() {
         #expect(!PermissionsSettings.consumerBulkGrantCapabilities.contains(.screenRecording))
         #expect(!PermissionsSettings.consumerBulkGrantCapabilities.contains(.accessibility))
@@ -226,21 +220,85 @@ struct ConsumerPermissionRecoveryTests {
         #expect(ConsumerPermissionCatalog.recommendedOnboardingCapabilities.contains(.location))
     }
 
-    @Test func `core request order asks for screen recording before accessibility`() {
-        let screenIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .screenRecording)
-        let accessibilityIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .accessibility)
+    @Test func `accessory panel aligns with the System Settings content column`() {
+        let frame = ConsumerPermissionAccessoryPanelLayout.frame(
+            panelSize: CGSize(width: 500, height: 112),
+            systemSettingsFrame: CGRect(x: 200, y: 180, width: 900, height: 720),
+            visibleScreenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900))
 
-        #expect(!ConsumerPermissionCatalog.coreRequestOrder.contains(.appleScript))
-        #expect(screenIndex != nil)
-        #expect(accessibilityIndex != nil)
-        #expect(screenIndex! < accessibilityIndex!)
+        #expect(frame.origin.x == 470)
+        #expect(frame.origin.y == 74)
     }
 
-    @Test func `core request flow pauses after unresolved special permission`() {
-        #expect(!ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: .appleScript, granted: false))
-        #expect(!ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: .location, granted: false))
-        #expect(ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: .screenRecording, granted: false))
-        #expect(ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: .accessibility, granted: false))
-        #expect(!ConsumerPermissionCatalog.shouldPauseCoreRequestFlow(after: .screenRecording, granted: true))
+    @Test func `accessory panel stays on screen when Settings is near an edge`() {
+        let frame = ConsumerPermissionAccessoryPanelLayout.frame(
+            panelSize: CGSize(width: 500, height: 112),
+            systemSettingsFrame: CGRect(x: 8, y: 4, width: 300, height: 600),
+            visibleScreenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900))
+
+        #expect(frame.origin.x == 98)
+        #expect(frame.origin.y == 12)
+    }
+
+    @Test func `accessory panel converts Quartz bounds through the primary display origin`() {
+        let primaryDisplayMaxY: CGFloat = 900
+
+        // Quartz Y is negative for a monitor above the primary display. AppKit
+        // should place that same window above the primary display's top edge.
+        let above = ConsumerPermissionAccessoryPanelLayout.appKitFrame(
+            fromQuartzBounds: CGRect(x: 100, y: -500, width: 600, height: 400),
+            primaryDisplayMaxY: primaryDisplayMaxY)
+        #expect(above == CGRect(x: 100, y: 1000, width: 600, height: 400))
+
+        // Quartz Y continues below the primary display for a monitor arranged
+        // underneath it. AppKit represents that display with negative Y.
+        let below = ConsumerPermissionAccessoryPanelLayout.appKitFrame(
+            fromQuartzBounds: CGRect(x: 100, y: 900, width: 600, height: 400),
+            primaryDisplayMaxY: primaryDisplayMaxY)
+        #expect(below == CGRect(x: 100, y: -400, width: 600, height: 400))
+    }
+
+    @Test func `accessory panel copy names the exact accessibility list`() {
+        #expect(ConsumerPermissionAccessoryPanelCopy.title(for: .accessibility) == "Accessibility")
+        #expect(ConsumerPermissionAccessoryPanelCopy.instruction(for: .accessibility) == "Drag Jarvis into this list")
+        #expect(!ConsumerPermissionAccessoryPanelCopy.instruction(for: .accessibility)
+            .contains("Finish in System Settings"))
+        #expect(!ConsumerPermissionAccessoryPanelCopy.instruction(for: .accessibility).contains("Turn on Jarvis"))
+        #expect(ConsumerPermissionAccessoryPanelCopy.followUp == "Then turn it on.")
+    }
+
+    @Test func `accessory panel follows its localized pane without requiring title access`() {
+        let localizedTitle = "Accesibilidad"
+        #expect(ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: localizedTitle,
+            expectedTitle: localizedTitle))
+        #expect(!ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: "Privacidad y seguridad",
+            expectedTitle: localizedTitle))
+        #expect(ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: nil,
+            expectedTitle: localizedTitle))
+        #expect(ConsumerPermissionAccessoryPanelPane.matches(
+            observedTitle: nil,
+            expectedTitle: nil))
+        #expect(ConsumerPermissionAccessoryPanelPane.normalizedTitle("  Accessibility  ") == "Accessibility")
+        #expect(ConsumerPermissionAccessoryPanelPane.normalizedTitle("   ") == nil)
+    }
+
+    @Test func `accessory panel copy names the exact screen recording list`() {
+        #expect(ConsumerPermissionAccessoryPanelCopy.title(for: .screenRecording) == "Screen & System Audio Recording")
+        #expect(ConsumerPermissionAccessoryPanelCopy.instruction(for: .screenRecording) == "Drag Jarvis into this list")
+        #expect(ConsumerPermissionAccessoryPanelCopy.followUp == "Then turn it on.")
+    }
+
+    @Test @MainActor func `product icon image view always applies the canonical rounded mask`() {
+        let iconSize: CGFloat = 44
+        let imageView = ProductAppIconImageView(size: iconSize)
+
+        #expect(imageView.wantsLayer)
+        #expect(imageView.layer?.masksToBounds == true)
+        #expect(imageView.layer?.cornerCurve == .continuous)
+        #expect(imageView.layer?.cornerRadius == ProductAppIconStyle.cornerRadius(for: iconSize))
+        #expect(ProductAppIconStyle.continuousCornerRadiusRatio == 0.22)
     }
 }

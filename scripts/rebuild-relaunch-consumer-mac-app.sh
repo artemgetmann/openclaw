@@ -6,10 +6,11 @@ source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 REPLACE=1
+PARALLEL=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/rebuild-relaunch-consumer-mac-app.sh [--instance <id>] [--no-replace]
+Usage: scripts/rebuild-relaunch-consumer-mac-app.sh [--instance <id>] [--no-replace] [--parallel]
 
 Fast founder/tester loop:
   - skips dependency reinstall
@@ -35,6 +36,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-replace)
       REPLACE=0
+      shift
+      ;;
+    --parallel)
+      PARALLEL=1
       shift
       ;;
     --help|-h)
@@ -83,6 +88,9 @@ fi
 
 if [[ "$REPLACE" == "1" ]]; then
   OPEN_ARGS+=(--replace)
+fi
+if [[ "$PARALLEL" == "1" ]]; then
+  OPEN_ARGS+=(--parallel)
 fi
 
 # This wrapper is an explicit rebuild/relaunch loop, so it owns the persistent

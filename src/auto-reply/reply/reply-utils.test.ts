@@ -258,6 +258,30 @@ describe("typing controller", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("keeps the typing safety lease alive while a healthy run keepalive succeeds", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn();
+    const onCleanup = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      onCleanup,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 2_000,
+    });
+
+    await typing.startTypingLoop();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // The original two-minute production lease used to seal the controller
+    // here even though every Telegram keepalive had succeeded.
+    expect(onReplyStart).toHaveBeenCalledTimes(6);
+    expect(onCleanup).not.toHaveBeenCalled();
+
+    typing.markRunComplete();
+    typing.markDispatchIdle();
+    expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("does not restart typing after it has stopped", async () => {
     vi.useFakeTimers();
     const { typing, onReplyStart } = createTestTypingController();

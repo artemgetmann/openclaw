@@ -22,7 +22,7 @@ async function loadConfigForHome(config: unknown) {
   });
 }
 
-function expectAnthropicPruningDefaults(cfg: ReturnType<typeof loadConfig>, heartbeatEvery = "1d") {
+function expectAnthropicPruningDefaults(cfg: ReturnType<typeof loadConfig>, heartbeatEvery = "1h") {
   expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
   expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
@@ -31,6 +31,9 @@ function expectAnthropicPruningDefaults(cfg: ReturnType<typeof loadConfig>, hear
     end: "20:00",
     timezone: "user",
   });
+  expect(cfg.agents?.defaults?.heartbeat?.weekendMode).toBe("urgent-only");
+  expect(cfg.agents?.defaults?.heartbeat?.lightContext).toBe(true);
+  expect(cfg.agents?.defaults?.heartbeat?.isolatedSession).toBe(true);
 }
 
 describe("config pruning defaults", () => {
@@ -42,17 +45,20 @@ describe("config pruning defaults", () => {
         const cfg = loadConfig();
 
         expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-        expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1d");
+        expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1h");
         expect(cfg.agents?.defaults?.heartbeat?.activeHours).toEqual({
           start: "09:00",
           end: "20:00",
           timezone: "user",
         });
+        expect(cfg.agents?.defaults?.heartbeat?.weekendMode).toBe("urgent-only");
+        expect(cfg.agents?.defaults?.heartbeat?.lightContext).toBe(true);
+        expect(cfg.agents?.defaults?.heartbeat?.isolatedSession).toBe(true);
       });
     });
   });
 
-  it("enables cache-ttl pruning + daily heartbeat for Anthropic OAuth", async () => {
+  it("enables cache-ttl pruning + hourly heartbeat for Anthropic OAuth", async () => {
     const cfg = await loadConfigForHome({
       auth: {
         profiles: {
@@ -62,7 +68,7 @@ describe("config pruning defaults", () => {
       agents: { defaults: {} },
     });
 
-    expectAnthropicPruningDefaults(cfg, "1d");
+    expectAnthropicPruningDefaults(cfg, "1h");
   });
 
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
@@ -169,11 +175,32 @@ describe("config pruning defaults", () => {
       },
     });
 
-    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1d");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1h");
     expect(cfg.agents?.defaults?.heartbeat?.activeHours).toEqual({
       start: "08:00",
       end: "22:00",
       timezone: "local",
+    });
+  });
+
+  it("does not override explicit heartbeat weekend or context-cost preferences", async () => {
+    const cfg = await loadConfigForHome({
+      agents: {
+        defaults: {
+          heartbeat: {
+            weekendMode: "normal",
+            lightContext: false,
+            isolatedSession: false,
+          },
+        },
+      },
+    });
+
+    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
+      every: "1h",
+      weekendMode: "normal",
+      lightContext: false,
+      isolatedSession: false,
     });
   });
 });

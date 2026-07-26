@@ -1,7 +1,13 @@
 import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isDurableFollowupMessageProcessed,
+  loadDurableFollowups,
+  persistDurableFollowup,
+} from "../../../src/auto-reply/reply/queue/durable-store.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
@@ -11,6 +17,7 @@ import { __testing as workLogTesting } from "./work-log.js";
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
+const prepareTelegramReplyForDelivery = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
 const guardedTelegramDeleteMessage = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
@@ -26,6 +33,7 @@ vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  prepareTelegramReplyForDelivery,
 }));
 
 vi.mock("./send.js", () => ({
@@ -59,6 +67,11 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     createTelegramDraftStream.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
+    prepareTelegramReplyForDelivery.mockReset();
+    prepareTelegramReplyForDelivery.mockImplementation(async ({ reply }) => ({
+      reply,
+      cancelled: false,
+    }));
     editMessageTelegram.mockClear();
     guardedTelegramDeleteMessage.mockReset();
     guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: false, suppressed: true });
@@ -119,15 +132,18 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     };
   }
 
-  function createBot(): Bot {
+  function createBot(options?: { richMessages?: boolean }): Bot {
     return {
       api: {
         sendMessage: vi.fn(),
         editMessageText: vi.fn(),
         deleteMessage: vi.fn().mockResolvedValue(true),
+        ...(options?.richMessages ? { raw: { sendRichMessage: vi.fn() } } : {}),
       },
     } as unknown as Bot;
   }
+
+  const createRichBot = () => createBot({ richMessages: true });
 
   function createRuntime(): Parameters<typeof dispatchTelegramMessage>[0]["runtime"] {
     return {
@@ -196,6 +212,350 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
   function allowDeterministicPreviewDeletes() {
     guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: true });
   }
+
+  it("completes a direct-turn recovery record only after visible final delivery", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-complete-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input",
+        messageId: "telegram:456",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          await dispatcherOptions.deliver({ text: "Visible final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [expect.objectContaining({ text: "Visible final." })],
+        }),
+      );
+      await expect(loadDurableFollowups()).resolves.toEqual([]);
+      await expect(isDurableFollowupMessageProcessed({ queueKey, run })).resolves.toBe(true);
+    });
+  });
+
+  it("retains direct-turn recovery when only a non-terminal payload was delivered", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-nonterminal-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input",
+        messageId: "telegram:457",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          // A tool/error envelope reaches Telegram, but the actual answer does
+          // not. General delivery success must not erase terminal recovery.
+          await dispatcherOptions.deliver(
+            { text: "The intermediate tool reported a warning.", isError: true },
+            { kind: "block" },
+          );
+          dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "block" });
+          await dispatcherOptions.deliver({ text: "Invisible final." }, { kind: "final" });
+          return { queuedFinal: false };
+        },
+      );
+      deliverReplies
+        .mockResolvedValueOnce({ delivered: true })
+        .mockResolvedValueOnce({ delivered: false });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).toHaveBeenCalledTimes(2);
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({
+          id: record.id,
+          delivery: expect.objectContaining({
+            payloads: [{ text: "Visible recovery receipt.", isError: true }],
+          }),
+        }),
+      ]);
+    });
+  });
+
+  it("retains direct-turn recovery after a generic error fallback", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-error-fallback-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input with ambiguous action",
+        messageId: "telegram:459",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const recoveryPayload = { text: "Visible recovery receipt.", isError: true };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [recoveryPayload],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+        await replyOptions.onDurableReplyAccepted?.(record.id);
+        throw new Error("provider failed after an ambiguous action");
+      });
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [
+            expect.objectContaining({
+              text: "Something went wrong while processing your request. Please try again.",
+            }),
+          ],
+        }),
+      );
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({
+          id: record.id,
+          delivery: expect.objectContaining({ payloads: [recoveryPayload] }),
+        }),
+      ]);
+    });
+  });
+
+  it("completes direct-turn recovery after block-only silence settles cleanly", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-silent-block-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input with intentional silence",
+        messageId: "telegram:460",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "block" });
+          return { queuedFinal: false };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await expect(loadDurableFollowups()).resolves.toEqual([]);
+      await expect(isDurableFollowupMessageProcessed({ queueKey, run })).resolves.toBe(true);
+    });
+  });
+
+  it("retains direct-turn recovery when only a tool payload is silent", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-silent-tool-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input with a silent tool payload",
+        messageId: "telegram:461",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const recoveryPayload = { text: "Visible recovery receipt.", isError: true };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [recoveryPayload],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          // Tool-level silence is intermediate state, not a terminal decision.
+          // A restart still owes the user the conservative recovery receipt.
+          dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "tool" });
+          return { queuedFinal: false };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({
+          id: record.id,
+          delivery: expect.objectContaining({ payloads: [recoveryPayload] }),
+        }),
+      ]);
+    });
+  });
+
+  it("retains direct-turn recovery when only an ambiguous preview remains", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-retained-preview-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input",
+        messageId: "telegram:458",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      });
+      const ambiguousPreview = createDraftStream(9058);
+      createTelegramDraftStream.mockReturnValueOnce(ambiguousPreview);
+      editMessageTelegram.mockRejectedValueOnce(new Error("ambiguous edit failure"));
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          await replyOptions.onPartialReply?.({ text: "Incomplete streamed answer" });
+          await dispatcherOptions.deliver({ text: "Complete terminal answer" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+      });
+
+      expect(editMessageTelegram).toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({ id: record.id }),
+      ]);
+    });
+  });
 
   it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);
@@ -782,6 +1142,309 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
   });
 
+  it("lets valid unfenced table finals use guarded rich delivery", async () => {
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
+    const call = deliverReplies.mock.calls[0]?.[0];
+    expect(call).toEqual(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+    expect(call).not.toHaveProperty("richMessages");
+  });
+
+  it("keeps table finals on legacy delivery when Telegram lacks rich raw API", async () => {
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+  });
+
+  it("keeps table-and-blockquote drafts on copy-safe legacy delivery", async () => {
+    const draftText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "> Hi Sveta, here is the booking link: https://example.com.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: draftText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        copySafeBlockquotes: true,
+        richMessages: false,
+        replies: [expect.objectContaining({ text: draftText })],
+      }),
+    );
+  });
+
+  it("finalizes a streamed table preview as legacy after message_sending removes the table", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    const answerStream = createDraftStream(9301);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    prepareTelegramReplyForDelivery.mockImplementationOnce(async ({ reply }) => ({
+      reply: { ...reply, text: "Plain final after hook." },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: tableText });
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9301" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
+    expectFinalPreviewEditedInPlace(9301, "Plain final after hook.");
+  });
+
+  it("clears a streamed prose preview after message_sending adds a table", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    const answerStream = createDraftStream(9302);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    prepareTelegramReplyForDelivery.mockImplementationOnce(async ({ reply }) => ({
+      reply: { ...reply, text: tableText },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Plain final before hook." });
+        await dispatcherOptions.deliver({ text: "Plain final before hook." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
+    expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      answerStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
+  });
+
+  it("deduplicates replayed final text before rerunning message_sending", async () => {
+    const sourceText = "One logical final.";
+    prepareTelegramReplyForDelivery.mockImplementation(async ({ reply }) => ({
+      reply: { ...reply, text: "One rewritten final." },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      // High-route providers can expose the same logical final through both a
+      // phased callback and their generic completion callback.
+      await dispatcherOptions.deliver({ text: sourceText }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: sourceText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "One rewritten final." })],
+      }),
+    );
+  });
+
+  it("runs message_sending against the exact preview-merged final text", async () => {
+    const previewText = "Context before final. Shared final sentence.";
+    const finalText = "Shared final sentence. Conclusion.";
+    const mergedText = "Context before final.\n\nShared final sentence. Conclusion.";
+    const answerStream = createDraftStream(9303);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: previewText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9303" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(prepareTelegramReplyForDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reply: expect.objectContaining({ text: mergedText }),
+      }),
+    );
+    expectFinalPreviewEditedInPlace(9303, mergedText);
+  });
+
+  it("does not restore preview text removed by message_sending", async () => {
+    const previewText = "Secret prefix. Shared final sentence.";
+    const finalText = "Shared final sentence. Conclusion.";
+    const rewrittenText = "Shared final sentence. Approved conclusion.";
+    const answerStream = createDraftStream(9304);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    prepareTelegramReplyForDelivery.mockImplementationOnce(async ({ reply }) => ({
+      reply: { ...reply, text: rewrittenText },
+      cancelled: false,
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: previewText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9304" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expectFinalPreviewEditedInPlace(9304, rewrittenText);
+    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+      123,
+      9304,
+      expect.stringContaining("Secret prefix."),
+      expect.anything(),
+    );
+  });
+
+  it.each(["off", "code", "bullets"] as const)(
+    "keeps table finals on legacy delivery when Telegram tables are %s",
+    async (tables) => {
+      const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+        bot: createRichBot(),
+        cfg: {
+          channels: { telegram: { markdown: { tables } } },
+        } as Parameters<typeof dispatchTelegramMessage>[0]["cfg"],
+      });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          richMessages: false,
+          replies: [expect.objectContaining({ text: tableText })],
+        }),
+      );
+    },
+  );
+
+  it("keeps table finals on legacy delivery when rich messages are disabled", async () => {
+    const tableText = ["| Plan | Owner |", "| --- | --- |", "| Ship | Jarvis |"].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      bot: createRichBot(),
+      telegramCfg: { richMessages: false },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [expect.objectContaining({ text: tableText })],
+      }),
+    );
+  });
+
+  it("keeps fenced table text on legacy Telegram HTML transport", async () => {
+    const fencedTableText = [
+      "```markdown",
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "```",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: fencedTableText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        richMessages: false,
+        replies: [expect.objectContaining({ text: fencedTableText })],
+      }),
+    );
+  });
+
   it("enables copy-safe blockquote rendering for final draft-style answers", async () => {
     const draftText = [
       "I would send:",
@@ -790,16 +1453,27 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       "> Confirm if this works.",
     ].join("\n");
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: draftText }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        {
+          text: draftText,
+          channelData: { openclaw: { copySafeDraft: true } },
+        },
+        { kind: "final" },
+      );
       return { queuedFinal: true };
     });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
 
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         copySafeBlockquotes: true,
+        richMessages: false,
         replies: [expect.objectContaining({ text: draftText })],
       }),
     );
@@ -886,7 +1560,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("finalizes streamed structured answers by editing the same preview with legacy HTML", async () => {
+  it("clears a streamed preview before sending an eligible table final through rich delivery", async () => {
     const answerStream = createDraftStream(9101);
     createTelegramDraftStream.mockReturnValueOnce(answerStream);
     const finalText = [
@@ -918,10 +1592,13 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
         return { queuedFinal: true };
       },
     );
-    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9101" });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
 
     const renderText = createTelegramDraftStream.mock.calls[0]?.[0]?.renderText;
     expect(renderText).toBeTypeOf("function");
@@ -933,17 +1610,79 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     );
     expect(renderText(finalText)).not.toHaveProperty("richMessage");
     expect(answerStream.update).toHaveBeenCalledWith(finalText);
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      9101,
-      finalText,
+    expect(answerStream.clear).toHaveBeenCalledWith({ waitForInFlight: true });
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        richMessages: false,
-        tableMode: "block",
+        copySafeBlockquotes: true,
+        replies: [expect.objectContaining({ text: finalText })],
       }),
     );
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("richMessages");
     expect(guardedTelegramDeleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("retains a streamed table preview when durable rich delivery reports false", async () => {
+    const answerStream = createDraftStream(9104);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: tableText });
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(deliverReplies).toHaveBeenCalled();
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("retains a streamed table preview when durable rich delivery rejects", async () => {
+    const answerStream = createDraftStream(9105);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const tableText = [
+      "| Plan | Owner |",
+      "| --- | --- |",
+      "| Ship | Jarvis |",
+      "",
+      "Review it.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: tableText });
+        await dispatcherOptions.deliver({ text: tableText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    // The dispatcher owns the existing error fallback; this is not a second
+    // rich-final attempt and must not erase the already-visible preview.
+    deliverReplies.mockRejectedValueOnce(new Error("rich delivery rejected")).mockResolvedValue({
+      delivered: true,
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      bot: createRichBot(),
+    });
+
+    expect(answerStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
   it("renders streamed draft-preview blockquotes as copy-safe legacy code blocks", async () => {
@@ -974,6 +1713,36 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(rendered).not.toHaveProperty("richMessage");
     expect(rendered.text).not.toContain("<blockquote>");
     expect(rendered.text).not.toContain("<a href");
+  });
+
+  it("finalizes streamed copy-safe drafts in the same legacy preview", async () => {
+    const answerStream = createDraftStream(9103);
+    createTelegramDraftStream.mockReturnValueOnce(answerStream);
+    const draftText = [
+      "Suggested reply:",
+      "",
+      "> Hi Sveta, here is the page: https://example.com/booking.",
+      "> Please confirm the passenger names.",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: draftText });
+        await dispatcherOptions.deliver(
+          {
+            text: draftText,
+            channelData: { openclaw: { copySafeDraft: true } },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9103" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerStream.update).toHaveBeenCalledWith(draftText);
+    expectFinalPreviewEditedInPlace(9103, draftText);
   });
 
   it("suppresses raw tool traces when preview streaming is on", async () => {
@@ -2135,6 +2904,17 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not send fallback for an intentionally silent non-final block", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "block" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

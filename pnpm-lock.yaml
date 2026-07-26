@@ -298,6 +298,8 @@ importers:
 
   extensions/cloudflare-ai-gateway: {}
 
+  extensions/codex: {}
+
   extensions/copilot-proxy: {}
 
   extensions/diagnostics-otel:

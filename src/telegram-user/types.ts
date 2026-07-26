@@ -85,8 +85,18 @@ export type TelegramUserLoginResult = {
 export type TelegramUserLogoutResult = {
   backend_meta?: TelegramUserBackendMeta;
   cleared: boolean;
+  owner_path_preserved: boolean;
   removed_paths: string[];
   session_path: string;
+};
+
+export type TelegramUserOwnerClaimResult = {
+  authorized_same_account_sources: string[];
+  backend_meta?: TelegramUserBackendMeta;
+  claimed: true;
+  session_path: string;
+  source: string;
+  unauthorized_sources: string[];
 };
 
 export type TelegramUserSendResult = {
@@ -180,13 +190,16 @@ export type TelegramUserBackendMeta = {
   api_hash_source: "env-file" | "process-env" | "missing";
   api_id_source: "env-file" | "process-env" | "missing";
   env_file: string;
+  env_file_source: "explicit" | "monitor-binding" | "runtime-default";
   lock_scope: "explicit" | "machine";
   session_source:
     | "explicit"
     | "monitor-binding"
     | "env-file"
+    | "explicit-repo-selector"
     | "process-env"
     | "legacy-repo"
+    | "machine-selector"
     | "machine-default"
     | "state-default";
   session_path: string;

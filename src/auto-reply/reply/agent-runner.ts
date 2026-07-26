@@ -50,6 +50,7 @@ import {
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import { resolveOpenClawAssistantPhase } from "./assistant-phase.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
@@ -83,10 +84,12 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { persistDurableFollowup } from "./queue/durable-store.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
   isExplicitAgentTimeoutPayload,
@@ -285,6 +288,12 @@ async function runReplyAgentWithFinalizationOwnership(
   };
   const markFinalVisibleReply = (payload: ReplyPayload) => {
     markVisibleReply(payload);
+    // Commentary proves that progress reached the user, not that the run
+    // completed. If the provider dies after this block, preserve the empty-final
+    // fallback instead of silently treating working state as the answer.
+    if (resolveOpenClawAssistantPhase(payload) === "commentary") {
+      return;
+    }
     didSendFinalVisibleReply.value = true;
   };
   const runOpts =
@@ -371,6 +380,12 @@ async function runReplyAgentWithFinalizationOwnership(
       storePath,
       defaultModel,
       agentCfgContextTokens,
+      liveReplyRoute: {
+        originatingChannel: followupRun.originatingChannel,
+        originatingTo: followupRun.originatingTo,
+        originatingAccountId: followupRun.originatingAccountId,
+        originatingThreadId: followupRun.originatingThreadId,
+      },
       // The same callback drains RAM-only and persisted items. Preserve legacy
       // best-effort behavior for the former, but reject failed durable work so
       // the queue cannot acknowledge its disk record as successfully processed.
@@ -428,6 +443,25 @@ async function runReplyAgentWithFinalizationOwnership(
   // owns queue finalization even after the embedded model lane becomes idle.
   // The exported wrapper releases ownership on every return and exception.
   lifecycle.releaseOwnership = acquireFollowupFinalizationOwnership(queueKey);
+
+  const isAlreadyDurableQueuedWork = Boolean(
+    followupRun.durableId?.trim() || followupRun.durableIds?.some((id) => id.trim()),
+  );
+  if (!isHeartbeat && !isAlreadyDurableQueuedWork && runOpts?.onDurableReplyAccepted) {
+    // Persist a recovery-safe terminal payload before starting model or tool
+    // work. An external restart can therefore never silently abandon this
+    // accepted direct turn, while the blocker avoids replaying ambiguous side
+    // effects. The transport removes this blocker only after terminal delivery.
+    const recoveryRecord = await persistDurableFollowup({
+      queueKey,
+      run: followupRun,
+      settings: resolvedQueue,
+      // One atomic record is the acceptance boundary. There is no crash window
+      // in which startup can observe replayable input without this blocker.
+      deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
+    });
+    await runOpts.onDurableReplyAccepted(recoveryRecord.id);
+  }
 
   const timeoutContinuationConfig = resolveReplyTimeoutContinuationConfig(cfg);
   durableTask = startDurableReplyTask({
@@ -872,6 +906,7 @@ async function runReplyAgentWithFinalizationOwnership(
           isHeartbeat,
           rawPayloads: payloadArray,
           didSendVisibleReply: didSendVisibleReply.value,
+          didSendFinalVisibleReply: didSendFinalVisibleReply.value,
           messagingToolSentTargets: runResult.messagingToolSentTargets,
           messageProvider: followupRun.run.messageProvider,
           originatingTo: sessionCtx.OriginatingTo,
@@ -928,6 +963,7 @@ async function runReplyAgentWithFinalizationOwnership(
           rawPayloads: payloadArray,
           replyPayloads,
           didSendVisibleReply: didSendVisibleReply.value,
+          didSendFinalVisibleReply: didSendFinalVisibleReply.value,
           messagingToolSentTargets: runResult.messagingToolSentTargets,
           messageProvider: followupRun.run.messageProvider,
           originatingTo: sessionCtx.OriginatingTo,

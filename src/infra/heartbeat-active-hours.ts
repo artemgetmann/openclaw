@@ -1,4 +1,5 @@
 import { resolveUserTimezone } from "../agents/date-time.js";
+import { DEFAULT_HEARTBEAT_WEEKEND_MODE } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 
@@ -65,6 +66,30 @@ function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | nul
   } catch {
     return null;
   }
+}
+
+function resolveWeekdayInTimeZone(nowMs: number, timeZone: string): string | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "short",
+    }).format(new Date(nowMs));
+  } catch {
+    return null;
+  }
+}
+
+export function resolveHeartbeatWeekendMode(
+  cfg: OpenClawConfig,
+  heartbeat?: HeartbeatConfig,
+  nowMs?: number,
+): "normal" | "urgent-only" | "off" {
+  const timeZone = resolveActiveHoursTimezone(cfg, heartbeat?.activeHours?.timezone);
+  const weekday = resolveWeekdayInTimeZone(nowMs ?? Date.now(), timeZone);
+  if (weekday !== "Sat" && weekday !== "Sun") {
+    return "normal";
+  }
+  return heartbeat?.weekendMode ?? DEFAULT_HEARTBEAT_WEEKEND_MODE;
 }
 
 export function isWithinActiveHours(

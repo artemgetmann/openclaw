@@ -50,6 +50,8 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Skip the generic write-ahead queue when a caller already owns durable delivery state. */
+  skipQueue?: boolean;
   /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
@@ -185,6 +187,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       abortSignal,
+      skipQueue: params.skipQueue,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {

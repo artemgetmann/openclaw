@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { isWithinActiveHours, resolveHeartbeatWeekendMode } from "./heartbeat-active-hours.js";
 
 function cfgWithUserTimezone(userTimezone = "UTC"): OpenClawConfig {
   return {
@@ -83,4 +83,31 @@ describe("isWithinActiveHours", () => {
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 9, 0, 0))).toBe(true);
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 11, 0, 0))).toBe(false);
   });
+});
+
+describe("resolveHeartbeatWeekendMode", () => {
+  it("uses normal weekday behavior regardless of the configured weekend mode", () => {
+    const cfg = cfgWithUserTimezone("UTC");
+    const heartbeat = {
+      ...heartbeatWindow("09:00", "20:00", "user"),
+      weekendMode: "urgent-only" as const,
+    };
+
+    expect(resolveHeartbeatWeekendMode(cfg, heartbeat, Date.UTC(2025, 0, 3, 12))).toBe("normal");
+  });
+
+  it.each(["normal", "urgent-only", "off"] as const)(
+    "uses configured %s behavior on weekends",
+    (weekendMode) => {
+      const cfg = cfgWithUserTimezone("UTC");
+      const heartbeat = {
+        ...heartbeatWindow("09:00", "20:00", "user"),
+        weekendMode,
+      };
+
+      expect(resolveHeartbeatWeekendMode(cfg, heartbeat, Date.UTC(2025, 0, 4, 12))).toBe(
+        weekendMode,
+      );
+    },
+  );
 });

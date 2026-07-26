@@ -24,6 +24,7 @@ export type ExecApprovalPendingReplyParams = {
   nodeId?: string;
   expiresAtMs?: number;
   nowMs?: number;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
 };
 
 export type ExecApprovalUnavailableReplyParams = {
@@ -91,12 +92,16 @@ export function buildExecApprovalPendingReplyPayload(
   lines.push("Pending command:");
   lines.push(buildFence(params.command, "sh"));
   lines.push("Other options:");
-  lines.push(
-    buildFence(
-      `/approve ${approvalCommandId} allow-always\n/approve ${approvalCommandId} deny`,
-      "txt",
-    ),
-  );
+  const allowedDecisions = params.allowedDecisions ?? ["allow-once", "allow-always", "deny"];
+  const otherCommands = [
+    ...(allowedDecisions.includes("allow-always")
+      ? [`/approve ${approvalCommandId} allow-always`]
+      : []),
+    ...(allowedDecisions.includes("deny") ? [`/approve ${approvalCommandId} deny`] : []),
+  ];
+  if (otherCommands.length > 0) {
+    lines.push(buildFence(otherCommands.join("\n"), "txt"));
+  }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);
   if (params.nodeId) {
@@ -121,7 +126,7 @@ export function buildExecApprovalPendingReplyPayload(
       execApproval: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        allowedDecisions,
       },
     },
   };

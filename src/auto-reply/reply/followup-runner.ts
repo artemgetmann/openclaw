@@ -34,10 +34,16 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
+import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { createTypingController, type TypingController } from "./typing.js";
+
+type LiveReplyRoute = Pick<
+  FollowupRun,
+  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+>;
 
 /**
  * Build the process-start callback used for disk-backed followups.
@@ -84,6 +90,13 @@ export function createFollowupRunner(params: {
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
+  /**
+   * Exact destination captured by the live transport dispatcher.
+   *
+   * Queue keys can span multiple conversations, so channel equality alone is
+   * never enough to prove that this callback is safe for a queued reply.
+   */
+  liveReplyRoute?: LiveReplyRoute;
   /** Preserve legacy behavior for RAM-only work; durable drains opt into rejection. */
   failureMode?: "absorb" | "throw-durable";
 }): (queued: FollowupRun) => Promise<void> {
@@ -97,6 +110,7 @@ export function createFollowupRunner(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    liveReplyRoute,
     failureMode = "absorb",
   } = params;
   const resolveDurableIds = (queued: FollowupRun): string[] =>
@@ -123,15 +137,39 @@ export function createFollowupRunner(params: {
   /**
    * Sends followup payloads, routing to the originating channel if set.
    *
-   * When originatingChannel/originatingTo are set on the queued run,
-   * replies are routed directly to that provider instead of using the
-   * session's current dispatcher. This ensures replies go back to
-   * where the message originated.
+   * RAM-only same-channel work may still use the live dispatcher for progress
+   * lifecycle semantics. Durable work must use routeReply because its promise
+   * is the provider-acceptance boundary; onBlockReply resolves after enqueue
+   * and an old dispatcher may already be closing.
    */
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const provider = resolveOriginMessageProvider({
+      provider: queued.run.messageProvider,
+    });
+    const origin = resolveOriginMessageProvider({
+      originatingChannel,
+    });
+    const liveOrigin = resolveOriginMessageProvider({
+      originatingChannel: liveReplyRoute?.originatingChannel,
+    });
+    const routePartMatches = (
+      queuedPart: string | number | undefined,
+      livePart: string | number | undefined,
+    ) => String(queuedPart ?? "") === String(livePart ?? "");
+    const canUseSameChannelDispatcher = Boolean(
+      opts?.onBlockReply &&
+      shouldRouteToOriginating &&
+      origin &&
+      origin === provider &&
+      origin === liveOrigin &&
+      routePartMatches(originatingTo, liveReplyRoute?.originatingTo) &&
+      routePartMatches(queued.originatingAccountId, liveReplyRoute?.originatingAccountId) &&
+      routePartMatches(queued.originatingThreadId, liveReplyRoute?.originatingThreadId),
+    );
+    const hasDurableOwnership = resolveDurableIds(queued).length > 0;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
@@ -166,8 +204,12 @@ export function createFollowupRunner(params: {
       }
       await typingSignals.signalTextDelta(payload.text);
 
-      // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      if (canUseSameChannelDispatcher && !hasDurableOwnership && opts?.onBlockReply) {
+        // RAM-only same-channel replies retain the original transport lifecycle.
+        // Durable work deliberately avoids this path because enqueue completion
+        // is not proof that the provider accepted the final.
+        await opts.onBlockReply(payload);
+      } else if (shouldRouteToOriginating) {
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -176,23 +218,18 @@ export function createFollowupRunner(params: {
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
           cfg: queued.run.config,
+          // The agent run already wrote its assistant turn to this session.
+          // Provider delivery must not append the same final a second time or
+          // create a second write-ahead owner for the same durable payload.
+          ...(hasDurableOwnership ? { mirror: false, skipQueue: true } : {}),
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply && origin && origin === provider) {
+          // A failed explicit route may use the live dispatcher only under the
+          // same complete-route proof as the primary path. Channel equality
+          // alone is unsafe when a queue spans several conversations.
+          if (canUseSameChannelDispatcher && !hasDurableOwnership && opts?.onBlockReply) {
             await opts.onBlockReply(payload);
           } else if (shouldThrowProcessingFailure(queued)) {
             throw new Error(`Followup reply routing failed: ${errorMsg}`);
@@ -226,6 +263,15 @@ export function createFollowupRunner(params: {
         // a non-empty outbound retry.
         await sendFollowupPayloads(queued.deliveryPayloads, queued);
         return;
+      }
+
+      if (durableIds.length > 0) {
+        // Transition the queued input to a conservative terminal carrier before
+        // starting model or tool work. If this process dies mid-turn, startup
+        // sends one visible blocker rather than replaying potentially completed
+        // side effects. A normal completion replaces this carrier with the exact
+        // final payload before delivery.
+        await persistDeliveryStage(queued, [RESTART_INTERRUPTED_TURN_PAYLOAD]);
       }
 
       const runId = crypto.randomUUID();

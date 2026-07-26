@@ -410,6 +410,33 @@ describe("delivery-queue", () => {
       expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ skipQueue: true }));
     });
 
+    it("normalizes legacy Telegram group destinations before recovery delivery", async () => {
+      await enqueueDelivery(
+        {
+          channel: "telegram",
+          // Older notification paths persisted the session-address form even
+          // though Telegram's transport requires the bare numeric chat id.
+          to: "group:-1003783709877",
+          payloads: [{ text: "resume safely" }],
+          threadId: 24176,
+        },
+        tmpDir,
+      );
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.recovered).toBe(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "-1003783709877",
+          threadId: 24176,
+          skipQueue: true,
+        }),
+      );
+    });
+
     it("replays stored delivery options during recovery", async () => {
       await enqueueDelivery(
         {

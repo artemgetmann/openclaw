@@ -148,6 +148,19 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
+  it("uses Adaptive for GPT-5.6 Sol so the runtime maps it to Medium", () => {
+    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+      ({ provider, context }) =>
+        (provider === "openai" || provider === "openai-codex") && context.modelId === "gpt-5.6-sol"
+          ? "adaptive"
+          : undefined,
+    );
+
+    expect(resolveThinkingDefaultForModel({ provider: "openai-codex", model: "gpt-5.6-sol" })).toBe(
+      "adaptive",
+    );
+  });
+
   it("uses provider-advertised adaptive defaults for Bedrock aliases", () => {
     providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
       ({ provider, context }) =>
@@ -161,13 +174,13 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
-  it("keeps built-in adaptive defaults without provider runtime", () => {
+  it("does not invent adaptive defaults without provider runtime", () => {
     expect(
       resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
-    ).toBe("adaptive");
+    ).toBe("off");
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
-    ).toBe("adaptive");
+    ).toBe("off");
   });
 
   it("defaults reasoning-capable catalog models to low", () => {

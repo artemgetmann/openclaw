@@ -308,6 +308,51 @@ describe("provider runtime contract", () => {
   });
 
   describe("openai", () => {
+    it("owns direct GPT-5.6 Sol defaults and the conservative context ceiling", () => {
+      const provider = requireProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.5"
+              ? createModel({
+                  id,
+                  provider: "openai",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.6-sol",
+        provider: "openai",
+        api: "openai-responses",
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      });
+      expect(
+        provider.resolveDefaultThinkingLevel?.({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          reasoning: true,
+        }),
+      ).toBe("adaptive");
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          model: createModel({
+            id: "gpt-5.6-sol",
+            provider: "openai",
+            contextWindow: 1_050_000,
+          }),
+        }),
+      ).toMatchObject({ contextWindow: 272_000 });
+    });
+
     it("owns openai gpt-5.5 forward-compat resolution", () => {
       const provider = requireProvider("openai");
       const model = provider.resolveDynamicModel?.({
@@ -400,6 +445,53 @@ describe("provider runtime contract", () => {
         contextWindow: 400_000,
         maxTokens: 128_000,
       });
+    });
+
+    it("owns Codex GPT-5.6 Sol defaults and the conservative context ceiling", () => {
+      const provider = requireProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.5"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.6-sol",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      });
+      expect(
+        provider.resolveDefaultThinkingLevel?.({
+          provider: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoning: true,
+        }),
+      ).toBe("adaptive");
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          model: createModel({
+            id: "gpt-5.6-sol",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            contextWindow: 1_050_000,
+          }),
+        }),
+      ).toMatchObject({ contextWindow: 272_000 });
     });
 
     it("owns codex transport defaults", () => {

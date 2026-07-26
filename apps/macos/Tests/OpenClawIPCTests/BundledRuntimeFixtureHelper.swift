@@ -67,6 +67,10 @@ enum BundledRuntimeFixtureHelper {
             to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/requirements.txt"),
             atomically: true,
             encoding: .utf8)
+        try "# session owner fixture\n".write(
+            to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/session_owner.py"),
+            atomically: true,
+            encoding: .utf8)
         try "print('telegram user cli fixture')\n".write(
             to: bundledRoot.appendingPathComponent("openclaw/scripts/telegram-e2e/telethon_cli.py"),
             atomically: true,

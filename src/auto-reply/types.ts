@@ -62,6 +62,14 @@ export type GetReplyOptions = {
   onAssistantMessageStart?: () => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  /**
+   * Receives the disk record protecting a direct user turn from process loss.
+   *
+   * Channel adapters must complete this record only after their terminal
+   * delivery settles. Until then, startup recovery owns a plain-language
+   * blocker instead of blindly replaying tools or ambiguous external actions.
+   */
+  onDurableReplyAccepted?: (durableId: string) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
