@@ -1222,7 +1222,11 @@ describe("createFollowupRunner durable delivery recovery", () => {
     routeReplyMock.mockResolvedValue({ ok: true });
 
     scheduleFollowupDrain(queueKey, runner);
-    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2), {
+      // The durable retry floor is one second; leave headroom for a busy CI
+      // worker instead of racing the test framework's one-second default.
+      timeout: 5_000,
+    });
     await expect(loadDurableFollowups()).resolves.toEqual([
       expect.objectContaining({
         id: later.id,
