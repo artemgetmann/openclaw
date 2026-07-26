@@ -394,6 +394,113 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   });
 
+  it("completes direct-turn recovery after block-only silence settles cleanly", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-silent-block-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input with intentional silence",
+        messageId: "telegram:460",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "block" });
+          return { queuedFinal: false };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await expect(loadDurableFollowups()).resolves.toEqual([]);
+      await expect(isDurableFollowupMessageProcessed({ queueKey, run })).resolves.toBe(true);
+    });
+  });
+
+  it("retains direct-turn recovery when only a tool payload is silent", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-silent-tool-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input with a silent tool payload",
+        messageId: "telegram:461",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const recoveryPayload = { text: "Visible recovery receipt.", isError: true };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [recoveryPayload],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          // Tool-level silence is intermediate state, not a terminal decision.
+          // A restart still owes the user the conservative recovery receipt.
+          dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "tool" });
+          return { queuedFinal: false };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({
+          id: record.id,
+          delivery: expect.objectContaining({ payloads: [recoveryPayload] }),
+        }),
+      ]);
+    });
+  });
+
   it("retains direct-turn recovery when only an ambiguous preview remains", async () => {
     await withStateDirEnv("openclaw-telegram-direct-turn-retained-preview-", async () => {
       const queueKey = "agent:main:telegram:direct:123";
@@ -2797,6 +2904,17 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not send fallback for an intentionally silent non-final block", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "block" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

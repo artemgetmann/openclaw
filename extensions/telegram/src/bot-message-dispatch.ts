@@ -1800,7 +1800,9 @@ export const dispatchTelegramMessage = async ({
   // General delivery state includes progress, tools, and media. Recovery state
   // may be cleared only after the terminal answer itself reaches Telegram.
   let terminalDeliveryConfirmed = false;
+  let terminalDeliveryAttempted = false;
   let intentionalSilentTerminal = false;
+  let sawSilentNonFinalSkip = false;
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
@@ -2563,6 +2565,7 @@ export const dispatchTelegramMessage = async ({
               payload.audioAsVoice === true &&
               isFinalTtsSupplementPayload(payload);
             if (deliveryKind === "final") {
+              terminalDeliveryAttempted = true;
               // Assistant callbacks are fire-and-forget; ensure queued boundary
               // rotations/partials are applied before final delivery mapping.
               await enqueueDraftLaneEvent(async () => {});
@@ -2883,8 +2886,14 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onSkip: (_payload, info) => {
-          if (info.reason === "silent" && info.kind === "final") {
-            intentionalSilentTerminal = true;
+          if (info.reason === "silent") {
+            if (info.kind === "final") {
+              intentionalSilentTerminal = true;
+            } else if (info.kind === "block") {
+              // A block-level NO_REPLY may still precede a failing final.
+              // Promote it only after the whole dispatcher settles cleanly.
+              sawSilentNonFinalSkip = true;
+            }
             return;
           }
           deliveryState.markNonSilentSkip();
@@ -3171,7 +3180,14 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
-  if (durableDirectTurnId && (terminalDeliveryConfirmed || intentionalSilentTerminal)) {
+  const settledSilentTerminal =
+    intentionalSilentTerminal ||
+    (sawSilentNonFinalSkip &&
+      !dispatchError &&
+      !terminalDeliveryAttempted &&
+      deliverySummary.skippedNonSilent === 0 &&
+      deliverySummary.failedNonSilent === 0);
+  if (durableDirectTurnId && (terminalDeliveryConfirmed || settledSilentTerminal)) {
     // Publish the processed-message receipt before Telegram middleware may
     // advance its update offset. If the process dies earlier, startup delivers
     // the conservative blocker without replaying tools or ambiguous actions.

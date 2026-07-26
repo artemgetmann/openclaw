@@ -920,7 +920,9 @@ describe("createFollowupRunner durable delivery recovery", () => {
     acceptProviderDelivery?.();
     await running;
     expect(completed).toBe(true);
-    expect(routeReplyMock).toHaveBeenCalledWith(expect.objectContaining({ mirror: false }));
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mirror: false, skipQueue: true }),
+    );
   });
 
   it("keeps the restart receipt while durable model and tool work is running", async () => {
