@@ -218,6 +218,9 @@ export function createFollowupRunner(params: {
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
           cfg: queued.run.config,
+          // The agent run already wrote its assistant turn to this session.
+          // Provider delivery must not append the same final a second time.
+          ...(hasDurableOwnership ? { mirror: false } : {}),
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";

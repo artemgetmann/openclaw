@@ -2401,8 +2401,10 @@ export const dispatchTelegramMessage = async ({
         });
       }
     }
-    if (result !== "skipped") {
+    if (result === "sent" || result === "preview-finalized") {
       terminalDeliveryConfirmed = true;
+    }
+    if (result !== "skipped") {
       // Record the provider's pre-hook text as well as sendPayload's delivered
       // text. A replay must be suppressed before another message_sending pass.
       deliveredFinalTextKeys.add(normalizedPreparedText);

@@ -333,6 +333,62 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   });
 
+  it("retains direct-turn recovery when only an ambiguous preview remains", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-retained-preview-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input",
+        messageId: "telegram:458",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      });
+      const ambiguousPreview = createDraftStream(9058);
+      createTelegramDraftStream.mockReturnValueOnce(ambiguousPreview);
+      editMessageTelegram.mockRejectedValueOnce(new Error("ambiguous edit failure"));
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          await replyOptions.onPartialReply?.({ text: "Incomplete streamed answer" });
+          await dispatcherOptions.deliver({ text: "Complete terminal answer" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+      });
+
+      expect(editMessageTelegram).toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({ id: record.id }),
+      ]);
+    });
+  });
+
   it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(progressStream);
