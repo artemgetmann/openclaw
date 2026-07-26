@@ -794,6 +794,68 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("projects shared interactive buttons onto inbound Telegram replies", async () => {
+    const runtime = createRuntime();
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn();
+    const bot = createBot({ raw: { sendRichMessage }, sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Plugin bind approval required",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Allow once",
+                    value: "pluginbind:approval-123:o",
+                    style: "success",
+                  },
+                  {
+                    label: "Deny",
+                    value: "pluginbind:approval-123:d",
+                    style: "danger",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: "123",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "Allow once",
+                callback_data: "pluginbind:approval-123:o",
+                style: "success",
+              },
+              {
+                text: "Deny",
+                callback_data: "pluginbind:approval-123:d",
+                style: "danger",
+              },
+            ],
+          ],
+        },
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("sends structured final-style text to rich messages with block tags", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
