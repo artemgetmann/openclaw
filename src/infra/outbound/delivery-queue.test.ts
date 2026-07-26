@@ -15,6 +15,7 @@ import {
   moveToFailed,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
+import { normalizeOutboundDeliveryTarget } from "./delivery-target.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -248,6 +249,28 @@ describe("delivery-queue", () => {
           testCase.expected,
         );
       }
+    });
+  });
+
+  describe("normalizeOutboundDeliveryTarget", () => {
+    it.each([
+      { channel: "telegram" as const, to: "-1003783709877" },
+      { channel: "telegram" as const, to: "@jarvis_test_bot" },
+      { channel: "telegram" as const, to: "group:jarvis_team" },
+      { channel: "telegram" as const, to: "group:123" },
+      { channel: "telegram" as const, to: "telegram:group:123" },
+      { channel: "telegram" as const, to: "tg:group:123" },
+      { channel: "whatsapp" as const, to: "group:-1003783709877" },
+    ])("preserves $channel target $to outside the proven legacy shape", ({ channel, to }) => {
+      expect(normalizeOutboundDeliveryTarget(channel, to)).toBe(to);
+    });
+
+    it.each([
+      { to: "group:-1003783709877", expected: "-1003783709877" },
+      { to: "telegram:group:-1003783709877", expected: "-1003783709877" },
+      { to: "tg:group:-1003783709877", expected: "-1003783709877" },
+    ])("normalizes negative Telegram group target $to", ({ to, expected }) => {
+      expect(normalizeOutboundDeliveryTarget("telegram", to)).toBe(expected);
     });
   });
 

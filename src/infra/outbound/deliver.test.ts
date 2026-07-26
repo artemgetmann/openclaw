@@ -246,6 +246,32 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("normalizes legacy Telegram group destinations before queueing and initial delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { telegram: { botToken: "tok-1", textChunkLimit: 100 } } },
+      channel: "telegram",
+      to: "group:-1003783709877",
+      payloads: [{ text: "deliver safely" }],
+      threadId: 24176,
+      deps: { sendTelegram },
+    });
+
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "-1003783709877",
+        threadId: 24176,
+      }),
+    );
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "-1003783709877",
+      "deliver safely",
+      expect.objectContaining({ messageThreadId: 24176 }),
+    );
+  });
+
   it("clamps telegram text chunk size to protocol max even with higher config", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: OpenClawConfig = {

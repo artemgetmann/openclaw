@@ -35,6 +35,7 @@ import {
   enqueueDelivery,
   failDelivery,
 } from "./delivery-queue.js";
+import { normalizeOutboundDeliveryTarget } from "./delivery-target.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
@@ -491,13 +492,14 @@ export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+  const deliveryTo = normalizeOutboundDeliveryTarget(channel, to);
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue
     ? null
     : await enqueueDelivery({
         channel,
-        to,
+        to: deliveryTo,
         accountId: params.accountId,
         payloads,
         threadId: params.threadId,
@@ -517,6 +519,9 @@ export async function deliverOutboundPayloads(
   let pendingQueueIndex = 0;
   const wrappedParams = {
     ...params,
+    // Keep the durable target and the first provider attempt identical. Thread
+    // identity remains separate in `threadId` and is not rewritten here.
+    to: deliveryTo,
     // Checkpoint before the next provider call. Best-effort failures advance
     // the durable-array index instead of blocking later successes from being
     // removed. The provider-acceptance/local-write ambiguity remains.
