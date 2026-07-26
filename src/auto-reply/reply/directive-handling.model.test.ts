@@ -3,7 +3,7 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
-import { parseInlineDirectives } from "./directive-handling.js";
+import { parseInlineDirectives, persistInlineDirectives } from "./directive-handling.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
@@ -180,6 +180,57 @@ describe("/model chat UX", () => {
       model: "@cf/openai/gpt-oss-20b",
       isDefault: false,
     });
+  });
+});
+
+describe("persistInlineDirectives context window", () => {
+  function createPersistParams(cfg: OpenClawConfig) {
+    const sessionKey = "agent:main:telegram:group:-1003783709877:topic:21876";
+    const sessionEntry: SessionEntry = {
+      sessionId: "sol-session",
+      updatedAt: Date.now(),
+    };
+    return {
+      directives: parseInlineDirectives("continue"),
+      cfg,
+      agentDir: "/tmp/agent",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.6-sol",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["openai-codex/gpt-5.6-sol"]),
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      initialModelLabel: "openai-codex/gpt-5.6-sol",
+      formatModelSwitchEvent: (label: string) => `Switched to ${label}`,
+      agentCfg: cfg.agents?.defaults,
+    };
+  }
+
+  it("keeps the provider-aware Sol context window when the discovery cache is empty", async () => {
+    const cfg = {
+      commands: { text: true },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+
+    const result = await persistInlineDirectives(createPersistParams(cfg));
+
+    expect(result.contextTokens).toBe(272_000);
+  });
+
+  it("preserves an explicit agent context cap", async () => {
+    const cfg = {
+      commands: { text: true },
+      agents: { defaults: { contextTokens: 180_000 } },
+    } as OpenClawConfig;
+
+    const result = await persistInlineDirectives(createPersistParams(cfg));
+
+    expect(result.contextTokens).toBe(180_000);
   });
 });
 

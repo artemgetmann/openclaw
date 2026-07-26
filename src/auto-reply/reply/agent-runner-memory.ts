@@ -78,25 +78,52 @@ export type SessionTranscriptUsageSnapshot = {
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
 
-function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
+type TranscriptTailUsageLine = {
+  usage?: ReturnType<typeof normalizeUsage>;
+  stopsUsageScan: boolean;
+  clearsStoredUsage?: boolean;
+};
+
+function parseTranscriptTailUsageLine(line: string): TranscriptTailUsageLine {
   const trimmed = line.trim();
   if (!trimmed) {
-    return undefined;
+    return { stopsUsageScan: false };
   }
   try {
     const parsed = JSON.parse(trimmed) as {
-      message?: { usage?: UsageLike };
+      type?: string;
+      message?: { role?: string; usage?: UsageLike };
       usage?: UsageLike;
     };
+    // Compaction rewrites the active context. A usage snapshot before this
+    // boundary describes the discarded prompt and must never be resurrected as
+    // fresh state. Session headers are also hard boundaries when reading a
+    // repaired or concatenated transcript.
+    if (
+      parsed.type === "compaction" ||
+      parsed.type === "session" ||
+      parsed.message?.role === "compactionSummary"
+    ) {
+      return { stopsUsageScan: true, clearsStoredUsage: true };
+    }
+    const hasUsageRecord =
+      Object.hasOwn(parsed, "usage") ||
+      (parsed.message != null && Object.hasOwn(parsed.message, "usage"));
     const usageRaw = parsed.message?.usage ?? parsed.usage;
     const usage = normalizeUsage(usageRaw);
     if (usage && hasNonzeroUsage(usage)) {
-      return usage;
+      return { usage, stopsUsageScan: false };
+    }
+    if (hasUsageRecord) {
+      // A newer assistant turn with explicit zero/unknown usage supersedes
+      // older snapshots. CLI backends write this shape intentionally because
+      // their aggregate run totals are not a valid final-context measurement.
+      return { stopsUsageScan: true };
     }
   } catch {
     // ignore bad lines
   }
-  return undefined;
+  return { stopsUsageScan: false };
 }
 
 function resolveSessionLogPath(
@@ -155,6 +182,9 @@ function deriveTranscriptUsageSnapshot(
 type SessionLogSnapshot = {
   byteSize?: number;
   usage?: SessionTranscriptUsageSnapshot;
+  usageBoundary?: boolean;
+  usageReadSucceeded?: boolean;
+  usageScanBoundary?: boolean;
 };
 
 async function readSessionLogSnapshot(params: {
@@ -189,17 +219,25 @@ async function readSessionLogSnapshot(params: {
 
   if (params.includeUsage) {
     try {
-      const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
-      snapshot.usage = deriveTranscriptUsageSnapshot(lastUsage);
+      const tailUsage = await readLastNonzeroUsageFromSessionLog(logPath);
+      snapshot.usage = deriveTranscriptUsageSnapshot(tailUsage.usage);
+      snapshot.usageBoundary = tailUsage.clearsStoredUsage;
+      snapshot.usageReadSucceeded = true;
+      snapshot.usageScanBoundary = tailUsage.stoppedAtBoundary;
     } catch {
       snapshot.usage = undefined;
+      snapshot.usageReadSucceeded = false;
     }
   }
 
   return snapshot;
 }
 
-async function readLastNonzeroUsageFromSessionLog(logPath: string) {
+async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<{
+  usage?: ReturnType<typeof normalizeUsage>;
+  stoppedAtBoundary: boolean;
+  clearsStoredUsage: boolean;
+}> {
   const handle = await fs.promises.open(logPath, "r");
   try {
     const stat = await handle.stat();
@@ -218,14 +256,25 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
       const lines = combined.split(/\n+/);
       leadingPartial = lines.shift() ?? "";
       for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
-        if (usage) {
-          return usage;
+        const parsed = parseTranscriptTailUsageLine(lines[i] ?? "");
+        if (parsed.usage) {
+          return { usage: parsed.usage, stoppedAtBoundary: false, clearsStoredUsage: false };
+        }
+        if (parsed.stopsUsageScan) {
+          return {
+            stoppedAtBoundary: true,
+            clearsStoredUsage: parsed.clearsStoredUsage === true,
+          };
         }
       }
       position = start;
     }
-    return parseUsageFromTranscriptLine(leadingPartial);
+    const parsed = parseTranscriptTailUsageLine(leadingPartial);
+    return {
+      usage: parsed.usage,
+      stoppedAtBoundary: parsed.stopsUsageScan,
+      clearsStoredUsage: parsed.clearsStoredUsage === true,
+    };
   } finally {
     await handle.close();
   }
@@ -264,9 +313,6 @@ export async function runMemoryFlushIfNeeded(params: {
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
-  if (!memoryFlushSettings) {
-    return params.sessionEntry;
-  }
 
   const memoryFlushWritable = (() => {
     if (!params.sessionKey) {
@@ -288,7 +334,7 @@ export async function runMemoryFlushIfNeeded(params: {
   // Let the shared pre-compaction memory flush run before CLI turns; when that
   // flush completes a real compaction, drop the CLI resume id so the next CLI
   // call starts from compacted OpenClaw context instead of the old hidden session.
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
+  const canAttemptFlush = memoryFlushSettings != null && memoryFlushWritable && !params.isHeartbeat;
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
@@ -310,10 +356,11 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
-  const flushThreshold =
-    contextWindowTokens -
-    memoryFlushSettings.reserveTokensFloor -
-    memoryFlushSettings.softThresholdTokens;
+  const flushThreshold = memoryFlushSettings
+    ? contextWindowTokens -
+      memoryFlushSettings.reserveTokensFloor -
+      memoryFlushSettings.softThresholdTokens
+    : 0;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -330,11 +377,14 @@ export async function runMemoryFlushIfNeeded(params: {
     (persistedPromptTokens ?? 0) + promptTokenEstimate >=
       flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
 
+  // Token reconciliation protects the outer reply preflight, not just memory
+  // flushing. Always repair a stale snapshot from transcript usage even when
+  // memory writes are disabled or the sandbox workspace is read-only.
   const shouldReadTranscript = Boolean(
-    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+    entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
   );
 
-  const forceFlushTranscriptBytes = memoryFlushSettings.forceFlushTranscriptBytes;
+  const forceFlushTranscriptBytes = memoryFlushSettings?.forceFlushTranscriptBytes ?? 0;
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     canAttemptFlush &&
     entry &&
@@ -357,6 +407,9 @@ export async function runMemoryFlushIfNeeded(params: {
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
+  const transcriptUsageBoundary = sessionLogSnapshot?.usageBoundary === true;
+  const transcriptUsageReadSucceeded = sessionLogSnapshot?.usageReadSucceeded === true;
+  const transcriptUsageScanBoundary = sessionLogSnapshot?.usageScanBoundary === true;
   const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
   const hasReliableTranscriptPromptTokens =
@@ -369,6 +422,19 @@ export async function runMemoryFlushIfNeeded(params: {
       (transcriptPromptTokens ?? 0) > (persistedPromptTokens ?? 0));
 
   if (entry && shouldPersistTranscriptPromptTokens) {
+    // Keep the queued run synchronized with the transcript-backed snapshot.
+    // Provider input counters may be cumulative across tool turns, so leaving
+    // the original value here lets the outer hard-reserve guard reject a
+    // healthy transcript even after this function has repaired the store.
+    // The provider's last input snapshot excludes its own assistant output,
+    // but that output becomes part of the next request. Include it only in the
+    // queued preflight value; SessionEntry.totalTokens intentionally remains a
+    // last-input context metric for status and persistence.
+    params.followupRun.run.persistedPromptTokens = resolveEffectivePromptTokens(
+      transcriptPromptTokens,
+      transcriptOutputTokens,
+      promptTokenEstimate,
+    );
     const nextEntry = {
       ...entry,
       totalTokens: transcriptPromptTokens,
@@ -397,6 +463,63 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
+  if (
+    shouldReadTranscript &&
+    transcriptUsageReadSucceeded &&
+    transcriptUsageScanBoundary &&
+    !hasFreshPersistedPromptTokens &&
+    !hasReliableTranscriptPromptTokens
+  ) {
+    // A stale provider counter is not safe enough to reject a turn by itself.
+    // CLI usage can be absent because its reported totals aggregate a tool loop
+    // rather than describe the final context snapshot. Let the provider's own
+    // context handling run instead of permanently wedging the session.
+    params.followupRun.run.persistedPromptTokens = undefined;
+  }
+
+  if (entry && transcriptUsageBoundary && !hasReliableTranscriptPromptTokens) {
+    // Compaction is authoritative: every earlier usage snapshot describes
+    // discarded context. Clear the store too so a crash between transcript and
+    // metadata writes cannot resurrect pre-compaction pressure.
+    const nextEntry = {
+      ...entry,
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      inputTokens: undefined,
+      outputTokens: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    };
+    entry = nextEntry;
+    if (params.sessionKey && params.sessionStore) {
+      params.sessionStore[params.sessionKey] = nextEntry;
+    }
+    if (params.storePath && params.sessionKey) {
+      try {
+        const updatedEntry = await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: async () => ({
+            totalTokens: undefined,
+            totalTokensFresh: false,
+            inputTokens: undefined,
+            outputTokens: undefined,
+            cacheRead: undefined,
+            cacheWrite: undefined,
+          }),
+        });
+        if (updatedEntry) {
+          entry = updatedEntry;
+          if (params.sessionStore) {
+            params.sessionStore[params.sessionKey] = updatedEntry;
+          }
+        }
+      } catch (err) {
+        logVerbose(`failed to clear pre-compaction token snapshot: ${String(err)}`);
+      }
+    }
+  }
+
   const promptTokensSnapshot = Math.max(
     hasFreshPersistedPromptTokens ? (persistedPromptTokens ?? 0) : 0,
     hasReliableTranscriptPromptTokens ? (transcriptPromptTokens ?? 0) : 0,
@@ -420,7 +543,7 @@ export async function runMemoryFlushIfNeeded(params: {
       : undefined;
   const hardReserveThreshold = Math.max(
     0,
-    contextWindowTokens - memoryFlushSettings.reserveTokensFloor,
+    contextWindowTokens - (memoryFlushSettings?.reserveTokensFloor ?? 0),
   );
   const hardReserveBreached =
     typeof tokenCountForFlush === "number" &&
@@ -459,7 +582,7 @@ export async function runMemoryFlushIfNeeded(params: {
       entry != null &&
       !hasAlreadyFlushedForCurrentCompaction(entry));
 
-  if (!shouldFlushMemory) {
+  if (!memoryFlushSettings || !shouldFlushMemory) {
     return entry ?? params.sessionEntry;
   }
 
