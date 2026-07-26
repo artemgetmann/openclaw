@@ -1034,9 +1034,11 @@ async def run_owner_claim(args: argparse.Namespace) -> int:
         unreadable_sources.append(source)
 
     if unreadable_sources:
+      source_labels = ",".join(unreadable_sources)
       return fail(
         "E_SESSION_CANDIDATE_UNREADABLE",
-        "One or more Telegram session candidates could not be safely inspected; ownership is unchanged.",
+        "Telegram session candidates "
+        f"({source_labels}) could not be safely inspected; ownership is unchanged.",
         details={"sources": unreadable_sources},
       )
 

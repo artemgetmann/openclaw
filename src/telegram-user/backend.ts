@@ -718,14 +718,18 @@ export function resolveTelegramUserLockSelection(params: {
   };
 }
 
-async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
+async function buildBackendEnv(options: BackendCallOptions): Promise<BackendEnvBuild> {
   // Credential values and USERBOT_SESSION must come from one file snapshot.
   // Re-reading after selector resolution could pair credentials from a replaced
   // env file with the previous account's resolved session path.
   const { envFilePath, envFileSource, loadedEnv, sessionPath, sessionSelection } =
     await resolveTelegramUserBackendSelection(options);
+  // Command-scoped overrides must participate in lock selection itself, not
+  // only mutate the child environment afterward. Owner migration uses this to
+  // force the machine lock even when a legacy credential file names another.
+  const processEnvWithOverrides = applyEnvOverrides(process.env, options.envOverrides);
   const lockSelection = resolveTelegramUserLockSelection({
-    env: process.env,
+    env: processEnvWithOverrides,
     loadedEnv,
   });
   return {
@@ -986,6 +990,11 @@ export async function runTelegramUserOwnerClaim(params: {
   return runBackendCommand<TelegramUserOwnerClaimResult>({
     args,
     envFile: params.envFile,
+    // Publishing the machine-wide selector is never a separate-account
+    // operation. Force the ownership lock above any legacy env-file override.
+    envOverrides: {
+      OPENCLAW_TELEGRAM_USER_LOCK_PATH: resolveTelegramUserMachineLockPath(runtimeEnv),
+    },
     // Pin the selected candidate so backend setup itself cannot re-enter the
     // ambiguity this command exists to resolve.
     session: selected.path,

@@ -576,6 +576,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       self.assertEqual(exit_code, 1)
       self.assertEqual(failure["code"], "E_SESSION_CANDIDATE_UNREADABLE")
       self.assertEqual(failure["details"], {"sources": ["machine"]})
+      self.assertIn("(machine)", failure["message"])
       self.assertNotIn("fixture path", str(failure))
       self.assertFalse(selector.exists())
 
