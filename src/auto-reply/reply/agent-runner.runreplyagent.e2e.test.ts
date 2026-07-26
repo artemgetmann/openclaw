@@ -336,7 +336,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
       expect(runningRecord?.delivery?.payloads).toEqual([
         expect.objectContaining({
           isError: true,
-          text: expect.stringContaining("interrupted by a Jarvis restart"),
+          text: expect.stringContaining("interrupted after accepting"),
         }),
       ]);
 

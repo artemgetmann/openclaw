@@ -437,6 +437,12 @@ export async function persistDurableFollowup(params: {
   queueKey: string;
   settings: QueueSettings;
   run: FollowupRun;
+  /**
+   * Optional terminal envelope written in the same atomic record as acceptance.
+   * Direct turns use this to avoid ever exposing replayable input between
+   * acceptance and restart-blocker staging.
+   */
+  deliveryPayloads?: ReplyPayload[];
   now?: number;
   ttlMs?: number;
   env?: NodeJS.ProcessEnv;
@@ -452,13 +458,23 @@ export async function persistDurableFollowup(params: {
     deliveryPayloads: _stagedDeliveryPayloads,
     ...safeFollowupRun
   } = params.run;
+  const processedMessageKey = buildDurableFollowupMessageKey(params.queueKey, params.run);
   const record: DurableFollowupRecord = {
     version: STORE_VERSION,
     id,
     queueKey: params.queueKey,
     settings: params.settings,
     run: { ...safeFollowupRun, durableId: id, run: safeRunConfig },
-    processedMessageKey: buildDurableFollowupMessageKey(params.queueKey, params.run),
+    ...(params.deliveryPayloads !== undefined
+      ? {
+          delivery: {
+            sourceDurableIds: [id],
+            processedMessageKeys: processedMessageKey ? [processedMessageKey] : [],
+            payloads: params.deliveryPayloads,
+          },
+        }
+      : {}),
+    processedMessageKey,
     acceptedCancellationId: cancellationAtStart?.id,
     createdAt: now,
     expiresAt: now + Math.max(1, params.ttlMs ?? DEFAULT_TTL_MS),

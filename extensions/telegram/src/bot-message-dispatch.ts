@@ -1797,6 +1797,10 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
+  // General delivery state includes progress, tools, and media. Recovery state
+  // may be cleared only after the terminal answer itself reaches Telegram.
+  let terminalDeliveryConfirmed = false;
+  let intentionalSilentTerminal = false;
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
@@ -2398,6 +2402,7 @@ export const dispatchTelegramMessage = async ({
       }
     }
     if (result !== "skipped") {
+      terminalDeliveryConfirmed = true;
       // Record the provider's pre-hook text as well as sendPayload's delivered
       // text. A replay must be suppressed before another message_sending pass.
       deliveredFinalTextKeys.add(normalizedPreparedText);
@@ -2428,6 +2433,9 @@ export const dispatchTelegramMessage = async ({
     await beginFinalAnswerPhase(`${classification.callsite ?? "final"}-before-final`);
     const delivered = await sendPayload(payload, classification);
     if (delivered) {
+      if (!isFinalTtsSupplementPayload(payload) && !isCaptionlessFinalMediaSupplement(payload)) {
+        terminalDeliveryConfirmed = true;
+      }
       latencyTrace?.mark("final_telegram_send_edit_completed", {
         result: "sent",
         textLength: payload.text?.length ?? 0,
@@ -2611,6 +2619,9 @@ export const dispatchTelegramMessage = async ({
                 payload,
               })
             ) {
+              // The local prompt is intentionally replaced by the canonical
+              // approval surface, so no Telegram final is expected here.
+              intentionalSilentTerminal = true;
               queuedFinal = true;
               return;
             }
@@ -2870,9 +2881,11 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onSkip: (_payload, info) => {
-          if (info.reason !== "silent") {
-            deliveryState.markNonSilentSkip();
+          if (info.reason === "silent") {
+            intentionalSilentTerminal = true;
+            return;
           }
+          deliveryState.markNonSilentSkip();
         },
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
@@ -3156,13 +3169,8 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
-  const reachedIntentionalSilentTerminal =
-    !dispatchError &&
-    !deliverySummary.delivered &&
-    deliverySummary.skippedNonSilent === 0 &&
-    deliverySummary.failedNonSilent === 0;
-  const confirmedTerminalDelivery = deliverySummary.delivered || sentFallback;
-  if (durableDirectTurnId && (confirmedTerminalDelivery || reachedIntentionalSilentTerminal)) {
+  const confirmedTerminalDelivery = terminalDeliveryConfirmed || sentFallback;
+  if (durableDirectTurnId && (confirmedTerminalDelivery || intentionalSilentTerminal)) {
     // Publish the processed-message receipt before Telegram middleware may
     // advance its update offset. If the process dies earlier, startup delivers
     // the conservative blocker without replaying tools or ambiguous actions.

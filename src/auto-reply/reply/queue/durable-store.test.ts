@@ -114,6 +114,26 @@ describe("durable followup queue", () => {
     expect(hydrateDurableFollowup(record, currentConfig).run.config).toBe(currentConfig);
   });
 
+  it("atomically persists accepted direct work as delivery-only recovery", async () => {
+    const run = createRun("accepted direct input");
+    const record = await persistDurableFollowup({
+      queueKey: "atomic-direct-recovery",
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+    });
+
+    expect(record.delivery).toEqual({
+      sourceDurableIds: [record.id],
+      processedMessageKeys: [expect.any(String)],
+      payloads: [{ text: "Visible recovery receipt.", isError: true }],
+    });
+    const [loaded] = await loadDurableFollowups();
+    expect(hydrateDurableFollowup(loaded, {}).deliveryPayloads).toEqual([
+      { text: "Visible recovery receipt.", isError: true },
+    ]);
+  });
+
   it("transitions constituent inputs into one delivery-only carrier", async () => {
     const first = await persistDurableFollowup({
       queueKey: "delivery-stage",

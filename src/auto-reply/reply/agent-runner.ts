@@ -84,11 +84,12 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { persistDurableFollowup, persistDurableFollowupDelivery } from "./queue/durable-store.js";
+import { persistDurableFollowup } from "./queue/durable-store.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
   isExplicitAgentTimeoutPayload,
@@ -100,13 +101,6 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
-const RESTART_INTERRUPTED_DIRECT_TURN_PAYLOAD: ReplyPayload = {
-  text:
-    "I was interrupted by a Jarvis restart after accepting your message. " +
-    "I did not repeat the unfinished actions because their outcome may be ambiguous. " +
-    "Send “Continue” and I’ll inspect the current state before proceeding.",
-  isError: true,
-};
 
 type FollowupFinalizationOwnership = {
   owners: number;
@@ -450,21 +444,23 @@ async function runReplyAgentWithFinalizationOwnership(
   // The exported wrapper releases ownership on every return and exception.
   lifecycle.releaseOwnership = acquireFollowupFinalizationOwnership(queueKey);
 
-  if (!isHeartbeat && runOpts?.onDurableReplyAccepted) {
+  const isAlreadyDurableQueuedWork = Boolean(
+    followupRun.durableId?.trim() || followupRun.durableIds?.some((id) => id.trim()),
+  );
+  if (!isHeartbeat && !isAlreadyDurableQueuedWork && runOpts?.onDurableReplyAccepted) {
     // Persist a recovery-safe terminal payload before starting model or tool
     // work. An external restart can therefore never silently abandon this
     // accepted direct turn, while the blocker avoids replaying ambiguous side
     // effects. The transport removes this blocker only after terminal delivery.
-    const inputRecord = await persistDurableFollowup({
+    const recoveryRecord = await persistDurableFollowup({
       queueKey,
       run: followupRun,
       settings: resolvedQueue,
+      // One atomic record is the acceptance boundary. There is no crash window
+      // in which startup can observe replayable input without this blocker.
+      deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
     });
-    const recoveryRecord = await persistDurableFollowupDelivery({
-      run: { ...followupRun, durableId: inputRecord.id },
-      payloads: [RESTART_INTERRUPTED_DIRECT_TURN_PAYLOAD],
-    });
-    await runOpts.onDurableReplyAccepted(recoveryRecord?.id ?? inputRecord.id);
+    await runOpts.onDurableReplyAccepted(recoveryRecord.id);
   }
 
   const timeoutContinuationConfig = resolveReplyTimeoutContinuationConfig(cfg);

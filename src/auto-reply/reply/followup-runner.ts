@@ -34,6 +34,7 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
+import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -136,10 +137,10 @@ export function createFollowupRunner(params: {
   /**
    * Sends followup payloads, routing to the originating channel if set.
    *
-   * A live same-channel dispatcher owns channel-specific reply lifecycle
-   * semantics such as Telegram's mutable progress bubble and retained Work log.
-   * Cross-channel delivery and restart recovery have no matching live
-   * dispatcher, so those paths still route directly to the recorded origin.
+   * RAM-only same-channel work may still use the live dispatcher for progress
+   * lifecycle semantics. Durable work must use routeReply because its promise
+   * is the provider-acceptance boundary; onBlockReply resolves after enqueue
+   * and an old dispatcher may already be closing.
    */
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
     // Check if we should route to originating channel.
@@ -168,6 +169,7 @@ export function createFollowupRunner(params: {
       routePartMatches(queued.originatingAccountId, liveReplyRoute?.originatingAccountId) &&
       routePartMatches(queued.originatingThreadId, liveReplyRoute?.originatingThreadId),
     );
+    const hasDurableOwnership = resolveDurableIds(queued).length > 0;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
@@ -202,11 +204,10 @@ export function createFollowupRunner(params: {
       }
       await typingSignals.signalTextDelta(payload.text);
 
-      if (canUseSameChannelDispatcher && opts?.onBlockReply) {
-        // Queued same-channel replies must re-enter the original transport
-        // dispatcher. Direct outbound routing would turn every phase-aware
-        // commentary payload into a separate durable message, bypassing
-        // Telegram's one-message progress controller and Work log finalization.
+      if (canUseSameChannelDispatcher && !hasDurableOwnership && opts?.onBlockReply) {
+        // RAM-only same-channel replies retain the original transport lifecycle.
+        // Durable work deliberately avoids this path because enqueue completion
+        // is not proof that the provider accepted the final.
         await opts.onBlockReply(payload);
       } else if (shouldRouteToOriginating) {
         const result = await routeReply({
@@ -224,7 +225,7 @@ export function createFollowupRunner(params: {
           // A failed explicit route may use the live dispatcher only under the
           // same complete-route proof as the primary path. Channel equality
           // alone is unsafe when a queue spans several conversations.
-          if (canUseSameChannelDispatcher && opts?.onBlockReply) {
+          if (canUseSameChannelDispatcher && !hasDurableOwnership && opts?.onBlockReply) {
             await opts.onBlockReply(payload);
           } else if (shouldThrowProcessingFailure(queued)) {
             throw new Error(`Followup reply routing failed: ${errorMsg}`);
@@ -258,6 +259,15 @@ export function createFollowupRunner(params: {
         // a non-empty outbound retry.
         await sendFollowupPayloads(queued.deliveryPayloads, queued);
         return;
+      }
+
+      if (durableIds.length > 0) {
+        // Transition the queued input to a conservative terminal carrier before
+        // starting model or tool work. If this process dies mid-turn, startup
+        // sends one visible blocker rather than replaying potentially completed
+        // side effects. A normal completion replaces this carrier with the exact
+        // final payload before delivery.
+        await persistDeliveryStage(queued, [RESTART_INTERRUPTED_TURN_PAYLOAD]);
       }
 
       const runId = crypto.randomUUID();

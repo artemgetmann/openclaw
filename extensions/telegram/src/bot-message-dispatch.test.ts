@@ -267,6 +267,71 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   });
 
+  it("retains direct-turn recovery when only a non-terminal payload was delivered", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-nonterminal-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input",
+        messageId: "telegram:457",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.onDurableReplyAccepted?.(record.id);
+          // A tool/error envelope reaches Telegram, but the actual answer does
+          // not. General delivery success must not erase terminal recovery.
+          await dispatcherOptions.deliver(
+            { text: "The intermediate tool reported a warning.", isError: true },
+            { kind: "block" },
+          );
+          await dispatcherOptions.deliver({ text: "Invisible final." }, { kind: "final" });
+          return { queuedFinal: false };
+        },
+      );
+      deliverReplies
+        .mockResolvedValueOnce({ delivered: true })
+        .mockResolvedValueOnce({ delivered: false });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).toHaveBeenCalledTimes(2);
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({
+          id: record.id,
+          delivery: expect.objectContaining({
+            payloads: [{ text: "Visible recovery receipt.", isError: true }],
+          }),
+        }),
+      ]);
+    });
+  });
+
   it("streams progress previews in private threads through the fastest visible message path", async () => {
     const progressStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(progressStream);
