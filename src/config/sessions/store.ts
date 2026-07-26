@@ -317,6 +317,45 @@ type SaveSessionStoreOptions = {
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
 };
 
+const SESSION_STORE_SERIALIZE_YIELD_BYTES = 512 * 1024;
+
+/**
+ * Serialize the top-level session map without monopolizing the gateway event loop.
+ *
+ * Founder runtimes can legitimately accumulate hundreds of session entries. Each
+ * entry may contain a skill snapshot, so the complete store can be tens of
+ * megabytes even though no individual entry is large. A single JSON.stringify()
+ * over that map blocks Telegram polling, health RPCs, and watchdog timers until
+ * V8 finishes. Serializing one entry at a time preserves the exact pretty JSON
+ * format while giving network work a chance to run after each bounded chunk.
+ */
+export async function serializeSessionStoreCooperatively(
+  store: Record<string, SessionEntry>,
+): Promise<string> {
+  const entries = Object.entries(store);
+  if (entries.length === 0) {
+    return "{}";
+  }
+
+  const serializedEntries: string[] = [];
+  let bytesSinceYield = 0;
+  for (const [key, entry] of entries) {
+    // Indent embedded newlines by one extra level to match
+    // JSON.stringify(store, null, 2) byte-for-byte.
+    const serializedValue = JSON.stringify(entry, null, 2).replaceAll("\n", "\n  ");
+    const serializedEntry = `  ${JSON.stringify(key)}: ${serializedValue}`;
+    serializedEntries.push(serializedEntry);
+    bytesSinceYield += Buffer.byteLength(serializedEntry);
+
+    if (bytesSinceYield >= SESSION_STORE_SERIALIZE_YIELD_BYTES) {
+      bytesSinceYield = 0;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
+  return `{\n${serializedEntries.join(",\n")}\n}`;
+}
+
 function updateSessionStoreWriteCaches(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -455,7 +494,7 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const json = await serializeSessionStoreCooperatively(store);
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });
     return;

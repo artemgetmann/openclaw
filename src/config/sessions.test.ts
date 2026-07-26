@@ -12,6 +12,7 @@ import {
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
+  serializeSessionStoreCooperatively,
   updateLastRoute,
   updateSessionStore,
   updateSessionStoreEntry,
@@ -434,6 +435,31 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store["agent:main:one"]?.sessionId).toBe("sess-1");
     expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
+  });
+
+  it("serializes session stores byte-for-byte without starving the event loop", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 500 }, (_, index) => [
+        `agent:main:large-${index}`,
+        {
+          sessionId: `sess-${index}`,
+          updatedAt: index,
+          // Match the founder runtime's measured shape: hundreds of entries
+          // around 100 KiB each, primarily due to persisted skill metadata.
+          label: "x".repeat(100 * 1024),
+        },
+      ]),
+    );
+    let heartbeatTicks = 0;
+    const heartbeat = setInterval(() => {
+      heartbeatTicks += 1;
+    }, 0);
+
+    const serialized = await serializeSessionStoreCooperatively(store);
+
+    clearInterval(heartbeat);
+    expect(serialized).toBe(JSON.stringify(store, null, 2));
+    expect(heartbeatTicks).toBeGreaterThan(2);
   });
 
   it("recovers from array-backed session stores", async () => {

@@ -15,6 +15,7 @@ import {
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  cancelGatewayDraining,
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,
@@ -27,8 +28,14 @@ const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
 
-export async function runGatewayLoop(params: {
-  start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+export type GatewayRestartPreparation<TPrepared> = {
+  prepared: TPrepared;
+  validate: () => Promise<void>;
+};
+
+export async function runGatewayLoop<TPrepared = never>(params: {
+  start: (prepared?: TPrepared) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+  prepareRestart?: () => Promise<GatewayRestartPreparation<TPrepared>>;
   runtime: typeof defaultRuntime;
   lockPort?: number;
 }) {
@@ -36,6 +43,9 @@ export async function runGatewayLoop(params: {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
+  let pendingPreparedRestart: TPrepared | undefined;
+  let restartPreparationGeneration = 0;
+  let activeRestartPreparationGeneration: number | null = null;
 
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
@@ -102,6 +112,17 @@ export async function runGatewayLoop(params: {
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
     if (shuttingDown) {
+      if (action === "stop" && activeRestartPreparationGeneration !== null) {
+        // A read-only restart preflight may wait indefinitely on an external
+        // secret backend. Stop signals must invalidate that work and start
+        // their own bounded shutdown immediately.
+        restartPreparationGeneration += 1;
+        activeRestartPreparationGeneration = null;
+        shuttingDown = false;
+        gatewayLog.info(`received ${signal} during restart preflight; cancelling restart`);
+        request("stop", signal);
+        return;
+      }
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
@@ -110,17 +131,47 @@ export async function runGatewayLoop(params: {
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
-    const forceExitTimer = setTimeout(() => {
-      gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      // Exit non-zero on restart timeout so launchd/systemd treats it as a
-      // failure and triggers a clean process restart instead of assuming the
-      // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-      exitProcess(isRestart ? 1 : 0);
-    }, forceExitMs);
-
     void (async () => {
+      let restartPreparation: GatewayRestartPreparation<TPrepared> | undefined;
+      if (isRestart && params.prepareRestart) {
+        const preparationGeneration = ++restartPreparationGeneration;
+        activeRestartPreparationGeneration = preparationGeneration;
+        try {
+          // Expensive read-only work runs while the old listener remains
+          // available. A failed preflight aborts the restart before draining
+          // or closing any live runtime.
+          restartPreparation = await params.prepareRestart();
+        } catch (err) {
+          if (activeRestartPreparationGeneration !== preparationGeneration) {
+            return;
+          }
+          activeRestartPreparationGeneration = null;
+          const classified = formatGatewayStartupPreflightFailure(err);
+          gatewayLog.error(
+            classified
+              ? `${classified}. Restart cancelled; current gateway remains running.`
+              : `gateway restart preflight failed: ${String(err)}. Restart cancelled; current gateway remains running.`,
+          );
+          shuttingDown = false;
+          return;
+        }
+        if (activeRestartPreparationGeneration !== preparationGeneration) {
+          return;
+        }
+        activeRestartPreparationGeneration = null;
+      }
+
+      const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+      const forceExitTimer = setTimeout(() => {
+        gatewayLog.error("shutdown timed out; exiting without full cleanup");
+        // Exit non-zero on restart timeout so launchd/systemd treats it as a
+        // failure and triggers a clean process restart instead of assuming the
+        // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
+        exitProcess(isRestart ? 1 : 0);
+      }, forceExitMs);
+
       try {
+        let drainTimedOut = false;
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
@@ -132,7 +183,7 @@ export async function runGatewayLoop(params: {
 
           // Best-effort abort for compacting runs so long compaction operations
           // don't hold session write locks across restart boundaries.
-          if (activeRuns > 0) {
+          if (activeRuns > 0 && !restartPreparation) {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });
           }
 
@@ -152,11 +203,37 @@ export async function runGatewayLoop(params: {
               gatewayLog.info("all active work drained");
             } else {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
-              // Final best-effort abort to avoid carrying active runs into the
-              // next lifecycle when drain time budget is exhausted.
-              abortEmbeddedPiRun(undefined, { mode: "all" });
+              drainTimedOut = true;
             }
           }
+        }
+
+        if (restartPreparation) {
+          try {
+            // Re-read config after draining and immediately before close. This
+            // rejects a staged context made stale during the preflight window.
+            await restartPreparation.validate();
+          } catch (err) {
+            // The old listener and any timed-out active tasks are still alive.
+            // Re-open ingress without clearing their lane bookkeeping.
+            cancelGatewayDraining();
+            const classified = formatGatewayStartupPreflightFailure(err);
+            gatewayLog.error(
+              classified
+                ? `${classified}. Restart cancelled; current gateway remains running.`
+                : `gateway restart preflight became stale: ${String(err)}. Restart cancelled; current gateway remains running.`,
+            );
+            shuttingDown = false;
+            return;
+          }
+          pendingPreparedRestart = restartPreparation.prepared;
+        }
+
+        if (drainTimedOut) {
+          // Only terminate surviving work after the final freshness check has
+          // committed this restart to cutover. A cancelled restart must leave
+          // the old listener and its active work intact.
+          abortEmbeddedPiRun(undefined, { mode: "all" });
         }
 
         await server?.close({
@@ -167,11 +244,13 @@ export async function runGatewayLoop(params: {
         gatewayLog.error(`shutdown error: ${String(err)}`);
       } finally {
         clearTimeout(forceExitTimer);
-        server = null;
-        if (isRestart) {
-          await handleRestartAfterServerClose();
-        } else {
-          await handleStopAfterServerClose();
+        if (shuttingDown) {
+          server = null;
+          if (isRestart) {
+            await handleRestartAfterServerClose();
+          } else {
+            await handleStopAfterServerClose();
+          }
         }
       }
     })();
@@ -230,7 +309,9 @@ export async function runGatewayLoop(params: {
     while (true) {
       onIteration();
       try {
-        server = await params.start();
+        const preparedRestart = pendingPreparedRestart;
+        pendingPreparedRestart = undefined;
+        server = await params.start(preparedRestart);
         isFirstStart = false;
       } catch (err) {
         // On initial startup, let the error propagate so the outer handler

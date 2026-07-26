@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PreparedSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { createGatewaySecretsActivationController } from "./server-startup-secrets.js";
+import {
+  createGatewaySecretsActivationController,
+  createGatewayStartupSecretsActivator,
+  resolvePreparedGatewayAuthOverride,
+} from "./server-startup-secrets.js";
 
 function createPreparedSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot {
   return {
@@ -26,6 +30,73 @@ function createPreparedSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeS
     },
   };
 }
+
+describe("createGatewayStartupSecretsActivator", () => {
+  it("feeds pre-resolved gateway credentials into auth bootstrap without changing source config", () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "GATEWAY_TOKEN" },
+        },
+      },
+    };
+    const snapshot = createPreparedSnapshot(sourceConfig);
+    snapshot.config = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "resolved-token",
+        },
+      },
+    };
+
+    expect(resolvePreparedGatewayAuthOverride({ snapshot })).toEqual({
+      token: "resolved-token",
+    });
+    expect(snapshot.sourceConfig.gateway?.auth?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GATEWAY_TOKEN",
+    });
+  });
+
+  it("activates the prepared snapshot after generated-token persistence without resolving again", async () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+        },
+      },
+    };
+    const prepared = createPreparedSnapshot(sourceConfig);
+    const activatePrepared = vi.fn();
+    const activateFresh = vi.fn(async (config: OpenClawConfig) => createPreparedSnapshot(config));
+    const activate = createGatewayStartupSecretsActivator({
+      preparedSnapshot: prepared,
+      activatePrepared,
+      activateFresh,
+    });
+    const configAfterAuthPersistence: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "generated-token",
+        },
+      },
+    };
+
+    const activated = await activate(configAfterAuthPersistence);
+
+    expect(activateFresh).not.toHaveBeenCalled();
+    expect(activatePrepared).toHaveBeenCalledTimes(1);
+    expect(activated.sourceConfig.gateway?.auth?.token).toBe("generated-token");
+    expect(activated.config.gateway?.auth?.token).toBe("generated-token");
+
+    await activate(configAfterAuthPersistence);
+    expect(activateFresh).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("createGatewaySecretsActivationController", () => {
   it("wraps startup failures with startup-specific context", async () => {
