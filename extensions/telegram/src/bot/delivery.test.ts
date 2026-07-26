@@ -821,13 +821,16 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("projects shared interactive buttons onto inbound Telegram replies", async () => {
+  it("projects shared interactive buttons onto legacy Telegram messages", async () => {
     const runtime = createRuntime();
     const sendRichMessage = vi.fn().mockResolvedValue({
       message_id: 8,
       chat: { id: "123" },
     });
-    const sendMessage = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
     const bot = createBot({ raw: { sendRichMessage }, sendMessage });
 
     await deliverWith({
@@ -859,9 +862,12 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendRichMessage).toHaveBeenCalledWith(
+    expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Plugin bind approval required"),
       expect.objectContaining({
-        chat_id: "123",
+        parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
             [
@@ -880,7 +886,6 @@ describe("deliverReplies", () => {
         },
       }),
     );
-    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("sends structured final-style text to rich messages with block tags", async () => {
