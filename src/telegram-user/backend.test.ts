@@ -300,17 +300,14 @@ describe("telegram-user backend defaults", () => {
     });
   });
 
-  it("ignores a machine owner selector after its target is removed", async () => {
+  it("keeps a missing machine owner authoritative until locked bootstrap recovery", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-stale-owner-"));
     const stateDir = path.join(homeDir, "stable-state");
     tempToolingRoots.push(homeDir);
     const selectorPath = path.join(homeDir, ".openclaw", "telegram-user", "canonical-session.path");
     const deletedSession = path.join(homeDir, "deleted-worktree", "userbot.session");
-    const stableSession = path.join(stateDir, "telegram-user", "userbot.session");
     await fs.mkdir(path.dirname(selectorPath), { recursive: true });
-    await fs.mkdir(path.dirname(stableSession), { recursive: true });
     await fs.writeFile(selectorPath, `${deletedSession}\n`, { mode: 0o600 });
-    await fs.writeFile(stableSession, "stable-fixture\n");
 
     const { resolveTelegramUserSessionSelection } = await import("./backend.js");
     expect(
@@ -318,8 +315,8 @@ describe("telegram-user backend defaults", () => {
         env: { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       }),
     ).toEqual({
-      sessionPath: stableSession,
-      source: "state-default",
+      sessionPath: deletedSession,
+      source: "machine-selector",
     });
   });
 

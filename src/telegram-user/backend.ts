@@ -157,14 +157,14 @@ function readRepoLocalSessionSelector(): string | undefined {
 }
 
 function readMachineSessionSelector(env: NodeJS.ProcessEnv): string | undefined {
-  const selected = readAbsoluteSessionSelector(
+  // Selection happens before the command acquires the shared machine lock.
+  // Never reinterpret a temporarily missing target here: logout atomically
+  // vacates it, while true stale-target recovery is serialized by bootstrap's
+  // ownership lock.
+  return readAbsoluteSessionSelector(
     resolveTelegramUserMachineSelectorPath(env),
     "machine Telegram session selector",
   );
-  // Worktree cleanup can remove an old migration target. A durable selector
-  // whose target vanished is no longer ownership evidence; ignore it so the
-  // locked bootstrap resolver can recover from stable legacy candidates.
-  return selected && fsSync.existsSync(selected) ? selected : undefined;
 }
 
 function isRecognizedLegacySession(value: string, env: NodeJS.ProcessEnv): boolean {

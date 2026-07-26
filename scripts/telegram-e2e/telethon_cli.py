@@ -198,7 +198,11 @@ def emit_auth_status(
   )
 
 
-def clear_session_artifacts(session_path: Path) -> list[str]:
+def clear_session_artifacts(
+  session_path: Path,
+  *,
+  preserve_owner_path: bool = False,
+) -> list[str]:
   removed_paths: list[str] = []
   if session_path.exists() and session_path.is_dir():
     raise ValueError(
@@ -207,8 +211,9 @@ def clear_session_artifacts(session_path: Path) -> list[str]:
   # Telethon can leave SQLite sidecars behind depending on shutdown timing and
   # platform filesystem semantics. Only delete the exact file artifacts that
   # belong to this session path; never recurse into directories.
+  session_existed = session_path.exists()
   candidate_paths = [
-    session_path,
+    *([] if preserve_owner_path else [session_path]),
     resolve_pending_auth_path(session_path),
     Path(f"{session_path}-journal"),
     Path(f"{session_path}-shm"),
@@ -223,6 +228,24 @@ def clear_session_artifacts(session_path: Path) -> list[str]:
       removed_paths.append(str(candidate))
     except FileNotFoundError:
       continue
+
+  if preserve_owner_path:
+    # Replace credentials without a missing-path window. Session resolution
+    # happens before lock acquisition, so delete-then-touch could let a racing
+    # process misclassify the canonical selector as stale.
+    session_path.parent.mkdir(parents = True, exist_ok = True)
+    temporary = session_path.with_name(f".{session_path.name}.{os.getpid()}.logout")
+    try:
+      temporary.write_bytes(b"")
+      os.chmod(temporary, 0o600)
+      os.replace(temporary, session_path)
+    finally:
+      try:
+        temporary.unlink()
+      except FileNotFoundError:
+        pass
+    if session_existed:
+      removed_paths.insert(0, str(session_path))
   return removed_paths
 
 
@@ -1288,16 +1311,9 @@ async def run_inbox(args: argparse.Namespace) -> int:
 async def run_logout(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
-    removed_paths = clear_session_artifacts(session_path)
+    removed_paths = clear_session_artifacts(session_path, preserve_owner_path = True)
     # Logout revokes the credentials, but the machine ownership reference must
-    # keep pointing at the same location for the next intentional login. An
-    # empty SQLite path is safe for Telethon to initialize and distinguishes
-    # logout from a vanished worktree target that bootstrap should recover.
-    session_path.touch(mode = 0o600, exist_ok = True)
-    try:
-      os.chmod(session_path, 0o600)
-    except OSError:
-      pass
+    # keep pointing at the same location for the next intentional login.
   return emit(
     {
       "cleared": len(removed_paths) > 0,

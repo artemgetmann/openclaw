@@ -587,11 +587,20 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       session_path.parent.mkdir(parents = True)
       session_path.write_bytes(b"credential-fixture")
       emitted: dict[str, object] = {}
+      owner_existed_before_replace: list[bool] = []
+      original_replace = os.replace
 
-      with patch.object(
-        telethon_cli,
-        "emit",
-        side_effect = lambda payload, **kwargs: emitted.update(payload) or 0,
+      def observing_replace(source, target) -> None:
+        owner_existed_before_replace.append(session_path.exists())
+        original_replace(source, target)
+
+      with (
+        patch.object(os, "replace", side_effect = observing_replace),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **kwargs: emitted.update(payload) or 0,
+        ),
       ):
         exit_code = await telethon_cli.run_logout(
           argparse.Namespace(session = str(session_path), lock = str(lock_path))
@@ -600,6 +609,7 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
       self.assertEqual(exit_code, 0)
       self.assertTrue(emitted["cleared"])
       self.assertTrue(emitted["owner_path_preserved"])
+      self.assertEqual(owner_existed_before_replace, [True])
       self.assertEqual(session_path.read_bytes(), b"")
       self.assertEqual(stat.S_IMODE(session_path.stat().st_mode), 0o600)
 
