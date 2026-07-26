@@ -431,14 +431,21 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       runtime: defaultRuntime,
       lockPort: port,
       prepareRestart: async () => {
-        const prepared = await prepareGatewayServerRestart(port, {
+        let prepared = await prepareGatewayServerRestart(port, {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
         });
         return {
           prepared,
-          validate: async () => await validatePreparedGatewayServerRestart(prepared),
+          validate: async () => {
+            prepared = await validatePreparedGatewayServerRestart(prepared, {
+              bind,
+              auth: authOverride,
+              tailscale: tailscaleOverride,
+            });
+            return prepared;
+          },
         };
       },
       start: async (preparedRestart) =>
