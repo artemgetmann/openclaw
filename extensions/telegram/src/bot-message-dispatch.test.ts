@@ -333,6 +333,67 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     });
   });
 
+  it("retains direct-turn recovery after a generic error fallback", async () => {
+    await withStateDirEnv("openclaw-telegram-direct-turn-error-fallback-", async () => {
+      const queueKey = "agent:main:telegram:direct:123";
+      const run = {
+        prompt: "accepted input with ambiguous action",
+        messageId: "telegram:459",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram" as const,
+        originatingTo: "123",
+        originatingAccountId: "default",
+        originatingThreadId: 777,
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-1",
+          sessionKey: queueKey,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 30_000,
+          blockReplyBreak: "message_end" as const,
+        },
+      };
+      const recoveryPayload = { text: "Visible recovery receipt.", isError: true };
+      const record = await persistDurableFollowup({
+        queueKey,
+        run,
+        settings: { mode: "followup", debounceMs: 0, cap: 20 },
+        deliveryPayloads: [recoveryPayload],
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+        await replyOptions.onDurableReplyAccepted?.(record.id);
+        throw new Error("provider failed after an ambiguous action");
+      });
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [
+            expect.objectContaining({
+              text: "Something went wrong while processing your request. Please try again.",
+            }),
+          ],
+        }),
+      );
+      await expect(loadDurableFollowups()).resolves.toEqual([
+        expect.objectContaining({
+          id: record.id,
+          delivery: expect.objectContaining({ payloads: [recoveryPayload] }),
+        }),
+      ]);
+    });
+  });
+
   it("retains direct-turn recovery when only an ambiguous preview remains", async () => {
     await withStateDirEnv("openclaw-telegram-direct-turn-retained-preview-", async () => {
       const queueKey = "agent:main:telegram:direct:123";

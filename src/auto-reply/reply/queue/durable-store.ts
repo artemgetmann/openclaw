@@ -218,7 +218,8 @@ export async function isDurableFollowupMessagePending(params: {
     (record) =>
       record.queueKey === params.queueKey &&
       (record.processedMessageKey === key ||
-        record.delivery?.processedMessageKeys.includes(key) === true),
+        (Array.isArray(record.delivery?.processedMessageKeys) &&
+          record.delivery.processedMessageKeys.includes(key))),
   );
 }
 

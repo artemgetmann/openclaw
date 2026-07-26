@@ -134,6 +134,24 @@ describe("durable followup queue", () => {
     ]);
   });
 
+  it("does not let a malformed legacy delivery identity block inbound dedupe", async () => {
+    const queueKey = "legacy-malformed-delivery-identity";
+    const run = createRun("accepted direct input");
+    const record = await persistDurableFollowup({
+      queueKey,
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+    });
+    const filePath = path.join(stateDir, "followup-queue", `${record.id}.json`);
+    const malformed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    delete malformed.processedMessageKey;
+    delete malformed.delivery.processedMessageKeys;
+    await fs.writeFile(filePath, JSON.stringify(malformed), "utf8");
+
+    await expect(isDurableFollowupMessagePending({ queueKey, run })).resolves.toBe(false);
+  });
+
   it("transitions constituent inputs into one delivery-only carrier", async () => {
     const first = await persistDurableFollowup({
       queueKey: "delivery-stage",

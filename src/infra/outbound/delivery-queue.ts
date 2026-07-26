@@ -348,6 +348,20 @@ export interface RecoveryLogger {
   error(msg: string): void;
 }
 
+function resolveRecoveryDestination(entry: QueuedDelivery): string {
+  if (entry.channel !== "telegram") {
+    return entry.to;
+  }
+
+  // Older notification and followup paths persisted Telegram's internal
+  // session-address form (`group:<chat id>`). The live Telegram transport
+  // accepts only the bare numeric chat id. Normalize this one proven legacy
+  // shape at the recovery boundary; leave usernames and every other provider
+  // untouched so recovery cannot reinterpret an ambiguous destination.
+  const legacyGroup = /^(?:(?:telegram|tg):)?group:(-?\d+)$/i.exec(entry.to.trim());
+  return legacyGroup?.[1] ?? entry.to;
+}
+
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
@@ -411,7 +425,7 @@ export async function recoverPendingDeliveries(opts: {
       await opts.deliver({
         cfg: opts.cfg,
         channel: entry.channel,
-        to: entry.to,
+        to: resolveRecoveryDestination(entry),
         accountId: entry.accountId,
         payloads: entry.payloads,
         threadId: entry.threadId,

@@ -3171,11 +3171,12 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
-  const confirmedTerminalDelivery = terminalDeliveryConfirmed || sentFallback;
-  if (durableDirectTurnId && (confirmedTerminalDelivery || intentionalSilentTerminal)) {
+  if (durableDirectTurnId && (terminalDeliveryConfirmed || intentionalSilentTerminal)) {
     // Publish the processed-message receipt before Telegram middleware may
     // advance its update offset. If the process dies earlier, startup delivers
     // the conservative blocker without replaying tools or ambiguous actions.
+    // A generic error fallback is visible but cannot prove whether a prior tool
+    // or external action completed, so it deliberately leaves recovery armed.
     await completeDurableFollowup(durableDirectTurnId);
   }
 
