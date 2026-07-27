@@ -27,7 +27,7 @@ function createRun(): FollowupRun {
     messageId: "77",
     enqueuedAt: Date.now(),
     originatingChannel: "telegram",
-    originatingTo: ROUTE.chatId,
+    originatingTo: `telegram:${ROUTE.chatId}`,
     originatingAccountId: ROUTE.accountId,
     originatingThreadId: ROUTE.threadId,
     run: {

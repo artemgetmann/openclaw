@@ -23,7 +23,12 @@ function matchesExpectedTelegramRoute(
   },
   expected: ExpectedTelegramRoute,
 ): boolean {
-  if (item.originatingChannel !== "telegram" || item.originatingTo !== expected.chatId) {
+  const expectedTargets = new Set([expected.chatId, `telegram:${expected.chatId}`]);
+  if (
+    item.originatingChannel !== "telegram" ||
+    !item.originatingTo ||
+    !expectedTargets.has(item.originatingTo)
+  ) {
     return false;
   }
   if (
