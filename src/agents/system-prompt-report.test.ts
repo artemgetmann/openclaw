@@ -145,6 +145,8 @@ describe("buildSystemPromptReport", () => {
       {
         name: "telegram-user",
         blockChars: expect.any(Number),
+        descriptionChars: "Telegram-as-me workflow.".length,
+        detailed: true,
         location: "/repo/.agents/skills/telegram-user/SKILL.md",
       },
     ]);
@@ -155,6 +157,26 @@ describe("buildSystemPromptReport", () => {
       worktree: "/repo",
       stateDir: "/state",
       configPath: "/state/openclaw.json",
+    });
+  });
+
+  it("makes compact skill entries explicit in the report", () => {
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [],
+      injectedFiles: [],
+      skillsPrompt:
+        "<available_skills><skill><name>tone-of-voice</name><location>/skills/tone/SKILL.md</location></skill></available_skills>",
+      tools: [],
+    });
+
+    expect(report.skills.entries[0]).toMatchObject({
+      name: "tone-of-voice",
+      descriptionChars: 0,
+      detailed: false,
     });
   });
 });

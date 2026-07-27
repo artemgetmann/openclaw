@@ -222,6 +222,20 @@ function buildGoalModeSection(params: {
   ];
 }
 
+function buildMessageDraftingSection(params: {
+  hasMessageDraftingSkill: boolean;
+  readToolName: string;
+}) {
+  if (!params.hasMessageDraftingSkill) {
+    return [];
+  }
+  return [
+    "## Recipient-Facing Drafts",
+    `Before composing, revising, or sending text to another person, read \`message-drafting\` with \`${params.readToolName}\` and follow it, even if a channel skill or autonomous monitor handles the action. This is a required late-read and may load one applicable user voice profile as a dependency.`,
+    "",
+  ];
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -453,6 +467,7 @@ export function buildAgentSystemPrompt(params: {
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const hasGoalModeSkill = skillsPrompt?.includes("<name>goal-mode</name>") ?? false;
+  const hasMessageDraftingSkill = skillsPrompt?.includes("<name>message-drafting</name>") ?? false;
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
     ? `Heartbeat prompt: ${heartbeatPrompt}`
@@ -701,6 +716,7 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }),
+    ...buildMessageDraftingSection({ hasMessageDraftingSkill, readToolName }),
     ...buildGoalModeSection({ isMinimal, availableTools, hasGoalModeSkill }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];

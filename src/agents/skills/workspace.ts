@@ -129,6 +129,7 @@ const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 const CRITICAL_PRODUCT_POLICY_SKILL = "goal-mode";
+const TONE_OF_VOICE_SKILL_NAME = /(?:^|-)tone-of-voice$/;
 
 function resolvePromptSourcePriority(source?: string): number {
   switch (source) {
@@ -172,6 +173,16 @@ function resolvePromptEntryPriority(
   // personal inventory, so selected skills must survive overflow trimming.
   if (isSelectedSkillForPrompt(entry, config, selectedSkillNames)) {
     return 0;
+  }
+
+  // Existing user voice profiles affect every recipient-facing draft, including
+  // drafts discovered only after a monitor reads a new inbound message. Their
+  // trigger cannot rely on current-turn relevance because scheduler wake
+  // prompts rarely contain words such as "draft" or "tone". The consumer
+  // template uses declared dependencies; this naming convention preserves
+  // compatibility for personal profiles created before that contract existed.
+  if (TONE_OF_VOICE_SKILL_NAME.test(entry.skill.name)) {
+    return 1;
   }
 
   // `goal-mode` is the sole product policy skill that must remain routable when

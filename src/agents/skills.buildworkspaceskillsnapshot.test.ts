@@ -253,6 +253,40 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt).not.toContain("generic-bundled-00");
   });
 
+  it("keeps existing tone-of-voice profile descriptions detailed during compaction", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const toneDescription = "Write recipient-facing messages in a concise, direct personal voice.";
+    for (let index = 0; index < 6; index += 1) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", `generic-${index}`),
+        name: `generic-${index}`,
+        description: `Generic helper ${index}. ${"x".repeat(700)}`,
+      });
+    }
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "artem-tone"),
+      name: "artem-tone-of-voice",
+      description: toneDescription,
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 100,
+            maxSkillsPromptChars: 3_000,
+          },
+        },
+      },
+      userPrompt: "Check whether the courier replied and handle the next step.",
+    });
+
+    expect(snapshot.prompt).toContain("Skills catalog compacted");
+    expect(snapshot.prompt).toContain("<name>artem-tone-of-voice</name>");
+    expect(snapshot.prompt).toContain(toneDescription);
+    expect(snapshot.protectedSkillNames).toContain("artem-tone-of-voice");
+  });
+
   it("keeps config-selected bundled skills ahead of managed overflow when prompt limits truncate", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const bundledDir = path.join(workspaceDir, ".bundled");

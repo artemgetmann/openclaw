@@ -289,6 +289,34 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("treat this as a post-action handoff");
   });
 
+  it("requires message-drafting before recipient-facing text in full and minimal runs", () => {
+    const skillsPrompt =
+      "<available_skills><skill><name>message-drafting</name></skill></available_skills>";
+    for (const promptMode of ["full", "minimal"] as const) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        skillsPrompt,
+        promptMode,
+      });
+
+      expect(prompt).toContain("## Recipient-Facing Drafts");
+      expect(prompt).toContain(
+        "Before composing, revising, or sending text to another person, read `message-drafting`",
+      );
+      expect(prompt).toContain("autonomous monitor");
+      expect(prompt).toContain("user voice profile as a dependency");
+    }
+  });
+
+  it("omits recipient-facing draft guidance when message-drafting is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt: "<available_skills><skill><name>wacli</name></skill></available_skills>",
+    });
+
+    expect(prompt).not.toContain("## Recipient-Facing Drafts");
+  });
+
   it("keeps the proactive monitor cue compact", () => {
     const promptWithMonitor = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

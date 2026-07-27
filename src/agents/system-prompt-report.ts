@@ -20,9 +20,13 @@ function extractBetween(
   return { text: input.slice(start, end), found: true };
 }
 
-function parseSkillBlocks(
-  skillsPrompt: string,
-): Array<{ name: string; blockChars: number; location?: string }> {
+function parseSkillBlocks(skillsPrompt: string): Array<{
+  name: string;
+  blockChars: number;
+  descriptionChars: number;
+  detailed: boolean;
+  location?: string;
+}> {
   const prompt = skillsPrompt.trim();
   if (!prompt) {
     return [];
@@ -33,12 +37,16 @@ function parseSkillBlocks(
   return blocks
     .map((block) => {
       const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
+      const description =
+        block.match(/<description>\s*([\s\S]*?)\s*<\/description>/i)?.[1]?.trim() ?? "";
       const location = block.match(/<location>\s*([^<]+?)\s*<\/location>/i)?.[1]?.trim();
-      // Persist the prompt-advertised source path so incident review can verify
-      // which SKILL.md the model was told to read before it touched tools.
+      // Persist both source and compaction state so incident review can tell
+      // whether the model saw a skill's routing trigger or only its name/path.
       return {
         name,
         blockChars: block.length,
+        descriptionChars: description.length,
+        detailed: description.length > 0,
         ...(location ? { location } : {}),
       };
     })
