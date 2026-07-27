@@ -287,6 +287,58 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.protectedSkillNames).toContain("artem-tone-of-voice");
   });
 
+  it("keeps explicit selections ahead of existing tone profiles without compacting either trigger", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const explicitDescription =
+      "Send and monitor WhatsApp messages through the configured adapter.";
+    const toneDescription = "Write external messages in the owner's concise personal voice.";
+
+    await writeSkill({
+      dir: path.join(bundledDir, "wacli"),
+      name: "wacli",
+      description: explicitDescription,
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "legacy-tone"),
+      name: "artem-tone-of-voice",
+      description: toneDescription,
+    });
+
+    // Model the live-sized personal catalog: most descriptions must compact,
+    // while the explicit adapter and legacy voice trigger remain actionable.
+    for (let index = 0; index < 124; index += 1) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", `generic-${index}`),
+        name: `generic-${index}`,
+        description: `Generic personal capability ${index}. ${"x".repeat(900)}`,
+      });
+    }
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          allowBundled: ["wacli"],
+          limits: {
+            maxSkillsInPrompt: 150,
+            maxSkillsPromptChars: 30_000,
+          },
+        },
+      },
+      userPrompt: "Check whether the courier replied and handle the next step.",
+    });
+
+    expect(snapshot.prompt).toContain("Skills catalog compacted");
+    expect(snapshot.prompt).toContain(explicitDescription);
+    expect(snapshot.prompt).toContain(toneDescription);
+    expect(snapshot.prompt.indexOf("<name>wacli</name>")).toBeLessThan(
+      snapshot.prompt.indexOf("<name>artem-tone-of-voice</name>"),
+    );
+    expect(snapshot.protectedSkillNames).toEqual(
+      expect.arrayContaining(["wacli", "artem-tone-of-voice"]),
+    );
+  });
+
   it("keeps config-selected bundled skills ahead of managed overflow when prompt limits truncate", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const bundledDir = path.join(workspaceDir, ".bundled");
