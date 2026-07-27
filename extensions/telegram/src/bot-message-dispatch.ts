@@ -3064,18 +3064,20 @@ export const dispatchTelegramMessage = async ({
           const queueKeyboard = canShowQueueButtons
             ? buildInlineKeyboard(buildTelegramQueuedButtons(durableId))
             : undefined;
-          const sent = await bot.api.sendMessage(
-            chatId,
-            "Queued behind the current task. Tap Steer to send it to the current task now.",
-            {
-              ...buildTelegramThreadParams(threadSpec),
-              reply_parameters: {
-                message_id: msg.message_id,
-                allow_sending_without_reply: true,
-              },
-              ...(queueKeyboard ? { reply_markup: queueKeyboard } : {}),
+          // Never advertise an action the configured Telegram surface cannot
+          // render. The shorter fallback still makes the queue state explicit
+          // to both a person and an agent reading message history.
+          const queueReceiptText = queueKeyboard
+            ? "Queued behind the current task. Tap Steer to send it to the current task now."
+            : "Queued behind the current task.";
+          const sent = await bot.api.sendMessage(chatId, queueReceiptText, {
+            ...buildTelegramThreadParams(threadSpec),
+            reply_parameters: {
+              message_id: msg.message_id,
+              allow_sending_without_reply: true,
             },
-          );
+            ...(queueKeyboard ? { reply_markup: queueKeyboard } : {}),
+          });
           recordSentMessage(chatId, sent.message_id, {
             sessionKey:
               typeof ctxPayload.SessionKey === "string" ? ctxPayload.SessionKey : undefined,

@@ -135,6 +135,17 @@ function acquireFollowupFinalizationOwnership(queueKey: string): () => void {
   };
 }
 
+/**
+ * Treat the post-model finalization window as part of the active session turn.
+ *
+ * The embedded provider lane can become idle before usage persistence and
+ * outbound reply delivery finish. Inbound admission must keep serializing
+ * behind that owner or a new direct turn can start against stale session state.
+ */
+export function hasFollowupFinalizationOwnership(queueKey: string): boolean {
+  return (FOLLOWUP_FINALIZATION_OWNERS.get(queueKey)?.owners ?? 0) > 0;
+}
+
 function scheduleOrDeferFollowupDrain(
   queueKey: string,
   runner: (run: FollowupRun) => Promise<void>,

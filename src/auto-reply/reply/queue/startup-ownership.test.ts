@@ -112,6 +112,16 @@ describe("startup durable queue ownership", () => {
     });
   });
 
+  it("treats post-model finalization ownership as an active session turn", () => {
+    expect(
+      resolveSessionRunActive({
+        embeddedRunActive: false,
+        queueOwned: false,
+        finalizationOwned: true,
+      }),
+    ).toBe(true);
+  });
+
   it("restores an active durable followup exactly once after an external restart", async () => {
     await expect(
       enqueueFollowupRunDurable(

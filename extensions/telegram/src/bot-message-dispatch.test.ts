@@ -350,7 +350,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(bot.api.sendMessage).toHaveBeenCalledWith(
       123,
-      "Queued behind the current task. Tap Steer to send it to the current task now.",
+      "Queued behind the current task.",
       expect.not.objectContaining({ reply_markup: expect.anything() }),
     );
   });
