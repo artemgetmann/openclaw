@@ -2,11 +2,44 @@ import type { CodexNotification, CodexRpcClient } from "./app-server-client.js";
 
 type JsonObject = Record<string, unknown>;
 
+const ALL_CODEX_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+] as const;
+
 export type CodexThreadRunResult = {
   threadId: string;
   turnId: string;
   finalText: string;
   progress: string[];
+};
+
+export type CodexFleetSnapshot = {
+  mode: "native-codex-fleet";
+  counts: {
+    total: number;
+    active: number;
+    idle: number;
+    other: number;
+  };
+  omittedInactive: number;
+  threads: Array<{
+    threadId: string;
+    name?: string;
+    status?: string;
+    cwd?: string;
+    branch?: string;
+    sha?: string;
+    updatedAt?: number;
+  }>;
 };
 
 type ThreadServiceOptions = {
@@ -51,7 +84,14 @@ export class CodexThreadService {
     };
   }
 
-  async list(params: { search?: string; archived?: boolean; limit?: number }): Promise<unknown> {
+  async list(params: {
+    search?: string;
+    archived?: boolean;
+    limit?: number;
+    cursor?: string;
+    sourceKinds?: readonly string[];
+    useStateDbOnly?: boolean;
+  }): Promise<unknown> {
     const client = await this.client();
     return await client.request("thread/list", {
       archived: params.archived === true,
@@ -59,8 +99,89 @@ export class CodexThreadService {
       modelProviders: [],
       sortKey: "recency_at",
       sortDirection: "desc",
+      ...(params.cursor ? { cursor: params.cursor } : {}),
+      ...(params.sourceKinds ? { sourceKinds: params.sourceKinds } : {}),
+      ...(params.useStateDbOnly === true ? { useStateDbOnly: true } : {}),
       ...(params.search?.trim() ? { searchTerm: params.search.trim() } : {}),
     });
+  }
+
+  async fleet(limit = 30): Promise<CodexFleetSnapshot> {
+    const rosterLimit = clamp(limit, 1, 100);
+    const catalog: JsonObject[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    // Active work can be older than the first recency-sorted page. Walk the
+    // metadata-only catalog so an active lane cannot disappear merely because
+    // many newer idle threads exist. Cursor repetition fails closed instead of
+    // returning a plausible but incomplete fleet.
+    do {
+      const response = asRecord(
+        await this.list({
+          limit: 100,
+          cursor,
+          // App Server defaults to interactive sources only. A fleet roster
+          // must also include exec and every sub-agent source or it can hide
+          // the exact workers the coordinator is responsible for.
+          sourceKinds: ALL_CODEX_THREAD_SOURCE_KINDS,
+          // Fleet pagination is inventory, not metadata repair. Re-scanning
+          // rollout JSONL once per page can create severe I/O pressure on a
+          // large catalog and is unnecessary for live status coordination.
+          useStateDbOnly: true,
+        }),
+      );
+      catalog.push(...asRecords(response.data));
+      const nextCursor = readString(response.nextCursor);
+      if (!nextCursor) {
+        cursor = undefined;
+        break;
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error("Codex App Server repeated a fleet catalog cursor");
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    } while (cursor);
+
+    const allThreads = catalog
+      .map((thread) => {
+        const threadId = readString(thread.id);
+        if (!threadId) {
+          return undefined;
+        }
+        return {
+          threadId,
+          name: readString(thread.name) ?? readString(thread.preview),
+          status: readNestedString(thread, ["status", "type"]),
+          cwd: readString(thread.cwd),
+          branch: readNestedString(thread, ["gitInfo", "branch"]),
+          sha: readNestedString(thread, ["gitInfo", "sha"]),
+          updatedAt: readNumberValue(thread.updatedAt),
+        };
+      })
+      .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
+    const activeThreads = allThreads.filter((thread) => thread.status === "active");
+    const inactiveThreads = allThreads.filter((thread) => thread.status !== "active");
+    const threads = [
+      ...activeThreads,
+      ...inactiveThreads.slice(0, Math.max(0, rosterLimit - activeThreads.length)),
+    ];
+    const active = activeThreads.length;
+    const idle = allThreads.filter(
+      (thread) => thread.status === "idle" || thread.status === "notLoaded",
+    ).length;
+    return {
+      mode: "native-codex-fleet",
+      counts: {
+        total: allThreads.length,
+        active,
+        idle,
+        other: allThreads.length - active - idle,
+      },
+      omittedInactive: allThreads.length - threads.length,
+      threads,
+    };
   }
 
   async read(threadId: string, includeTurns = false): Promise<unknown> {
@@ -389,8 +510,16 @@ function asRecord(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
 }
 
+function asRecords(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.map(asRecord) : [];
+}
+
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readNumberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readNestedString(value: JsonObject, path: string[]): string | undefined {

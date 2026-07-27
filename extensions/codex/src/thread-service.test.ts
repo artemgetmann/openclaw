@@ -7,6 +7,11 @@ class FakeCodexClient implements CodexRpcClient {
   readonly handlers = new Set<(notification: CodexNotification) => void>();
   closed = false;
   holdTurn = false;
+  listedThreads: Array<Record<string, unknown>> = [];
+  listedThreadPages = new Map<
+    string,
+    { data: Array<Record<string, unknown>>; nextCursor?: string }
+  >();
 
   async initialize() {}
 
@@ -18,7 +23,12 @@ class FakeCodexClient implements CodexRpcClient {
       return { account: { type: "chatgpt" } } as T;
     }
     if (method === "thread/list") {
-      return { data: [] } as T;
+      const cursor = typeof record.cursor === "string" ? record.cursor : "";
+      const page = this.listedThreadPages.get(cursor);
+      if (page) {
+        return { data: page.data, nextCursor: page.nextCursor ?? null } as T;
+      }
+      return { data: this.listedThreads } as T;
     }
     if (method === "thread/start") {
       return { thread: { id: "thread-new", status: { type: "idle" } } } as T;
@@ -135,6 +145,116 @@ describe("CodexThreadService", () => {
       finalText: "stable final",
       progress: ["started:commandExecution"],
     });
+  });
+
+  it("returns a compact fleet snapshot without loading every thread transcript", async () => {
+    const client = new FakeCodexClient();
+    client.listedThreads = [
+      {
+        id: "thread-active",
+        name: "Package Jarvis",
+        status: { type: "active", activeFlags: [] },
+        cwd: "/repo/worktree-a",
+        gitInfo: { branch: "codex/a", sha: "abc123" },
+        updatedAt: 123,
+        turns: [{ id: "large-transcript-that-must-not-leak" }],
+      },
+      {
+        id: "thread-idle",
+        preview: "Review the docs",
+        status: { type: "idle" },
+        cwd: "/repo/worktree-b",
+      },
+    ];
+    const service = createService(client);
+
+    await expect(service.fleet(50)).resolves.toEqual({
+      mode: "native-codex-fleet",
+      counts: { total: 2, active: 1, idle: 1, other: 0 },
+      omittedInactive: 0,
+      threads: [
+        {
+          threadId: "thread-active",
+          name: "Package Jarvis",
+          status: "active",
+          cwd: "/repo/worktree-a",
+          branch: "codex/a",
+          sha: "abc123",
+          updatedAt: 123,
+        },
+        {
+          threadId: "thread-idle",
+          name: "Review the docs",
+          status: "idle",
+          cwd: "/repo/worktree-b",
+          branch: undefined,
+          sha: undefined,
+          updatedAt: undefined,
+        },
+      ],
+    });
+    expect(client.requests.at(-1)).toEqual({
+      method: "thread/list",
+      params: expect.objectContaining({ limit: 100 }),
+    });
+  });
+
+  it("paginates the catalog and never trims an older active thread", async () => {
+    const client = new FakeCodexClient();
+    client.listedThreadPages.set("", {
+      data: [
+        {
+          id: "thread-recent-idle",
+          status: { type: "idle" },
+          updatedAt: 200,
+        },
+      ],
+      nextCursor: "page-2",
+    });
+    client.listedThreadPages.set("page-2", {
+      data: [
+        {
+          id: "thread-older-active",
+          status: { type: "active", activeFlags: [] },
+          updatedAt: 100,
+        },
+        {
+          id: "thread-older-idle",
+          status: { type: "notLoaded" },
+          updatedAt: 50,
+        },
+      ],
+    });
+    const service = createService(client);
+
+    await expect(service.fleet(1)).resolves.toEqual({
+      mode: "native-codex-fleet",
+      counts: { total: 3, active: 1, idle: 2, other: 0 },
+      omittedInactive: 2,
+      threads: [
+        expect.objectContaining({
+          threadId: "thread-older-active",
+          status: "active",
+        }),
+      ],
+    });
+    expect(client.requests.slice(-2)).toEqual([
+      {
+        method: "thread/list",
+        params: expect.objectContaining({
+          sourceKinds: expect.arrayContaining(["cli", "exec", "subAgent", "subAgentThreadSpawn"]),
+          useStateDbOnly: true,
+        }),
+      },
+      {
+        method: "thread/list",
+        params: expect.objectContaining({
+          cursor: "page-2",
+          sourceKinds: expect.arrayContaining(["cli", "exec", "subAgent", "subAgentThreadSpawn"]),
+          useStateDbOnly: true,
+        }),
+      },
+    ]);
   });
 
   it("starts the first turn on a freshly created empty thread without resuming it", async () => {

@@ -22,6 +22,18 @@ vi.mock("./src/app-server-client.js", () => ({
       if (method === "thread/start") {
         return { thread: { id: "thread-natural" } };
       }
+      if (method === "thread/list") {
+        return {
+          data: [
+            {
+              id: "thread-active",
+              name: "Active fleet worker",
+              status: { type: "active", activeFlags: [] },
+              cwd: "/repo/openclaw",
+            },
+          ],
+        };
+      }
       if (method === "turn/start") {
         // The service registers its collector before starting the turn. Delay
         // the terminal notification one event-loop tick so it first records
@@ -150,5 +162,49 @@ describe("Codex natural-language delegation", () => {
     );
 
     expect(factory?.({ senderIsOwner: false, sandboxed: false })).toBeNull();
+  });
+
+  it("gives the owner a compact read-only fleet roster", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    let factory: OpenClawPluginToolFactory | undefined;
+    let beforePromptBuild: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {} as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+        on(name, handler) {
+          if (name === "before_prompt_build") {
+            beforePromptBuild = handler as typeof beforePromptBuild;
+          }
+        },
+      }) as OpenClawPluginApi,
+    );
+
+    await expect(beforePromptBuild?.({}, {})).resolves.toMatchObject({
+      prependSystemContext: expect.stringContaining("coordinate multiple active Codex tasks"),
+    });
+    const tool = factory?.({ senderIsOwner: true, sandboxed: false }) as AnyAgentTool;
+    await expect(tool.execute("fleet-1", { action: "fleet", limit: 40 })).resolves.toMatchObject({
+      details: {
+        mode: "native-codex-fleet",
+        counts: { total: 1, active: 1 },
+        omittedInactive: 0,
+        threads: [{ threadId: "thread-active", status: "active" }],
+      },
+    });
+    expect(appServer.requests.at(-1)).toMatchObject({
+      method: "thread/list",
+      params: { useStateDbOnly: true },
+    });
   });
 });

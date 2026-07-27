@@ -39,7 +39,18 @@ const ToolSchema = {
   properties: {
     action: {
       type: "string",
-      enum: ["status", "list", "search", "read", "create", "message", "delegate", "resume", "fork"],
+      enum: [
+        "status",
+        "list",
+        "fleet",
+        "search",
+        "read",
+        "create",
+        "message",
+        "delegate",
+        "resume",
+        "fork",
+      ],
     },
     thread_id: { type: "string" },
     text: { type: "string" },
@@ -228,14 +239,15 @@ function createCodexTool(service: CodexThreadService) {
     name: "codex_threads",
     label: "Codex Threads",
     ownerOnly: true,
-    description:
-      "Owner-only native Codex thread status, catalog, lifecycle, and read-only continuation controls.",
+    description: "Owner-only native Codex thread inventory, lifecycle, and delegation controls.",
     parameters: ToolSchema,
     execute: async (_toolCallId: string, raw: ToolParams) => {
       const action = raw.action ?? "";
       let result: unknown;
       if (action === "status") {
         result = await service.status();
+      } else if (action === "fleet") {
+        result = await service.fleet(raw.limit);
       } else if (action === "list" || action === "search") {
         result = await service.list({
           search: action === "search" ? (raw.search ?? raw.text) : raw.search,
@@ -299,6 +311,9 @@ async function handleCodexCommand(
   try {
     if (parsed.action === "status") {
       return { text: JSON.stringify(await service.status(), null, 2) };
+    }
+    if (parsed.action === "fleet") {
+      return { text: JSON.stringify(await service.fleet(50), null, 2) };
     }
     if (parsed.action === "list" || parsed.action === "search") {
       return {
@@ -529,6 +544,7 @@ function codexHelp(): string {
     "Codex pilot commands:",
     "/codex status",
     "/codex list",
+    "/codex fleet",
     "/codex search <text>",
     "/codex read <thread-id>",
     "/codex create [first prompt]",
@@ -550,4 +566,7 @@ const CODEX_DELEGATION_GUIDANCE = [
   "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
   "- After the tool returns, relay one concise Jarvis summary containing the native thread id and final result. If the tool fails, say that native Codex was unavailable and do not claim the task ran with Pi.",
+  "- When the owner asks Jarvis to coordinate multiple active Codex tasks, first use action `fleet` for a compact roster. Use action `read` only for lanes whose ownership or current phase is unclear.",
+  "- Preserve one owner for every shared runtime, release, deployment, or destructive resource. Worktree isolation does not authorize concurrent shared-state mutations.",
+  "- Fleet inventory is observation only. It does not prove this App Server owns another process's active turn and must never be described as cross-process steering or interruption.",
 ].join("\n");
