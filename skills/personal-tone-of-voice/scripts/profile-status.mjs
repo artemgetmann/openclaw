@@ -7,6 +7,27 @@ const PROFILE_FILENAME = "TONE_OF_VOICE.md";
 const SUPPORTED_SCHEMA_VERSION = 1;
 
 /**
+ * The shipped schema uses flat scalar frontmatter. Reject every construct
+ * outside that small grammar so malformed YAML, duplicate keys, and ambiguous
+ * parser behavior always fail closed.
+ */
+function parseFlatFrontmatter(block) {
+  const values = new Map();
+  for (const rawLine of block.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const match = /^([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(\S(?:.*\S)?)?$/.exec(line);
+    if (!match || match[2] === undefined || values.has(match[1])) {
+      return null;
+    }
+    values.set(match[1], match[2]);
+  }
+  return values;
+}
+
+/**
  * Parse only the tiny frontmatter surface required for state classification.
  * Profile prose deliberately never enters the observable result.
  */
@@ -16,15 +37,17 @@ function parseState(content) {
     return { state: "unconfigured", schemaVersion: null, reason: "missing_frontmatter" };
   }
 
-  const frontmatter = frontmatterMatch[1];
-  const schemaMatch = frontmatter.match(/^schema_version:\s*(\d+)\s*$/m);
-  const statusMatch = frontmatter.match(/^status:\s*([a-z_-]+)\s*$/m);
-  const schemaVersion = schemaMatch ? Number(schemaMatch[1]) : null;
+  const frontmatter = parseFlatFrontmatter(frontmatterMatch[1]);
+  if (!frontmatter) {
+    return { state: "unconfigured", schemaVersion: null, reason: "malformed_frontmatter" };
+  }
+  const schemaRaw = frontmatter.get("schema_version");
+  const schemaVersion = /^\d+$/.test(schemaRaw ?? "") ? Number(schemaRaw) : null;
 
   if (schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
     return { state: "unconfigured", schemaVersion, reason: "unsupported_schema" };
   }
-  if (statusMatch?.[1] !== "configured") {
+  if (frontmatter.get("status") !== "configured") {
     return { state: "unconfigured", schemaVersion, reason: "status_not_configured" };
   }
 

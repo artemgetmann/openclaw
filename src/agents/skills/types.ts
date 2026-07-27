@@ -22,6 +22,8 @@ export type SkillInstallSpec = {
 
 export type OpenClawSkillMetadata = {
   always?: boolean;
+  /** Skills that must remain model-visible whenever this skill is selected. */
+  dependencies?: string[];
   skillKey?: string;
   displayName?: string;
   primaryEnv?: string;

@@ -2,6 +2,7 @@
 name: message-drafting
 description: "Compose, draft, revise, shorten, translate, review, approve, or prepare recipient-facing messages for sending across email, chat, and messaging channels. Use for direct requests involving message wording, tone, cross-language presentation, revisions, approval-ready output, or sending a message to another person."
 user-invocable: false
+metadata: { "openclaw": { "dependencies": ["personal-tone-of-voice"] } }
 ---
 
 # Message Drafting

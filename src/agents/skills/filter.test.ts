@@ -6,6 +6,7 @@ import {
   normalizeSkillFilterForComparison,
   resolveSkillFilter,
 } from "./filter.js";
+import type { SkillEntry } from "./types.js";
 
 const messageDraftingOwners = [
   "wacli",
@@ -18,6 +19,29 @@ const messageDraftingOwners = [
   "discord",
   "cross-channel-triage",
 ] as const;
+
+function makeEntry(name: string, dependencies?: string[]): SkillEntry {
+  return {
+    skill: {
+      name,
+      description: name,
+      filePath: `/bundled/${name}/SKILL.md`,
+      baseDir: `/bundled/${name}`,
+      source: "openclaw-bundled",
+      disableModelInvocation: false,
+    },
+    frontmatter: {},
+    ...(dependencies ? { metadata: { dependencies } } : {}),
+  };
+}
+
+function makeDraftingEntries(owner?: string): SkillEntry[] {
+  return [
+    ...(owner ? [makeEntry(owner, ["message-drafting"])] : []),
+    makeEntry("message-drafting", ["personal-tone-of-voice"]),
+    makeEntry("personal-tone-of-voice"),
+  ];
+}
 
 describe("skills/filter", () => {
   it("normalizes configured filters with trimming", () => {
@@ -37,7 +61,7 @@ describe("skills/filter", () => {
     (owner) => {
       const filter = [owner];
 
-      expect(resolveSkillFilter(filter)).toEqual([
+      expect(resolveSkillFilter(filter, undefined, makeDraftingEntries(owner))).toEqual([
         owner,
         "message-drafting",
         "personal-tone-of-voice",
@@ -49,7 +73,10 @@ describe("skills/filter", () => {
   it("closes a direct drafting filter over personal tone", () => {
     const filter = ["message-drafting"];
 
-    expect(resolveSkillFilter(filter)).toEqual(["message-drafting", "personal-tone-of-voice"]);
+    expect(resolveSkillFilter(filter, undefined, makeDraftingEntries())).toEqual([
+      "message-drafting",
+      "personal-tone-of-voice",
+    ]);
     expect(filter).toEqual(["message-drafting"]);
   });
 
@@ -59,9 +86,14 @@ describe("skills/filter", () => {
     };
     const disabledOnly = ["wacli"];
     const withEnabledOwner = ["wacli", "slack"];
+    const entries = [
+      makeEntry("wacli", ["message-drafting"]),
+      makeEntry("slack", ["message-drafting"]),
+      ...makeDraftingEntries(),
+    ];
 
-    expect(resolveSkillFilter(disabledOnly, config)).toEqual(["wacli"]);
-    expect(resolveSkillFilter(withEnabledOwner, config)).toEqual([
+    expect(resolveSkillFilter(disabledOnly, config, entries)).toEqual(["wacli"]);
+    expect(resolveSkillFilter(withEnabledOwner, config, entries)).toEqual([
       "wacli",
       "slack",
       "message-drafting",

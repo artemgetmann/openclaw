@@ -2,18 +2,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry } from "./types.js";
 
-const MESSAGE_DRAFTING_REFERENCING_SKILLS = new Set([
-  "wacli",
-  "telegram-user",
-  "gog",
-  "himalaya",
-  "imsg",
-  "bluebubbles",
-  "slack",
-  "discord",
-  "cross-channel-triage",
-]);
-
 function isSkillEnabled(
   skillName: string,
   config?: OpenClawConfig,
@@ -29,14 +17,16 @@ function isSkillEnabled(
   return config?.skills?.entries?.[skillKey]?.enabled !== false;
 }
 
-function dependenciesFor(skillName: string): readonly string[] {
-  if (MESSAGE_DRAFTING_REFERENCING_SKILLS.has(skillName)) {
-    return ["message-drafting"];
-  }
-  if (skillName === "message-drafting") {
-    return ["personal-tone-of-voice"];
-  }
-  return [];
+function dependenciesFor(skillName: string, entries?: SkillEntry[]): readonly string[] {
+  // Dependencies are a generic capability contract owned by each skill's
+  // metadata. Looking up both canonical and effective keys keeps aliases usable
+  // without creating a second hardcoded routing table.
+  const entry = entries?.find(
+    (candidate) =>
+      candidate.skill.name === skillName ||
+      resolveSkillKey(candidate.skill, candidate) === skillName,
+  );
+  return entry?.metadata?.dependencies ?? [];
 }
 
 export function expandSkillDependencies(
@@ -48,9 +38,10 @@ export function expandSkillDependencies(
     return skillNames;
   }
 
-  // Traverse the tiny dependency graph so channel -> drafting -> personal tone
-  // works for allowlists and autonomous-run filters alike. The input remains an
-  // exact immutable record of the caller's explicit choices.
+  // Traverse declared dependencies so channel -> drafting -> personal tone
+  // works for allowlists and autonomous-run filters alike. Selected
+  // dependencies receive protected prompt priority, preserving full trigger
+  // descriptions when large catalogs compact their unselected tail.
   const expanded = [...skillNames];
   const seen = new Set(expanded);
   for (let index = 0; index < expanded.length; index += 1) {
@@ -58,7 +49,7 @@ export function expandSkillDependencies(
     if (!isSkillEnabled(source, config, entries)) {
       continue;
     }
-    for (const dependency of dependenciesFor(source)) {
+    for (const dependency of dependenciesFor(source, entries)) {
       if (seen.has(dependency)) {
         continue;
       }

@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📨",
+        "dependencies": ["message-drafting"],
         "os": ["darwin"],
         "requires": { "bins": ["imsg"] },
         "install":

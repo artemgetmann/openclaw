@@ -1,7 +1,15 @@
 ---
 name: cross-channel-triage
 description: Use when the user asks to triage messages, emails, chats, inboxes, unread messages, recent messages, open replies, who they owe replies to, outreach, or reply drafting across one or more channels such as WhatsApp, Telegram, Gmail/email, Slack, Signal, iMessage, browser portals, or files. For broad sweeps, first produce a scoped prioritized triage list; for one known target, use single-thread draft mode. Always require user approval before any external reply/send.
-metadata: { "openclaw": { "emoji": "📬", "displayName": "Cross-Channel Triage" } }
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📬",
+        "displayName": "Cross-Channel Triage",
+        "dependencies": ["message-drafting"],
+      },
+  }
 ---
 
 # Cross-Channel Triage

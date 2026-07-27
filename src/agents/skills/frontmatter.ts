@@ -257,8 +257,10 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const dependencies = normalizeStringList(metadataObj.dependencies);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    dependencies: dependencies.length > 0 ? dependencies : undefined,
     displayName: typeof metadataObj.displayName === "string" ? metadataObj.displayName : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
     homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,

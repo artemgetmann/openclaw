@@ -172,6 +172,28 @@ describe("personal tone profile status observability", () => {
     });
   });
 
+  it("rejects duplicate or malformed frontmatter instead of trusting a matching line", () => {
+    const workspace = makeWorkspace();
+    fs.writeFileSync(
+      path.join(workspace, "TONE_OF_VOICE.md"),
+      `---
+schema_version: 1
+status: configured
+status: unconfigured
+---
+
+# Ambiguous
+`,
+    );
+
+    expect(runStatus(workspace)).toEqual({
+      event: "personal_tone_profile_status",
+      state: "unconfigured",
+      schemaVersion: null,
+      reason: "malformed_frontmatter",
+    });
+  });
+
   it("reports configured without leaking profile prose or paths", () => {
     const workspace = makeWorkspace();
     const privateSentinel = "PRIVATE_SENTINEL_PHRASE";
