@@ -1,7 +1,10 @@
 import fssync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
+import {
+  PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL,
+  PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL,
+} from "../consumer/runtime-identity.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { resolveCanonicalMainRepoRoot } from "../infra/telegram-live-token-claims.js";
@@ -289,6 +292,222 @@ async function bootoutSharedGatewayWatchdogLaunchAgent(env: GatewayServiceEnv): 
   await execLaunchctl(["unload", plistPath]);
 }
 
+function resolvePublicJarvisWatchdogPlistPath(env: GatewayServiceEnv): string {
+  return resolveLaunchAgentPlistPathForLabel(env, PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL);
+}
+
+function publicJarvisWatchdogEnvironmentIsExact(env: GatewayServiceEnv): boolean {
+  if (!isPublicJarvisLaunchAgentTarget(env)) {
+    return false;
+  }
+  if (env.OPENCLAW_PROFILE?.trim() !== "consumer") {
+    return false;
+  }
+  if (env.OPENCLAW_CONSUMER_INSTANCE_ID?.trim()) {
+    return false;
+  }
+  if ((env.OPENCLAW_GATEWAY_PORT?.trim() || "18789") !== "18789") {
+    return false;
+  }
+
+  const home = normalizePathForComparison(resolveHomeDir(env));
+  const stateDir = normalizePathForComparison(env.OPENCLAW_STATE_DIR);
+  const configPath = normalizePathForComparison(env.OPENCLAW_CONFIG_PATH);
+  if (!home || !stateDir || !configPath) {
+    return false;
+  }
+  const expectedStateDir = normalizePathForComparison(
+    path.join(home, "Library", "Application Support", "Jarvis", ".jarvis"),
+  );
+  const expectedConfigPath = normalizePathForComparison(
+    path.join(home, "Library", "Application Support", "Jarvis", ".jarvis", "openclaw.json"),
+  );
+  return stateDir === expectedStateDir && configPath === expectedConfigPath;
+}
+
+function resolvePublicJarvisWatchdogExecutable(env: GatewayServiceEnv): string | null {
+  const executable = normalizePathForComparison(env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE);
+  if (!executable) {
+    return null;
+  }
+  const home = normalizePathForComparison(resolveHomeDir(env));
+  if (!home) {
+    return null;
+  }
+  const helperSuffix = path.join("Jarvis.app", "Contents", "MacOS", "JarvisGatewayWatchdog");
+  const durableHelpers = [
+    path.join(path.parse(home).root, "Applications", helperSuffix),
+    path.join(home, "Applications", helperSuffix),
+  ].map((candidate) => normalizePathForComparison(candidate));
+
+  // Swift normally supplies this value, but the daemon treats all inherited
+  // environment as untrusted. Enforce the same durable-location rule here so a
+  // direct CLI call cannot persist a DMG, Downloads, translocated, or worktree path.
+  return durableHelpers.includes(executable) ? executable : null;
+}
+
+function preflightPublicJarvisWatchdogInstall(env: GatewayServiceEnv): void {
+  if (!isPublicJarvisLaunchAgentTarget(env)) {
+    return;
+  }
+  // Older installed Jarvis apps do not ship the helper. Preserve their gateway
+  // install/restart behavior; the package verifier makes the helper mandatory
+  // for every new app that claims this watchdog capability.
+  if (!env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE?.trim()) {
+    return;
+  }
+  if (!publicJarvisWatchdogEnvironmentIsExact(env)) {
+    throw new Error(
+      "Jarvis gateway watchdog install refused: runtime identity is not exact default packaged Jarvis.",
+    );
+  }
+  const executable = resolvePublicJarvisWatchdogExecutable(env);
+  let executableIsReady = false;
+  if (executable) {
+    try {
+      fssync.accessSync(executable, fssync.constants.X_OK);
+      executableIsReady = true;
+    } catch {
+      executableIsReady = false;
+    }
+  }
+  if (!executable || !executableIsReady) {
+    throw new Error(
+      "Jarvis gateway watchdog install refused: signed app helper is missing or outside installed Jarvis.app.",
+    );
+  }
+}
+
+async function bootoutPublicJarvisWatchdogLaunchAgent(env: GatewayServiceEnv): Promise<void> {
+  if (!isPublicJarvisLaunchAgentTarget(env)) {
+    return;
+  }
+  const domain = resolveGuiDomain();
+  const plistPath = resolvePublicJarvisWatchdogPlistPath(env);
+  await execLaunchctl(["bootout", `${domain}/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}`]);
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
+}
+
+async function movePublicJarvisWatchdogPlistToTrash(
+  env: GatewayServiceEnv,
+  stdout: NodeJS.WritableStream,
+): Promise<void> {
+  if (!isPublicJarvisLaunchAgentTarget(env)) {
+    return;
+  }
+  const plistPath = resolvePublicJarvisWatchdogPlistPath(env);
+  try {
+    await fs.access(plistPath);
+  } catch {
+    return;
+  }
+
+  // Uninstall must remove persistent registration, not merely boot out the
+  // current job. Otherwise RunAtLoad resurrects an orphaned KeepAlive helper.
+  const home = toPosixPath(resolveHomeDir(env));
+  const trashDir = path.posix.join(home, ".Trash");
+  const defaultDest = path.join(trashDir, `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`);
+  try {
+    await fs.mkdir(trashDir, { recursive: true });
+    // Finder's Trash does not replace an existing file. Preserve both copies
+    // so uninstall remains recoverable while still removing the live
+    // registration that launchd would otherwise resurrect at next login.
+    let dest = defaultDest;
+    try {
+      await fs.access(defaultDest);
+      dest = path.join(
+        trashDir,
+        `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}-${Date.now()}-${process.pid}.plist`,
+      );
+    } catch {
+      // The stable destination is free.
+    }
+    await fs.rename(plistPath, dest);
+    stdout.write(`${formatLine("Moved Jarvis Watchdog LaunchAgent to Trash", dest)}\n`);
+  } catch {
+    stdout.write(`Jarvis Watchdog LaunchAgent remains at ${plistPath} (could not move)\n`);
+  }
+}
+
+async function installPublicJarvisWatchdogLaunchAgent(args: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  if (!isPublicJarvisLaunchAgentTarget(args.env)) {
+    return;
+  }
+  if (!args.env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE?.trim()) {
+    return;
+  }
+  preflightPublicJarvisWatchdogInstall(args.env);
+  const executable = resolvePublicJarvisWatchdogExecutable(args.env);
+  if (!executable) {
+    return;
+  }
+
+  const domain = resolveGuiDomain();
+  const plistPath = resolvePublicJarvisWatchdogPlistPath(args.env);
+  const home = toPosixPath(resolveHomeDir(args.env));
+  await ensureSecureDirectory(home);
+  await ensureSecureDirectory(path.posix.join(home, "Library"));
+  await ensureSecureDirectory(path.dirname(plistPath));
+  // launchd opens StandardOutPath/StandardErrorPath before exec. Keep these
+  // app-owned and create the parent before bootstrap so first install works on
+  // a machine that has never run any source-checkout watchdog.
+  const logDir = path.posix.join(args.env.OPENCLAW_STATE_DIR!, "logs");
+  await ensureSecureDirectory(logDir);
+  const stdoutPath = path.posix.join(logDir, "gateway-watchdog.log");
+  const stderrPath = path.posix.join(logDir, "gateway-watchdog.err.log");
+
+  const plist = buildLaunchAgentPlist({
+    label: PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL,
+    comment: "Jarvis Managed Gateway Watchdog",
+    programArguments: [executable],
+    stdoutPath,
+    stderrPath,
+    // A stale or invalid persisted environment is a permanent refusal, not a
+    // crash. Relaunch unexpected failures, but let the helper's clean refusal
+    // stay stopped until the canonical installer replaces this job.
+    keepAlive: "on-failure",
+    environment: {
+      HOME: home,
+      OPENCLAW_PROFILE: "consumer",
+      OPENCLAW_HOME: args.env.OPENCLAW_HOME,
+      OPENCLAW_STATE_DIR: args.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_CONFIG_PATH: args.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_LABEL: PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL,
+    },
+  });
+  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
+  await bootstrapLaunchAgentOrThrow({
+    domain,
+    serviceTarget: `${domain}/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}`,
+    plistPath,
+    actionHint: "Jarvis gateway watchdog install",
+  });
+  writeFormattedLines(
+    args.stdout,
+    [{ label: "Installed Jarvis Watchdog LaunchAgent", value: plistPath }],
+    { leadingBlankLine: false },
+  );
+}
+
+async function installGatewayWatchdogsAfterRestart(args: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  // Deliberate stop boots the public helper out first. Every completed start or
+  // restart must restore both watchdog layers so stop -> start cannot silently
+  // leave packaged Jarvis unsupervised.
+  await installSharedGatewayWatchdogLaunchAgent(args);
+  await installPublicJarvisWatchdogLaunchAgent(args);
+}
+
 async function disableAndBootoutLaunchAgentLabel(
   env: GatewayServiceEnv,
   label: string,
@@ -367,6 +586,7 @@ export function buildLaunchAgentPlist({
   stdoutPath,
   stderrPath,
   environment,
+  keepAlive,
 }: {
   label?: string;
   comment?: string;
@@ -375,6 +595,7 @@ export function buildLaunchAgentPlist({
   stdoutPath: string;
   stderrPath: string;
   environment?: Record<string, string | undefined>;
+  keepAlive?: "always" | "on-failure";
 }): string {
   return buildLaunchAgentPlistImpl({
     label,
@@ -384,6 +605,7 @@ export function buildLaunchAgentPlist({
     stdoutPath,
     stderrPath,
     environment,
+    keepAlive,
   });
 }
 
@@ -723,6 +945,8 @@ export async function uninstallLaunchAgent({
     action: "LaunchAgent uninstall",
   });
   await bootoutSharedGatewayWatchdogLaunchAgent(env);
+  await bootoutPublicJarvisWatchdogLaunchAgent(env);
+  await movePublicJarvisWatchdogPlistToTrash(env, stdout);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
@@ -844,6 +1068,7 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
     action: "LaunchAgent stop",
   });
   await bootoutSharedGatewayWatchdogLaunchAgent(serviceEnv);
+  await bootoutPublicJarvisWatchdogLaunchAgent(serviceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
@@ -869,12 +1094,21 @@ export async function installLaunchAgent({
     programArguments,
   });
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(serviceEnv);
+  // Validate the optional packaged helper before booting out or rewriting the
+  // healthy gateway. A bad app package must fail without partial mutation.
+  preflightPublicJarvisWatchdogInstall(serviceEnv);
   await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   await disableConflictingOpenClawSharedAgentsForPublicJarvis(serviceEnv);
   await bootoutSharedGatewayWatchdogLaunchAgent(serviceEnv);
+  if (serviceEnv.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE?.trim()) {
+    // Only the owning packaged app may cut over this companion. An older CLI
+    // invocation without the signed helper path must not silently orphan an
+    // already-installed watchdog from a newer Jarvis package.
+    await bootoutPublicJarvisWatchdogLaunchAgent(serviceEnv);
+  }
   for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(serviceEnv.OPENCLAW_PROFILE)) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(serviceEnv, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
@@ -938,6 +1172,7 @@ export async function installLaunchAgent({
     programArguments,
     workingDirectory,
   });
+  await installPublicJarvisWatchdogLaunchAgent({ env: serviceEnv, stdout });
   return { plistPath };
 }
 
@@ -974,7 +1209,7 @@ export async function restartLaunchAgent({
   if (!(await sharedMainLaunchAgentLooksHealthy(serviceEnv))) {
     await runSharedMainLaunchAgentRecovery({ env: serviceEnv, stdout });
     writeLaunchAgentActionLine(stdout, "Recovered LaunchAgent", serviceTarget);
-    await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+    await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
     return { outcome: "completed" };
   }
 
@@ -988,7 +1223,7 @@ export async function restartLaunchAgent({
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-    await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+    await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
     return { outcome: "completed" };
   }
 
@@ -996,7 +1231,7 @@ export async function restartLaunchAgent({
     if (isSharedMainLaunchAgent(serviceEnv)) {
       await runSharedMainLaunchAgentRecovery({ env: serviceEnv, stdout });
       writeLaunchAgentActionLine(stdout, "Recovered LaunchAgent", serviceTarget);
-      await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+      await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
       return { outcome: "completed" };
     }
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
@@ -1015,6 +1250,6 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-  await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+  await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
   return { outcome: "completed" };
 }

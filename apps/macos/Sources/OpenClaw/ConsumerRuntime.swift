@@ -79,6 +79,12 @@ enum ConsumerRuntime {
             .appendingPathComponent("Library/LaunchAgents/\(self.gatewayLaunchdLabel).plist")
     }
 
+    static var gatewayWatchdogIncidentURL: URL {
+        self.stateDirURL
+            .appendingPathComponent("diagnostics", isDirectory: true)
+            .appendingPathComponent("gateway-watchdog-incident.json")
+    }
+
     static var installPrefixURL: URL {
         self.identity.installPrefixURL
     }

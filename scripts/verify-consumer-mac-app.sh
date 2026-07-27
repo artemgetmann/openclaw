@@ -82,6 +82,10 @@ if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2
   exit 1
 fi
+if [[ ! -x "$APP_PATH/Contents/MacOS/JarvisGatewayWatchdog" ]]; then
+  echo "ERROR: consumer app is missing the managed Jarvis gateway watchdog helper." >&2
+  exit 1
+fi
 
 plist_print() {
   local key="$1"

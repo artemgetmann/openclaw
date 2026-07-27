@@ -871,11 +871,44 @@ extension GatewayLaunchAgentManager {
         // The app and gateway intentionally use different launchd labels, and the explicit
         // env keeps status/install/restart commands from drifting across authorities.
         env["OPENCLAW_LAUNCHD_LABEL"] = identity.gatewayLaunchdLabel
+        // Never trust an ambient shell value for a launchd mutation path.
+        env.removeValue(forKey: "OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE")
+        if identity.gatewayLaunchdLabel == "ai.jarvis.gateway",
+           ConsumerInstance.current.isDefault,
+           let watchdogPath = self.packagedGatewayWatchdogExecutablePath(bundleURL: Bundle.main.bundleURL)
+        {
+            // The external helper is shipped and signed inside the same app.
+            // Named tester instances never receive this path, so their daemon
+            // installs cannot accidentally create the production watchdog.
+            env["OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE"] = watchdogPath
+        }
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint
         }
         ConsumerRuntime.applyInheritedToolIsolationEnvironment(to: &env, base: base)
         return env
+    }
+
+    static func packagedGatewayWatchdogExecutablePath(
+        bundleURL: URL,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> String?
+    {
+        let bundle = bundleURL.standardizedFileURL
+        guard bundle.lastPathComponent == "Jarvis.app" else { return nil }
+        let systemInstall = URL(fileURLWithPath: "/Applications/Jarvis.app", isDirectory: true)
+            .standardizedFileURL
+        let userInstall = homeURL
+            .appendingPathComponent("Applications/Jarvis.app", isDirectory: true)
+            .standardizedFileURL
+        // A LaunchAgent persists this absolute path beyond the app process.
+        // DMG, Downloads, App Translocation, source, and worktree bundles are
+        // not durable ownership and must never register the companion.
+        guard bundle == systemInstall || bundle == userInstall else { return nil }
+        let executable = bundle
+            .appendingPathComponent("Contents/MacOS/JarvisGatewayWatchdog")
+            .path
+        return isExecutable(executable) ? executable : nil
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {

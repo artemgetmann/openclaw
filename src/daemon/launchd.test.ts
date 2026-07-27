@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL } from "../consumer/runtime-identity.js";
 import { GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL } from "./constants.js";
 import {
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
@@ -366,6 +367,41 @@ describe("launchd install", () => {
       "LaunchAgents",
       `${GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL}.plist`,
     );
+  }
+
+  function createPublicJarvisWatchdogFixture(): {
+    env: Record<string, string | undefined>;
+    executable: string;
+    plistPath: string;
+  } {
+    // Resolve the macOS /var -> /private/var alias up front so the fixture's
+    // existing home and not-yet-created state paths compare identically.
+    const home = fs.realpathSync(makeTempDir());
+    const appRoot = path.join(home, "Applications", "Jarvis.app");
+    const executable = path.join(appRoot, "Contents", "MacOS", "JarvisGatewayWatchdog");
+    fs.mkdirSync(path.dirname(executable), { recursive: true });
+    fs.writeFileSync(executable, "#!/bin/false\n", { mode: 0o755 });
+    const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
+    return {
+      executable,
+      plistPath: path.join(
+        home,
+        "Library",
+        "LaunchAgents",
+        `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`,
+      ),
+      env: {
+        ...createDefaultLaunchdEnv(),
+        HOME: home,
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+        OPENCLAW_HOME: "/Users/test/Library/Application Support/Jarvis",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: `${stateDir}/openclaw.json`,
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE: executable,
+      },
+    };
   }
 
   it("enables service before bootstrap without self-restarting the fresh agent", async () => {
@@ -970,13 +1006,9 @@ describe("launchd install", () => {
     ).toBe(false);
   });
 
-  it("public Jarvis install disables old shared OpenClaw gateway agents", async () => {
-    const env = {
-      ...createDefaultLaunchdEnv(),
-      OPENCLAW_PROFILE: "consumer",
-      OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
-      OPENCLAW_GATEWAY_PORT: "18789",
-    };
+  it("public Jarvis install replaces old source agents and installs packaged watchdog", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const env = fixture.env;
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
 
     await installLaunchAgent({
@@ -995,7 +1027,7 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toContainEqual([
       "bootstrap",
       domain,
-      "/Users/test/Library/LaunchAgents/ai.jarvis.gateway.plist",
+      resolveLaunchAgentPlistPath(env),
     ]);
     expect(
       state.launchctlCalls.some(
@@ -1004,6 +1036,228 @@ describe("launchd install", () => {
           call.some((part) => part.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
       ),
     ).toBe(false);
+    const watchdogPlist = state.files.get(fixture.plistPath) ?? "";
+    expect(watchdogPlist).toContain("Jarvis Managed Gateway Watchdog");
+    expect(watchdogPlist).toContain(fixture.executable);
+    expect(watchdogPlist).toContain("<string>ai.jarvis.gateway</string>");
+    expect(watchdogPlist).toMatch(
+      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/,
+    );
+    expect(watchdogPlist).not.toContain("Programming_Projects");
+    expect(watchdogPlist).toContain(`${fixture.env.OPENCLAW_STATE_DIR}/logs/gateway-watchdog.log`);
+    expect(watchdogPlist).toContain(
+      `${fixture.env.OPENCLAW_STATE_DIR}/logs/gateway-watchdog.err.log`,
+    );
+    expect(state.dirs.has(`${fixture.env.OPENCLAW_STATE_DIR}/logs`)).toBe(true);
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, fixture.plistPath]);
+  });
+
+  it("public Jarvis watchdog preflight fails before gateway mutation for wrong identity", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    fixture.env.OPENCLAW_PROFILE = "consumer-tester";
+
+    await expect(
+      installLaunchAgent({
+        env: fixture.env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory:
+          "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
+      }),
+    ).rejects.toThrow("runtime identity is not exact default packaged Jarvis");
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.files.size).toBe(0);
+  });
+
+  it("public Jarvis watchdog preflight rejects helper outside Jarvis app before mutation", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    fixture.env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE = "/tmp/watchdog";
+
+    await expect(
+      installLaunchAgent({
+        env: fixture.env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory:
+          "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
+      }),
+    ).rejects.toThrow("signed app helper is missing or outside installed Jarvis.app");
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.files.size).toBe(0);
+  });
+
+  it("public Jarvis watchdog preflight rejects a transient Jarvis app before mutation", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const transientHelper = path.join(
+      fixture.env.HOME!,
+      "Downloads",
+      "Jarvis.app",
+      "Contents",
+      "MacOS",
+      "JarvisGatewayWatchdog",
+    );
+    fs.mkdirSync(path.dirname(transientHelper), { recursive: true });
+    fs.writeFileSync(transientHelper, "#!/bin/false\n", { mode: 0o755 });
+    fixture.env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE = transientHelper;
+
+    await expect(
+      installLaunchAgent({
+        env: fixture.env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory:
+          "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
+      }),
+    ).rejects.toThrow("signed app helper is missing or outside installed Jarvis.app");
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.files.size).toBe(0);
+  });
+
+  it("public Jarvis watchdog preflight rejects a source-checkout app before mutation", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const sourceHelper = path.join(
+      makeTempDir(),
+      "Programming_Projects",
+      "openclaw",
+      "dist",
+      "Jarvis.app",
+      "Contents",
+      "MacOS",
+      "JarvisGatewayWatchdog",
+    );
+    fs.mkdirSync(path.dirname(sourceHelper), { recursive: true });
+    fs.writeFileSync(sourceHelper, "#!/bin/false\n", { mode: 0o755 });
+    fixture.env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE = sourceHelper;
+
+    await expect(
+      installLaunchAgent({
+        env: fixture.env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory:
+          "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
+      }),
+    ).rejects.toThrow("signed app helper is missing or outside installed Jarvis.app");
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.files.size).toBe(0);
+  });
+
+  it("older public Jarvis without packaged helper keeps gateway install compatible", async () => {
+    const stateDir = "/Users/test/Library/Application Support/Jarvis/.jarvis";
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_PROFILE: "consumer",
+      OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: `${stateDir}/openclaw.json`,
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory: `${stateDir}/lib/openclaw-bundled`,
+    });
+
+    expect(
+      state.launchctlCalls.some((call) =>
+        call.some((part) => part.includes(PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL)),
+      ),
+    ).toBe(false);
+    expect(
+      state.launchctlCalls.some(
+        (call) =>
+          call[0] === "bootstrap" &&
+          call.some((part) => part.includes(PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL)),
+      ),
+    ).toBe(false);
+  });
+
+  it("public Jarvis deliberate stop boots out watchdog before gateway", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+
+    await stopLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    const watchdogIndex = state.launchctlCalls.findIndex(
+      (call) =>
+        call[0] === "bootout" &&
+        call.includes(`${domain}/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}`),
+    );
+    const gatewayIndex = state.launchctlCalls.findIndex(
+      (call) => call[0] === "bootout" && call.includes(`${domain}/ai.jarvis.gateway`),
+    );
+    expect(watchdogIndex).toBeGreaterThanOrEqual(0);
+    expect(gatewayIndex).toBeGreaterThan(watchdogIndex);
+  });
+
+  it("public Jarvis start after deliberate stop restores the companion watchdog", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+
+    await stopLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+    state.launchctlCalls.length = 0;
+
+    const result = await restartLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, fixture.plistPath]);
+  });
+
+  it("public Jarvis uninstall moves the companion watchdog plist to Trash", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const gatewayPlistPath = resolveLaunchAgentPlistPath(fixture.env);
+    state.files.set(gatewayPlistPath, "<plist/>");
+    state.files.set(fixture.plistPath, "<watchdog/>");
+    state.fileModes.set(gatewayPlistPath, 0o644);
+    state.fileModes.set(fixture.plistPath, 0o644);
+
+    await uninstallLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    const watchdogTrashPath = `${fixture.env.HOME}/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
+    expect(state.files.has(fixture.plistPath)).toBe(false);
+    expect(state.files.get(watchdogTrashPath)).toBe("<watchdog/>");
+  });
+
+  it("public Jarvis uninstall uses a unique Trash name when the stable name exists", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const gatewayPlistPath = resolveLaunchAgentPlistPath(fixture.env);
+    const stableTrashPath = `${fixture.env.HOME}/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
+    state.files.set(gatewayPlistPath, "<plist/>");
+    state.files.set(fixture.plistPath, "<watchdog/>");
+    state.files.set(stableTrashPath, "<older-watchdog/>");
+
+    await uninstallLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    expect(state.files.has(fixture.plistPath)).toBe(false);
+    expect(state.files.get(stableTrashPath)).toBe("<older-watchdog/>");
+    const uniqueCopies = [...state.files.entries()].filter(
+      ([candidate, contents]) =>
+        candidate.startsWith(
+          `${fixture.env.HOME}/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}-`,
+        ) && contents === "<watchdog/>",
+    );
+    expect(uniqueCopies).toHaveLength(1);
   });
 
   it("boots out the watchdog before stopping the canonical shared service", async () => {

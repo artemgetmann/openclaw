@@ -221,6 +221,17 @@ identities:
 - app icon: `Jarvis.icns` when that approved asset exists, otherwise the
   packaging scripts keep using `OpenClaw.icns` and print a warning
 
+Packaged default Jarvis also ships a signed
+`Contents/MacOS/JarvisGatewayWatchdog` helper. The packaged gateway install
+registers it as the separate `ai.jarvis.gateway-watchdog` LaunchAgent only for
+the exact default Jarvis profile, state, config, label, and port. It ignores
+normal cold-start/cutover windows, never installs or repoints the gateway, and
+may only kickstart the already-owned `ai.jarvis.gateway` job after sustained
+local health failure. Deliberate stops boot out the watchdog first; the
+`disable-launchagent` marker and canonical Jarvis release lock also suppress
+automatic recovery. Its diagnostic JSON contains only PID, timestamps,
+counters, and outcome codes.
+
 ## Jarvis CLI dogfooding
 
 For release dogfooding, ambient `openclaw` should resolve to the app-managed

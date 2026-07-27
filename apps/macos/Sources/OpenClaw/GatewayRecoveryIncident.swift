@@ -162,6 +162,13 @@ struct GatewayRecoveryIncidentTracker {
         return true
     }
 
+    /// The external helper already owns native notification delivery. Import
+    /// its durable receipt into the existing card without enqueueing a duplicate.
+    mutating func recordExternallyNotifiedUnavailable() {
+        self.isIncidentActive = true
+        self.notificationSentForCurrentIncident = true
+    }
+
     /// Live health is stronger evidence than local service inspection. It clears
     /// both the UI state and notification dedupe so a later real outage can alert.
     mutating func recordHealthy() {
