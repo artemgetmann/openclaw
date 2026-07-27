@@ -245,6 +245,8 @@
     "cleanup:apply:all": "bash scripts/cleanup-build-artifacts.sh --apply --deps --worktrees --build-cache --runtime-instances",
     "cleanup:report": "bash scripts/cleanup-build-artifacts.sh --deps",
     "cleanup:report:all": "bash scripts/cleanup-build-artifacts.sh --deps --worktrees --build-cache --runtime-instances",
+    "cleanup:retention:auto": "bash scripts/disk-retention.sh --auto",
+    "cleanup:retention:report": "bash scripts/disk-retention.sh",
     "config:docs:check": "node --import tsx scripts/generate-config-doc-baseline.ts --check",
     "config:docs:gen": "node --import tsx scripts/generate-config-doc-baseline.ts --write",
     "deadcode:ci": "pnpm deadcode:report:ci:knip",

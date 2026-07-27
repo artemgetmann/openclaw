@@ -31,8 +31,14 @@ RELEASE_STAGING_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RELEASE_STAGING_OLDER_THAN_D
 RUNTIME_CACHE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_CACHE_OLDER_THAN_DAYS:-14}"
 RUNTIME_INSTANCE_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN_DAYS:-7}"
 RUNTIME_LOGS_OLDER_THAN_DAYS="${OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS:-3}"
+PS_BIN="${OPENCLAW_CLEANUP_PS_BIN:-/bin/ps}"
+LSOF_BIN="${OPENCLAW_CLEANUP_LSOF_BIN:-/usr/sbin/lsof}"
 
 WORKTREES_ROOT="${OPENCLAW_WORKTREES_ROOT:-}"
+WORKTREES_ROOT_EXPLICIT=0
+if [[ -n "$WORKTREES_ROOT" ]]; then
+  WORKTREES_ROOT_EXPLICIT=1
+fi
 BUILD_ARTIFACT_ROOT="$(openclaw_build_artifact_root)"
 RUNTIME_INSTANCES_ROOT="${OPENCLAW_RUNTIME_INSTANCES_ROOT:-$HOME/Library/Application Support/OpenClaw/instances}"
 CURRENT_ROOT="$(cd "$ROOT_DIR" && pwd -P)"
@@ -40,6 +46,12 @@ NOW_EPOCH="$(date +%s)"
 TOTAL_KIB=0
 CANDIDATE_COUNT=0
 DELETED_COUNT=0
+PROCESS_SNAPSHOT_READY=0
+PROCESS_SNAPSHOT_FAILED=0
+PROCESS_SNAPSHOT=""
+OPEN_FILE_SNAPSHOT_READY=0
+OPEN_FILE_SNAPSHOT_FAILED=0
+OPEN_FILE_SNAPSHOT=""
 DISK_BEFORE_KIB=""
 DISK_AFTER_KIB=""
 
@@ -50,7 +62,7 @@ Usage: scripts/cleanup-build-artifacts.sh [options]
 Reports rebuildable OpenClaw worktree artifacts by default.
 
 Modes:
-  --worktrees             Scan sibling worktree artifacts. Default when no mode is set.
+  --worktrees             Scan registered worktree artifacts. Default when no mode is set.
   --build-cache           Scan ~/Library/Caches/OpenClaw/build-artifacts.
   --runtime-instances     Scan ~/Library/Application Support/OpenClaw/instances.
 
@@ -62,7 +74,7 @@ Options:
   --older-than-days <n>   Worktree artifact age threshold. Default: 7.
   --deps-older-than-days <n>
                           node_modules age threshold. Default: 21.
-  --worktrees-root <dir>  Override the worktree root. Default: canonical .worktrees.
+  --worktrees-root <dir>  Scan immediate child directories instead of registered worktrees.
   --json                  Emit machine-readable JSON lines.
   --help                  Show this help.
 
@@ -200,17 +212,64 @@ record_candidate_total() {
 
 path_has_process_ref() {
   local target_path="$1"
-  ps axww -o args= | grep -F "$target_path" | grep -v 'grep -F' >/dev/null 2>&1
+
+  # One host snapshot is sufficient for report/classification and avoids
+  # spawning ps once per artifact across hundreds of registered worktrees.
+  # Apply mode performs an additional fresh check immediately before removal.
+  if [[ "$PROCESS_SNAPSHOT_READY" != "1" ]]; then
+    PROCESS_SNAPSHOT_READY=1
+    if ! command -v "$PS_BIN" >/dev/null 2>&1 || ! PROCESS_SNAPSHOT="$("$PS_BIN" axww -o args= 2>/dev/null)"; then
+      PROCESS_SNAPSHOT_FAILED=1
+    fi
+  fi
+  [[ "$PROCESS_SNAPSHOT_FAILED" == "1" ]] && return 0
+  printf '%s\n' "$PROCESS_SNAPSHOT" | grep -F "$target_path" | grep -v 'grep -F' >/dev/null 2>&1
 }
 
 path_has_open_files() {
   local target_path="$1"
-  local lsof_output
-  if ! command -v lsof >/dev/null 2>&1; then
-    return 1
+
+  # A single machine-readable lsof snapshot replaces recursive +D traversal
+  # for every candidate. Exact path/prefix matching preserves directory
+  # semantics without making scan time proportional to dependency tree size.
+  if [[ "$OPEN_FILE_SNAPSHOT_READY" != "1" ]]; then
+    OPEN_FILE_SNAPSHOT_READY=1
+    if ! command -v "$LSOF_BIN" >/dev/null 2>&1 || ! OPEN_FILE_SNAPSHOT="$("$LSOF_BIN" -Fn 2>/dev/null)"; then
+      OPEN_FILE_SNAPSHOT_FAILED=1
+    fi
   fi
-  lsof_output="$(lsof +D "$target_path" 2>/dev/null || true)"
-  [[ -n "$lsof_output" ]]
+  [[ "$OPEN_FILE_SNAPSHOT_FAILED" == "1" ]] && return 0
+  printf '%s\n' "$OPEN_FILE_SNAPSHOT" | awk -v target="$target_path" '
+    substr($0, 1, 1) == "n" {
+      open_path = substr($0, 2)
+      if (open_path == target || index(open_path, target "/") == 1) {
+        found = 1
+        exit
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
+path_is_active_fresh() {
+  local target_path="$1"
+  local process_output=""
+  local lsof_output=""
+  local lsof_status=0
+
+  command -v "$PS_BIN" >/dev/null 2>&1 || return 0
+  if ! process_output="$("$PS_BIN" axww -o args= 2>/dev/null)"; then
+    return 0
+  fi
+  if printf '%s\n' "$process_output" | grep -F "$target_path" | grep -v 'grep -F' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  command -v "$LSOF_BIN" >/dev/null 2>&1 || return 0
+  lsof_output="$("$LSOF_BIN" +D "$target_path" 2>&1)" || lsof_status=$?
+  [[ "$lsof_status" == "0" ]] && return 0
+  [[ "$lsof_status" == "1" && -z "$lsof_output" ]] && return 1
+  return 0
 }
 
 path_is_active() {
@@ -254,6 +313,12 @@ delete_or_report_candidate() {
   record_candidate_total "$size_kib"
 
   if [[ "$APPLY" == "1" ]]; then
+    # Close the snapshot-to-delete race with fresh host evidence. Any process
+    # or open-file inspection uncertainty keeps the exact candidate.
+    if path_is_active_fresh "$target_path"; then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "became-active-or-inspection-indeterminate" "rebuildable-generated"
+      return 0
+    fi
     # rm can still lose a race with a permission or filesystem change after the
     # precheck. Keep the overall cleanup pass alive and report the exact path;
     # never compensate with chmod, sudo, or a broader deletion.
@@ -296,31 +361,34 @@ consider_generated_path() {
   delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "$size_kib"
 }
 
-canonical_checkout_root() {
-  local common_dir
-  common_dir="$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
-  if [[ -n "$common_dir" ]]; then
-    if [[ "$common_dir" != /* ]]; then
-      common_dir="$ROOT_DIR/$common_dir"
-    fi
-    common_dir="$(cd "$common_dir" && pwd -P)"
-    if [[ "$(basename "$common_dir")" == ".git" ]]; then
-      dirname "$common_dir"
-      return 0
-    fi
-  fi
-  printf '%s\n' "$ROOT_DIR"
-}
-
-default_worktrees_root() {
-  local checkout_root
-  checkout_root="$(canonical_checkout_root)"
-  printf '%s/.worktrees\n' "$checkout_root"
-}
-
 worktree_is_dirty() {
   local worktree="$1"
-  [[ -n "$(git -C "$worktree" status --short --untracked-files=no 2>/dev/null || true)" ]]
+  local status_output
+
+  # Untracked files are user state too. A generated directory may itself be
+  # ignored, but any unrelated untracked file protects the whole worktree.
+  # A failed status probe is indeterminate, so fail closed and protect it too.
+  if ! status_output="$(git -C "$worktree" status --short 2>/dev/null)"; then
+    return 0
+  fi
+  [[ -n "$status_output" ]]
+}
+
+worktree_is_protected_control_lane() {
+  local worktree="$1"
+  local branch=""
+
+  # The sacred main checkout owns source-control and shared-runtime recovery;
+  # the blessed Jarvis release lane intentionally keeps expensive prewarm
+  # output. Registered-worktree discovery must not turn either durable control
+  # surface into an automatic cache target.
+  branch="$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  case "$branch" in
+    main|codex/jarvis-release-current)
+      return 0
+      ;;
+  esac
+  [[ "$worktree" == */.worktrees/jarvis-release-current ]]
 }
 
 dist_has_release_recovery_state() {
@@ -370,6 +438,10 @@ consider_worktree_candidate() {
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "current-checkout"
     return 0
   fi
+  if worktree_is_protected_control_lane "$worktree"; then
+    print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "control-or-release-worktree"
+    return 0
+  fi
   if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$worktree" "$target_path" "protected" "release-artifact-or-receipt"
     return 0
@@ -416,11 +488,37 @@ scan_worktree() {
   fi
 }
 
-scan_worktrees() {
+scan_worktrees_root() {
   [[ -d "$WORKTREES_ROOT" ]] || return 0
   while IFS= read -r -d '' worktree; do
     scan_worktree "$worktree"
   done < <(find "$WORKTREES_ROOT" -mindepth 1 -maxdepth 1 -type d -print0)
+}
+
+scan_registered_worktrees() {
+  local field
+  local worktree
+
+  # Git's registry is the authority for linked worktrees. NUL-delimited
+  # porcelain output preserves spaces and other shell-sensitive path bytes,
+  # while avoiding assumptions about whether a checkout lives under
+  # .worktrees/name or a nested Codex UUID/openclaw directory.
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      "worktree "*)
+        worktree="${field#worktree }"
+        scan_worktree "$worktree"
+        ;;
+    esac
+  done < <(git -C "$ROOT_DIR" worktree list --porcelain -z)
+}
+
+scan_worktrees() {
+  if [[ "$WORKTREES_ROOT_EXPLICIT" == "1" ]]; then
+    scan_worktrees_root
+  else
+    scan_registered_worktrees
+  fi
 }
 
 scan_build_cache_standard_bucket() {
@@ -597,7 +695,31 @@ runtime_instance_is_protected_name() {
 
 runtime_instance_has_protected_state() {
   local instance_dir="$1"
-  [[ -e "$instance_dir/browser" || -e "$instance_dir/memory" || -e "$instance_dir/credentials" || -e "$instance_dir/openclaw.json" ]]
+  local protected_path
+
+  # Legacy/runtime-instance layouts may place operator identity and control
+  # state under instance/.openclaw rather than at the instance root. Check the
+  # known layouts explicitly and fail closed before generated-name heuristics
+  # can classify the entire instance as rebuildable.
+  for protected_path in \
+    "$instance_dir"/browser \
+    "$instance_dir"/memory \
+    "$instance_dir"/credentials \
+    "$instance_dir"/identity \
+    "$instance_dir"/openclaw.json \
+    "$instance_dir"/config/openclaw.json \
+    "$instance_dir"/.openclaw/browser \
+    "$instance_dir"/.openclaw/memory \
+    "$instance_dir"/.openclaw/credentials \
+    "$instance_dir"/.openclaw/identity \
+    "$instance_dir"/.openclaw/openclaw.json \
+    "$instance_dir"/.openclaw/config/openclaw.json; do
+    if [[ -e "$protected_path" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 scan_runtime_instance_logs() {
@@ -706,6 +828,7 @@ while [[ $# -gt 0 ]]; do
     --worktrees-root)
       [[ $# -ge 2 ]] || die "--worktrees-root requires a value"
       WORKTREES_ROOT="$2"
+      WORKTREES_ROOT_EXPLICIT=1
       shift 2
       ;;
     --json)
@@ -749,17 +872,18 @@ done
 if [[ "$EXPLICIT_MODE" == "0" ]]; then
   WORKTREES=1
 fi
-if [[ -z "$WORKTREES_ROOT" ]]; then
-  WORKTREES_ROOT="$(default_worktrees_root)"
-fi
-
 if [[ "$JSON" != "1" ]]; then
   echo "OpenClaw build artifact cleanup"
   echo "  mode=$([[ "$APPLY" == "1" ]] && echo apply || echo report)"
   echo "  worktrees=$WORKTREES"
   echo "  build_cache=$BUILD_CACHE"
   echo "  runtime_instances=$RUNTIME_INSTANCES"
-  echo "  worktrees_root=$WORKTREES_ROOT"
+  if [[ "$WORKTREES_ROOT_EXPLICIT" == "1" ]]; then
+    echo "  worktrees_source=root"
+    echo "  worktrees_root=$WORKTREES_ROOT"
+  else
+    echo "  worktrees_source=git-registry"
+  fi
   echo "  build_artifact_root=$BUILD_ARTIFACT_ROOT"
   echo "  runtime_instances_root=$RUNTIME_INSTANCES_ROOT"
   echo "  current_checkout=$CURRENT_ROOT"

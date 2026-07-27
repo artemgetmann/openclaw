@@ -4,6 +4,8 @@ set -euo pipefail
 PLISTBUDDY_BIN="${OPENCLAW_PLISTBUDDY_BIN:-/usr/libexec/PlistBuddy}"
 LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-/bin/launchctl}"
 FIND_BIN="${OPENCLAW_FIND_BIN:-/usr/bin/find}"
+PS_BIN="${OPENCLAW_PS_BIN:-/bin/ps}"
+LSOF_BIN="${OPENCLAW_LSOF_BIN:-/usr/sbin/lsof}"
 LAUNCH_AGENTS_DIR="${OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR:-${HOME}/Library/LaunchAgents}"
 LAUNCH_AGENT_QUARANTINE_DIR="${OPENCLAW_WORKTREE_GC_QUARANTINE_DIR:-${LAUNCH_AGENTS_DIR}/openclaw-worktree-gc-disabled-$(date +%Y%m%d-%H%M%S)-$$}"
 
@@ -577,6 +579,121 @@ mask_token() {
   printf '%s...%s' "${token:0:4}" "${token:len-4:4}"
 }
 
+# Return the first protected repo-local state path. These are intentionally
+# top-level, explicit names: they cover ignored credentials, bot claims,
+# browser/session state, and agent memory without mistaking tracked source
+# directories such as src/browser or src/sessions for local runtime state.
+protected_local_state_path() {
+  local worktree_path="$1"
+  local relative_path=""
+  local -a protected_paths=(
+    ".env"
+    ".env.local"
+    ".env.bots"
+    ".dev-launch.env"
+    ".telegram-lane.env"
+    ".local"
+    ".openclaw"
+    ".dev-state"
+    ".serena"
+    "local"
+    "memory"
+    ".claude"
+    "IDENTITY.md"
+    "USER.md"
+    "skills-lock.json"
+    "scripts/telegram-e2e/.env.local"
+    "scripts/telegram-e2e/tmp"
+    "scripts/telegram-e2e/userbot.session"
+  )
+
+  for relative_path in "${protected_paths[@]}"; do
+    if [[ -e "${worktree_path}/${relative_path}" || -L "${worktree_path}/${relative_path}" ]]; then
+      printf '%s' "${worktree_path}/${relative_path}"
+      return 0
+    fi
+  done
+
+  # The repository intentionally tracks .agent/workflows while ignoring local
+  # .agent JSON state. Protect only the ignored state files so tracked workflow
+  # source does not make every worktree permanently ineligible.
+  for protected_path in "$worktree_path"/.agent/*.json; do
+    if [[ -e "$protected_path" || -L "$protected_path" ]]; then
+      printf '%s' "$protected_path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Print a reason and succeed when a worktree must be preserved. A failure means
+# all safety evidence was positively clean. Tool absence and unexpected command
+# results are blockers, not permission to delete.
+worktree_removal_block_reason() {
+  local worktree_path="$1"
+  local command_output=""
+  local command_status=0
+  local protected_path=""
+
+  if ! command -v "$PS_BIN" >/dev/null 2>&1; then
+    printf 'process inspection unavailable: %s' "$PS_BIN"
+    return 0
+  fi
+  if command_output="$("$PS_BIN" -axo args= 2>&1)"; then
+    if [[ "$command_output" == *"$worktree_path"* ]]; then
+      printf 'live process references worktree'
+      return 0
+    fi
+  else
+    command_status=$?
+    printf 'process inspection failed (status %s)' "$command_status"
+    return 0
+  fi
+
+  # A missing prunable directory cannot contain dirty/protected files or be the
+  # root of an open-file walk. Process arguments still matter and were checked
+  # above; retain the existing stale-registration retirement path after that.
+  if [[ ! -d "$worktree_path" ]]; then
+    return 1
+  fi
+
+  # Check known auth/control paths before the generic dirty-state gate so the
+  # report names the highest-risk reason without ever printing secret content.
+  if protected_path="$(protected_local_state_path "$worktree_path")"; then
+    printf 'protected local state: %s' "$protected_path"
+    return 0
+  fi
+
+  if command_output="$(git -C "$worktree_path" status --porcelain=v2 --untracked-files=all 2>&1)"; then
+    :
+  else
+    command_status=$?
+    printf 'git status inspection failed (status %s)' "$command_status"
+    return 0
+  fi
+  if [[ -n "$command_output" ]]; then
+    printf 'tracked or untracked worktree changes'
+    return 0
+  fi
+
+  if ! command -v "$LSOF_BIN" >/dev/null 2>&1; then
+    printf 'open-file inspection unavailable: %s' "$LSOF_BIN"
+    return 0
+  fi
+  command_output="$("$LSOF_BIN" +D "$worktree_path" 2>&1)" || command_status=$?
+  if [[ "$command_status" == "0" ]]; then
+    # lsof exits zero only when it found at least one matching open file.
+    printf 'open file references worktree'
+    return 0
+  fi
+  if [[ "$command_status" != "1" || -n "$command_output" ]]; then
+    printf 'open-file inspection indeterminate (status %s)' "$command_status"
+    return 0
+  fi
+
+  return 1
+}
+
 usage() {
   cat <<'EOF'
 Usage: scripts/gc-worktrees.sh [--auto] [--include-detached] [--base-branch <branch>]
@@ -638,6 +755,7 @@ declare -a block_locked=()
 declare -a display_classes=()
 declare -a display_paths=()
 declare -a display_tokens=()
+declare -a display_reasons=()
 declare -a remove_paths=()
 declare -a remove_prunable=()
 
@@ -777,17 +895,29 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
   display_paths+=("$normalized_path")
   display_tokens+=("$token_display")
   if [[ "$should_remove" == "1" ]]; then
-    remove_paths+=("$normalized_path")
-    remove_prunable+=("$is_prunable")
+    removal_block_reason=""
+    if removal_block_reason="$(worktree_removal_block_reason "$normalized_path")"; then
+      class="protected"
+      should_remove=0
+    fi
+    display_classes[${#display_classes[@]}-1]="$class"
+    display_reasons+=("$removal_block_reason")
+    if [[ "$should_remove" == "1" ]]; then
+      remove_paths+=("$normalized_path")
+      remove_prunable+=("$is_prunable")
+    fi
+  else
+    display_reasons+=("")
   fi
 done
 
-printf '%-10s %-18s %s\n' "CLASS" "BOT" "PATH"
+printf '%-10s %-18s %-60s %s\n' "CLASS" "BOT" "PATH" "REASON"
 for ((i = 0; i < ${#display_paths[@]}; i++)); do
-  printf '%-10s %-18s %s\n' \
+  printf '%-10s %-18s %-60s %s\n' \
     "${display_classes[$i]}" \
     "${display_tokens[$i]}" \
-    "${display_paths[$i]}"
+    "${display_paths[$i]}" \
+    "${display_reasons[$i]}"
 done
 
 if [[ "$AUTO" == "1" ]]; then
@@ -798,6 +928,15 @@ if [[ "$AUTO" == "1" ]]; then
   for ((remove_index = 0; remove_index < ${#remove_paths[@]}; remove_index++)); do
     path="${remove_paths[$remove_index]}"
     path_is_prunable="${remove_prunable[$remove_index]}"
+
+    # Recheck immediately before the first mutation. The earlier classification
+    # makes report mode useful; this check closes the gap where a process or
+    # local file appears after inventory but before LaunchAgent retirement.
+    removal_block_reason=""
+    if removal_block_reason="$(worktree_removal_block_reason "$path")"; then
+      echo "Skipped worktree removal (${removal_block_reason}): ${path}"
+      continue
+    fi
 
     # Retire launchd ownership before either the tester runtime release or Git
     # deletion. If quarantine fails, leave the worktree intact; deleting its
@@ -820,19 +959,19 @@ if [[ "$AUTO" == "1" ]]; then
       continue
     fi
 
-    env_local_path="${path}/.env.local"
-    if [[ -d "$path" && -f "$env_local_path" ]]; then
-      claimed_token="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
-      if [[ -n "$claimed_token" ]]; then
-        # The release helper lives inside the worktree, so this preexisting
-        # best-effort external claim release must happen before Git deletes the
-        # lane. It is intentionally not represented as transactionally
-        # restorable state; LaunchAgent rollback must not pretend otherwise.
-        (cd "$path" && bash scripts/telegram-live-runtime.sh release) || true
-      fi
+    # LaunchAgent retirement can take long enough for a lane to become active.
+    # Revalidate before Git removal and roll back the reversible launchd
+    # transaction if any local/live protection appeared meanwhile.
+    removal_block_reason=""
+    if removal_block_reason="$(worktree_removal_block_reason "$path")"; then
+      echo "Skipped worktree removal after LaunchAgent retirement (${removal_block_reason}): ${path}" >&2
+      rollback_retired_launchagents "$path" || true
+      continue
     fi
 
-    if git worktree remove --force "$path"; then
+    # Native removal is the final independent dirtiness guard. Never use
+    # --force: an unobserved race must preserve the lane.
+    if git worktree remove "$path"; then
       removed_count=$((removed_count + 1))
     else
       echo "Error: git worktree remove failed; preserving worktree: ${path}" >&2

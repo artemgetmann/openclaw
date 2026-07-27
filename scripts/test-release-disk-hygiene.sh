@@ -10,6 +10,7 @@ TMP_DIR="$(mktemp -d)"
 BUILD_ROOT="$TMP_DIR/build-artifacts"
 OUT="$TMP_DIR/out.txt"
 ACTIVE_PROCESS_PID=""
+INSPECTION_BIN_DIR="$TMP_DIR/inspection-bin"
 IMMUTABLE_FIXTURE_PATH=""
 IMMUTABLE_FIXTURE_SET=0
 ACL_FIXTURE_PATH=""
@@ -165,6 +166,37 @@ fi
 # exercises the real process/open-file safety gates instead of marker logic.
 /usr/bin/tail -f "$PROCESS_ACTIVE/payload" >/dev/null 2>&1 &
 ACTIVE_PROCESS_PID=$!
+export OPENCLAW_TEST_ACTIVE_PROCESS_PID="$ACTIVE_PROCESS_PID"
+
+# Deterministic inspection wrappers keep the fixture independent of host TCC
+# and lsof traversal behavior. The process wrapper reports only the deliberately
+# active fixture while its real tail process exists; the lsof wrapper positively
+# reports no matches.
+mkdir -p "$INSPECTION_BIN_DIR"
+cat >"$INSPECTION_BIN_DIR/ps" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${OPENCLAW_TEST_INSPECTION_LOG:-}" ]]; then
+  printf 'ps %s\n' "$*" >>"$OPENCLAW_TEST_INSPECTION_LOG"
+fi
+if [[ -n "${OPENCLAW_TEST_ACTIVE_PROCESS_PID:-}" ]] && kill -0 "$OPENCLAW_TEST_ACTIVE_PROCESS_PID" 2>/dev/null; then
+  printf '/usr/bin/tail -f %s/payload\n' "$OPENCLAW_TEST_PROCESS_ACTIVE"
+fi
+EOF
+cat >"$INSPECTION_BIN_DIR/lsof" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${OPENCLAW_TEST_INSPECTION_LOG:-}" ]]; then
+  printf 'lsof %s\n' "$*" >>"$OPENCLAW_TEST_INSPECTION_LOG"
+fi
+if [[ "${1:-}" == "-Fn" ]]; then
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$INSPECTION_BIN_DIR/ps" "$INSPECTION_BIN_DIR/lsof"
+export OPENCLAW_TEST_PROCESS_ACTIVE="$PROCESS_ACTIVE"
+export OPENCLAW_CLEANUP_PS_BIN="$INSPECTION_BIN_DIR/ps"
+export OPENCLAW_CLEANUP_LSOF_BIN="$INSPECTION_BIN_DIR/lsof"
 
 OPENCLAW_BUILD_ARTIFACT_ROOT="$BUILD_ROOT" \
 OPENCLAW_CLEANUP_BUILD_RUNS_OLDER_THAN_HOURS=0 \
@@ -269,29 +301,43 @@ fi
 
 RUNTIME_ROOT="$TMP_DIR/runtime-instances"
 OLD_LOG="$RUNTIME_ROOT/manual-instance/logs/old.log"
-mkdir -p "$(dirname "$OLD_LOG")"
+LEGACY_PROTECTED_INSTANCE="$RUNTIME_ROOT/legacy-test-instance"
+LEGACY_NESTED_CREDENTIAL="$LEGACY_PROTECTED_INSTANCE/.openclaw/credentials/provider.json"
+LEGACY_NESTED_CONFIG="$LEGACY_PROTECTED_INSTANCE/.openclaw/config/openclaw.json"
+mkdir -p "$(dirname "$OLD_LOG")" "$(dirname "$LEGACY_NESTED_CREDENTIAL")" "$(dirname "$LEGACY_NESTED_CONFIG")"
 printf 'ordinary generated log\n' >"$OLD_LOG"
+printf 'must survive cleanup\n' >"$LEGACY_NESTED_CREDENTIAL"
+printf '{}\n' >"$LEGACY_NESTED_CONFIG"
 chmod 600 "$OLD_LOG"
 touch -t 202001010000 "$OLD_LOG"
+touch -t 202001010000 "$LEGACY_PROTECTED_INSTANCE"
 [[ ! -x "$OLD_LOG" ]] || fail "old log fixture must be non-executable"
 
 OPENCLAW_RUNTIME_INSTANCES_ROOT="$RUNTIME_ROOT" \
 OPENCLAW_CLEANUP_RUNTIME_LOGS_OLDER_THAN_DAYS=0 \
+OPENCLAW_CLEANUP_RUNTIME_INSTANCE_OLDER_THAN_DAYS=0 \
   /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
     --runtime-instances \
     --apply >"$OUT" 2>&1
 
 assert_file_missing "$OLD_LOG" "apply deletes eligible non-executable old log"
 assert_record "deleted" "$OLD_LOG" "cleanup reports non-executable log deletion"
+assert_file_exists "$LEGACY_NESTED_CREDENTIAL" "apply keeps nested legacy credentials"
+assert_file_exists "$LEGACY_NESTED_CONFIG" "apply keeps nested legacy control config"
+assert_record "skip" "$LEGACY_PROTECTED_INSTANCE" "generated-name instance with nested state is protected"
+assert_output_has "stateful-or-default" "nested runtime state explains protected instance"
 
 WORKTREES_ROOT="$TMP_DIR/worktrees"
 RELEASE_WORKTREE="$WORKTREES_ROOT/release-lane"
 ORDINARY_WORKTREE="$WORKTREES_ROOT/ordinary-lane"
 mkdir -p "$RELEASE_WORKTREE/dist" "$ORDINARY_WORKTREE/dist"
 for fixture_repo in "$RELEASE_WORKTREE" "$ORDINARY_WORKTREE"; do
-  git -C "$fixture_repo" init -q
+  git -C "$fixture_repo" init -q -b fixture
   printf 'fixture\n' >"$fixture_repo/tracked.txt"
-  git -C "$fixture_repo" add tracked.txt
+  # Keep generated dist output ignored so a clean fixture remains clean after
+  # dirty detection starts protecting unrelated untracked user files.
+  printf '/dist/\n' >"$fixture_repo/.gitignore"
+  git -C "$fixture_repo" add tracked.txt .gitignore
   git -C "$fixture_repo" -c user.name='Fixture' -c user.email='fixture@example.invalid' commit -qm 'fixture'
 done
 printf 'submission receipt\n' >"$RELEASE_WORKTREE/dist/Jarvis.app.notary.env"
@@ -307,6 +353,86 @@ OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
 assert_file_exists "$RELEASE_WORKTREE/dist/Jarvis.app.notary.env" "apply keeps resumable release receipt"
 assert_file_missing "$ORDINARY_WORKTREE/dist" "apply still removes ordinary generated dist output"
 assert_output_has "release-artifact-or-receipt" "cleanup explains protected release dist"
+
+# Default discovery must follow Git's registry rather than assuming every
+# checkout is an immediate child of one filesystem root. A narrow Git wrapper
+# supplies nested registered paths for this fixture and delegates status/repo
+# validation to the real Git binary.
+REAL_GIT="$(command -v git)"
+REGISTERED_ROOT="$TMP_DIR/codex-worktrees"
+REGISTERED_CLEAN="$REGISTERED_ROOT/clean-uuid/openclaw"
+REGISTERED_UNTRACKED="$REGISTERED_ROOT/untracked-uuid/openclaw"
+REGISTERED_MODIFIED="$REGISTERED_ROOT/modified-uuid/openclaw"
+REGISTERED_STATUS_ERROR="$REGISTERED_ROOT/status-error-uuid/openclaw"
+REGISTERED_MAIN="$REGISTERED_ROOT/main-uuid/openclaw"
+GIT_WRAPPER_DIR="$TMP_DIR/git-wrapper"
+GIT_WRAPPER="$GIT_WRAPPER_DIR/git"
+INSPECTION_LOG="$TMP_DIR/registered-inspection.log"
+mkdir -p "$GIT_WRAPPER_DIR"
+
+for fixture_repo in "$REGISTERED_CLEAN" "$REGISTERED_UNTRACKED" "$REGISTERED_MODIFIED" "$REGISTERED_STATUS_ERROR"; do
+  mkdir -p "$fixture_repo/dist"
+  git -C "$fixture_repo" init -q -b fixture
+  printf 'fixture\n' >"$fixture_repo/tracked.txt"
+  printf '/dist/\n' >"$fixture_repo/.gitignore"
+  git -C "$fixture_repo" add tracked.txt .gitignore
+  git -C "$fixture_repo" -c user.name='Fixture' -c user.email='fixture@example.invalid' commit -qm 'fixture'
+  printf 'old generated output\n' >"$fixture_repo/dist/payload.txt"
+  touch -t 202001010000 "$fixture_repo/dist"
+done
+printf 'untracked user state\n' >"$REGISTERED_UNTRACKED/user-notes.txt"
+printf 'modified user state\n' >>"$REGISTERED_MODIFIED/tracked.txt"
+mkdir -p "$REGISTERED_MAIN/dist"
+git -C "$REGISTERED_MAIN" init -q -b main
+printf 'fixture\n' >"$REGISTERED_MAIN/tracked.txt"
+printf '/dist/\n' >"$REGISTERED_MAIN/.gitignore"
+git -C "$REGISTERED_MAIN" add tracked.txt .gitignore
+git -C "$REGISTERED_MAIN" -c user.name='Fixture' -c user.email='fixture@example.invalid' commit -qm 'fixture'
+printf 'sacred generated output\n' >"$REGISTERED_MAIN/dist/payload.txt"
+touch -t 202001010000 "$REGISTERED_MAIN/dist"
+
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'if [[ "$3" == "worktree" && "$4" == "list" && "$5" == "--porcelain" && "$6" == "-z" ]]; then'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_CLEAN"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_UNTRACKED"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_MODIFIED"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/fixture\0\0" "$REGISTERED_STATUS_ERROR"'
+  printf '%s\n' '  printf "worktree %s\0HEAD fixture\0branch refs/heads/main\0\0" "$REGISTERED_MAIN"'
+  printf '%s\n' '  exit 0'
+  printf '%s\n' 'fi'
+  printf '%s\n' 'if [[ "$1" == "-C" && "$2" == "$REGISTERED_STATUS_ERROR" && "$3" == "status" ]]; then'
+  printf '%s\n' '  exit 1'
+  printf '%s\n' 'fi'
+  printf '%s\n' 'exec "$REAL_GIT" "$@"'
+} >"$GIT_WRAPPER"
+chmod +x "$GIT_WRAPPER"
+export OPENCLAW_TEST_INSPECTION_LOG="$INSPECTION_LOG"
+
+PATH="$GIT_WRAPPER_DIR:$PATH" \
+REAL_GIT="$REAL_GIT" \
+REGISTERED_CLEAN="$REGISTERED_CLEAN" \
+REGISTERED_UNTRACKED="$REGISTERED_UNTRACKED" \
+REGISTERED_MODIFIED="$REGISTERED_MODIFIED" \
+REGISTERED_STATUS_ERROR="$REGISTERED_STATUS_ERROR" \
+REGISTERED_MAIN="$REGISTERED_MAIN" \
+OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
+  /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+    --worktrees >"$OUT" 2>&1
+
+assert_record "would_rm" "$REGISTERED_CLEAN/dist" "default discovery finds nested registered worktree"
+assert_record "skip" "$REGISTERED_UNTRACKED/dist" "untracked-only worktree is protected"
+assert_output_has "reason: dirty" "untracked-only protection explains dirty state"
+assert_record "skip" "$REGISTERED_MODIFIED/dist" "tracked-dirty worktree remains protected"
+assert_record "skip" "$REGISTERED_STATUS_ERROR/dist" "status failure protects indeterminate worktree"
+assert_record "skip" "$REGISTERED_MAIN/dist" "sacred main worktree remains protected"
+assert_output_has "control-or-release-worktree" "control-lane protection explains sacred main skip"
+assert_file_exists "$REGISTERED_CLEAN/dist" "default registered-worktree fixture remains dry-run only"
+if [[ "$(grep -c '^ps ' "$INSPECTION_LOG")" != "1" || "$(grep -c '^lsof -Fn$' "$INSPECTION_LOG")" != "1" ]]; then
+  fail "registered scan must take one process and one open-file snapshot"
+fi
+pass "registered scan cost is bounded to one host inspection snapshot"
+unset OPENCLAW_TEST_INSPECTION_LOG
 
 set +e
 JARVIS_RELEASE_DISK_AVAILABLE_KIB_OVERRIDE=1024 \

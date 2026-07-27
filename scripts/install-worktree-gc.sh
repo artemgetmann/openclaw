@@ -11,6 +11,7 @@ DEFAULT_BASE_BRANCH="${OPENCLAW_WORKTREE_GC_BASE_BRANCH:-main}"
 DEFAULT_LOG_OUT="/tmp/openclaw-worktree-gc.out.log"
 DEFAULT_LOG_ERR="/tmp/openclaw-worktree-gc.err.log"
 SCHEDULE_REPO_ROOT="${OPENCLAW_WORKTREE_GC_REPO_ROOT:-${OPENCLAW_MAIN_REPO:-$MAIN_REPO_DEFAULT}}"
+LAUNCHCTL_BIN="${OPENCLAW_WORKTREE_GC_LAUNCHCTL_BIN:-launchctl}"
 
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
@@ -93,8 +94,11 @@ Usage:
   scripts/install-worktree-gc.sh run-now [--base-branch <branch>] [--include-detached]
 
 Behavior:
-  macOS installs a LaunchAgent that runs scripts/gc-worktrees.sh --auto on a timer.
-  Linux installs a crontab entry that runs the same command on a cron schedule.
+  macOS installs a LaunchAgent that runs scripts/disk-retention.sh --auto.
+  Linux installs a crontab entry that runs the same pressure-aware coordinator.
+  Runtime instances and ambiguous authenticated state remain outside automatic
+  cleanup; only age-gated rebuildable artifacts and safely retired worktrees
+  are eligible.
 EOF
 }
 
@@ -160,9 +164,9 @@ if [[ ! "$INTERVAL_SECS" =~ ^[0-9]+$ ]] || (( INTERVAL_SECS <= 0 )); then
   exit 1
 fi
 
-GC_ARGS=(--auto --base-branch "$BASE_BRANCH")
+RETENTION_ARGS=(--auto --base-branch "$BASE_BRANCH")
 if [[ "$INCLUDE_DETACHED" == "1" ]]; then
-  GC_ARGS+=(--include-detached)
+  RETENTION_ARGS+=(--include-detached)
 fi
 
 # The scheduled GC job should normally anchor to the main checkout, not the
@@ -189,11 +193,13 @@ render_launchd_plist() {
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>${SCHEDULE_REPO_ROOT}/scripts/gc-worktrees.sh</string>
-$(for arg in "${GC_ARGS[@]}"; do printf '    <string>%s</string>\n' "$arg"; done)
+    <string>${SCHEDULE_REPO_ROOT}/scripts/disk-retention.sh</string>
+$(for arg in "${RETENTION_ARGS[@]}"; do printf '    <string>%s</string>\n' "$arg"; done)
   </array>
   <key>WorkingDirectory</key>
   <string>${SCHEDULE_REPO_ROOT}</string>
+  <key>RunAtLoad</key>
+  <true/>
   <key>StartInterval</key>
   <integer>${INTERVAL_SECS}</integer>
   <key>StandardOutPath</key>
@@ -213,7 +219,7 @@ render_cron_entry() {
   printf '%s cd %q && /bin/bash %q --auto --base-branch %q%s >>%q 2>>%q # %s\n' \
     "$CRON_SCHEDULE" \
     "$SCHEDULE_REPO_ROOT" \
-    "${SCHEDULE_REPO_ROOT}/scripts/gc-worktrees.sh" \
+    "${SCHEDULE_REPO_ROOT}/scripts/disk-retention.sh" \
     "$BASE_BRANCH" \
     "$include_detached_flag" \
     "$DEFAULT_LOG_OUT" \
@@ -237,8 +243,11 @@ install_macos() {
   mkdir -p "$(dirname "$plist_path")"
   render_launchd_plist "$plist_path" > "$plist_path"
 
-  launchctl bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/${UID}" "$plist_path"
+  # launchctl disable state survives plist rewrites and logins. Clear it
+  # explicitly before bootstrap so "installed" cannot remain silently inert.
+  "$LAUNCHCTL_BIN" enable "gui/${UID}/${LABEL}"
+  "$LAUNCHCTL_BIN" bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
+  "$LAUNCHCTL_BIN" bootstrap "gui/${UID}" "$plist_path"
 
   echo "installed=1"
   echo "platform=darwin"
@@ -259,7 +268,7 @@ uninstall_macos() {
     return 0
   fi
 
-  launchctl bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
+  "$LAUNCHCTL_BIN" bootout "gui/${UID}/${LABEL}" >/dev/null 2>&1 || true
   rm -f "$plist_path"
 
   echo "uninstalled=1"
@@ -270,6 +279,9 @@ uninstall_macos() {
 
 status_macos() {
   local plist_path
+  local launchctl_output=""
+  local disabled_output=""
+  local status=0
   plist_path="$(launchd_plist_path)"
   echo "platform=darwin"
   echo "repo_root=${SCHEDULE_REPO_ROOT}"
@@ -278,8 +290,33 @@ status_macos() {
     echo "installed=yes"
   else
     echo "installed=no"
+    status=1
   fi
-  launchctl print "gui/${UID}/${LABEL}" 2>/dev/null || true
+
+  # Plist presence proves only that a file was written. Loaded state and the
+  # persistent launchctl disabled bit are separate host truths and must both be
+  # visible to operators.
+  if launchctl_output="$("$LAUNCHCTL_BIN" print "gui/${UID}/${LABEL}" 2>&1)"; then
+    echo "loaded=yes"
+    printf '%s\n' "$launchctl_output"
+  else
+    echo "loaded=no"
+    status=1
+  fi
+
+  if disabled_output="$("$LAUNCHCTL_BIN" print-disabled "gui/${UID}" 2>&1)"; then
+    if printf '%s\n' "$disabled_output" | grep -F "\"${LABEL}\" => disabled" >/dev/null 2>&1; then
+      echo "enabled=no"
+      status=1
+    else
+      echo "enabled=yes"
+    fi
+  else
+    echo "enabled=unknown"
+    status=1
+  fi
+
+  return "$status"
 }
 
 install_linux() {
@@ -341,11 +378,11 @@ status_linux() {
 run_now() {
   (
     cd "$SCHEDULE_REPO_ROOT"
-    bash scripts/gc-worktrees.sh "${GC_ARGS[@]}"
+    bash scripts/disk-retention.sh "${RETENTION_ARGS[@]}"
   )
 }
 
-platform="$(uname -s)"
+platform="${OPENCLAW_WORKTREE_GC_PLATFORM_OVERRIDE:-$(uname -s)}"
 case "$COMMAND" in
   install)
     case "$platform" in

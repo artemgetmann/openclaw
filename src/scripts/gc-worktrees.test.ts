@@ -99,6 +99,39 @@ exec /usr/bin/find "$@"
 `,
   );
 
+  const ps = path.join(binDir, "ps");
+  writeExecutable(
+    ps,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${OPENCLAW_TEST_PS_FAIL:-0}" == "1" ]]; then
+  exit 69
+fi
+printf '%s\\n' "\${OPENCLAW_TEST_PS_OUTPUT:-}"
+`,
+  );
+
+  const lsof = path.join(binDir, "lsof");
+  writeExecutable(
+    lsof,
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "\${OPENCLAW_TEST_LSOF_MODE:-clean}" in
+  clean)
+    exit 1
+    ;;
+  open)
+    printf 'node 123 test 1r REG 1,1 1 1 %s/open-file\\n' "\${*: -1}"
+    exit 0
+    ;;
+  fail)
+    printf 'inspection failed\\n' >&2
+    exit 74
+    ;;
+esac
+`,
+  );
+
   const launchctl = path.join(binDir, "launchctl");
   writeExecutable(
     launchctl,
@@ -158,7 +191,7 @@ exec "${realGit}" "$@"
 `,
   );
 
-  return { binDir, find, launchctl, launchctlLog, plistBuddy };
+  return { binDir, find, launchctl, launchctlLog, lsof, plistBuddy, ps };
 }
 
 function runGc(
@@ -174,6 +207,9 @@ function runGc(
     gitRemoveFails?: boolean;
     findFails?: boolean;
     plistBuddyFatalPath?: string;
+    psOutput?: string;
+    psFails?: boolean;
+    lsofMode?: "clean" | "open" | "fail";
   },
 ) {
   // The macOS scheduler invokes /bin/bash (Apple Bash 3.2). Pin the integration
@@ -187,14 +223,19 @@ function runGc(
       PATH: `${path.dirname(env.launchctl)}:${process.env.PATH ?? ""}`,
       OPENCLAW_FIND_BIN: path.join(path.dirname(env.launchctl), "find"),
       OPENCLAW_LAUNCHCTL_BIN: env.launchctl,
+      OPENCLAW_LSOF_BIN: path.join(path.dirname(env.launchctl), "lsof"),
       OPENCLAW_PLISTBUDDY_BIN: env.plistBuddy,
+      OPENCLAW_PS_BIN: path.join(path.dirname(env.launchctl), "ps"),
       OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR: env.launchAgents,
       OPENCLAW_WORKTREE_GC_QUARANTINE_DIR: env.quarantine,
       OPENCLAW_TEST_LAUNCHCTL_BOOTOUT_FAIL: env.launchctlBootoutFails ? "1" : "0",
       OPENCLAW_TEST_LAUNCHCTL_PRINT_MODE: env.launchctlPrintMode ?? "loaded",
       OPENCLAW_TEST_GIT_REMOVE_FAIL: env.gitRemoveFails ? "1" : "0",
       OPENCLAW_TEST_FIND_FAIL: env.findFails ? "1" : "0",
+      OPENCLAW_TEST_LSOF_MODE: env.lsofMode ?? "clean",
       OPENCLAW_TEST_PLISTBUDDY_FATAL_PATH: env.plistBuddyFatalPath ?? "",
+      OPENCLAW_TEST_PS_FAIL: env.psFails ? "1" : "0",
+      OPENCLAW_TEST_PS_OUTPUT: env.psOutput ?? "",
     },
     encoding: "utf8",
   });
@@ -222,6 +263,205 @@ afterEach(() => {
 });
 
 describePosix("gc-worktrees LaunchAgent retirement", () => {
+  it("preserves a merged worktree with tracked changes before LaunchAgent retirement", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    fs.writeFileSync(path.join(lane, "README.md"), "locally edited\n");
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(fs.readFileSync(path.join(lane, "README.md"), "utf8")).toBe("locally edited\n");
+    expect(result.stdout).toContain("protected");
+    expect(result.stdout).toContain("tracked or untracked worktree changes");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("preserves a merged worktree with only an untracked file", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    fs.writeFileSync(path.join(lane, "local-note.txt"), "keep me\n");
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(path.join(lane, "local-note.txt"))).toBe(true);
+    expect(result.stdout).toContain("tracked or untracked worktree changes");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("preserves a merged worktree referenced by a live process argument", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      psOutput: `/usr/bin/node ${fs.realpathSync(lane)}/dist/index.js gateway`,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(result.stdout).toContain("live process references worktree");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("fails closed when process inspection is unavailable", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      psFails: true,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(result.stdout).toContain("process inspection failed");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("preserves a merged worktree with an open file", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      lsofMode: "open",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(result.stdout).toContain("open file references worktree");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("preserves ignored repo-local auth and control state", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    fs.writeFileSync(path.join(lane, ".env.local"), "TELEGRAM_BOT_TOKEN=secret\n");
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(path.join(lane, ".env.local"))).toBe(true);
+    expect(result.stdout).toContain("protected local state");
+    expect(result.stdout).toContain(path.join(lane, ".env.local"));
+    expect(result.stdout).not.toContain("secret");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("preserves ignored personal identity state that Git native removal would discard", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+    fs.writeFileSync(path.join(lane, "USER.md"), "private operator context\n");
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.readFileSync(path.join(lane, "USER.md"), "utf8")).toBe("private operator context\n");
+    expect(result.stdout).toContain(
+      `protected local state: ${path.join(fs.realpathSync(lane), "USER.md")}`,
+    );
+    expect(result.stdout).not.toContain("private operator context");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
+  it("fails closed when open-file inspection is indeterminate", () => {
+    const root = makeTempRoot();
+    const { main, lane } = initRepoWithMergedWorktree(root);
+    const home = path.join(root, "home");
+    const launchAgents = path.join(home, "Library/LaunchAgents");
+    const quarantine = path.join(launchAgents, "gc-quarantine");
+    const tools = makeToolFixtures(root);
+    fs.mkdirSync(launchAgents, { recursive: true });
+
+    const result = runGc(main, {
+      home,
+      launchAgents,
+      launchctl: tools.launchctl,
+      plistBuddy: tools.plistBuddy,
+      quarantine,
+      lsofMode: "fail",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(result.stdout).toContain("open-file inspection indeterminate");
+    expect(fs.existsSync(tools.launchctlLog)).toBe(false);
+  });
+
   it("removes a merged worktree under /bin/bash when LaunchAgent inventory is empty", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
@@ -336,6 +576,12 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
       plistTarget,
       ownedConsumerGatewayFields("ai.openclaw.consumer.merged-lane.gateway", lane),
     );
+    const excludePath = spawnSync(
+      "git",
+      ["-C", lane, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"],
+      { encoding: "utf8" },
+    ).stdout.trim();
+    fs.appendFileSync(excludePath, "\n/owned-target.plist\n");
     fs.symlinkSync(plistTarget, ownedPlist);
 
     const result = runGc(main, {
@@ -1066,7 +1312,7 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     expect(result.stderr).toContain("preserved because Git removal failed");
   });
 
-  it("still releases a claimed Telegram tester token before removing the worktree", () => {
+  it("preserves a claimed Telegram tester token without invoking its release helper", () => {
     const root = makeTempRoot();
     const { main, lane } = initRepoWithMergedWorktree(root);
     const home = path.join(root, "home");
@@ -1091,7 +1337,9 @@ describePosix("gc-worktrees LaunchAgent retirement", () => {
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(fs.readFileSync(releaseLog, "utf8")).toBe("release\n");
-    expect(fs.existsSync(lane)).toBe(false);
+    expect(fs.existsSync(releaseLog)).toBe(false);
+    expect(fs.existsSync(path.join(lane, ".env.local"))).toBe(true);
+    expect(fs.existsSync(lane)).toBe(true);
+    expect(result.stdout).toContain("protected local state");
   });
 });

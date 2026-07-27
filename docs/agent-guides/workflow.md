@@ -272,6 +272,17 @@ ready`.
   - manual pass: `bash scripts/gc-worktrees.sh --auto --base-branch main`
   - legacy consumer fallback pass: `bash scripts/gc-worktrees.sh --auto --base-branch codex/consumer-openclaw-project`
   - background cleanup: `bash scripts/install-worktree-gc.sh install`
+- The background job runs the pressure-aware retention coordinator:
+  - `pnpm cleanup:retention:report` is always report-only
+  - `pnpm cleanup:retention:auto` applies age-gated rebuildable artifact cleanup
+    below 50 GiB free and safely retires eligible completed worktrees
+  - warnings begin below 80 GiB; remaining pressure below 30 GiB is urgent and
+    must stop new heavy builds
+  - runtime instances, Codex sessions/history/browser state, and ambiguous
+    authenticated state are excluded from scheduled deletion
+- Prove the background job is real with
+  `bash scripts/install-worktree-gc.sh status`. A plist on disk is not enough;
+  status fails unless launchd reports the job loaded and enabled.
 - For recovery and vanished-worktree triage, use `docs/debug/worktree-branch-survival.md`.
 
 ## Migration path
