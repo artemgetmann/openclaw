@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$SCRIPT_ROOT/scripts/lib/heavy-local-slot.sh"
+ORIGINAL_ARGS=("$@")
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
 EXPECTED_MAIN_REPO="/Users/user/Programming_Projects/openclaw"
 if [[ "${OPENCLAW_SHARED_MAIN_TEST_MODE:-0}" == "1" ]]; then
@@ -174,6 +178,14 @@ print_proof() {
 
 main() {
   parse_args "$@"
+
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    openclaw_heavy_local_slot_require_or_reexec \
+      "deploy-shared-main-runtime" \
+      "$SCRIPT_ROOT" \
+      "$SCRIPT_ROOT/scripts/deploy-shared-main-runtime.sh" \
+      "${ORIGINAL_ARGS[@]}"
+  fi
 
   if [[ "${DRY_RUN}" == "1" && "$(pwd -P)" != "${EXPECTED_MAIN_REPO}" ]]; then
     log "dry-run preview only; live deploy must run from ${EXPECTED_MAIN_REPO}"

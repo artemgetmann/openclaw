@@ -799,7 +799,8 @@ main() {
     # Fleet admission must wrap the entire live hotfix transaction and precede
     # the narrower release/runtime mutex acquired below. Dry-run remains a
     # read-only planning surface and does not consume the machine-wide slot.
-    openclaw_heavy_local_slot_require_or_reexec \
+    openclaw_heavy_local_slot_require_or_reexec_with_policy \
+      "jarvis-remediation" \
       "ship-jarvis-hotfix:pr-${PR_NUMBER}" \
       "$ROOT_DIR" \
       "$ROOT_DIR/scripts/ship-jarvis-hotfix.sh" \

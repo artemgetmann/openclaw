@@ -7,7 +7,12 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-heavy-local-slot-test.XXXXXX")"
 FIXTURE_ROOT="$TMP_DIR/instrumented-root"
 FIXTURE_WRAPPER="$FIXTURE_ROOT/scripts/with-heavy-local-slot.sh"
 SIGINT_RESET_LAUNCHER="$TMP_DIR/reset-sigint-and-exec.pl"
+TERM_ATTRIBUTION_HOLDER="$TMP_DIR/term-attribution-holder.pl"
 PERL_BIN=""
+SUITE_PHASE="startup"
+# $$ is inherited unchanged by Bash subshells. Capture BASHPID before any
+# asynchronous launch so fixture output names the actual suite process.
+SUITE_OS_PID="$BASHPID"
 
 cleanup() {
   local background_pid=""
@@ -22,6 +27,25 @@ cleanup() {
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
+
+handle_suite_signal() {
+  local signal_name="$1"
+  local status="$2"
+
+  # Name the interrupted phase before EXIT cleanup signals background fixtures.
+  # Without this receipt, a holder's 143 and a TERM delivered to the suite are
+  # indistinguishable at the outer wrapper boundary.
+  printf 'FAIL: heavy-local slot suite received %s (suite PID %s, phase %s).\n' \
+    "$signal_name" \
+    "$$" \
+    "$SUITE_PHASE" >&2
+  trap - INT TERM HUP
+  exit "$status"
+}
+
+trap 'handle_suite_signal INT 130' INT
+trap 'handle_suite_signal TERM 143' TERM
+trap 'handle_suite_signal HUP 129' HUP
 
 fail() {
   echo "FAIL: $*" >&2
@@ -65,6 +89,17 @@ wait_for_dead_pid() {
   ! kill -0 "$pid" 2>/dev/null || fail "PID $pid remained alive"
 }
 
+wait_for_dead_group() {
+  local pgid="$1"
+  local attempt=0
+
+  while kill -0 -- "-$pgid" 2>/dev/null && [[ "$attempt" -lt 200 ]]; do
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  ! kill -0 -- "-$pgid" 2>/dev/null || fail "process group $pgid remained alive"
+}
+
 write_healthy_samples() {
   local path="$1"
   local sample=0
@@ -79,14 +114,43 @@ write_healthy_samples() {
 create_instrumented_runtime() {
   local fixture_helper="$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh"
   local fixture_health_hook="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-health-fixture.sh"
+  local fixture_hotfix="$FIXTURE_ROOT/scripts/ship-jarvis-hotfix.sh"
+  local fixture_runner="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl"
+  local fixture_runner_tmp="$fixture_runner.tmp"
   local fixture_wrapper_tmp="$FIXTURE_WRAPPER.tmp"
   local injected_hook_count=0
+  local injected_runner_hook_count=0
+  local injected_session_hook_count=0
+  local injected_stop_receipt_count=0
 
   mkdir -p "$FIXTURE_ROOT/scripts/lib"
   cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" "$fixture_helper"
   cp \
     "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh" \
     "$FIXTURE_ROOT/scripts/lib/jarvis-release-lock.sh"
+
+  # Pause only the disposable runner immediately after metadata publication and
+  # before the atomic commit transition. This makes the formerly racy state
+  # deterministic without putting a fixture hook in production code.
+  /usr/bin/awk '
+    $0 == "rename $pending_path, $committed_path" {
+      print "if (defined $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE}) {"
+      print "    my $fixture_ready = $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE};"
+      print "    my $fixture_release = $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_RELEASE_FILE} // \"\";"
+      print "    $fixture_release ne \"\" or die \"fixture handshake release path is missing\\n\";"
+      print "    open my $fixture_ready_handle, \">\", $fixture_ready or die \"could not publish fixture handshake readiness: $!\\n\";"
+      print "    close $fixture_ready_handle or die \"could not close fixture handshake readiness: $!\\n\";"
+      print "    while (!-e $fixture_release) { select undef, undef, undef, 0.01; }"
+      print "}"
+    }
+    $0 == "    print $result;" {
+      print "    if (defined $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_SESSION_MISMATCH}) {"
+      print "        $result =~ s/^session=[1-9][0-9]*$/session=99999999/m;"
+      print "    }"
+    }
+    { print }
+  ' "$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl" >"$fixture_runner_tmp"
+  /bin/mv "$fixture_runner_tmp" "$fixture_runner"
 
   # Only the disposable copy accepts a private path. Canonical scripts always
   # source the production helper, whose lock identity has no ambient override.
@@ -98,8 +162,22 @@ openclaw_heavy_local_slot_default_path() {
 }
 EOF
 
+  # Policy validation resolves this exact fixture-root entrypoint. Its body is
+  # intentionally tiny: the test is for admission semantics, not deployment.
+  cat >"$fixture_hotfix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+marker="$1"
+sleep 0.2
+: >"$marker"
+EOF
+  chmod +x "$fixture_hotfix"
+
   cat >"$fixture_health_hook" <<'EOF'
 host_health_reason() {
+  local required_cpu_idle="$1"
+  local require_jarvis_health="$2"
   local test_health_file="${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE:-}"
   local test_ready_file="${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_READY_FILE:-}"
   local test_health_sample="" test_health_tmp=""
@@ -117,17 +195,34 @@ host_health_reason() {
     /usr/bin/tail -n +2 "$test_health_file" >"$test_health_tmp"
     /bin/mv "$test_health_tmp" "$test_health_file"
   fi
-  if [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
+  # The remediation policy skips only the Jarvis probe. Synthetic memory, CPU,
+  # and Tailscale failures remain fatal regardless of policy.
+  if [[ "$test_health_sample" == "jarvis-unhealthy" ]]; then
+    if [[ "$require_jarvis_health" == "1" ]]; then
+      printf 'managed Jarvis health check failed'
+    fi
+  elif [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
     printf '%s' "$test_health_sample"
   fi
 }
 EOF
 
-  # Instrument only the copied wrapper after its production health function is
-  # defined. The checked-in wrapper has no hook path or fake-health switch.
+  # Instrument only the copied wrapper. The checked-in wrapper retains fixed
+  # policy constants and has no hook path or fake-health switch.
   /usr/bin/awk '
-    $0 == "min_cpu_idle=${OPENCLAW_FLEET_MIN_CPU_IDLE_PERCENT:-35}" {
+    $0 == "readonly MONITOR_INTERVAL_SECONDS=15" {
+      print "readonly MONITOR_INTERVAL_SECONDS=0.05"
+      next
+    }
+    $0 == "preflight_reason=$(host_health_reason \"$PREFLIGHT_MIN_CPU_IDLE_PERCENT\" \"$require_jarvis_health\")" {
       print "source \"${ROOT_DIR}/scripts/lib/heavy-local-slot-health-fixture.sh\""
+    }
+    $0 == "  kill -TERM -- \"-$child_pgid\" 2>/dev/null || true" {
+      # Attribute only real fixture group signals. This copied-wrapper receipt
+      # keeps production output unchanged and distinguishes internal cleanup
+      # from an external TERM delivered directly to the guarded child.
+      print "  printf '\''FIXTURE: stop_guarded_child sender=%s owner=%s child=%s pgid=%s.\\n'\'' \\"
+      print "    \"${FUNCNAME[1]:-unknown}\" \"$$\" \"${child_pid:-unknown}\" \"${child_pgid:-unknown}\" >&2"
     }
     { print }
   ' "$WRAPPER" >"$fixture_wrapper_tmp"
@@ -143,6 +238,23 @@ EOF
   )"
   [[ "$injected_hook_count" -eq 1 ]] ||
     fail "instrumented wrapper contains $injected_hook_count health hooks instead of 1"
+  injected_stop_receipt_count="$(
+    grep -Fc 'FIXTURE: stop_guarded_child sender=' "$FIXTURE_WRAPPER" || true
+  )"
+  [[ "$injected_stop_receipt_count" -eq 1 ]] ||
+    fail "instrumented wrapper contains $injected_stop_receipt_count stop receipts instead of 1"
+  injected_runner_hook_count="$(
+    grep -Fc 'OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE' \
+      "$fixture_runner" || true
+  )"
+  [[ "$injected_runner_hook_count" -eq 2 ]] ||
+    fail "instrumented runner contains $injected_runner_hook_count handshake hook references instead of 2"
+  injected_session_hook_count="$(
+    grep -Fc 'OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_SESSION_MISMATCH' \
+      "$fixture_runner" || true
+  )"
+  [[ "$injected_session_hook_count" -eq 1 ]] ||
+    fail "instrumented runner contains $injected_session_hook_count session hooks instead of 1"
 }
 
 create_sigint_reset_launcher() {
@@ -167,6 +279,83 @@ die "could not exec $program: $!\n";
 EOF
 }
 
+create_term_attribution_holder() {
+  # A conventional shell trap proves only the signal number. SA_SIGINFO also
+  # exposes the sender PID for user-originated signals, which lets one repro
+  # distinguish suite cleanup, wrapper supervision, and an external process.
+  cat >"$TERM_ATTRIBUTION_HOLDER" <<'EOF'
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use POSIX qw(SIGTERM SA_SIGINFO sigaction);
+
+@ARGV == 3
+    or die "usage: term-attribution-holder.pl <ready> <release> <suite-pid>\n";
+my ($ready_path, $release_path, $suite_pid) = @ARGV;
+
+my $term_action = POSIX::SigAction->new(
+    sub {
+        my ($signal_name, $signal_info, $raw_signal_info) = @_;
+        my ($raw_code, $raw_pid, $raw_uid);
+
+        # This macOS Perl does not populate the optional pid/uid/code hash
+        # fields. Darwin siginfo_t begins with five consecutive 32-bit values:
+        # signo, errno, code, sender pid, and sender uid. Decode the raw third
+        # callback argument using that SDK-defined layout.
+        if ($^O eq "darwin" &&
+            defined $raw_signal_info &&
+            length($raw_signal_info) >= 20) {
+            my ($raw_signo, $raw_errno);
+            ($raw_signo, $raw_errno, $raw_code, $raw_pid, $raw_uid) =
+                unpack "l5", substr($raw_signal_info, 0, 20);
+        }
+        my $sender_pid =
+            defined $signal_info && defined $signal_info->{pid}
+            ? $signal_info->{pid}
+            : defined $raw_pid
+                ? $raw_pid
+                : "unknown";
+        my $sender_uid =
+            defined $signal_info && defined $signal_info->{uid}
+            ? $signal_info->{uid}
+            : defined $raw_uid
+                ? $raw_uid
+                : "unknown";
+        my $signal_code =
+            defined $signal_info && defined $signal_info->{code}
+            ? $signal_info->{code}
+            : defined $raw_code
+                ? $raw_code
+                : "unknown";
+        my $holder_pgid = getpgrp(0);
+
+        # Exit with the same observable status as SIGTERM after recording the
+        # kernel attribution. This is a disposable fixture, not runner policy.
+        print STDERR
+            "FIXTURE: guarded holder received $signal_name from PID $sender_pid ",
+            "UID $sender_uid code $signal_code (holder PID $$, PGID $holder_pgid, ",
+            "wrapper PID ", getppid(), ", suite PID $suite_pid).\n";
+        exit 143;
+    },
+    POSIX::SigSet->new(),
+    SA_SIGINFO,
+);
+# Deferred handling permits normal Perl I/O in the diagnostic callback while
+# retaining the siginfo captured by the low-level handler.
+$term_action->safe(1);
+defined sigaction(SIGTERM, $term_action)
+    or die "could not install TERM attribution handler\n";
+
+open my $ready, ">", $ready_path
+    or die "could not publish holder readiness: $!\n";
+close $ready or die "could not close holder readiness: $!\n";
+
+while (!-e $release_path) {
+    select undef, undef, undef, 0.05;
+}
+EOF
+}
+
 run_test_wrapper() {
   local lock_path="$1"
   local health_path="$2"
@@ -177,7 +366,6 @@ run_test_wrapper() {
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_READY_FILE="$ready_path" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
     "$FIXTURE_WRAPPER" --label "$label" -- "$@"
 }
 
@@ -189,6 +377,7 @@ test_production_has_no_ambient_test_bypass() {
   # copies created above, so canonical commands cannot opt into them.
   for production_script in \
     "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" \
+    "$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl" \
     "$ROOT_DIR/scripts/with-heavy-local-slot.sh"; do
     if grep -Eq \
       'OPENCLAW_HEAVY_LOCAL_SLOT_(TEST|FIXTURE)|OPENCLAW_HEAVY_LOCAL_SLOT_TESTING' \
@@ -196,7 +385,158 @@ test_production_has_no_ambient_test_bypass() {
       fail "$production_script exposes an ambient test bypass"
     fi
   done
-  pass "production helper and wrapper expose no ambient test bypass"
+
+  for production_script in \
+    OPENCLAW_FLEET_MIN_MEMORY_FREE_PERCENT \
+    OPENCLAW_FLEET_MIN_CPU_IDLE_PERCENT \
+    OPENCLAW_FLEET_RUNTIME_MIN_CPU_IDLE_PERCENT \
+    OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS; do
+    if grep -Fq "$production_script" "$ROOT_DIR/scripts/with-heavy-local-slot.sh"; then
+      fail "production wrapper exposes ambient health tuning via $production_script"
+    fi
+  done
+  grep -Fq 'readonly MIN_MEMORY_FREE_PERCENT=25' "$WRAPPER" ||
+    fail "production memory threshold is not fixed at 25%"
+  grep -Fq 'readonly PREFLIGHT_MIN_CPU_IDLE_PERCENT=35' "$WRAPPER" ||
+    fail "production preflight CPU threshold is not fixed at 35%"
+  grep -Fq 'readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20' "$WRAPPER" ||
+    fail "production runtime CPU threshold is not fixed at 20%"
+  grep -Fq 'readonly MONITOR_INTERVAL_SECONDS=15' "$WRAPPER" ||
+    fail "production monitor interval is not fixed at 15 seconds"
+  grep -Fq 'readonly UNHEALTHY_STRIKES_BEFORE_STOP=2' "$WRAPPER" ||
+    fail "production stop rule is not fixed at two unhealthy samples"
+  grep -Fq 'readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3' "$WRAPPER" ||
+    fail "production health timeout is not fixed at three seconds"
+  pass "production wrapper exposes no ambient bypass or health tuning"
+}
+
+test_wrapper_waits_for_explicit_handshake_commit() {
+  local lock_path="$TMP_DIR/handshake-commit.lock"
+  local health_path="$TMP_DIR/handshake-commit.health"
+  local ready_path="$TMP_DIR/handshake-commit.ready"
+  local release_path="$TMP_DIR/handshake-commit.release"
+  local body_marker="$TMP_DIR/handshake-commit.body"
+  local output="$TMP_DIR/handshake-commit.out"
+  local wrapper_pid=0 status=0
+
+  write_healthy_samples "$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE="$ready_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_RELEASE_FILE="$release_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "handshake-commit" \
+      -- \
+      bash -c ': >"$1"' _ "$body_marker" \
+      >"$output" 2>&1 &
+  wrapper_pid=$!
+  wait_for_file "$ready_path"
+
+  # The runner has installed complete metadata but deliberately has not
+  # committed it. Give the wrapper several polling intervals to prove this
+  # transitional state is waited through rather than rejected.
+  [[ -f "$lock_path/child_pid" ]] || fail "handshake fixture did not publish metadata"
+  [[ -f "$lock_path/child_pending" ]] || fail "handshake fixture lost its pending marker"
+  [[ ! -e "$lock_path/child_committed" ]] || fail "handshake fixture committed before release"
+  sleep 0.2
+  kill -0 "$wrapper_pid" 2>/dev/null || fail "wrapper rejected transitional handshake metadata"
+  [[ ! -e "$body_marker" ]] || fail "guarded body ran before handshake commit"
+  if grep -Fq 'metadata was not published safely' "$output"; then
+    fail "wrapper reported the transitional handshake as unsafe"
+  fi
+
+  : >"$release_path"
+  set +e
+  wait "$wrapper_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 0 ]] || fail "committed handshake returned $status instead of 0"
+  [[ -f "$body_marker" ]] || fail "guarded body did not run after handshake commit"
+  [[ ! -e "$lock_path" ]] || fail "committed handshake leaked its fixture lease"
+  pass "wrapper waits for explicit metadata commit across publication race"
+}
+
+test_authoritative_session_identity_ignores_macos_ps_zero() {
+  local lock_path="$TMP_DIR/session-identity.lock"
+  local health_path="$TMP_DIR/session-identity.health"
+  local ready_path="$TMP_DIR/session-identity.ready"
+  local release_path="$TMP_DIR/session-identity.release"
+  local leader_pid="" legacy_ps_session="" holder_pid=0 status=0
+
+  write_healthy_samples "$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "session-identity" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' \
+        _ "$ready_path" "$release_path" &
+  holder_pid=$!
+  wait_for_file "$ready_path"
+  wait_for_file "$lock_path/child_committed"
+
+  source "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh"
+  leader_pid="$(openclaw_heavy_local_slot_value "$lock_path/child_pid" pid)"
+  [[ "$leader_pid" =~ ^[1-9][0-9]*$ ]] || fail "session fixture leader PID is invalid"
+
+  # macOS exposes a kernel session pointer through this ps field, not getsid().
+  # Preserve the observed zero as a regression fact while proving the syscall
+  # identity query still authenticates the live dedicated session.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    legacy_ps_session="$(
+      LC_ALL=C /bin/ps -p "$leader_pid" -o sess= 2>/dev/null |
+        /usr/bin/awk '{$1=$1; print}'
+    )"
+    [[ "$legacy_ps_session" == "0" ]] ||
+      fail "macOS ps sess regression expected 0, got ${legacy_ps_session:-empty}"
+  fi
+  openclaw_heavy_local_slot_child_group_status "$lock_path" ||
+    fail "syscall-backed session identity rejected the live committed leader"
+
+  export OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_SESSION_MISMATCH=1
+  if openclaw_heavy_local_slot_child_group_status "$lock_path"; then
+    status=0
+  else
+    status=$?
+  fi
+  unset OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_SESSION_MISMATCH
+  [[ "$status" -eq 2 ]] ||
+    fail "authoritative session mismatch returned $status instead of ambiguous"
+
+  : >"$release_path"
+  wait "$holder_pid"
+  [[ ! -e "$lock_path" ]] || fail "session identity fixture leaked its lease"
+  pass "syscall SID accepts actual match and rejects mismatch despite macOS ps sess=0"
+}
+
+test_hostile_health_environment_cannot_weaken_policy() {
+  local lock_path="$TMP_DIR/hostile-health.lock"
+  local health_path="$TMP_DIR/hostile-health.health"
+  local marker="$TMP_DIR/hostile-health.marker"
+  local output="$TMP_DIR/hostile-health.out"
+  local status=0
+
+  printf 'synthetic host pressure\n' >"$health_path"
+  set +e
+  OPENCLAW_FLEET_MIN_MEMORY_FREE_PERCENT=0 \
+  OPENCLAW_FLEET_MIN_CPU_IDLE_PERCENT=-100 \
+  OPENCLAW_FLEET_RUNTIME_MIN_CPU_IDLE_PERCENT=not-a-number \
+  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=999999 \
+    run_test_wrapper \
+      "$lock_path" \
+      "$health_path" \
+      "hostile-health-env" \
+      touch "$marker" \
+      >"$output" 2>&1
+  status=$?
+  set -e
+
+  [[ "$status" -eq 75 ]] || fail "hostile health environment returned $status instead of 75"
+  [[ ! -e "$marker" ]] || fail "hostile health environment reached guarded work"
+  grep -Fq 'synthetic host pressure' "$output" ||
+    fail "hostile health environment hid the fixed-policy refusal"
+  [[ ! -e "$lock_path" ]] || fail "hostile health environment leaked its lease"
+  pass "ambient health values cannot weaken fixed admission policy"
 }
 
 create_minimal_clone_pair() {
@@ -207,6 +547,9 @@ create_minimal_clone_pair() {
   mkdir -p "$seed/scripts/lib"
   cp "$FIXTURE_WRAPPER" "$seed/scripts/with-heavy-local-slot.sh"
   cp "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh" "$seed/scripts/lib/heavy-local-slot.sh"
+  cp \
+    "$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl" \
+    "$seed/scripts/lib/heavy-local-slot-runner.pl"
   cp \
     "$FIXTURE_ROOT/scripts/lib/heavy-local-slot-health-fixture.sh" \
     "$seed/scripts/lib/heavy-local-slot-health-fixture.sh"
@@ -228,9 +571,11 @@ test_machine_wide_default_and_separate_clone_contention() {
   local contender_health="$TMP_DIR/cross-clone-contender.health"
   local ready="$TMP_DIR/cross-clone.ready"
   local release="$TMP_DIR/cross-clone.release"
+  local holder_out="$TMP_DIR/cross-clone-holder.out"
+  local holder_err="$TMP_DIR/cross-clone-holder.err"
   local contender_err="$TMP_DIR/cross-clone-contender.err"
   local path_a="" path_b=""
-  local holder_pid=0 status=0
+  local guarded_pid="" holder_pid=0 holder_status=0 ready_attempt=0 status=0
 
   create_minimal_clone_pair
   path_a="$(
@@ -252,13 +597,55 @@ test_machine_wide_default_and_separate_clone_contention() {
   write_healthy_samples "$contender_health"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
     "$clone_a/scripts/with-heavy-local-slot.sh" \
       --label "clone-a-holder" \
       -- \
-      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' _ "$ready" "$release" &
+      "$PERL_BIN" "$TERM_ATTRIBUTION_HOLDER" "$ready" "$release" "$SUITE_OS_PID" \
+      >"$holder_out" 2>"$holder_err" &
   holder_pid=$!
-  wait_for_file "$ready"
+
+  # Poll the shell's running-job registry as well as readiness. kill -0 alone
+  # can report an exited-but-unreaped child, hiding the holder's real status
+  # until the generic readiness timeout.
+  while [[ ! -f "$ready" && "$ready_attempt" -lt 200 ]]; do
+    if ! jobs -pr | grep -Fxq "$holder_pid"; then
+      set +e
+      wait "$holder_pid"
+      holder_status=$?
+      set -e
+      printf 'FAIL: clone-a-holder exited before readiness with status %s.\n' "$holder_status" >&2
+      printf 'clone-a-holder stdout:\n' >&2
+      /usr/bin/sed -n '1,80p' "$holder_out" >&2
+      printf 'clone-a-holder stderr:\n' >&2
+      /usr/bin/sed -n '1,80p' "$holder_err" >&2
+      fail "clone-a-holder died before publishing readiness"
+    fi
+    sleep 0.05
+    ready_attempt=$((ready_attempt + 1))
+  done
+  if [[ ! -f "$ready" ]]; then
+    printf 'clone-a-holder stdout before readiness timeout:\n' >&2
+    /usr/bin/sed -n '1,80p' "$holder_out" >&2
+    printf 'clone-a-holder stderr before readiness timeout:\n' >&2
+    /usr/bin/sed -n '1,80p' "$holder_err" >&2
+    fail "timed out waiting for clone-a-holder readiness"
+  fi
+
+  guarded_pid="$(
+    /usr/bin/sed -n 's/^pid=//p' "$lock_path/child_pid"
+  )"
+  [[ "$guarded_pid" =~ ^[1-9][0-9]*$ ]] ||
+    fail "clone-a-holder published an invalid guarded PID"
+  # Capture the actual OS identities before contention. The signal callback
+  # then supplies a kernel sender PID that can be matched to suite, wrapper,
+  # holder, or a process outside this fixture.
+  printf 'FIXTURE: pre-contention process identities (suite=%s wrapper=%s holder=%s):\n' \
+    "$SUITE_OS_PID" \
+    "$holder_pid" \
+    "$guarded_pid" >>"$holder_err"
+  LC_ALL=C /bin/ps \
+    -p "$SUITE_OS_PID,$holder_pid,$guarded_pid" \
+    -o pid=,ppid=,pgid=,command= >>"$holder_err"
 
   set +e
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
@@ -271,10 +658,32 @@ test_machine_wide_default_and_separate_clone_contention() {
   set -e
   [[ "$status" -eq 75 ]] || fail "separate-clone contender returned $status instead of 75"
   grep -Fq 'clone-a-holder' "$contender_err" || fail "contention omitted live cross-clone owner"
-  kill -0 "$holder_pid" 2>/dev/null || fail "cross-clone contention harmed the holder"
+  if ! kill -0 "$holder_pid" 2>/dev/null; then
+    set +e
+    wait "$holder_pid"
+    holder_status=$?
+    set -e
+    printf 'FAIL: clone-a-holder exited during contention with status %s.\n' "$holder_status" >&2
+    printf 'clone-a-holder stdout:\n' >&2
+    /usr/bin/sed -n '1,80p' "$holder_out" >&2
+    printf 'clone-a-holder stderr:\n' >&2
+    /usr/bin/sed -n '1,80p' "$holder_err" >&2
+    fail "cross-clone contention harmed the holder"
+  fi
 
   : >"$release"
+  set +e
   wait "$holder_pid"
+  holder_status=$?
+  set -e
+  if [[ "$holder_status" -ne 0 ]]; then
+    printf 'FAIL: clone-a-holder returned status %s after release.\n' "$holder_status" >&2
+    printf 'clone-a-holder stdout:\n' >&2
+    /usr/bin/sed -n '1,80p' "$holder_out" >&2
+    printf 'clone-a-holder stderr:\n' >&2
+    /usr/bin/sed -n '1,80p' "$holder_err" >&2
+    fail "clone-a-holder did not exit cleanly"
+  fi
   wait_for_absence "$lock_path"
   pass "machine-wide path and separate-clone contention"
 }
@@ -318,7 +727,6 @@ test_nested_reuse_without_reacquire() {
   write_healthy_samples "$health_path"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
     "$fixture" "$FIXTURE_ROOT" "$body_log" nested 0 >"$output"
 
   grant_count="$(grep -c 'Heavy-local slot granted' "$output" || true)"
@@ -347,7 +755,6 @@ test_forged_token_rejected() {
   write_healthy_samples "$contender_health"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
     "$FIXTURE_WRAPPER" \
       --label "forged-holder" \
       -- \
@@ -369,6 +776,55 @@ test_forged_token_rejected() {
   : >"$release"
   wait "$holder_pid"
   pass "forged inheritance token is rejected"
+}
+
+test_copied_live_token_from_sibling_is_rejected() {
+  local fixture="" lock_path="$TMP_DIR/copied-token.lock"
+  local holder_health="$TMP_DIR/copied-token-holder.health"
+  local contender_health="$TMP_DIR/copied-token-contender.health"
+  local ready="$TMP_DIR/copied-token.ready"
+  local release="$TMP_DIR/copied-token.release"
+  local body_log="$TMP_DIR/copied-token.body"
+  local err="$TMP_DIR/copied-token.err"
+  local copied_token=""
+  local holder_pid=0 status=0
+
+  fixture="$(create_nested_fixture)"
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$contender_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "copied-token-holder" \
+      -- \
+      bash -c ': >"$1"; while [[ ! -f "$2" ]]; do sleep 0.05; done' _ "$ready" "$release" &
+  holder_pid=$!
+  wait_for_file "$ready"
+  copied_token="$(
+    source "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh"
+    openclaw_heavy_local_slot_value "$lock_path/owner" token
+  )"
+  [[ "$copied_token" =~ ^[0-9a-fA-F]{64}$ ]] || fail "could not read holder token for sibling regression"
+
+  # This shell is a sibling of the guarded session, not a descendant of the
+  # recorded wrapper. Even a byte-perfect live token must fall back to normal
+  # admission and contend with the real holder.
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$contender_health" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN="$copied_token" \
+    "$fixture" "$FIXTURE_ROOT" "$body_log" copied 0 >/dev/null 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "copied sibling token returned $status instead of contention"
+  [[ ! -e "$body_log" ]] || fail "copied sibling token reached guarded fixture body"
+  grep -Fq 'copied-token-holder' "$err" ||
+    fail "copied sibling token did not resolve the real live owner"
+
+  : >"$release"
+  wait "$holder_pid"
+  wait_for_absence "$lock_path"
+  pass "copied live token from a same-user sibling cannot bypass admission"
 }
 
 test_stale_recovery_and_token_safe_cleanup() {
@@ -396,7 +852,6 @@ test_stale_recovery_and_token_safe_cleanup() {
   write_healthy_samples "$live_health"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$live_lock" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$live_health" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
     "$FIXTURE_WRAPPER" \
       --label "token-safe-holder" \
       -- \
@@ -485,6 +940,133 @@ test_child_status_propagation() {
   [[ "$status" -eq 42 ]] || fail "wrapper changed child status 42 to $status"
   [[ ! -e "$lock_path" ]] || fail "status propagation left its lock behind"
   pass "guarded child status propagates unchanged"
+}
+
+create_stubborn_orphan_fixture() {
+  local fixture="$TMP_DIR/stubborn-orphan-fixture.sh"
+
+  cat >"$fixture" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+leader_pid_file="$1"
+stubborn_pid_file="$2"
+mode="$3"
+
+printf '%s\n' "$$" >"$leader_pid_file"
+bash -c '
+  trap "" TERM HUP INT
+  printf "%s\n" "$$" >"$1"
+  while true; do sleep 1; done
+' _ "$stubborn_pid_file" &
+stubborn_pid=$!
+
+if [[ "$mode" == "root-exits" ]]; then
+  exit 0
+fi
+wait "$stubborn_pid"
+EOF
+  chmod +x "$fixture"
+  printf '%s\n' "$fixture"
+}
+
+test_root_exit_kills_term_ignoring_orphan_group() {
+  local fixture="" lock_path="$TMP_DIR/root-exit-orphan.lock"
+  local health_path="$TMP_DIR/root-exit-orphan.health"
+  local leader_pid_file="$TMP_DIR/root-exit-orphan.leader"
+  local stubborn_pid_file="$TMP_DIR/root-exit-orphan.stubborn"
+  local status=0 leader_pid=0 stubborn_pid=0
+
+  fixture="$(create_stubborn_orphan_fixture)"
+  write_healthy_samples "$health_path"
+  set +e
+  run_test_wrapper \
+    "$lock_path" \
+    "$health_path" \
+    "root-exit-orphan" \
+    "$fixture" "$leader_pid_file" "$stubborn_pid_file" root-exits
+  status=$?
+  set -e
+
+  [[ "$status" -eq 0 ]] || fail "root-exit orphan cleanup returned $status instead of 0"
+  wait_for_file "$leader_pid_file"
+  wait_for_file "$stubborn_pid_file"
+  leader_pid="$(<"$leader_pid_file")"
+  stubborn_pid="$(<"$stubborn_pid_file")"
+  wait_for_dead_pid "$leader_pid"
+  wait_for_dead_pid "$stubborn_pid"
+  [[ ! -e "$lock_path" ]] || fail "root-exit orphan cleanup leaked its lease"
+  pass "root exit kills a TERM-ignoring background orphan before release"
+}
+
+test_wrapper_sigkill_retains_lease_until_orphan_group_dies() {
+  local fixture="" lock_path="$TMP_DIR/wrapper-sigkill.lock"
+  local holder_health="$TMP_DIR/wrapper-sigkill-holder.health"
+  local contender_health="$TMP_DIR/wrapper-sigkill-contender.health"
+  local leader_pid_file="$TMP_DIR/wrapper-sigkill.leader"
+  local stubborn_pid_file="$TMP_DIR/wrapper-sigkill.stubborn"
+  local contender_marker="$TMP_DIR/wrapper-sigkill.contender"
+  local reclaimed_marker="$TMP_DIR/wrapper-sigkill.reclaimed"
+  local err="$TMP_DIR/wrapper-sigkill.err"
+  local owner_pid=0 holder_pid=0 pgid=0 status=0
+
+  fixture="$(create_stubborn_orphan_fixture)"
+  write_healthy_samples "$holder_health"
+  write_healthy_samples "$contender_health"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$holder_health" \
+    "$FIXTURE_WRAPPER" \
+      --label "wrapper-sigkill-holder" \
+      -- \
+      "$fixture" "$leader_pid_file" "$stubborn_pid_file" wait &
+  holder_pid=$!
+  wait_for_file "$lock_path/owner"
+  wait_for_file "$lock_path/child_pid"
+  wait_for_file "$stubborn_pid_file"
+
+  source "$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh"
+  owner_pid="$(openclaw_heavy_local_slot_value "$lock_path/owner" pid)"
+  pgid="$(openclaw_heavy_local_slot_value "$lock_path/child_pid" pgid)"
+  [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] || fail "SIGKILL fixture owner PID is invalid"
+  [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || fail "SIGKILL fixture PGID is invalid"
+  [[ "$owner_pid" -eq "$holder_pid" ]] || fail "SIGKILL fixture shell job is not the lease owner"
+
+  kill -KILL "$owner_pid"
+  set +e
+  wait "$holder_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 137 ]] || fail "SIGKILLed wrapper returned $status instead of 137"
+  kill -0 -- "-$pgid" 2>/dev/null || fail "SIGKILL did not leave the guarded orphan group alive"
+
+  set +e
+  run_test_wrapper \
+    "$lock_path" \
+    "$contender_health" \
+    "wrapper-sigkill-contender" \
+    touch "$contender_marker" \
+    >/dev/null 2>"$err"
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "live orphan contender returned $status instead of 75"
+  [[ ! -e "$contender_marker" ]] || fail "live orphan contender overlapped guarded work"
+  grep -Fq 'live guarded process group' "$err" ||
+    fail "live orphan contention did not identify the guarded process group"
+  [[ -f "$lock_path/owner" ]] || fail "live orphan contention reclaimed the dead owner's lease"
+
+  # The test owns this deliberately orphaned fixture group. Remove it explicitly,
+  # prove the group is gone, then verify normal stale recovery can proceed.
+  kill -KILL -- "-$pgid"
+  wait_for_dead_group "$pgid"
+  write_healthy_samples "$contender_health"
+  run_test_wrapper \
+    "$lock_path" \
+    "$contender_health" \
+    "wrapper-sigkill-reclaimer" \
+    touch "$reclaimed_marker"
+  [[ -f "$reclaimed_marker" ]] || fail "dead orphan group did not permit stale recovery"
+  [[ ! -e "$lock_path" ]] || fail "post-orphan stale recovery leaked its lease"
+  pass "wrapper SIGKILL cannot release or overlap a live guarded orphan group"
 }
 
 create_process_tree_fixture() {
@@ -663,7 +1245,6 @@ run_signal_cleanup_case() {
   set +e
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
     "$PERL_BIN" \
       "$SIGINT_RESET_LAUNCHER" \
       "$FIXTURE_WRAPPER" \
@@ -703,6 +1284,77 @@ test_signal_cleanup_kills_tree_and_releases() {
   pass "TERM, INT, and HUP stop the guarded tree and release the lease"
 }
 
+test_jarvis_remediation_policy_is_narrow_and_non_ambient() {
+  local standard_lock="$TMP_DIR/remediation-standard.lock"
+  local ambient_lock="$TMP_DIR/remediation-ambient.lock"
+  local wrong_command_lock="$TMP_DIR/remediation-wrong-command.lock"
+  local allowed_lock="$TMP_DIR/remediation-allowed.lock"
+  local health_path="$TMP_DIR/remediation.health"
+  local marker="$TMP_DIR/remediation.marker"
+  local output="$TMP_DIR/remediation.out"
+  local sample=0 status=0
+
+  printf 'jarvis-unhealthy\n' >"$health_path"
+  set +e
+  run_test_wrapper \
+    "$standard_lock" \
+    "$health_path" \
+    "remediation-standard" \
+    touch "$marker" \
+    >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "standard policy ignored unhealthy Jarvis with status $status"
+  [[ ! -e "$marker" ]] || fail "standard policy ran while Jarvis was unhealthy"
+
+  printf 'jarvis-unhealthy\n' >"$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_POLICY=jarvis-remediation \
+    run_test_wrapper \
+      "$ambient_lock" \
+      "$health_path" \
+      "remediation-ambient" \
+      touch "$marker" \
+      >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "ambient remediation policy changed standard admission"
+  [[ ! -e "$marker" ]] || fail "ambient remediation policy reached guarded work"
+
+  write_healthy_samples "$health_path"
+  set +e
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$wrong_command_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy jarvis-remediation \
+      --label "remediation-wrong-command" \
+      -- \
+      /usr/bin/true \
+      >"$output" 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 75 ]] || fail "noncanonical remediation command returned $status instead of 75"
+  grep -Fq 'restricted to the canonical ship-jarvis-hotfix entrypoint' "$output" ||
+    fail "noncanonical remediation command omitted the policy boundary"
+  [[ ! -e "$wrong_command_lock" ]] || fail "wrong remediation command acquired a lease"
+
+  : >"$health_path"
+  while [[ "$sample" -lt 20 ]]; do
+    printf 'jarvis-unhealthy\n' >>"$health_path"
+    sample=$((sample + 1))
+  done
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$allowed_lock" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+    "$FIXTURE_WRAPPER" \
+      --policy jarvis-remediation \
+      --label "remediation-canonical-hotfix" \
+      -- \
+      "$FIXTURE_ROOT/scripts/ship-jarvis-hotfix.sh" "$marker"
+  [[ -f "$marker" ]] || fail "canonical remediation entrypoint did not run"
+  [[ ! -e "$allowed_lock" ]] || fail "canonical remediation entrypoint leaked its lease"
+  pass "Jarvis remediation is canonical-entrypoint-only and skips only Jarvis health"
+}
+
 create_lock_order_fixture() {
   local fixture="$TMP_DIR/lock-order-fixture.sh"
 
@@ -733,6 +1385,25 @@ EOF
   printf '%s\n' "$fixture"
 }
 
+assert_guard_precedes_mutation() {
+  local script="$1"
+  local mutation_pattern="$2"
+  local guard_line="" mutation_line=""
+
+  guard_line="$(
+    grep -n 'openclaw_heavy_local_slot_require_or_reexec' "$ROOT_DIR/$script" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  mutation_line="$(
+    grep -nE "$mutation_pattern" "$ROOT_DIR/$script" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  [[ -n "$guard_line" && -n "$mutation_line" && "$guard_line" -lt "$mutation_line" ]] ||
+    fail "$script does not acquire the fleet slot before its first live mutation"
+}
+
 test_fleet_and_release_lock_coexistence_and_wiring() {
   local fixture="" fleet_lock="$TMP_DIR/order-fleet.lock"
   local release_lock="$TMP_DIR/order-release.lock"
@@ -744,7 +1415,6 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
   write_healthy_samples "$health_path"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$fleet_lock" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
-  OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS=0.05 \
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$release_lock" \
     "$fixture" "$FIXTURE_ROOT" "$proof_file" >/dev/null
   [[ "$(<"$proof_file")" == "fleet_then_release" ]] || fail "lock coexistence proof did not run"
@@ -773,24 +1443,74 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
     scripts/rebuild-relaunch-consumer-mac-app.sh \
     scripts/package-consumer-mac-app.sh \
     scripts/package-mac-app.sh \
-    scripts/package-mac-dist.sh; do
+    scripts/package-mac-dist.sh \
+    scripts/deploy-shared-main-runtime.sh \
+    scripts/restart-mac.sh \
+    scripts/ship-main-gateway-fix.sh \
+    scripts/build-shared-runtime.sh \
+    scripts/new-worktree.sh \
+    scripts/bootstrap-worktree-runtime.sh \
+    scripts/prewarm-worktree.sh; do
     grep -Fq 'openclaw_heavy_local_slot_require_or_reexec' "$ROOT_DIR/$script" ||
       fail "$script does not self-enforce the fleet slot"
   done
-  pass "fleet lease precedes and coexists with release lock"
+
+  # Every newly covered canonical lane must guard before the first operation
+  # that can mutate shared runtime state, a worktree, dependencies, or builds.
+  assert_guard_precedes_mutation \
+    scripts/deploy-shared-main-runtime.sh \
+    '^[[:space:]]*run_or_print git -C .* pull --ff-only$'
+  assert_guard_precedes_mutation \
+    scripts/restart-mac.sh \
+    '^kill_all_openclaw$'
+  assert_guard_precedes_mutation \
+    scripts/ship-main-gateway-fix.sh \
+    '^[[:space:]]*mark_ready_if_needed "\$\{json\}"$'
+  assert_guard_precedes_mutation \
+    scripts/build-shared-runtime.sh \
+    '^[[:space:]]*openclaw_run_repo_pnpm "\$\{ROOT\}" build$'
+  assert_guard_precedes_mutation \
+    scripts/new-worktree.sh \
+    '^if ! git fetch origin; then$'
+  assert_guard_precedes_mutation \
+    scripts/bootstrap-worktree-runtime.sh \
+    '^[[:space:]]*openclaw_run_repo_pnpm "\$ROOT" install --frozen-lockfile$'
+  assert_guard_precedes_mutation \
+    scripts/prewarm-worktree.sh \
+    '^openclaw_run_repo_pnpm "\$ROOT" install --frozen-lockfile$'
+  pass "fleet lease precedes release locks and canonical lane mutations"
 }
 
-create_instrumented_runtime
-create_sigint_reset_launcher
-test_production_has_no_ambient_test_bypass
-test_machine_wide_default_and_separate_clone_contention
-test_nested_reuse_without_reacquire
-test_forged_token_rejected
-test_stale_recovery_and_token_safe_cleanup
-test_ambiguous_owner_identity_fails_closed
-test_child_status_propagation
-test_two_sample_health_stop_kills_tree
-test_signal_cleanup_kills_tree_and_releases
-test_fleet_and_release_lock_coexistence_and_wiring
+run_suite_test() {
+  local test_name="$1"
 
+  SUITE_PHASE="$test_name"
+  "$test_name"
+}
+
+SUITE_PHASE="create_instrumented_runtime"
+create_instrumented_runtime
+SUITE_PHASE="create_sigint_reset_launcher"
+create_sigint_reset_launcher
+SUITE_PHASE="create_term_attribution_holder"
+create_term_attribution_holder
+run_suite_test test_production_has_no_ambient_test_bypass
+run_suite_test test_wrapper_waits_for_explicit_handshake_commit
+run_suite_test test_authoritative_session_identity_ignores_macos_ps_zero
+run_suite_test test_hostile_health_environment_cannot_weaken_policy
+run_suite_test test_machine_wide_default_and_separate_clone_contention
+run_suite_test test_nested_reuse_without_reacquire
+run_suite_test test_forged_token_rejected
+run_suite_test test_copied_live_token_from_sibling_is_rejected
+run_suite_test test_stale_recovery_and_token_safe_cleanup
+run_suite_test test_ambiguous_owner_identity_fails_closed
+run_suite_test test_child_status_propagation
+run_suite_test test_root_exit_kills_term_ignoring_orphan_group
+run_suite_test test_wrapper_sigkill_retains_lease_until_orphan_group_dies
+run_suite_test test_two_sample_health_stop_kills_tree
+run_suite_test test_signal_cleanup_kills_tree_and_releases
+run_suite_test test_jarvis_remediation_policy_is_narrow_and_non_ambient
+run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
+
+SUITE_PHASE="complete"
 echo "All heavy-local slot tests passed."

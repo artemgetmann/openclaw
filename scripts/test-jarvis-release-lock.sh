@@ -65,10 +65,13 @@ prepare_clean_release_fixture() {
   git -C "$release_home" worktree add -q "$release_root" -b "codex/$release_name"
   git -C "$ROOT_DIR" diff --binary HEAD -- . | git -C "$release_root" apply --whitespace=nowarn -
 
-  # Before the implementation commit exists, the new helper is untracked and
-  # therefore absent from git diff. Copy that one required source file; after
-  # commit this is an idempotent overwrite of the already-cloned file.
+  # Before the implementation commit exists, new guard files are untracked and
+  # therefore absent from git diff. Copy the complete guard runtime; after
+  # commit these are idempotent overwrites of the already-cloned files.
   cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" "$release_root/scripts/lib/heavy-local-slot.sh"
+  cp \
+    "$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl" \
+    "$release_root/scripts/lib/heavy-local-slot-runner.pl"
   git -C "$release_root" add -A
   if ! git -C "$release_root" diff --cached --quiet; then
     git -C "$release_root" \

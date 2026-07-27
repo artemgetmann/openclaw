@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "${REPO_ROOT}/scripts/lib/heavy-local-slot.sh"
 MAIN_REPO_RAW="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
 if [[ -d "${MAIN_REPO_RAW}" ]]; then
   # Normalize early so a relative OPENCLAW_MAIN_REPO cannot re-exec the same
@@ -328,6 +330,14 @@ main() {
   maybe_reexec_from_sacred_main "$@"
   parse_args "$@"
   require_tools
+
+  if (( DRY_RUN != 1 )); then
+    openclaw_heavy_local_slot_require_or_reexec \
+      "ship-main-gateway-fix:pr-${PR_NUMBER}:${RUNTIME_SCOPE}" \
+      "$REPO_ROOT" \
+      "$REPO_ROOT/scripts/ship-main-gateway-fix.sh" \
+      "$@"
+  fi
 
   local json=""
   json="$(pr_json)"

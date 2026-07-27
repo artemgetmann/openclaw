@@ -5,6 +5,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/lib/heavy-local-slot.sh
 source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+RUNNER="$ROOT_DIR/scripts/lib/heavy-local-slot-runner.pl"
+
+# These are product safety policy, not tuning knobs. Ambient environment values
+# must never weaken admission or stretch monitoring beyond the documented
+# protection window.
+readonly MIN_MEMORY_FREE_PERCENT=25
+readonly PREFLIGHT_MIN_CPU_IDLE_PERCENT=35
+readonly RUNTIME_MIN_CPU_IDLE_PERCENT=20
+readonly MONITOR_INTERVAL_SECONDS=15
+readonly UNHEALTHY_STRIKES_BEFORE_STOP=2
+readonly HOST_HEALTH_HTTP_TIMEOUT_SECONDS=3
 
 usage() {
   cat >&2 <<'EOF'
@@ -21,6 +32,7 @@ EOF
 
 label=''
 check_only=false
+policy='standard'
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -32,6 +44,11 @@ while [ "$#" -gt 0 ]; do
     --check)
       check_only=true
       shift
+      ;;
+    --policy)
+      [ "$#" -ge 2 ] || usage
+      policy=$2
+      shift 2
       ;;
     --)
       shift
@@ -52,40 +69,140 @@ if [ "$check_only" = true ] && [ "$#" -ne 0 ]; then
 fi
 
 child_pid=''
+child_pgid=''
 monitor_pid=''
 health_stop_file=''
+child_cleanup_safe=1
+PERL_BIN="$(command -v perl 2>/dev/null || true)"
 
-signal_descendants() {
-  local parent_pid=$1
-  local signal_name=$2
-  local descendant_pid
+resolve_command_path() {
+  local candidate="$1"
+  [ -n "$PERL_BIN" ] || return 1
+  "$PERL_BIN" -MCwd=abs_path -e '
+    my $resolved = abs_path($ARGV[0]);
+    defined $resolved or exit 1;
+    print "$resolved\n";
+  ' "$candidate" 2>/dev/null
+}
 
-  # Walk children before parents so test-worker pools cannot immediately spawn
-  # replacements after their coordinator receives the signal.
-  while IFS= read -r descendant_pid; do
-    [ -n "$descendant_pid" ] || continue
-    signal_descendants "$descendant_pid" "$signal_name"
-  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+validate_policy_for_command() {
+  local guarded_command=""
+  local allowed_command=""
 
-  kill "-$signal_name" "$parent_pid" 2>/dev/null || true
+  case "$policy" in
+    standard)
+      return 0
+      ;;
+    jarvis-remediation)
+      [ "$check_only" = false ] || {
+        echo "Refusing heavy work: Jarvis remediation requires the canonical hotfix command." >&2
+        return 75
+      }
+      guarded_command="$(resolve_command_path "${1:-}" || true)"
+      allowed_command="$(resolve_command_path "$ROOT_DIR/scripts/ship-jarvis-hotfix.sh" || true)"
+      if [ -z "$guarded_command" ] || [ "$guarded_command" != "$allowed_command" ]; then
+        echo "Refusing heavy work: Jarvis remediation is restricted to the canonical ship-jarvis-hotfix entrypoint." >&2
+        return 75
+      fi
+      return 0
+      ;;
+    *)
+      echo "Refusing heavy work: unknown admission policy '$policy'." >&2
+      return 75
+      ;;
+  esac
+}
+
+guarded_group_is_live() {
+  [ -n "$child_pgid" ] || return 1
+  kill -0 -- "-$child_pgid" 2>/dev/null
+}
+
+load_guarded_group_identity() {
+  local metadata_path="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid"
+  local status=0
+
+  [ -f "$metadata_path" ] || return 1
+  child_pgid="$(openclaw_heavy_local_slot_value "$metadata_path" pgid)"
+  if openclaw_heavy_local_slot_child_group_status "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -ne 2 ] || return 2
+  return 0
 }
 
 stop_guarded_child() {
-  [ -n "$child_pid" ] || return 0
-  kill -0 "$child_pid" 2>/dev/null || return 0
-
-  signal_descendants "$child_pid" TERM
   local attempt=0
-  while kill -0 "$child_pid" 2>/dev/null && [ "$attempt" -lt 10 ]; do
-    sleep 0.5
+  local status=0
+
+  # Acquisition publishes the shared path before it knows whether this wrapper
+  # won the mkdir race. A losing contender must never interpret the winner's
+  # child metadata as its own cleanup authority.
+  [ "$OPENCLAW_HEAVY_LOCAL_SLOT_HELD" = "1" ] || return 0
+
+  # A signal can arrive after spawn but before Bash assigns `$!`. Recover the
+  # published leader when possible; an incomplete pending handshake is not
+  # proof that no child exists and therefore retains the lease.
+  if [ -z "$child_pid" ] &&
+    [ -n "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH" ] &&
+    [ -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid" ]; then
+    child_pid="$(
+      openclaw_heavy_local_slot_value \
+        "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid" \
+        pid
+    )"
+  fi
+  if [ -z "$child_pid" ] &&
+    [ -n "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH" ] &&
+    [ -e "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" ]; then
+    child_cleanup_safe=0
+    echo "Refusing unsafe cleanup: guarded child spawn is still pending." >&2
+    return 1
+  fi
+  [ -n "$child_pid" ] || return 0
+  if load_guarded_group_identity; then
+    :
+  else
+    status=$?
+    if [ "$status" -eq 2 ]; then
+      child_cleanup_safe=0
+      echo "Refusing unsafe cleanup: guarded process-group identity is ambiguous." >&2
+      return 1
+    fi
+    kill -0 "$child_pid" 2>/dev/null || return 0
+    child_cleanup_safe=0
+    echo "Refusing unsafe cleanup: guarded child metadata was not published." >&2
+    return 1
+  fi
+
+  guarded_group_is_live || return 0
+  kill -TERM -- "-$child_pgid" 2>/dev/null || true
+  while guarded_group_is_live && [ "$attempt" -lt 10 ]; do
+    sleep 0.2
     attempt=$((attempt + 1))
   done
 
-  # A wedged compiler or worker must not keep starving the remote desktop after
-  # its graceful shutdown window. Scope KILL to the exact guarded tree.
-  if kill -0 "$child_pid" 2>/dev/null; then
-    signal_descendants "$child_pid" KILL
+  # The command runs in a dedicated session whose leader PID, PGID, start time,
+  # and session ID were verified above. KILL therefore cannot touch the caller,
+  # coordinator, or any unrelated process group.
+  if guarded_group_is_live; then
+    kill -KILL -- "-$child_pgid" 2>/dev/null || true
   fi
+  wait "$child_pid" 2>/dev/null || true
+
+  attempt=0
+  while guarded_group_is_live && [ "$attempt" -lt 40 ]; do
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  if guarded_group_is_live; then
+    child_cleanup_safe=0
+    echo "Refusing lease release: guarded process group survived KILL." >&2
+    return 1
+  fi
+  return 0
 }
 
 stop_health_monitor() {
@@ -98,22 +215,55 @@ stop_health_monitor() {
 
 cleanup_wrapper() {
   stop_health_monitor
-  openclaw_heavy_local_slot_release
+  stop_guarded_child || true
+  if [ "$child_cleanup_safe" = "1" ]; then
+    openclaw_heavy_local_slot_release
+  else
+    echo "Heavy-local lease retained because guarded process cleanup was not proven safe." >&2
+  fi
 }
 
 handle_interrupt() {
-  local status=$1
+  local signal_name="$1"
+  local status="$2"
+
+  # Emit the supervisor identity before cleanup can reap the child or clear its
+  # metadata. This distinguishes a signal delivered to this wrapper from a
+  # signal-derived status returned by the guarded command.
+  printf 'Heavy-local wrapper "%s" received %s (owner PID %s, child PID %s, child PGID %s).\n' \
+    "$label" \
+    "$signal_name" \
+    "$$" \
+    "${child_pid:-unknown}" \
+    "${child_pgid:-unknown}" >&2
   stop_health_monitor
-  stop_guarded_child
+  # Preserve the signal-derived exit status even if identity ambiguity forces
+  # EXIT cleanup to retain the lease for operator recovery.
+  stop_guarded_child || true
   exit "$status"
 }
 
 trap cleanup_wrapper EXIT
-trap 'handle_interrupt 130' INT
-trap 'handle_interrupt 143' TERM
-trap 'handle_interrupt 129' HUP
+trap 'handle_interrupt INT 130' INT
+trap 'handle_interrupt TERM 143' TERM
+trap 'handle_interrupt HUP 129' HUP
 
-if openclaw_heavy_local_slot_acquire "$label"; then
+if validate_policy_for_command "${1:-}"; then
+  :
+else
+  policy_status=$?
+  exit "$policy_status"
+fi
+[ -n "$PERL_BIN" ] && [ -r "$RUNNER" ] || {
+  echo "Refusing heavy work: Perl session runner is unavailable." >&2
+  exit 75
+}
+if ! "$PERL_BIN" "$RUNNER" --inspect-process "$$" >/dev/null 2>&1; then
+  echo "Refusing heavy work: POSIX process identity backend is unavailable." >&2
+  exit 75
+fi
+
+if openclaw_heavy_local_slot_acquire "$label" "$policy"; then
   :
 else
   acquire_status=$?
@@ -128,10 +278,9 @@ deny() {
 
 host_health_reason() {
   local required_cpu_idle=$1
+  local require_jarvis_health=$2
 
   [ "$(uname -s)" = "Darwin" ] || return 0
-
-  min_memory_free=${OPENCLAW_FLEET_MIN_MEMORY_FREE_PERCENT:-25}
 
   # memory_pressure already accounts for compressed memory. Raw "free pages"
   # alone would falsely reject healthy Macs that are using their cache.
@@ -143,8 +292,8 @@ host_health_reason() {
     printf 'could not measure memory pressure'
     return 0
   fi
-  if [ "$memory_free" -lt "$min_memory_free" ]; then
-    printf 'memory headroom is %s%% (minimum %s%%)' "$memory_free" "$min_memory_free"
+  if [ "$memory_free" -lt "$MIN_MEMORY_FREE_PERCENT" ]; then
+    printf 'memory headroom is %s%% (minimum %s%%)' "$memory_free" "$MIN_MEMORY_FREE_PERCENT"
     return 0
   fi
 
@@ -173,16 +322,25 @@ host_health_reason() {
 
   # Only require Jarvis health when this user actually owns the managed
   # LaunchAgent. Development Macs without that service remain supported.
-  if launchctl print "gui/$(id -u)/ai.jarvis.gateway" >/dev/null 2>&1; then
-    if ! curl -fsS --max-time 3 http://127.0.0.1:18789/healthz >/dev/null; then
+  if [ "$require_jarvis_health" = "1" ] &&
+    launchctl print "gui/$(id -u)/ai.jarvis.gateway" >/dev/null 2>&1; then
+    if ! curl -fsS --max-time "$HOST_HEALTH_HTTP_TIMEOUT_SECONDS" \
+      http://127.0.0.1:18789/healthz >/dev/null; then
       printf 'managed Jarvis health check failed'
       return 0
     fi
   fi
 }
 
-min_cpu_idle=${OPENCLAW_FLEET_MIN_CPU_IDLE_PERCENT:-35}
-preflight_reason=$(host_health_reason "$min_cpu_idle")
+require_jarvis_health=1
+if [ "$policy" = "jarvis-remediation" ]; then
+  # The canonical hotfix intentionally replaces ai.jarvis.gateway. Continue to
+  # enforce workstation and remote-access health, but do not let the broken
+  # service or its planned restart kill the repair transaction.
+  require_jarvis_health=0
+fi
+
+preflight_reason=$(host_health_reason "$PREFLIGHT_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
 if [ -n "$preflight_reason" ]; then
   deny "$preflight_reason"
 fi
@@ -192,18 +350,41 @@ if [ "$check_only" = true ]; then
   exit 0
 fi
 
-# Background scheduling reduces competition with the interactive desktop.
-# The lock remains held by this wrapper until the child exits.
+# Publish a pending handshake before spawn. The runner atomically renames this
+# marker to child_committed only after complete identity metadata is installed.
+# If either process dies mid-publication, stale recovery fails closed.
+(umask 077 && : >"$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending")
+
+# Background scheduling reduces competition with the interactive desktop. The
+# Perl runner creates a dedicated session/process group before exec so cleanup
+# remains complete even if the root command exits before stubborn descendants.
 if [ "$(uname -s)" = "Darwin" ] && command -v taskpolicy >/dev/null 2>&1; then
-  taskpolicy -b nice -n 15 "$@" &
+  taskpolicy -b nice -n 15 "$PERL_BIN" "$RUNNER" "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH" "$@" &
 else
-  nice -n 15 "$@" &
+  nice -n 15 "$PERL_BIN" "$RUNNER" "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH" "$@" &
 fi
 child_pid=$!
-printf '%s\n' "$child_pid" >"$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid"
 
-runtime_min_cpu_idle=${OPENCLAW_FLEET_RUNTIME_MIN_CPU_IDLE_PERCENT:-20}
-monitor_interval=${OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS:-15}
+metadata_wait=0
+while [ "$metadata_wait" -lt 200 ]; do
+  if [ -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid" ] &&
+    [ -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_committed" ] &&
+    [ ! -e "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" ]; then
+    break
+  fi
+  kill -0 "$child_pid" 2>/dev/null || break
+  sleep 0.05
+  metadata_wait=$((metadata_wait + 1))
+done
+if [ ! -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_committed" ] ||
+  [ -e "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" ] ||
+  ! load_guarded_group_identity; then
+  child_cleanup_safe=0
+  kill -KILL "$child_pid" 2>/dev/null || true
+  wait "$child_pid" 2>/dev/null || true
+  echo "Refusing heavy work: guarded child session metadata was not published safely." >&2
+  exit 75
+fi
 
 monitor_guarded_child() {
   local unhealthy_strikes=0
@@ -214,7 +395,7 @@ monitor_guarded_child() {
   trap - EXIT INT TERM HUP
 
   while kill -0 "$child_pid" 2>/dev/null; do
-    runtime_reason=$(host_health_reason "$runtime_min_cpu_idle")
+    runtime_reason=$(host_health_reason "$RUNTIME_MIN_CPU_IDLE_PERCENT" "$require_jarvis_health")
     if [ -n "$runtime_reason" ]; then
       unhealthy_strikes=$((unhealthy_strikes + 1))
     else
@@ -223,13 +404,14 @@ monitor_guarded_child() {
 
     # Two consecutive unhealthy samples ignore a transient spike while still
     # stopping a runaway job before a multi-minute VNC/Jarvis starvation event.
-    if [ "$unhealthy_strikes" -ge 2 ] && kill -0 "$child_pid" 2>/dev/null; then
+    if [ "$unhealthy_strikes" -ge "$UNHEALTHY_STRIKES_BEFORE_STOP" ] &&
+      guarded_group_is_live; then
       printf '%s\n' "$runtime_reason" >"$health_stop_file"
       printf 'Stopping guarded work after repeated host-health failures: %s\n' "$runtime_reason" >&2
       stop_guarded_child
       return 0
     fi
-    sleep "$monitor_interval"
+    sleep "$MONITOR_INTERVAL_SECONDS"
   done
 }
 
@@ -244,6 +426,10 @@ wait "$child_pid"
 child_status=$?
 set -e
 stop_health_monitor
+
+# Root exit is not proof that every worker exited. Stop and verify the dedicated
+# group before returning the root status or releasing the machine lease.
+stop_guarded_child || true
 
 if [ -s "$health_stop_file" ]; then
   exit 75

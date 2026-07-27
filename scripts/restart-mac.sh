@@ -4,8 +4,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORIGINAL_ARGS=("$@")
 source "${ROOT_DIR}/scripts/lib/validated-node.sh"
 source "${ROOT_DIR}/scripts/lib/worktree-guards.sh"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 GATEWAY_ENTRY="${ROOT_DIR}/dist/index.js"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
@@ -181,6 +184,14 @@ fi
 if [[ "$APP_SCOPE" != "self" && "$APP_SCOPE" != "all" ]]; then
   fail "Unknown --app-scope value '${APP_SCOPE}'. Use self or all."
 fi
+
+# The global lease must precede this script's restart mutex, process kills,
+# cache deletion, Swift build, packaging, and LaunchAgent mutation.
+openclaw_heavy_local_slot_require_or_reexec \
+  "restart-mac:${APP_SCOPE}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/restart-mac.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 mkdir -p "$(dirname "$LOG_PATH")"
 rm -f "$LOG_PATH"

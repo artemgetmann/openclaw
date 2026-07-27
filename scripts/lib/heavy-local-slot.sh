@@ -4,9 +4,9 @@
 #
 # The wrapper owns the lease for the lifetime of its guarded child tree.
 # Canonical entrypoints source this helper and accept inheritance only when the
-# exported capability token matches live owner metadata at the canonical lock
-# path. A boolean "already guarded" flag would let any caller bypass admission,
-# so this helper deliberately has no such sentinel.
+# exported capability token matches live owner metadata and the caller is an
+# actual descendant of that wrapper. A boolean "already guarded" flag or token
+# alone would let a same-user sibling bypass admission, so neither is trusted.
 
 OPENCLAW_HEAVY_LOCAL_SLOT_HELD=0
 OPENCLAW_HEAVY_LOCAL_SLOT_CLAIMED_DIR=0
@@ -39,6 +39,33 @@ openclaw_heavy_local_slot_process_start() {
     /usr/bin/head -n 1
 }
 
+openclaw_heavy_local_slot_process_parent() {
+  local pid="$1"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  LC_ALL=C /bin/ps -p "$pid" -o ppid= 2>/dev/null |
+    /usr/bin/awk '{$1=$1; if ($0 ~ /^[1-9][0-9]*$/) print}' |
+    /usr/bin/head -n 1
+}
+
+openclaw_heavy_local_slot_process_identity() {
+  local pid="$1"
+  local helper_dir="" runner="" perl_bin=""
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  # Query PGID and SID together through syscall-backed POSIX APIs. macOS
+  # `ps -o sess=` is not a SID interface and commonly reports zero.
+  helper_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
+  runner="$helper_dir/heavy-local-slot-runner.pl"
+  if [[ -x /usr/bin/perl ]]; then
+    perl_bin=/usr/bin/perl
+  else
+    perl_bin="$(command -v perl 2>/dev/null || true)"
+  fi
+  [[ -n "$perl_bin" && -r "$runner" ]] || return 1
+  "$perl_bin" "$runner" --inspect-process "$pid" 2>/dev/null
+}
+
 openclaw_heavy_local_slot_owner_is_live() {
   local pid="$1"
   local expected_start="$2"
@@ -59,6 +86,36 @@ openclaw_heavy_local_slot_owner_is_live() {
   [[ -n "$current_start" ]] || return 2
   [[ "$current_start" == "$expected_start" ]] || return 2
   return 0
+}
+
+openclaw_heavy_local_slot_process_descends_from_owner() {
+  local child_pid="$1"
+  local owner_pid="$2"
+  local owner_start="$3"
+  local current_pid="$child_pid"
+  local parent_pid=""
+  local depth=0
+
+  [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  # Validate the owner before and after walking. The bounded ancestry walk
+  # fails closed on unreadable process state, cycles, or a concurrently reused
+  # owner PID instead of treating a copied token as sufficient authority.
+  openclaw_heavy_local_slot_owner_is_live "$owner_pid" "$owner_start" || return 1
+  while [[ "$depth" -lt 256 ]]; do
+    if [[ "$current_pid" == "$owner_pid" ]]; then
+      openclaw_heavy_local_slot_owner_is_live "$owner_pid" "$owner_start"
+      return
+    fi
+
+    parent_pid="$(openclaw_heavy_local_slot_process_parent "$current_pid" || true)"
+    [[ "$parent_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    [[ "$parent_pid" != "$current_pid" ]] || return 1
+    current_pid="$parent_pid"
+    depth=$((depth + 1))
+  done
+  return 1
 }
 
 openclaw_heavy_local_slot_default_path() {
@@ -99,6 +156,7 @@ openclaw_heavy_local_slot_write_owner() {
   local owner_path="$1"
   local token="$2"
   local label="$3"
+  local policy="${4:-standard}"
   local owner_tmp="${owner_path}.tmp.$$"
   local process_start=""
 
@@ -110,6 +168,7 @@ openclaw_heavy_local_slot_write_owner() {
     printf 'token=%s\n' "$token"
     printf 'process_start=%s\n' "$process_start"
     printf 'label=%s\n' "$(openclaw_heavy_local_slot_safe_text "$label")"
+    printf 'policy=%s\n' "$(openclaw_heavy_local_slot_safe_text "$policy")"
     printf 'created_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
       printf 'thread_id=%s\n' "$(openclaw_heavy_local_slot_safe_text "$CODEX_THREAD_ID")"
@@ -117,6 +176,65 @@ openclaw_heavy_local_slot_write_owner() {
   } >"$owner_tmp"
   /bin/chmod 600 "$owner_tmp"
   /bin/mv "$owner_tmp" "$owner_path"
+}
+
+openclaw_heavy_local_slot_child_group_status() {
+  local lock_path="$1"
+  local pending_path="$lock_path/child_pending"
+  local committed_path="$lock_path/child_committed"
+  local metadata_path="$lock_path/child_pid"
+  local child_pid="" child_start="" child_pgid="" child_session=""
+  local current_start="" current_identity="" current_pgid="" current_session=""
+
+  # The runner publishes metadata first, then atomically renames pending to
+  # committed. Only that exact committed state is signal/recovery authority.
+  # Pending or metadata without its commit marker can be a crash in the publish
+  # window, so stale recovery must stop for operator review.
+  [[ ! -e "$pending_path" ]] || return 2
+  if [[ ! -e "$committed_path" ]]; then
+    [[ ! -e "$metadata_path" ]] || return 2
+    return 1
+  fi
+  [[ -f "$committed_path" ]] || return 2
+  [[ -f "$metadata_path" ]] || return 2
+
+  child_pid="$(openclaw_heavy_local_slot_value "$metadata_path" pid)"
+  child_start="$(openclaw_heavy_local_slot_value "$metadata_path" process_start)"
+  child_pgid="$(openclaw_heavy_local_slot_value "$metadata_path" pgid)"
+  child_session="$(openclaw_heavy_local_slot_value "$metadata_path" session)"
+  [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] || return 2
+  [[ -n "$child_start" ]] || return 2
+  [[ "$child_pgid" == "$child_pid" ]] || return 2
+  [[ "$child_session" == "$child_pid" ]] || return 2
+
+  # When the leader PID still exists, every recorded identity component must
+  # match. A reused PID, process group, or session is ambiguous and must never
+  # become a signal or stale-recovery target.
+  if kill -0 "$child_pid" 2>/dev/null; then
+    current_start="$(openclaw_heavy_local_slot_process_start "$child_pid" || true)"
+    current_identity="$(openclaw_heavy_local_slot_process_identity "$child_pid" || true)"
+    current_pgid="$(
+      printf '%s\n' "$current_identity" |
+        /usr/bin/sed -n 's/^pgid=//p' |
+        /usr/bin/head -n 1
+    )"
+    current_session="$(
+      printf '%s\n' "$current_identity" |
+        /usr/bin/sed -n 's/^session=//p' |
+        /usr/bin/head -n 1
+    )"
+    [[ "$current_start" == "$child_start" ]] || return 2
+    [[ "$current_pgid" == "$child_pgid" ]] || return 2
+    [[ "$current_session" == "$child_session" ]] || return 2
+  fi
+
+  # The session runner is both leader and process-group leader. Negative-PGID
+  # probing remains true after the root command exits while stubborn children
+  # stay behind, which prevents stale recovery from overlapping their work.
+  if kill -0 -- "-$child_pgid" 2>/dev/null; then
+    return 0
+  fi
+  return 1
 }
 
 openclaw_heavy_local_slot_after_mkdir() {
@@ -153,7 +271,8 @@ openclaw_heavy_local_slot_reclaim_dead_owner() {
   if ! openclaw_heavy_local_slot_write_owner \
     "$reclaim_path/owner" \
     "$reclaim_token" \
-    "heavy-local-stale-recovery"; then
+    "heavy-local-stale-recovery" \
+    "standard"; then
     /bin/rmdir "$reclaim_path" 2>/dev/null || true
     return 1
   fi
@@ -181,6 +300,20 @@ openclaw_heavy_local_slot_reclaim_dead_owner() {
     return 1
   fi
 
+  if openclaw_heavy_local_slot_child_group_status "$lock_path"; then
+    live_status=0
+  else
+    live_status=$?
+  fi
+  if [[ "$live_status" -ne 1 ]]; then
+    openclaw_heavy_local_slot_remove_reclaim_claim "$reclaim_path" "$reclaim_token" || true
+    return 1
+  fi
+
+  /bin/rm -f \
+    "$lock_path/child_pid" \
+    "$lock_path/child_pending" \
+    "$lock_path/child_committed"
   /bin/rm -f "$lock_path/owner"
   openclaw_heavy_local_slot_remove_reclaim_claim "$reclaim_path" "$reclaim_token" || return 1
   /bin/rmdir "$lock_path" 2>/dev/null
@@ -204,6 +337,8 @@ openclaw_heavy_local_slot_release() {
       # The enclosing directory prevents a replacement mkdir until rmdir.
       /bin/rm -f \
         "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid" \
+        "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" \
+        "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_committed" \
         "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason" \
         "$owner_path"
       /bin/rmdir "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH" 2>/dev/null || true
@@ -216,9 +351,10 @@ openclaw_heavy_local_slot_release() {
 
 openclaw_heavy_local_slot_acquire() {
   local label="$1"
+  local policy="${2:-standard}"
   local lock_path="" lock_parent="" owner_path=""
   local token="" owner_pid="" owner_token="" owner_start="" owner_label=""
-  local metadata_wait=0 live_status=0
+  local metadata_wait=0 live_status=0 child_status=0
 
   lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 1
   token="$(openclaw_heavy_local_slot_generate_token)" || {
@@ -238,7 +374,7 @@ openclaw_heavy_local_slot_acquire() {
     if (umask 077 && /bin/mkdir "$lock_path") 2>/dev/null; then
       OPENCLAW_HEAVY_LOCAL_SLOT_CLAIMED_DIR=1
       if ! openclaw_heavy_local_slot_after_mkdir ||
-        ! openclaw_heavy_local_slot_write_owner "$owner_path" "$token" "$label"; then
+        ! openclaw_heavy_local_slot_write_owner "$owner_path" "$token" "$label" "$policy"; then
         openclaw_heavy_local_slot_release
         echo "Refusing heavy work: could not publish lease owner metadata." >&2
         return 75
@@ -281,6 +417,20 @@ openclaw_heavy_local_slot_acquire() {
       return 75
     fi
 
+    if openclaw_heavy_local_slot_child_group_status "$lock_path"; then
+      child_status=0
+    else
+      child_status=$?
+    fi
+    if [[ "$child_status" -eq 0 ]]; then
+      echo "Refusing heavy work: dead slot owner still has a live guarded process group." >&2
+      return 75
+    fi
+    if [[ "$child_status" -eq 2 ]]; then
+      echo "Refusing heavy work: guarded child identity is incomplete; refusing unsafe recovery." >&2
+      return 75
+    fi
+
     if ! openclaw_heavy_local_slot_reclaim_dead_owner \
       "$lock_path" \
       "$owner_token" \
@@ -293,9 +443,10 @@ openclaw_heavy_local_slot_acquire() {
 }
 
 openclaw_heavy_local_slot_inherited_lease_is_valid() {
+  local required_policy="${1:-standard}"
   local inherited_token="${OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN:-}"
   local lock_path="" owner_path=""
-  local owner_pid="" owner_token="" owner_start=""
+  local owner_pid="" owner_token="" owner_start="" owner_policy=""
 
   [[ "$inherited_token" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
   lock_path="$(openclaw_heavy_local_slot_resolve_path)" || return 1
@@ -305,25 +456,56 @@ openclaw_heavy_local_slot_inherited_lease_is_valid() {
   owner_pid="$(openclaw_heavy_local_slot_value "$owner_path" pid)"
   owner_token="$(openclaw_heavy_local_slot_value "$owner_path" token)"
   owner_start="$(openclaw_heavy_local_slot_value "$owner_path" process_start)"
+  owner_policy="$(openclaw_heavy_local_slot_value "$owner_path" policy)"
   [[ "$owner_token" == "$inherited_token" ]] || return 1
-  openclaw_heavy_local_slot_owner_is_live "$owner_pid" "$owner_start"
+
+  # Standard nested work can safely run inside the stricter remediation
+  # transaction. The reverse is false: a standard outer monitor would kill an
+  # authorized hotfix during the Jarvis restart window it exists to repair.
+  if [[ "$required_policy" == "jarvis-remediation" &&
+    "$owner_policy" != "jarvis-remediation" ]]; then
+    return 1
+  fi
+  openclaw_heavy_local_slot_process_descends_from_owner "$$" "$owner_pid" "$owner_start"
 }
 
-openclaw_heavy_local_slot_require_or_reexec() {
-  local label="$1"
-  local root="$2"
-  local entrypoint="$3"
-  shift 3
+openclaw_heavy_local_slot_require_or_reexec_with_policy() {
+  local policy="$1"
+  local label="$2"
+  local root="$3"
+  local entrypoint="$4"
+  shift 4
 
-  if openclaw_heavy_local_slot_inherited_lease_is_valid; then
+  case "$policy" in
+    standard | jarvis-remediation)
+      ;;
+    *)
+      echo "Refusing heavy work: unknown admission policy '$policy'." >&2
+      return 75
+      ;;
+  esac
+
+  if openclaw_heavy_local_slot_inherited_lease_is_valid "$policy"; then
     return 0
   fi
 
   # exec keeps one supervision boundary and preserves the eventual child exit
   # status. The wrapper replaces any forged/stale token with a fresh capability;
   # the re-executed entrypoint then validates that live metadata and proceeds.
+  if [[ "$policy" == "standard" ]]; then
+    exec "$root/scripts/with-heavy-local-slot.sh" \
+      --label "$label" \
+      -- \
+      "$entrypoint" "$@"
+  fi
+
   exec "$root/scripts/with-heavy-local-slot.sh" \
+    --policy "$policy" \
     --label "$label" \
     -- \
     "$entrypoint" "$@"
+}
+
+openclaw_heavy_local_slot_require_or_reexec() {
+  openclaw_heavy_local_slot_require_or_reexec_with_policy "standard" "$@"
 }
