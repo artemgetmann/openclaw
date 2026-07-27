@@ -24,7 +24,13 @@ import {
 import type { FollowupRun } from "./queue.js";
 import {
   checkpointDurableFollowupDelivery,
+  DurableFollowupActiveOwnerError,
+  isDurableFollowupOwnedByOtherLiveProcess,
+  loadDurableFollowupDeliveryCarrier,
+  loadDurableFollowupRestartRecovery,
   loadDurableFollowupDelivery,
+  markDurableFollowupRestartReceiptDelivering,
+  markDurableFollowupRestartReceiptDelivered,
   persistDurableFollowupDelivery,
 } from "./queue/durable-store.js";
 import {
@@ -34,7 +40,12 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
-import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
+import {
+  isRestartInterruptedTurnPayload,
+  RESTART_INTERRUPTED_TURN_PAYLOAD,
+  RestartContinuationPendingError,
+  scheduleInterruptedDirectTurnContinuation,
+} from "./restart-recovery.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -142,7 +153,11 @@ export function createFollowupRunner(params: {
    * is the provider-acceptance boundary; onBlockReply resolves after enqueue
    * and an old dispatcher may already be closing.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    options?: { checkpoint?: boolean },
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
@@ -180,7 +195,7 @@ export function createFollowupRunner(params: {
     }
 
     const markPayloadComplete = async () => {
-      if (queued.deliveryPayloads === undefined) {
+      if (queued.deliveryPayloads === undefined || options?.checkpoint === false) {
         return;
       }
       // Persist first: once the next provider call begins, disk must already
@@ -203,6 +218,7 @@ export function createFollowupRunner(params: {
         continue;
       }
       await typingSignals.signalTextDelta(payload.text);
+      const isRestartRecovery = isRestartInterruptedTurnPayload(payload);
 
       if (canUseSameChannelDispatcher && !hasDurableOwnership && opts?.onBlockReply) {
         // RAM-only same-channel replies retain the original transport lifecycle.
@@ -221,7 +237,19 @@ export function createFollowupRunner(params: {
           // The agent run already wrote its assistant turn to this session.
           // Provider delivery must not append the same final a second time or
           // create a second write-ahead owner for the same durable payload.
-          ...(hasDurableOwnership ? { mirror: false, skipQueue: true } : {}),
+          //
+          // The restart receipt is different: recovery generated it outside
+          // the agent transcript. Mirror it so the automatic continuation sees
+          // exactly the restart acknowledgment delivered to the user.
+          ...(hasDurableOwnership
+            ? {
+                mirror: isRestartRecovery,
+                mirrorIdempotencyKey: isRestartRecovery
+                  ? `restart-recovery:${queued.durableId}`
+                  : undefined,
+                skipQueue: true,
+              }
+            : {}),
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
@@ -257,10 +285,55 @@ export function createFollowupRunner(params: {
         queued.durableIds = stagedDelivery.delivery.sourceDurableIds;
         queued.deliveryPayloads = stagedDelivery.delivery.payloads;
       }
+      const ownershipRecord =
+        stagedDelivery ??
+        (queued.durableId ? await loadDurableFollowupDeliveryCarrier(queued.durableId) : undefined);
+      if (ownershipRecord && isDurableFollowupOwnedByOtherLiveProcess(ownershipRecord)) {
+        // Warm restart preparation can overlap the old listener. Do not infer
+        // interruption until the process that accepted this turn has exited;
+        // it may still persist or deliver the exact final.
+        throw new DurableFollowupActiveOwnerError(
+          ownershipRecord.id,
+          ownershipRecord.activeOwnerPid!,
+        );
+      }
       if (queued.deliveryPayloads !== undefined) {
         // Empty is a valid completed stage (NO_REPLY or messaging-tool
         // suppression). Its presence must skip model/tool execution just like
         // a non-empty outbound retry.
+        const restartPayload = queued.deliveryPayloads.find(isRestartInterruptedTurnPayload);
+        if (restartPayload && queued.durableId) {
+          const recoveryRecord = await loadDurableFollowupRestartRecovery(queued.durableId);
+          if (!recoveryRecord) {
+            throw new Error(`Restart recovery carrier ${queued.durableId} is unavailable`);
+          }
+          const receiptState = recoveryRecord.restartRecovery?.receipt;
+          if (receiptState === "pending") {
+            // Claim before the provider call. A replacement process treats a
+            // leftover `delivering` receipt as an ambiguous attempt and skips
+            // resending it, preferring one missing notice over a duplicate.
+            const ownsReceiptAttempt = await markDurableFollowupRestartReceiptDelivering(
+              recoveryRecord.id,
+            );
+            if (!ownsReceiptAttempt) {
+              throw new RestartContinuationPendingError(recoveryRecord.id);
+            }
+            // The transport cannot prove whether a thrown timeout happened
+            // before or after provider acceptance. Keep `delivering` on error;
+            // reconciliation skips this optional receipt rather than risking
+            // a duplicate. The final continuation remains durable.
+            await sendFollowupPayloads([restartPayload], queued, { checkpoint: false });
+            await markDurableFollowupRestartReceiptDelivered(recoveryRecord.id);
+          } else if (receiptState === "delivering") {
+            // Startup cannot distinguish a crash before send from Telegram
+            // acceptance before checkpoint. Never issue a second send attempt.
+            await markDurableFollowupRestartReceiptDelivered(recoveryRecord.id);
+          }
+          await scheduleInterruptedDirectTurnContinuation(recoveryRecord);
+          // Queue completion would delete the authority before the heartbeat
+          // final is delivered. Retain it under ordinary durable backoff.
+          throw new RestartContinuationPendingError(recoveryRecord.id);
+        }
         await sendFollowupPayloads(queued.deliveryPayloads, queued);
         return;
       }

@@ -110,4 +110,9 @@ export type ReplyPayload = {
   isReasoning?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /**
+   * Internal marker for the conservative receipt delivered after process
+   * recovery. The outbound router strips this before channel delivery.
+   */
+  restartRecovery?: true;
 };

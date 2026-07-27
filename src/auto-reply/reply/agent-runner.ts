@@ -84,7 +84,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { persistDurableFollowup } from "./queue/durable-store.js";
+import { persistDurableFollowup, persistDurableFollowupDelivery } from "./queue/durable-store.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
@@ -164,6 +164,7 @@ function finalizeWithFollowup<T>(
 
 type RunReplyAgentFinalizationLifecycle = {
   releaseOwnership?: () => void;
+  directRecoveryRun?: FollowupRun;
 };
 
 type RunReplyAgentParams = {
@@ -203,7 +204,17 @@ export async function runReplyAgent(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const lifecycle: RunReplyAgentFinalizationLifecycle = {};
   try {
-    return await runReplyAgentWithFinalizationOwnership(params, lifecycle);
+    const result = await runReplyAgentWithFinalizationOwnership(params, lifecycle);
+    if (lifecycle.directRecoveryRun && result !== undefined) {
+      // Model/tool completion and Telegram acceptance are separate boundaries.
+      // Replace the conservative blocker with the exact final before returning
+      // it to the transport, so a restart in between only re-delivers output.
+      await persistDurableFollowupDelivery({
+        run: lifecycle.directRecoveryRun,
+        payloads: Array.isArray(result) ? result : [result],
+      });
+    }
+    return result;
   } finally {
     lifecycle.releaseOwnership?.();
   }
@@ -460,6 +471,7 @@ async function runReplyAgentWithFinalizationOwnership(
       // in which startup can observe replayable input without this blocker.
       deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
     });
+    lifecycle.directRecoveryRun = { ...followupRun, durableId: recoveryRecord.id };
     await runOpts.onDurableReplyAccepted(recoveryRecord.id);
   }
 

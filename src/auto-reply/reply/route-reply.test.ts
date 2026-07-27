@@ -512,6 +512,40 @@ describe("routeReply", () => {
     );
   });
 
+  it("anchors restart recovery in the transcript without leaking internal metadata", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: {
+        text: "Jarvis restarted. Reply Continue.",
+        isError: true,
+        restartRecovery: true,
+      },
+      channel: "telegram",
+      to: "123",
+      sessionKey: "agent:main:telegram:direct:123",
+      mirror: true,
+      mirrorIdempotencyKey: "restart-recovery:durable-1",
+      skipQueue: true,
+      cfg: {} as never,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.not.objectContaining({
+            restartRecovery: true,
+          }),
+        ],
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:123",
+          text: "Jarvis restarted. Reply Continue.",
+          idempotencyKey: "restart-recovery:durable-1",
+        }),
+        skipQueue: true,
+      }),
+    );
+  });
+
   it("skips mirror data when mirror is false", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
     await routeReply({

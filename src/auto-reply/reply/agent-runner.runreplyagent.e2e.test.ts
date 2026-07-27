@@ -335,8 +335,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
       const [runningRecord] = await loadDurableFollowups();
       expect(runningRecord?.delivery?.payloads).toEqual([
         expect.objectContaining({
-          isError: true,
-          text: expect.stringContaining("interrupted after accepting"),
+          restartRecovery: true,
+          text: expect.stringContaining("Jarvis restarted"),
         }),
       ]);
 
@@ -345,18 +345,16 @@ describe("runReplyAgent heartbeat followup guard", () => {
         expect.objectContaining({ text: "exact final" }),
       );
 
-      // The live transport has not acknowledged delivery yet. A restart in
-      // this window must deliver the conservative recovery receipt without
-      // rerunning model or tool work. Provider acceptance can be ambiguous,
-      // so replaying even a completed final would be less safe.
+      // Model/tool completion is now durable before control returns to the
+      // transport. A restart in this window re-delivers the exact completed
+      // result and never emits a misleading interruption receipt.
       const [completedRecord] = await loadDurableFollowups();
       expect(completedRecord?.id).toBe(runningRecord?.id);
       expect(completedRecord?.delivery?.payloads).toEqual([
-        expect.objectContaining({
-          isError: true,
-          text: expect.stringContaining("did not repeat the unfinished actions"),
-        }),
+        expect.objectContaining({ text: "exact final" }),
       ]);
+      expect(completedRecord?.restartRecovery).toBeUndefined();
+      expect(completedRecord?.activeOwnerPid).toBe(process.pid);
     });
   });
 

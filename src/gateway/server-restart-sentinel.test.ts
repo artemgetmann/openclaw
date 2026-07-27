@@ -208,7 +208,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringMatching(/Reassess the current external state.*Never blindly repeat/s),
+      expect.stringMatching(/reassess the current external state.*Never blindly repeat/s),
       expect.objectContaining({ sessionKey: "agent:main:main", contextKey: "restart:op-1" }),
     );
     expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith(
