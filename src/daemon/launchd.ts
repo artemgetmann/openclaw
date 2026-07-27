@@ -330,20 +330,20 @@ function resolvePublicJarvisWatchdogExecutable(env: GatewayServiceEnv): string |
   if (!executable) {
     return null;
   }
-  const expectedSuffix = path.join("Jarvis.app", "Contents", "MacOS", "JarvisGatewayWatchdog");
-  if (!executable.endsWith(expectedSuffix)) {
+  const home = normalizePathForComparison(resolveHomeDir(env));
+  if (!home) {
     return null;
   }
-  if (
-    executable.includes(`${path.sep}Programming_Projects${path.sep}`) ||
-    executable.includes(`${path.sep}.codex${path.sep}worktrees${path.sep}`) ||
-    executable.includes(`${path.sep}.worktrees${path.sep}`)
-  ) {
-    // A locally packaged debug app may contain the helper, but it is not a
-    // durable package owner and must never become production launchd provenance.
-    return null;
-  }
-  return executable;
+  const helperSuffix = path.join("Jarvis.app", "Contents", "MacOS", "JarvisGatewayWatchdog");
+  const durableHelpers = [
+    path.join(path.parse(home).root, "Applications", helperSuffix),
+    path.join(home, "Applications", helperSuffix),
+  ].map((candidate) => normalizePathForComparison(candidate));
+
+  // Swift normally supplies this value, but the daemon treats all inherited
+  // environment as untrusted. Enforce the same durable-location rule here so a
+  // direct CLI call cannot persist a DMG, Downloads, translocated, or worktree path.
+  return durableHelpers.includes(executable) ? executable : null;
 }
 
 function preflightPublicJarvisWatchdogInstall(env: GatewayServiceEnv): void {
@@ -373,7 +373,7 @@ function preflightPublicJarvisWatchdogInstall(env: GatewayServiceEnv): void {
   }
   if (!executable || !executableIsReady) {
     throw new Error(
-      "Jarvis gateway watchdog install refused: signed app helper is missing or outside Jarvis.app.",
+      "Jarvis gateway watchdog install refused: signed app helper is missing or outside installed Jarvis.app.",
     );
   }
 }

@@ -374,16 +374,25 @@ describe("launchd install", () => {
     executable: string;
     plistPath: string;
   } {
-    const appRoot = path.join(makeTempDir(), "Applications", "Jarvis.app");
+    // Resolve the macOS /var -> /private/var alias up front so the fixture's
+    // existing home and not-yet-created state paths compare identically.
+    const home = fs.realpathSync(makeTempDir());
+    const appRoot = path.join(home, "Applications", "Jarvis.app");
     const executable = path.join(appRoot, "Contents", "MacOS", "JarvisGatewayWatchdog");
     fs.mkdirSync(path.dirname(executable), { recursive: true });
     fs.writeFileSync(executable, "#!/bin/false\n", { mode: 0o755 });
-    const stateDir = "/Users/test/Library/Application Support/Jarvis/.jarvis";
+    const stateDir = path.join(home, "Library", "Application Support", "Jarvis", ".jarvis");
     return {
       executable,
-      plistPath: `/Users/test/Library/LaunchAgents/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`,
+      plistPath: path.join(
+        home,
+        "Library",
+        "LaunchAgents",
+        `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`,
+      ),
       env: {
         ...createDefaultLaunchdEnv(),
+        HOME: home,
         OPENCLAW_PROFILE: "consumer",
         OPENCLAW_LAUNCHD_LABEL: "ai.jarvis.gateway",
         OPENCLAW_HOME: "/Users/test/Library/Application Support/Jarvis",
@@ -1018,7 +1027,7 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toContainEqual([
       "bootstrap",
       domain,
-      "/Users/test/Library/LaunchAgents/ai.jarvis.gateway.plist",
+      resolveLaunchAgentPlistPath(env),
     ]);
     expect(
       state.launchctlCalls.some(
@@ -1070,7 +1079,35 @@ describe("launchd install", () => {
         workingDirectory:
           "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
       }),
-    ).rejects.toThrow("signed app helper is missing or outside Jarvis.app");
+    ).rejects.toThrow("signed app helper is missing or outside installed Jarvis.app");
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.files.size).toBe(0);
+  });
+
+  it("public Jarvis watchdog preflight rejects a transient Jarvis app before mutation", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const transientHelper = path.join(
+      fixture.env.HOME!,
+      "Downloads",
+      "Jarvis.app",
+      "Contents",
+      "MacOS",
+      "JarvisGatewayWatchdog",
+    );
+    fs.mkdirSync(path.dirname(transientHelper), { recursive: true });
+    fs.writeFileSync(transientHelper, "#!/bin/false\n", { mode: 0o755 });
+    fixture.env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE = transientHelper;
+
+    await expect(
+      installLaunchAgent({
+        env: fixture.env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory:
+          "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
+      }),
+    ).rejects.toThrow("signed app helper is missing or outside installed Jarvis.app");
 
     expect(state.launchctlCalls).toEqual([]);
     expect(state.files.size).toBe(0);
@@ -1100,7 +1137,7 @@ describe("launchd install", () => {
         workingDirectory:
           "/Users/test/Library/Application Support/Jarvis/.jarvis/lib/openclaw-bundled",
       }),
-    ).rejects.toThrow("signed app helper is missing or outside Jarvis.app");
+    ).rejects.toThrow("signed app helper is missing or outside installed Jarvis.app");
 
     expect(state.launchctlCalls).toEqual([]);
     expect(state.files.size).toBe(0);
@@ -1172,7 +1209,7 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    const watchdogTrashPath = `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
+    const watchdogTrashPath = `${fixture.env.HOME}/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
     expect(state.files.has(fixture.plistPath)).toBe(false);
     expect(state.files.get(watchdogTrashPath)).toBe("<watchdog/>");
   });
@@ -1180,7 +1217,7 @@ describe("launchd install", () => {
   it("public Jarvis uninstall uses a unique Trash name when the stable name exists", async () => {
     const fixture = createPublicJarvisWatchdogFixture();
     const gatewayPlistPath = resolveLaunchAgentPlistPath(fixture.env);
-    const stableTrashPath = `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
+    const stableTrashPath = `${fixture.env.HOME}/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
     state.files.set(gatewayPlistPath, "<plist/>");
     state.files.set(fixture.plistPath, "<watchdog/>");
     state.files.set(stableTrashPath, "<older-watchdog/>");
@@ -1195,7 +1232,7 @@ describe("launchd install", () => {
     const uniqueCopies = [...state.files.entries()].filter(
       ([candidate, contents]) =>
         candidate.startsWith(
-          `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}-`,
+          `${fixture.env.HOME}/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}-`,
         ) && contents === "<watchdog/>",
     );
     expect(uniqueCopies).toHaveLength(1);
