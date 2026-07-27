@@ -39,7 +39,19 @@ const ToolSchema = {
   properties: {
     action: {
       type: "string",
-      enum: ["status", "list", "search", "read", "create", "message", "delegate", "resume", "fork"],
+      enum: [
+        "status",
+        "list",
+        "fleet",
+        "search",
+        "read",
+        "create",
+        "message",
+        "steer",
+        "delegate",
+        "resume",
+        "fork",
+      ],
     },
     thread_id: { type: "string" },
     text: { type: "string" },
@@ -229,13 +241,15 @@ function createCodexTool(service: CodexThreadService) {
     label: "Codex Threads",
     ownerOnly: true,
     description:
-      "Owner-only native Codex thread status, catalog, lifecycle, and read-only continuation controls.",
+      "Owner-only native Codex thread inventory, lifecycle, delegation, and race-safe active-turn steering.",
     parameters: ToolSchema,
     execute: async (_toolCallId: string, raw: ToolParams) => {
       const action = raw.action ?? "";
       let result: unknown;
       if (action === "status") {
         result = await service.status();
+      } else if (action === "fleet") {
+        result = await service.fleet(raw.limit);
       } else if (action === "list" || action === "search") {
         result = await service.list({
           search: action === "search" ? (raw.search ?? raw.text) : raw.search,
@@ -254,6 +268,11 @@ function createCodexTool(service: CodexThreadService) {
           required(raw.thread_id, "thread_id"),
           required(raw.text, "text"),
           raw.workspace_dir,
+        );
+      } else if (action === "steer") {
+        result = await service.steer(
+          required(raw.thread_id, "thread_id"),
+          required(raw.text, "text"),
         );
       } else if (action === "delegate") {
         // A single action makes the intended Jarvis UX atomic from the
@@ -300,6 +319,9 @@ async function handleCodexCommand(
     if (parsed.action === "status") {
       return { text: JSON.stringify(await service.status(), null, 2) };
     }
+    if (parsed.action === "fleet") {
+      return { text: JSON.stringify(await service.fleet(50), null, 2) };
+    }
     if (parsed.action === "list" || parsed.action === "search") {
       return {
         text: JSON.stringify(
@@ -342,6 +364,13 @@ async function handleCodexCommand(
         required(parsed.rest, "message text"),
       );
       return { text: formatCodexFinal(result.threadId, result.finalText, result.progress) };
+    }
+    if (parsed.action === "steer") {
+      const result = await service.steer(
+        required(parsed.first, "thread id"),
+        required(parsed.rest, "steering text"),
+      );
+      return { text: `Steered active Codex turn ${result.turnId} in thread ${result.threadId}.` };
     }
     if (parsed.action === "resume") {
       const resumed = await service.resume(required(parsed.first, "thread id"));
@@ -529,11 +558,13 @@ function codexHelp(): string {
     "Codex pilot commands:",
     "/codex status",
     "/codex list",
+    "/codex fleet",
     "/codex search <text>",
     "/codex read <thread-id>",
     "/codex create [first prompt]",
     "/codex delegate <task>",
     "/codex message <thread-id> <text>",
+    "/codex steer <thread-id> <text>",
     "/codex resume <thread-id>",
     "/codex fork <thread-id>",
     "/codex bind [thread-id]",
@@ -550,4 +581,7 @@ const CODEX_DELEGATION_GUIDANCE = [
   "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
   "- After the tool returns, relay one concise Jarvis summary containing the native thread id and final result. If the tool fails, say that native Codex was unavailable and do not claim the task ran with Pi.",
+  "- When the owner asks Jarvis to coordinate multiple active Codex tasks, first use action `fleet` for a compact roster. Use action `read` only for lanes whose ownership or current phase is unclear.",
+  "- Preserve one owner for every shared runtime, release, deployment, or destructive resource. Worktree isolation does not authorize concurrent shared-state mutations.",
+  "- Use action `steer` only for a specific active thread and a concrete scope, dependency, resource, or stop instruction. Steering is race-safe and fails if that active turn has already changed; never replace a failed steer with `message` unless the owner explicitly wants queued follow-up work.",
 ].join("\n");

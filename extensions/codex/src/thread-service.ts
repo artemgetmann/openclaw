@@ -9,6 +9,31 @@ export type CodexThreadRunResult = {
   progress: string[];
 };
 
+export type CodexThreadSteerResult = {
+  mode: "native-codex-steer";
+  threadId: string;
+  turnId: string;
+};
+
+export type CodexFleetSnapshot = {
+  mode: "native-codex-fleet";
+  counts: {
+    total: number;
+    active: number;
+    idle: number;
+    other: number;
+  };
+  threads: Array<{
+    threadId: string;
+    name?: string;
+    status?: string;
+    cwd?: string;
+    branch?: string;
+    sha?: string;
+    updatedAt?: number;
+  }>;
+};
+
 type ThreadServiceOptions = {
   client: () => Promise<CodexRpcClient>;
   turnTimeoutMs: number;
@@ -61,6 +86,41 @@ export class CodexThreadService {
       sortDirection: "desc",
       ...(params.search?.trim() ? { searchTerm: params.search.trim() } : {}),
     });
+  }
+
+  async fleet(limit = 30): Promise<CodexFleetSnapshot> {
+    const response = asRecord(await this.list({ limit }));
+    const threads = asRecords(response.data)
+      .map((thread) => {
+        const threadId = readString(thread.id);
+        if (!threadId) {
+          return undefined;
+        }
+        return {
+          threadId,
+          name: readString(thread.name) ?? readString(thread.preview),
+          status: readNestedString(thread, ["status", "type"]),
+          cwd: readString(thread.cwd),
+          branch: readNestedString(thread, ["gitInfo", "branch"]),
+          sha: readNestedString(thread, ["gitInfo", "sha"]),
+          updatedAt: readNumberValue(thread.updatedAt),
+        };
+      })
+      .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
+    const active = threads.filter((thread) => thread.status === "active").length;
+    const idle = threads.filter(
+      (thread) => thread.status === "idle" || thread.status === "notLoaded",
+    ).length;
+    return {
+      mode: "native-codex-fleet",
+      counts: {
+        total: threads.length,
+        active,
+        idle,
+        other: threads.length - active - idle,
+      },
+      threads,
+    };
   }
 
   async read(threadId: string, includeTurns = false): Promise<unknown> {
@@ -173,6 +233,63 @@ export class CodexThreadService {
     } finally {
       this.activeThreadIds.delete(normalizedThreadId);
     }
+  }
+
+  async steer(threadId: string, text: string): Promise<CodexThreadSteerResult> {
+    const normalizedThreadId = requireId(threadId);
+    const prompt = text.trim();
+    if (!prompt) {
+      throw new Error("text is required");
+    }
+
+    // Read and steer through one App Server generation. The active turn id is
+    // an optimistic-concurrency token: if the worker finishes or a replacement
+    // turn starts after this read, turn/steer fails instead of modifying the
+    // wrong work. Never fall back to turn/start because that would silently
+    // change an immediate coordination instruction into queued future work.
+    const client = await this.client();
+    const response = asRecord(
+      await client.request("thread/read", {
+        threadId: normalizedThreadId,
+        includeTurns: true,
+      }),
+    );
+    const returnedThreadId = readNestedString(response, ["thread", "id"]);
+    if (returnedThreadId !== normalizedThreadId) {
+      throw new Error("Codex App Server returned a different thread while preparing steering");
+    }
+    const status = readNestedString(response, ["thread", "status", "type"]);
+    if (status !== "active") {
+      throw new Error(
+        `cannot steer Codex thread ${normalizedThreadId} while status is ${status ?? "unknown"}`,
+      );
+    }
+    const activeTurnIds = asRecords(asRecord(response.thread).turns)
+      .filter((turn) => readString(turn.status) === "inProgress")
+      .map((turn) => readString(turn.id))
+      .filter((turnId): turnId is string => Boolean(turnId));
+    if (activeTurnIds.length !== 1) {
+      throw new Error(
+        `cannot steer Codex thread ${normalizedThreadId}: expected one active turn, found ${activeTurnIds.length}`,
+      );
+    }
+    const expectedTurnId = activeTurnIds[0];
+    const steered = asRecord(
+      await client.request("turn/steer", {
+        threadId: normalizedThreadId,
+        expectedTurnId,
+        input: [{ type: "text", text: prompt, text_elements: [] }],
+      }),
+    );
+    const returnedTurnId = readString(steered.turnId);
+    if (returnedTurnId !== expectedTurnId) {
+      throw new Error("Codex App Server steered a different turn than requested");
+    }
+    return {
+      mode: "native-codex-steer",
+      threadId: normalizedThreadId,
+      turnId: expectedTurnId,
+    };
   }
 
   async archive(threadId: string): Promise<void> {
@@ -389,8 +506,16 @@ function asRecord(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
 }
 
+function asRecords(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.map(asRecord) : [];
+}
+
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readNumberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readNestedString(value: JsonObject, path: string[]): string | undefined {

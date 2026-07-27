@@ -22,6 +22,30 @@ vi.mock("./src/app-server-client.js", () => ({
       if (method === "thread/start") {
         return { thread: { id: "thread-natural" } };
       }
+      if (method === "thread/list") {
+        return {
+          data: [
+            {
+              id: "thread-active",
+              name: "Active fleet worker",
+              status: { type: "active", activeFlags: [] },
+              cwd: "/repo/openclaw",
+            },
+          ],
+        };
+      }
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "thread-active",
+            status: { type: "active", activeFlags: [] },
+            turns: [{ id: "turn-active", status: "inProgress", items: [] }],
+          },
+        };
+      }
+      if (method === "turn/steer") {
+        return { turnId: "turn-active" };
+      }
       if (method === "turn/start") {
         // The service registers its collector before starting the turn. Delay
         // the terminal notification one event-loop tick so it first records
@@ -150,5 +174,70 @@ describe("Codex natural-language delegation", () => {
     );
 
     expect(factory?.({ senderIsOwner: false, sandboxed: false })).toBeNull();
+  });
+
+  it("gives the owner a compact fleet roster and race-safe steering", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    let factory: OpenClawPluginToolFactory | undefined;
+    let beforePromptBuild: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {} as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+        on(name, handler) {
+          if (name === "before_prompt_build") {
+            beforePromptBuild = handler as typeof beforePromptBuild;
+          }
+        },
+      }) as OpenClawPluginApi,
+    );
+
+    await expect(beforePromptBuild?.({}, {})).resolves.toMatchObject({
+      prependSystemContext: expect.stringContaining("coordinate multiple active Codex tasks"),
+    });
+    const tool = factory?.({ senderIsOwner: true, sandboxed: false }) as AnyAgentTool;
+    await expect(tool.execute("fleet-1", { action: "fleet", limit: 40 })).resolves.toMatchObject({
+      details: {
+        mode: "native-codex-fleet",
+        counts: { total: 1, active: 1 },
+        threads: [{ threadId: "thread-active", status: "active" }],
+      },
+    });
+    await expect(
+      tool.execute("steer-1", {
+        action: "steer",
+        thread_id: "thread-active",
+        text: "Do not deploy; hand back source proof only.",
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        mode: "native-codex-steer",
+        threadId: "thread-active",
+        turnId: "turn-active",
+      },
+    });
+    expect(appServer.requests.slice(-2)).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-active", includeTurns: true },
+      },
+      {
+        method: "turn/steer",
+        params: expect.objectContaining({
+          threadId: "thread-active",
+          expectedTurnId: "turn-active",
+        }),
+      },
+    ]);
   });
 });
