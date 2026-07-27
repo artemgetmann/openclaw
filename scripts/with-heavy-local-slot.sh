@@ -169,7 +169,8 @@ printf '%s\n' "$label" >"$lock_dir/label"
 date -u '+%Y-%m-%dT%H:%M:%SZ' >"$lock_dir/started_at"
 trap remove_owned_lock EXIT
 trap 'handle_interrupt 130' INT
-trap 'handle_interrupt 143' TERM HUP
+trap 'handle_interrupt 143' TERM
+trap 'handle_interrupt 129' HUP
 
 deny() {
   printf 'Refusing heavy work: %s\n' "$1" >&2
