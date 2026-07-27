@@ -56,6 +56,7 @@ my $expected_token = $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_LEASE_TOKEN} // "";
 my $owner_path = "$lock_path/owner";
 my $pending_path = "$lock_path/child_pending";
 my $committed_path = "$lock_path/child_committed";
+my $authorized_path = "$lock_path/child_authorized";
 my $metadata_path = "$lock_path/child_pid";
 
 sub metadata_value {
@@ -89,9 +90,22 @@ sub process_start {
 
 my $owner_pid = metadata_value($owner_path, "pid");
 my $owner_token = metadata_value($owner_path, "token");
-if ($owner_pid !~ /^[1-9][0-9]*$/ || $owner_pid != getppid() || $owner_token ne $expected_token) {
+my $owner_start = metadata_value($owner_path, "process_start");
+
+sub exact_owner_is_live {
+    return 0 if $owner_pid !~ /^[1-9][0-9]*$/;
+    return 0 if $owner_pid != getppid();
+    return 0 if $owner_token ne $expected_token;
+    return 0 if $owner_start eq "";
+    return 0 if metadata_value($owner_path, "pid") ne $owner_pid;
+    return 0 if metadata_value($owner_path, "token") ne $owner_token;
+    return 0 if metadata_value($owner_path, "process_start") ne $owner_start;
+    return process_start($owner_pid) eq $owner_start;
+}
+
+if (!exact_owner_is_live()) {
     unlink $pending_path;
-    die "heavy-local session runner is not a direct child of the recorded owner\n";
+    die "heavy-local session runner does not have the exact live recorded owner\n";
 }
 
 my $session_id = setsid();
@@ -118,10 +132,29 @@ close $metadata
     or die "could not publish guarded child metadata: $!\n";
 rename $metadata_tmp, $metadata_path
     or die "could not install guarded child metadata: $!\n";
+
+# The wrapper may receive a trapped signal after spawn but before it learns the
+# child identity. Revalidate its exact PID/start/token immediately before commit
+# so a reparented runner can never publish authority for an exited owner.
+exact_owner_is_live()
+    or die "heavy-local session runner lost its exact owner before commit\n";
 # Atomically transition from pending to committed only after the complete
 # metadata record is installed. Readers never infer commitment from absence.
 rename $pending_path, $committed_path
     or die "could not complete guarded child handshake: $!\n";
+
+# Commit alone is not permission to execute. Wait until the live exact owner has
+# validated this session and published its capability token. If the wrapper
+# exits first, getppid()/start/metadata revalidation fails and the body never
+# starts; after authorization, the wrapper already has signal authority.
+while (!-f $authorized_path) {
+    exact_owner_is_live()
+        or die "heavy-local session runner lost its exact owner before authorization\n";
+    select undef, undef, undef, 0.01;
+}
+metadata_value($authorized_path, "token") eq $expected_token
+    or die "heavy-local session runner received invalid owner authorization\n";
+exact_owner_is_live() or die "heavy-local session runner lost its exact owner before exec\n";
 
 exec {$program} $program, @ARGV;
 die "could not exec guarded command $program: $!\n";

@@ -152,7 +152,7 @@ create_instrumented_runtime() {
   # before the atomic commit transition. This makes the formerly racy state
   # deterministic without putting a fixture hook in production code.
   /usr/bin/awk '
-    $0 == "rename $pending_path, $committed_path" {
+    $0 == "exact_owner_is_live()" {
       print "if (defined $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE}) {"
       print "    my $fixture_ready = $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE};"
       print "    my $fixture_release = $ENV{OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_RELEASE_FILE} // \"\";"
@@ -479,6 +479,58 @@ test_wrapper_waits_for_explicit_handshake_commit() {
   [[ -f "$body_marker" ]] || fail "guarded body did not run after handshake commit"
   [[ ! -e "$lock_path" ]] || fail "committed handshake leaked its fixture lease"
   pass "wrapper waits for explicit metadata commit across publication race"
+}
+
+test_pending_signal_never_executes_guarded_body() {
+  local lock_path="$TMP_DIR/pending-signal.lock"
+  local health_path="$TMP_DIR/pending-signal.health"
+  local ready_path="$TMP_DIR/pending-signal.ready"
+  local release_path="$TMP_DIR/pending-signal.release"
+  local body_marker="$TMP_DIR/pending-signal.body"
+  local output="$TMP_DIR/pending-signal.out"
+  local owner_pid="" runner_pid="" wrapper_pid=0 status=0
+
+  write_healthy_samples "$health_path"
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_READY_FILE="$ready_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HANDSHAKE_RELEASE_FILE="$release_path" \
+    "$FIXTURE_WRAPPER" \
+      --label "pending-signal" \
+      -- \
+      bash -c ': >"$1"' _ "$body_marker" \
+      >"$output" 2>&1 &
+  wrapper_pid=$!
+  wait_for_file "$ready_path"
+
+  owner_pid="$(/usr/bin/sed -n 's/^pid=//p' "$lock_path/owner")"
+  runner_pid="$(/usr/bin/sed -n 's/^pid=//p' "$lock_path/child_pid")"
+  [[ "$owner_pid" == "$wrapper_pid" ]] ||
+    fail "pending signal fixture shell job is not the recorded owner"
+  [[ "$runner_pid" =~ ^[1-9][0-9]*$ ]] ||
+    fail "pending signal fixture did not publish a runner PID"
+  [[ -f "$lock_path/child_pending" && ! -e "$lock_path/child_committed" ]] ||
+    fail "pending signal fixture escaped the intended pre-commit window"
+
+  kill -TERM "$owner_pid"
+  set +e
+  wait "$wrapper_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 143 ]] || fail "pending signal wrapper returned $status instead of 143"
+
+  # Release only the disposable pause after the owner is reaped. The production
+  # owner check must then reject commit/exec and let the runner exit by itself.
+  : >"$release_path"
+  wait_for_dead_pid "$runner_pid"
+  [[ ! -e "$body_marker" ]] || fail "pending signal allowed the guarded body to run"
+  [[ ! -e "$lock_path/child_committed" ]] ||
+    fail "pending signal runner committed after losing its exact owner"
+  [[ ! -e "$lock_path/child_authorized" ]] ||
+    fail "pending signal published execution authorization"
+  grep -Fq 'lease retained because guarded process cleanup was not proven safe' "$output" ||
+    fail "pending signal did not retain the fail-closed lease"
+  pass "pending-window signal cannot leave an unsupervised guarded body"
 }
 
 test_authoritative_session_identity_ignores_macos_ps_zero() {
@@ -1575,6 +1627,7 @@ SUITE_PHASE="create_term_attribution_holder"
 create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_wrapper_waits_for_explicit_handshake_commit
+run_suite_test test_pending_signal_never_executes_guarded_body
 run_suite_test test_authoritative_session_identity_ignores_macos_ps_zero
 run_suite_test test_persistent_committed_identity_ambiguity_fails_closed
 run_suite_test test_hostile_health_environment_cannot_weaken_policy

@@ -159,6 +159,18 @@ load_committed_guarded_group_identity() {
   return 2
 }
 
+authorize_committed_guarded_child() {
+  local authorized_path="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_authorized"
+  local authorized_tmp="${authorized_path}.tmp.$$"
+
+  # The runner cannot exec until this exact owner publishes its lease token.
+  # Atomic rename prevents a signal-interrupted partial record from becoming
+  # execution authority; cleanup removes only this owner's known temp path.
+  (umask 077 && printf 'token=%s\n' "$OPENCLAW_HEAVY_LOCAL_SLOT_TOKEN" >"$authorized_tmp") ||
+    return 1
+  /bin/mv "$authorized_tmp" "$authorized_path"
+}
+
 stop_guarded_child() {
   local attempt=0
   local status=0
@@ -417,6 +429,13 @@ if [ "$committed_identity_status" -ne 0 ]; then
   kill -KILL "$child_pid" 2>/dev/null || true
   wait "$child_pid" 2>/dev/null || true
   echo "Refusing heavy work: guarded child session metadata was not published safely." >&2
+  exit 75
+fi
+if ! authorize_committed_guarded_child; then
+  child_cleanup_safe=0
+  kill -KILL "$child_pid" 2>/dev/null || true
+  wait "$child_pid" 2>/dev/null || true
+  echo "Refusing heavy work: guarded child authorization was not published safely." >&2
   exit 75
 fi
 
