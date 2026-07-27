@@ -8,6 +8,10 @@ class FakeCodexClient implements CodexRpcClient {
   closed = false;
   holdTurn = false;
   listedThreads: Array<Record<string, unknown>> = [];
+  listedThreadPages = new Map<
+    string,
+    { data: Array<Record<string, unknown>>; nextCursor?: string }
+  >();
   readStatus = "idle";
   readTurns: Array<Record<string, unknown>> = [];
   steerTurnId: string | undefined;
@@ -22,6 +26,11 @@ class FakeCodexClient implements CodexRpcClient {
       return { account: { type: "chatgpt" } } as T;
     }
     if (method === "thread/list") {
+      const cursor = typeof record.cursor === "string" ? record.cursor : "";
+      const page = this.listedThreadPages.get(cursor);
+      if (page) {
+        return { data: page.data, nextCursor: page.nextCursor ?? null } as T;
+      }
       return { data: this.listedThreads } as T;
     }
     if (method === "thread/start") {
@@ -177,6 +186,7 @@ describe("CodexThreadService", () => {
     await expect(service.fleet(50)).resolves.toEqual({
       mode: "native-codex-fleet",
       counts: { total: 2, active: 1, idle: 1, other: 0 },
+      omittedInactive: 0,
       threads: [
         {
           threadId: "thread-active",
@@ -200,8 +210,59 @@ describe("CodexThreadService", () => {
     });
     expect(client.requests.at(-1)).toEqual({
       method: "thread/list",
-      params: expect.objectContaining({ limit: 50 }),
+      params: expect.objectContaining({ limit: 100 }),
     });
+  });
+
+  it("paginates the catalog and never trims an older active thread", async () => {
+    const client = new FakeCodexClient();
+    client.listedThreadPages.set("", {
+      data: [
+        {
+          id: "thread-recent-idle",
+          status: { type: "idle" },
+          updatedAt: 200,
+        },
+      ],
+      nextCursor: "page-2",
+    });
+    client.listedThreadPages.set("page-2", {
+      data: [
+        {
+          id: "thread-older-active",
+          status: { type: "active", activeFlags: [] },
+          updatedAt: 100,
+        },
+        {
+          id: "thread-older-idle",
+          status: { type: "notLoaded" },
+          updatedAt: 50,
+        },
+      ],
+    });
+    const service = createService(client);
+
+    await expect(service.fleet(1)).resolves.toEqual({
+      mode: "native-codex-fleet",
+      counts: { total: 3, active: 1, idle: 2, other: 0 },
+      omittedInactive: 2,
+      threads: [
+        expect.objectContaining({
+          threadId: "thread-older-active",
+          status: "active",
+        }),
+      ],
+    });
+    expect(client.requests.slice(-2)).toEqual([
+      {
+        method: "thread/list",
+        params: expect.not.objectContaining({ cursor: expect.anything() }),
+      },
+      {
+        method: "thread/list",
+        params: expect.objectContaining({ cursor: "page-2" }),
+      },
+    ]);
   });
 
   it("steers only the freshly observed active turn", async () => {

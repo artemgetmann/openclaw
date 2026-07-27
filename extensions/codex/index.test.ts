@@ -210,6 +210,7 @@ describe("Codex natural-language delegation", () => {
       details: {
         mode: "native-codex-fleet",
         counts: { total: 1, active: 1 },
+        omittedInactive: 0,
         threads: [{ threadId: "thread-active", status: "active" }],
       },
     });

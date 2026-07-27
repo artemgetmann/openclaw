@@ -23,6 +23,7 @@ export type CodexFleetSnapshot = {
     idle: number;
     other: number;
   };
+  omittedInactive: number;
   threads: Array<{
     threadId: string;
     name?: string;
@@ -76,7 +77,12 @@ export class CodexThreadService {
     };
   }
 
-  async list(params: { search?: string; archived?: boolean; limit?: number }): Promise<unknown> {
+  async list(params: {
+    search?: string;
+    archived?: boolean;
+    limit?: number;
+    cursor?: string;
+  }): Promise<unknown> {
     const client = await this.client();
     return await client.request("thread/list", {
       archived: params.archived === true,
@@ -84,13 +90,37 @@ export class CodexThreadService {
       modelProviders: [],
       sortKey: "recency_at",
       sortDirection: "desc",
+      ...(params.cursor ? { cursor: params.cursor } : {}),
       ...(params.search?.trim() ? { searchTerm: params.search.trim() } : {}),
     });
   }
 
   async fleet(limit = 30): Promise<CodexFleetSnapshot> {
-    const response = asRecord(await this.list({ limit }));
-    const threads = asRecords(response.data)
+    const rosterLimit = clamp(limit, 1, 100);
+    const catalog: JsonObject[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    // Active work can be older than the first recency-sorted page. Walk the
+    // metadata-only catalog so an active lane cannot disappear merely because
+    // many newer idle threads exist. Cursor repetition fails closed instead of
+    // returning a plausible but incomplete fleet.
+    do {
+      const response = asRecord(await this.list({ limit: 100, cursor }));
+      catalog.push(...asRecords(response.data));
+      const nextCursor = readString(response.nextCursor);
+      if (!nextCursor) {
+        cursor = undefined;
+        break;
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error("Codex App Server repeated a fleet catalog cursor");
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    } while (cursor);
+
+    const allThreads = catalog
       .map((thread) => {
         const threadId = readString(thread.id);
         if (!threadId) {
@@ -107,18 +137,25 @@ export class CodexThreadService {
         };
       })
       .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
-    const active = threads.filter((thread) => thread.status === "active").length;
-    const idle = threads.filter(
+    const activeThreads = allThreads.filter((thread) => thread.status === "active");
+    const inactiveThreads = allThreads.filter((thread) => thread.status !== "active");
+    const threads = [
+      ...activeThreads,
+      ...inactiveThreads.slice(0, Math.max(0, rosterLimit - activeThreads.length)),
+    ];
+    const active = activeThreads.length;
+    const idle = allThreads.filter(
       (thread) => thread.status === "idle" || thread.status === "notLoaded",
     ).length;
     return {
       mode: "native-codex-fleet",
       counts: {
-        total: threads.length,
+        total: allThreads.length,
         active,
         idle,
-        other: threads.length - active - idle,
+        other: allThreads.length - active - idle,
       },
+      omittedInactive: allThreads.length - threads.length,
       threads,
     };
   }

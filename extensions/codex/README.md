@@ -18,6 +18,9 @@ default runtime.
 - Race-safe steering of exactly one currently active turn. The active turn id is
   re-read immediately before `turn/steer`; if the worker finishes or changes
   turns, steering fails instead of becoming queued work for a different turn.
+- Fleet inventory paginates the metadata-only catalog, always retains every
+  active thread, and reports how many inactive historical threads were omitted
+  from the compact roster.
 - One-time Telegram approval buttons for archive and unarchive, with
   sender-bound tokens and a fresh native state check before mutation.
 
