@@ -1040,6 +1040,9 @@ describe("launchd install", () => {
     expect(watchdogPlist).toContain("Jarvis Managed Gateway Watchdog");
     expect(watchdogPlist).toContain(fixture.executable);
     expect(watchdogPlist).toContain("<string>ai.jarvis.gateway</string>");
+    expect(watchdogPlist).toMatch(
+      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/,
+    );
     expect(watchdogPlist).not.toContain("Programming_Projects");
     expect(watchdogPlist).toContain(`${fixture.env.OPENCLAW_STATE_DIR}/logs/gateway-watchdog.log`);
     expect(watchdogPlist).toContain(
@@ -1194,6 +1197,25 @@ describe("launchd install", () => {
     );
     expect(watchdogIndex).toBeGreaterThanOrEqual(0);
     expect(gatewayIndex).toBeGreaterThan(watchdogIndex);
+  });
+
+  it("public Jarvis start after deliberate stop restores the companion watchdog", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+
+    await stopLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+    state.launchctlCalls.length = 0;
+
+    const result = await restartLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, fixture.plistPath]);
   });
 
   it("public Jarvis uninstall moves the companion watchdog plist to Trash", async () => {

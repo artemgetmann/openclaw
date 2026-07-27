@@ -466,6 +466,10 @@ async function installPublicJarvisWatchdogLaunchAgent(args: {
     programArguments: [executable],
     stdoutPath,
     stderrPath,
+    // A stale or invalid persisted environment is a permanent refusal, not a
+    // crash. Relaunch unexpected failures, but let the helper's clean refusal
+    // stay stopped until the canonical installer replaces this job.
+    keepAlive: "on-failure",
     environment: {
       HOME: home,
       OPENCLAW_PROFILE: "consumer",
@@ -491,6 +495,17 @@ async function installPublicJarvisWatchdogLaunchAgent(args: {
     [{ label: "Installed Jarvis Watchdog LaunchAgent", value: plistPath }],
     { leadingBlankLine: false },
   );
+}
+
+async function installGatewayWatchdogsAfterRestart(args: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  // Deliberate stop boots the public helper out first. Every completed start or
+  // restart must restore both watchdog layers so stop -> start cannot silently
+  // leave packaged Jarvis unsupervised.
+  await installSharedGatewayWatchdogLaunchAgent(args);
+  await installPublicJarvisWatchdogLaunchAgent(args);
 }
 
 async function disableAndBootoutLaunchAgentLabel(
@@ -571,6 +586,7 @@ export function buildLaunchAgentPlist({
   stdoutPath,
   stderrPath,
   environment,
+  keepAlive,
 }: {
   label?: string;
   comment?: string;
@@ -579,6 +595,7 @@ export function buildLaunchAgentPlist({
   stdoutPath: string;
   stderrPath: string;
   environment?: Record<string, string | undefined>;
+  keepAlive?: "always" | "on-failure";
 }): string {
   return buildLaunchAgentPlistImpl({
     label,
@@ -588,6 +605,7 @@ export function buildLaunchAgentPlist({
     stdoutPath,
     stderrPath,
     environment,
+    keepAlive,
   });
 }
 
@@ -1191,7 +1209,7 @@ export async function restartLaunchAgent({
   if (!(await sharedMainLaunchAgentLooksHealthy(serviceEnv))) {
     await runSharedMainLaunchAgentRecovery({ env: serviceEnv, stdout });
     writeLaunchAgentActionLine(stdout, "Recovered LaunchAgent", serviceTarget);
-    await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+    await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
     return { outcome: "completed" };
   }
 
@@ -1205,7 +1223,7 @@ export async function restartLaunchAgent({
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-    await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+    await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
     return { outcome: "completed" };
   }
 
@@ -1213,7 +1231,7 @@ export async function restartLaunchAgent({
     if (isSharedMainLaunchAgent(serviceEnv)) {
       await runSharedMainLaunchAgentRecovery({ env: serviceEnv, stdout });
       writeLaunchAgentActionLine(stdout, "Recovered LaunchAgent", serviceTarget);
-      await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+      await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
       return { outcome: "completed" };
     }
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
@@ -1232,6 +1250,6 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-  await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+  await installGatewayWatchdogsAfterRestart({ env: serviceEnv, stdout });
   return { outcome: "completed" };
 }
