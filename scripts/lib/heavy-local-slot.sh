@@ -44,12 +44,21 @@ openclaw_heavy_local_slot_owner_is_live() {
   local expected_start="$2"
   local current_start=""
 
-  # Missing identity is unknown, not stale. Callers distinguish status 2 from
-  # a proven-dead owner and refuse unsafe recovery.
-  [[ "$pid" =~ ^[0-9]+$ && -n "$expected_start" ]] || return 2
+  # The writer emits a positive decimal PID without padding. Reject zero and
+  # malformed values before kill(2), because PID 0 addresses a process group.
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 2
+
+  # Reclaim requires positive proof that the recorded PID no longer exists.
+  # A missing or mismatched start fingerprint can mean transient ps failure or
+  # PID reuse; both are ambiguous while the PID is live and must fail closed.
+  if ! kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  [[ -n "$expected_start" ]] || return 2
   current_start="$(openclaw_heavy_local_slot_process_start "$pid" || true)"
-  [[ -n "$current_start" ]] || return 1
-  [[ "$current_start" == "$expected_start" ]]
+  [[ -n "$current_start" ]] || return 2
+  [[ "$current_start" == "$expected_start" ]] || return 2
+  return 0
 }
 
 openclaw_heavy_local_slot_default_path() {
@@ -60,24 +69,8 @@ openclaw_heavy_local_slot_default_path() {
 }
 
 openclaw_heavy_local_slot_resolve_path() {
-  local override="${OPENCLAW_HEAVY_LOCAL_SLOT_TEST_LOCK_PATH:-}"
-
-  if [[ -n "$override" ]]; then
-    # The override exists only for hermetic contention tests. Requiring a
-    # second explicit test marker prevents ordinary callers from redirecting a
-    # canonical entrypoint to a private lock and silently bypassing the fleet.
-    if [[ "${OPENCLAW_HEAVY_LOCAL_SLOT_TESTING:-0}" != "1" ]]; then
-      echo "ERROR: OPENCLAW_HEAVY_LOCAL_SLOT_TEST_LOCK_PATH is test-only." >&2
-      return 1
-    fi
-    if [[ "$override" != /* || "$override" == *$'\n'* ]]; then
-      echo "ERROR: heavy-local test lock path must be absolute and single-line." >&2
-      return 1
-    fi
-    printf '%s\n' "$override"
-    return 0
-  fi
-
+  # Production has exactly one identity. Tests that need a private lock copy
+  # this helper into a disposable fixture and override the function there.
   openclaw_heavy_local_slot_default_path
 }
 

@@ -43,6 +43,9 @@ independent clones and worktrees contend for the same slot. Canonical
 build/package/release/runtime entrypoints self-acquire this lease when called
 directly. Nested entrypoints reuse it only when the wrapper's capability token
 matches live owner metadata; a caller-provided boolean cannot bypass admission.
+Stale recovery requires positive proof that the owner PID no longer exists.
+Missing metadata, unreadable process identity, or a live PID with a mismatched
+start fingerprint fails closed instead of guessing that the lease is stale.
 On macOS the wrapper refuses admission when:
 
 - another heavy command owns the slot;

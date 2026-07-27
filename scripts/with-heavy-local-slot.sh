@@ -128,24 +128,6 @@ deny() {
 
 host_health_reason() {
   local required_cpu_idle=$1
-  local test_health_file="${OPENCLAW_HEAVY_LOCAL_SLOT_TEST_HEALTH_FILE:-}"
-  local test_health_sample="" test_health_tmp=""
-
-  # Focused tests need deterministic health transitions without spoofing host
-  # binaries. Consume one line per sample only behind the explicit test marker:
-  # "healthy" means no reason; any other non-empty line is the refusal reason.
-  if [[ "${OPENCLAW_HEAVY_LOCAL_SLOT_TESTING:-0}" == "1" && -n "$test_health_file" ]]; then
-    if [[ -s "$test_health_file" ]]; then
-      test_health_sample="$(/usr/bin/head -n 1 "$test_health_file")"
-      test_health_tmp="${test_health_file}.tmp.$$"
-      /usr/bin/tail -n +2 "$test_health_file" >"$test_health_tmp"
-      /bin/mv "$test_health_tmp" "$test_health_file"
-    fi
-    if [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
-      printf '%s' "$test_health_sample"
-    fi
-    return 0
-  fi
 
   [ "$(uname -s)" = "Darwin" ] || return 0
 
