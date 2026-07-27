@@ -21,6 +21,7 @@ source "$ROOT_DIR/scripts/lib/github-release-upload-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-disk-preflight.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
@@ -1441,6 +1442,15 @@ case "$PACKAGE_PHASE" in
     exit 1
     ;;
 esac
+
+# Fleet admission is intentionally outside and before the release mutex. When
+# delegated by jarvis-public-release.sh, the wrapper-owned live token is reused;
+# a direct package command re-execs through the same machine-wide supervisor.
+openclaw_heavy_local_slot_require_or_reexec \
+  "package-openclaw-mac-dist:${PACKAGE_PHASE}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" \
+  "${ORIGINAL_PACKAGE_ARGS[@]}"
 
 trap release_package_exit EXIT
 

@@ -51,6 +51,35 @@ run_holder() {
   ' _ "$ROOT_DIR" "$ready_path" "$release_path"
 }
 
+prepare_clean_release_fixture() {
+  local release_home="$1"
+  local release_name="$2"
+  local release_root="$release_home/.worktrees/$release_name"
+
+  # Release intents bind to a clean tracked snapshot. The implementation
+  # checkout is intentionally dirty while this regression runs, so mirror its
+  # tracked diff into a disposable local clone and checkpoint that exact source
+  # before exercising the real wrapper/package delegation path.
+  git clone -q --shared "$ROOT_DIR" "$release_home"
+  mkdir -p "$release_home/.worktrees"
+  git -C "$release_home" worktree add -q "$release_root" -b "codex/$release_name"
+  git -C "$ROOT_DIR" diff --binary HEAD -- . | git -C "$release_root" apply --whitespace=nowarn -
+
+  # Before the implementation commit exists, the new helper is untracked and
+  # therefore absent from git diff. Copy that one required source file; after
+  # commit this is an idempotent overwrite of the already-cloned file.
+  cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" "$release_root/scripts/lib/heavy-local-slot.sh"
+  git -C "$release_root" add -A
+  if ! git -C "$release_root" diff --cached --quiet; then
+    git -C "$release_root" \
+      -c user.name="Jarvis Release Lock Test" \
+      -c user.email="jarvis-release-lock-test@example.invalid" \
+      commit -qm "test: checkpoint clean release fixture"
+  fi
+
+  printf '%s\n' "$release_root"
+}
+
 test_acquire_and_cleanup() {
   local lock_path="$TMP_DIR/acquire.lock"
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
@@ -476,12 +505,13 @@ test_parent_delegation_and_wrapper_contention() {
   local dry_run_out="$TMP_DIR/wrapper-dry-run.out"
   local delegated_wrapper_out="$TMP_DIR/wrapper-delegated.out"
   local delegated_wrapper_err="$TMP_DIR/wrapper-delegated.err"
-  local release_home release_name holder_pid status intent_id
+  local release_home release_name release_root holder_pid status intent_id
 
-  release_home="$(cd "$ROOT_DIR/../.." && pwd)"
-  release_name="$(basename "$ROOT_DIR")"
+  release_home="$TMP_DIR/wrapper-release-home"
+  release_name="wrapper-release-fixture"
+  release_root="$(prepare_clean_release_fixture "$release_home" "$release_name")"
   export OPENCLAW_JARVIS_RELEASE_INTENT_PATH_OVERRIDE="$TMP_DIR/wrapper.intent"
-  intent_id="$(openclaw_jarvis_release_intent_authorize "$ROOT_DIR" 3600)"
+  intent_id="$(openclaw_jarvis_release_intent_authorize "$release_root" 3600)"
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" bash -c '
     set -euo pipefail
     source "$1/scripts/lib/jarvis-release-lock.sh"
@@ -502,7 +532,7 @@ test_parent_delegation_and_wrapper_contention() {
   OPENCLAW_MAIN_HOME_CLONE="$release_home" \
   OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME="$release_name" \
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --phase full \
+    bash "$release_root/scripts/jarvis-public-release.sh" --phase full \
       --release-intent "$intent_id" \
       >"$contender_out" 2>"$contender_err"
   status=$?
@@ -518,7 +548,7 @@ test_parent_delegation_and_wrapper_contention() {
   kill -0 "$holder_pid" 2>/dev/null || fail "wrapper contention harmed the live owner"
 
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" --dry-run --phase full >"$dry_run_out"
+    bash "$release_root/scripts/jarvis-public-release.sh" --dry-run --phase full >"$dry_run_out"
   grep -q "dry_run=true" "$dry_run_out" || fail "dry-run did not remain lock-free"
 
   : >"$release_path"
@@ -530,7 +560,7 @@ test_parent_delegation_and_wrapper_contention() {
   OPENCLAW_JARVIS_RELEASE_LOCK_PATH_OVERRIDE="$lock_path" \
   OPENCLAW_JARVIS_PUBLIC_RELEASE_SUMMARY="$TMP_DIR/wrapper-delegated-summary.env" \
   OPENCLAW_JARVIS_RELEASE_TIMING_REPORT="$TMP_DIR/wrapper-delegated-timing.tsv" \
-    bash "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+    bash "$release_root/scripts/jarvis-public-release.sh" \
       --phase create-local-release-assets-only \
       --release-intent "$intent_id" \
       --github-release-tag v-current \

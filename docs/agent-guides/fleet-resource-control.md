@@ -38,8 +38,12 @@ Use the read-only preflight before assigning the slot:
 scripts/with-heavy-local-slot.sh --label "<thread-id>:preflight" --check
 ```
 
-The wrapper stores an atomic lease in Git's common directory, which is shared
-by every worktree in the clone. On macOS it refuses admission when:
+The wrapper stores an atomic lease at a stable per-user machine path, so
+independent clones and worktrees contend for the same slot. Canonical
+build/package/release/runtime entrypoints self-acquire this lease when called
+directly. Nested entrypoints reuse it only when the wrapper's capability token
+matches live owner metadata; a caller-provided boolean cannot bypass admission.
+On macOS the wrapper refuses admission when:
 
 - another heavy command owns the slot;
 - system memory headroom is below 25%;
@@ -54,6 +58,14 @@ before VNC, Tailscale, or Jarvis can remain starved for minutes. The slot is
 released when the command exits. Exit code `75` means "temporarily unavailable"
 or "stopped to protect host health"; wait for recovery instead of bypassing the
 guard.
+
+Read-only `--help`, release `--dry-run`, and release `--authorize` paths remain
+outside the expensive slot where their entrypoint contract guarantees that
+they do not build, package, deploy, restart, or publish. Executed release lanes
+always acquire locks in this order:
+
+1. machine-wide heavy-local slot;
+2. canonical Jarvis release lock.
 
 ## Resume sequence after an incident
 

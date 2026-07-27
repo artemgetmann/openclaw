@@ -2,8 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 
+ORIGINAL_ARGS=("$@")
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 REPLACE=1
 PARALLEL=0
@@ -53,6 +56,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Hold one lease across both app packaging and the runtime relaunch. The nested
+# package entrypoints validate the same live token instead of reacquiring.
+openclaw_heavy_local_slot_require_or_reexec \
+  "rebuild-relaunch-consumer-mac-app:${INSTANCE_ID:-auto}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/rebuild-relaunch-consumer-mac-app.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 EFFECTIVE_INSTANCE_ID="$INSTANCE_ID"
 if [[ -z "$EFFECTIVE_INSTANCE_ID" ]]; then

@@ -2,15 +2,19 @@
 
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+
 usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/with-heavy-local-slot.sh --label <owner> --check
   scripts/with-heavy-local-slot.sh --label <owner> -- <command> [args...]
 
-Serializes CPU- or memory-intensive local work across all worktrees in this
-clone. On macOS it also refuses to start when memory, CPU headroom, Tailscale,
-or the managed Jarvis gateway are unhealthy.
+Serializes CPU- or memory-intensive local work across all worktrees and clones
+owned by this user. On macOS it also refuses to start when memory, CPU
+headroom, Tailscale, or the managed Jarvis gateway are unhealthy.
 EOF
   exit 2
 }
@@ -47,32 +51,9 @@ if [ "$check_only" = true ] && [ "$#" -ne 0 ]; then
   usage
 fi
 
-# The Git common directory is shared by every worktree belonging to this clone,
-# so one atomic directory lock protects the whole local fleet rather than only
-# the current checkout.
-git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || {
-  printf 'Refusing heavy work: not inside a Git checkout.\n' >&2
-  exit 1
-}
-lock_dir="$git_common_dir/openclaw-heavy-local.lock"
-owner_token="$$-$(date +%s)-${RANDOM:-0}"
 child_pid=''
 monitor_pid=''
-health_stop_file="$lock_dir/health_stop_reason"
-
-remove_owned_lock() {
-  # A late trap from an old owner must never delete a newer owner's lock.
-  if [ -f "$lock_dir/token" ] && [ "$(cat "$lock_dir/token" 2>/dev/null || true)" = "$owner_token" ]; then
-    rm -f \
-      "$lock_dir/pid" \
-      "$lock_dir/child_pid" \
-      "$health_stop_file" \
-      "$lock_dir/label" \
-      "$lock_dir/token" \
-      "$lock_dir/started_at"
-    rmdir "$lock_dir" 2>/dev/null || true
-  fi
-}
+health_stop_file=''
 
 signal_descendants() {
   local parent_pid=$1
@@ -115,6 +96,11 @@ stop_health_monitor() {
   wait "$monitor_pid" 2>/dev/null || true
 }
 
+cleanup_wrapper() {
+  stop_health_monitor
+  openclaw_heavy_local_slot_release
+}
+
 handle_interrupt() {
   local status=$1
   stop_health_monitor
@@ -122,55 +108,18 @@ handle_interrupt() {
   exit "$status"
 }
 
-clear_stale_lock() {
-  [ -d "$lock_dir" ] || return 0
-
-  local existing_pid existing_token
-  existing_pid=$(cat "$lock_dir/pid" 2>/dev/null || true)
-  existing_token=$(cat "$lock_dir/token" 2>/dev/null || true)
-
-  # A live PID owns the lease. Missing or non-numeric metadata is treated as
-  # unsafe instead of guessed away because two heavy jobs are worse than a
-  # briefly stuck queue.
-  if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
-    return 1
-  fi
-  if [ -z "$existing_token" ]; then
-    return 1
-  fi
-
-  # Re-read the token before cleanup so a concurrent owner cannot be removed
-  # after replacing a stale lease.
-  [ "$(cat "$lock_dir/token" 2>/dev/null || true)" = "$existing_token" ] || return 1
-  rm -f \
-    "$lock_dir/pid" \
-    "$lock_dir/child_pid" \
-    "$health_stop_file" \
-    "$lock_dir/label" \
-    "$lock_dir/token" \
-    "$lock_dir/started_at"
-  rmdir "$lock_dir" 2>/dev/null
-}
-
-if ! mkdir "$lock_dir" 2>/dev/null; then
-  if clear_stale_lock && mkdir "$lock_dir" 2>/dev/null; then
-    :
-  else
-    current_label=$(cat "$lock_dir/label" 2>/dev/null || printf 'unknown')
-    current_pid=$(cat "$lock_dir/pid" 2>/dev/null || printf 'unknown')
-    printf 'Refusing heavy work: slot held by "%s" (PID %s).\n' "$current_label" "$current_pid" >&2
-    exit 75
-  fi
-fi
-
-printf '%s\n' "$owner_token" >"$lock_dir/token"
-printf '%s\n' "$$" >"$lock_dir/pid"
-printf '%s\n' "$label" >"$lock_dir/label"
-date -u '+%Y-%m-%dT%H:%M:%SZ' >"$lock_dir/started_at"
-trap remove_owned_lock EXIT
+trap cleanup_wrapper EXIT
 trap 'handle_interrupt 130' INT
 trap 'handle_interrupt 143' TERM
 trap 'handle_interrupt 129' HUP
+
+if openclaw_heavy_local_slot_acquire "$label"; then
+  :
+else
+  acquire_status=$?
+  exit "$acquire_status"
+fi
+health_stop_file="$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/health_stop_reason"
 
 deny() {
   printf 'Refusing heavy work: %s\n' "$1" >&2
@@ -179,6 +128,24 @@ deny() {
 
 host_health_reason() {
   local required_cpu_idle=$1
+  local test_health_file="${OPENCLAW_HEAVY_LOCAL_SLOT_TEST_HEALTH_FILE:-}"
+  local test_health_sample="" test_health_tmp=""
+
+  # Focused tests need deterministic health transitions without spoofing host
+  # binaries. Consume one line per sample only behind the explicit test marker:
+  # "healthy" means no reason; any other non-empty line is the refusal reason.
+  if [[ "${OPENCLAW_HEAVY_LOCAL_SLOT_TESTING:-0}" == "1" && -n "$test_health_file" ]]; then
+    if [[ -s "$test_health_file" ]]; then
+      test_health_sample="$(/usr/bin/head -n 1 "$test_health_file")"
+      test_health_tmp="${test_health_file}.tmp.$$"
+      /usr/bin/tail -n +2 "$test_health_file" >"$test_health_tmp"
+      /bin/mv "$test_health_tmp" "$test_health_file"
+    fi
+    if [[ -n "$test_health_sample" && "$test_health_sample" != "healthy" ]]; then
+      printf '%s' "$test_health_sample"
+    fi
+    return 0
+  fi
 
   [ "$(uname -s)" = "Darwin" ] || return 0
 
@@ -251,7 +218,7 @@ else
   nice -n 15 "$@" &
 fi
 child_pid=$!
-printf '%s\n' "$child_pid" >"$lock_dir/child_pid"
+printf '%s\n' "$child_pid" >"$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pid"
 
 runtime_min_cpu_idle=${OPENCLAW_FLEET_RUNTIME_MIN_CPU_IDLE_PERCENT:-20}
 monitor_interval=${OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS:-15}

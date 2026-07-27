@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_NAME="ship-jarvis-hotfix"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "${ROOT_DIR}/scripts/lib/heavy-local-slot.sh"
 # shellcheck source=scripts/lib/jarvis-release-lock.sh
 source "${ROOT_DIR}/scripts/lib/jarvis-release-lock.sh"
 # shellcheck source=scripts/lib/jarvis-release-disk-preflight.sh
@@ -793,6 +795,16 @@ prove_break_glass_runtime() {
 main() {
   trap transaction_exit_guard EXIT
   parse_args "$@"
+  if (( DRY_RUN != 1 )); then
+    # Fleet admission must wrap the entire live hotfix transaction and precede
+    # the narrower release/runtime mutex acquired below. Dry-run remains a
+    # read-only planning surface and does not consume the machine-wide slot.
+    openclaw_heavy_local_slot_require_or_reexec \
+      "ship-jarvis-hotfix:pr-${PR_NUMBER}" \
+      "$ROOT_DIR" \
+      "$ROOT_DIR/scripts/ship-jarvis-hotfix.sh" \
+      "$@"
+  fi
   require_preflight_tools
   assert_clean_sacred_main
 

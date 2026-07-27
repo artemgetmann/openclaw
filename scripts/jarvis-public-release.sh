@@ -16,6 +16,7 @@ GITHUB_RELEASE_REPO="artemgetmann/openclaw"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-orchestration.sh"
 source "$ROOT_DIR/scripts/lib/macos-release-gates.sh"
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-intent.sh"
 source "$ROOT_DIR/scripts/lib/jarvis-release-checkpoint.sh"
@@ -544,6 +545,17 @@ fi
 if [[ "$RELEASE_INTENT_TTL_EXPLICIT" == "1" ]]; then
   echo "ERROR: --intent-ttl-seconds is valid only with standalone --authorize." >&2
   exit 1
+fi
+
+if [[ "$DRY_RUN" != "1" ]]; then
+  # Authorization and dry-run intentionally remain lightweight. Executed
+  # release orchestration acquires the fleet lease before intent/state work and
+  # before the release lock, making the global order fleet -> release.
+  openclaw_heavy_local_slot_require_or_reexec \
+    "jarvis-public-release:${FORCED_PHASE}" \
+    "$ROOT_DIR" \
+    "$ROOT_DIR/scripts/jarvis-public-release.sh" \
+    "${ORIGINAL_WRAPPER_ARGS[@]}"
 fi
 
 # Recompute action binding from parsed values before any lock, report, release
