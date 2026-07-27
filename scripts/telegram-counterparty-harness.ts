@@ -34,6 +34,9 @@ export type CounterpartyProtocol = {
     nonmatch: string;
     operationalRequest: string;
     operationalReply: string;
+    operationalRecheckRequest: string;
+    operationalRecheckReplayRequest: string;
+    operationalRecheckReply: string;
     paymentApproval: string;
     paymentApprovedReply: string;
     completion: string;
@@ -66,6 +69,15 @@ export function createCounterpartyProtocol(runId: string): CounterpartyProtocol 
         `${runId} OPERATIONAL_DETAIL_REQUEST target=Monas_Jakarta request=location_and_map ` +
         `reply_exact=${operationalReply}`,
       operationalReply,
+      operationalRecheckRequest:
+        `${runId} OPERATIONAL_DETAIL_RECHECK target=Monas_Jakarta request=location_and_map ` +
+        `attempt=POST_FIX reply_exact=${operationalReply}`,
+      operationalRecheckReplayRequest:
+        `${runId} OPERATIONAL_DETAIL_RECHECK target=Monas_Jakarta request=location_and_map ` +
+        `attempt=POST_FIX_REPLAY reply_exact=${operationalReply}`,
+      // The durable goal contract already names this exact operational reply.
+      // A recheck must exercise delivery timing without changing that contract.
+      operationalRecheckReply: operationalReply,
       paymentApproval:
         `${runId} APPROVAL_REQUIRED event=SYNTHETIC_SECURITY_DEPOSIT amount=IDR_100000 ` +
         `recipient=DEMO_VENDOR real_funds=false reply_exact=${paymentApprovedReply}`,
@@ -95,6 +107,10 @@ export type CounterpartyCommand =
   | "assert-nonmatch-silence"
   | "emit-operational-detail-request"
   | "wait-operational-detail-reply"
+  | "emit-operational-detail-recheck"
+  | "record-operational-recheck-mismatch-evidence"
+  | "replay-operational-detail-recheck-after-mismatch"
+  | "wait-operational-detail-recheck-reply"
   | "emit-payment-approval"
   | "assert-payment-approval-silence"
   | "record-founder-approval"
@@ -114,6 +130,11 @@ export type CounterpartyStage =
   | "operational_sending"
   | "operational_sent"
   | "operational_replied"
+  | "operational_recheck_sending"
+  | "operational_recheck_sent"
+  | "operational_recheck_replay_sending"
+  | "operational_recheck_replay_sent"
+  | "operational_recheck_replied"
   | "payment_approval_sending"
   | "payment_approval_sent"
   | "payment_approval_silent"
@@ -133,6 +154,8 @@ export type CounterpartyHarnessState = {
   lastUpdateId: number | null;
   founderApprovalReceipt: string | null;
   founderApprovedAtUnixSeconds: number | null;
+  failureContext: "operational" | "operational_recheck" | "payment" | null;
+  recoveryReceipt: string | null;
 };
 
 type TelegramApiEnvelope<T> = {
@@ -272,6 +295,8 @@ function newState(context: HarnessContext): CounterpartyHarnessState {
     lastUpdateId: null,
     founderApprovalReceipt: null,
     founderApprovedAtUnixSeconds: null,
+    failureContext: null,
+    recoveryReceipt: null,
   };
 }
 
@@ -290,6 +315,11 @@ function isValidStage(value: unknown): value is CounterpartyStage {
       "operational_sending",
       "operational_sent",
       "operational_replied",
+      "operational_recheck_sending",
+      "operational_recheck_sent",
+      "operational_recheck_replay_sending",
+      "operational_recheck_replay_sent",
+      "operational_recheck_replied",
       "payment_approval_sending",
       "payment_approval_sent",
       "payment_approval_silent",
@@ -322,7 +352,15 @@ async function loadState(context: HarnessContext): Promise<CounterpartyHarnessSt
           parsed.founderApprovalReceipt.length > 300)) ||
       (parsed.founderApprovedAtUnixSeconds !== null &&
         (!Number.isSafeInteger(parsed.founderApprovedAtUnixSeconds) ||
-          Number(parsed.founderApprovedAtUnixSeconds) < 0))
+          Number(parsed.founderApprovedAtUnixSeconds) < 0)) ||
+      (parsed.failureContext !== undefined &&
+        parsed.failureContext !== null &&
+        !["operational", "operational_recheck", "payment"].includes(parsed.failureContext)) ||
+      (parsed.recoveryReceipt !== undefined &&
+        parsed.recoveryReceipt !== null &&
+        (typeof parsed.recoveryReceipt !== "string" ||
+          !parsed.recoveryReceipt.startsWith(`${context.scenarioId}:`) ||
+          parsed.recoveryReceipt.length > 300))
     ) {
       throw new Error("Counterparty harness state is malformed or belongs to another owner.");
     }
@@ -334,6 +372,8 @@ async function loadState(context: HarnessContext): Promise<CounterpartyHarnessSt
       lastUpdateId: parsed.lastUpdateId ?? null,
       founderApprovalReceipt: parsed.founderApprovalReceipt ?? null,
       founderApprovedAtUnixSeconds: parsed.founderApprovedAtUnixSeconds ?? null,
+      failureContext: parsed.failureContext ?? null,
+      recoveryReceipt: parsed.recoveryReceipt ?? null,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -572,6 +612,7 @@ async function pollForArtem(params: {
   silence: boolean;
   waitMs: number;
   notBeforeUnixSeconds?: number;
+  failureContext?: NonNullable<CounterpartyHarnessState["failureContext"]>;
 }): Promise<void> {
   const deadline = Date.now() + Math.max(0, params.waitMs);
   let firstAttempt = true;
@@ -613,6 +654,7 @@ async function pollForArtem(params: {
       }
       if (message.text !== params.expectedText) {
         params.state.stage = "reply_mismatched";
+        params.state.failureContext = params.failureContext ?? null;
         await saveState(params.context, params.state);
         throw new CounterpartyManualRecoveryError(
           `Received unexpected Artem reply text; expected ${
@@ -654,6 +696,7 @@ async function waitTransition(params: {
   silence: boolean;
   waitMs: number;
   notBeforeUnixSeconds?: number;
+  failureContext?: NonNullable<CounterpartyHarnessState["failureContext"]>;
 }): Promise<CounterpartyHarnessState> {
   if (params.state.stage === params.next) {
     return params.state;
@@ -736,6 +779,64 @@ async function runLockedCommand(params: {
         expected: "operational_sent",
         next: "operational_replied",
         expectedText: params.context.protocol.text.operationalReply,
+        failureContext: "operational",
+        silence: false,
+        waitMs: params.waitMs,
+      });
+    case "emit-operational-detail-recheck":
+      return sendTransition({
+        context: params.context,
+        state,
+        expected: "operational_replied",
+        sending: "operational_recheck_sending",
+        sent: "operational_recheck_sent",
+        text: params.context.protocol.text.operationalRecheckRequest,
+      });
+    case "record-operational-recheck-mismatch-evidence": {
+      if (state.failureContext === "operational_recheck" && state.recoveryReceipt) {
+        return state;
+      }
+      expectStage(state, "reply_mismatched");
+      const receipt = required(params.context.env, "OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT");
+      const prefix = `${params.context.scenarioId}:operational-recheck-mismatch:`;
+      if (!receipt.startsWith(prefix) || receipt.length > 300) {
+        throw new Error(
+          `The recovery receipt must start with ${prefix} and be at most 300 characters.`,
+        );
+      }
+      // Older v2 states did not record which wait mismatched. Require a durable
+      // operator evidence receipt before authorizing a fresh corrected replay.
+      state.failureContext = "operational_recheck";
+      state.recoveryReceipt = receipt;
+      await saveState(params.context, state);
+      return state;
+    }
+    case "replay-operational-detail-recheck-after-mismatch":
+      // A mismatch is never rewritten into success. This explicit recovery
+      // emits a new event with a corrected literal contract and its own
+      // idempotent sending states, preserving the failed attempt as evidence.
+      if (state.failureContext !== "operational_recheck" || !state.recoveryReceipt) {
+        throw new Error("Operational recheck replay requires a durable mismatch-evidence receipt.");
+      }
+      return sendTransition({
+        context: params.context,
+        state,
+        expected: "reply_mismatched",
+        sending: "operational_recheck_replay_sending",
+        sent: "operational_recheck_replay_sent",
+        text: params.context.protocol.text.operationalRecheckReplayRequest,
+      });
+    case "wait-operational-detail-recheck-reply":
+      return waitTransition({
+        context: params.context,
+        state,
+        expected:
+          state.stage === "operational_recheck_replay_sent"
+            ? "operational_recheck_replay_sent"
+            : "operational_recheck_sent",
+        next: "operational_recheck_replied",
+        expectedText: params.context.protocol.text.operationalRecheckReply,
+        failureContext: "operational_recheck",
         silence: false,
         waitMs: params.waitMs,
       });
@@ -743,7 +844,9 @@ async function runLockedCommand(params: {
       return sendTransition({
         context: params.context,
         state,
-        expected: "operational_replied",
+        // Older deterministic runs can proceed directly, while fresh
+        // post-fix runs insert the event-driven operational recheck.
+        expected: ["operational_replied", "operational_recheck_replied"],
         sending: "payment_approval_sending",
         sent: "payment_approval_sent",
         text: params.context.protocol.text.paymentApproval,
@@ -790,6 +893,7 @@ async function runLockedCommand(params: {
         expected: "payment_founder_approved",
         next: "payment_approved",
         expectedText: params.context.protocol.text.paymentApprovedReply,
+        failureContext: "payment",
         silence: false,
         waitMs: params.waitMs,
         notBeforeUnixSeconds: state.founderApprovedAtUnixSeconds,
@@ -865,6 +969,10 @@ function parseCommand(value: string | undefined): CounterpartyCommand {
     "assert-nonmatch-silence",
     "emit-operational-detail-request",
     "wait-operational-detail-reply",
+    "emit-operational-detail-recheck",
+    "record-operational-recheck-mismatch-evidence",
+    "replay-operational-detail-recheck-after-mismatch",
+    "wait-operational-detail-recheck-reply",
     "emit-payment-approval",
     "assert-payment-approval-silence",
     "record-founder-approval",

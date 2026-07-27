@@ -412,8 +412,9 @@ describe("deterministic Telegram counterparty harness", () => {
         [{ update_id: 1 }],
         [],
         [artemUpdate(2, protocol.text.operationalReply)],
+        [artemUpdate(3, protocol.text.operationalRecheckReply)],
         [],
-        [artemUpdate(3, protocol.text.paymentApprovedReply)],
+        [artemUpdate(4, protocol.text.paymentApprovedReply)],
       ],
     });
 
@@ -429,6 +430,15 @@ describe("deterministic Telegram counterparty harness", () => {
       fetchImpl: api.fetchImpl,
     });
     await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-recheck", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-recheck-reply", {
       env,
       fetchImpl: api.fetchImpl,
       waitMs: 0,
@@ -475,6 +485,7 @@ describe("deterministic Telegram counterparty harness", () => {
     expect(sent).toEqual([
       { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.nonmatch },
       { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.operationalRequest },
+      { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.operationalRecheckRequest },
       { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.paymentApproval },
       { chat_id: COUNTERPARTY_ARTEM_USER_ID, text: protocol.text.completion },
     ]);
@@ -486,8 +497,76 @@ describe("deterministic Telegram counterparty harness", () => {
     expect(persisted).toMatchObject({
       version: 2,
       stage: "completion_sent",
-      lastUpdateId: 3,
+      lastUpdateId: 4,
       founderApprovalReceipt: `${protocol.scenarioId}:test-founder-approval`,
+    });
+  });
+
+  it("requires durable evidence before replaying a corrected operational recheck", async () => {
+    const env = await ownedEnvironment();
+    const api = fakeBotApi({
+      updateBatches: [
+        [],
+        [],
+        [artemUpdate(2, protocol.text.operationalReply)],
+        [artemUpdate(3, "wrong recheck reply")],
+        [artemUpdate(4, protocol.text.operationalRecheckReply)],
+      ],
+    });
+
+    await runCounterpartyHarness("preflight", { env, fetchImpl: api.fetchImpl, waitMs: 0 });
+    await runCounterpartyHarness("emit-nonmatch", { env, fetchImpl: api.fetchImpl });
+    await runCounterpartyHarness("assert-nonmatch-silence", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-request", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("wait-operational-detail-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+    await runCounterpartyHarness("emit-operational-detail-recheck", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await expect(
+      runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+        env,
+        fetchImpl: api.fetchImpl,
+        waitMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(CounterpartyManualRecoveryError);
+    await expect(
+      runCounterpartyHarness("replay-operational-detail-recheck-after-mismatch", {
+        env,
+        fetchImpl: api.fetchImpl,
+      }),
+    ).rejects.toThrow(/durable mismatch-evidence receipt/);
+
+    env.OPENCLAW_COUNTERPARTY_RECOVERY_RECEIPT = `${protocol.scenarioId}:operational-recheck-mismatch:telegram-message-3`;
+    await runCounterpartyHarness("record-operational-recheck-mismatch-evidence", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    await runCounterpartyHarness("replay-operational-detail-recheck-after-mismatch", {
+      env,
+      fetchImpl: api.fetchImpl,
+    });
+    const recovered = await runCounterpartyHarness("wait-operational-detail-recheck-reply", {
+      env,
+      fetchImpl: api.fetchImpl,
+      waitMs: 0,
+    });
+
+    expect(recovered).toMatchObject({
+      stage: "operational_recheck_replied",
+      failureContext: "operational_recheck",
+      recoveryReceipt: `${protocol.scenarioId}:operational-recheck-mismatch:telegram-message-3`,
     });
   });
 
