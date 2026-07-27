@@ -61,6 +61,7 @@ final class GatewayProcessManager {
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
     private var launchAgentReconciliationTask: Task<Void, Never>?
+    private var externalWatchdogNotificationHandled = false
     /// A cancelled loop can finish after local mode has already started a replacement.
     /// The generation prevents that stale loop from clearing the replacement task handle.
     private var launchAgentReconciliationGeneration: UInt = 0
@@ -136,6 +137,7 @@ final class GatewayProcessManager {
         self.refreshEnvironmentStatus()
         if active {
             self.startLaunchAgentReconciliationIfNeeded()
+            Task { await self.reconcileExternalWatchdogIncidentReceipt() }
             self.startIfNeeded()
         } else {
             self.stop()
@@ -399,6 +401,7 @@ final class GatewayProcessManager {
         // A loaded service is normally a no-op. If an incident is already visible,
         // one live probe lets a launchd-owned recovery clear it without user action.
         if firstLoadedState == true {
+            await self.reconcileExternalWatchdogIncidentReceipt()
             if self.recoveryIncidentTracker.isIncidentActive {
                 await self.clearRecoveryIncidentIfSingleHealthProbeSucceeds()
             }
@@ -815,6 +818,34 @@ final class GatewayProcessManager {
         } catch {
             // Keep the existing incident. The next reconciliation tick or the
             // explicit restart action can prove recovery; neither may re-notify.
+        }
+    }
+
+    private struct ExternalWatchdogIncidentReceipt: Decodable {
+        let active: Bool
+        /// Optional keeps the app compatible with an older or partially-written
+        /// receipt; absence means the app should own fallback delivery.
+        let notificationDelivered: Bool?
+    }
+
+    private func reconcileExternalWatchdogIncidentReceipt() async {
+        guard AppFlavor.current.isConsumer, ConsumerInstance.current.isDefault else {
+            return
+        }
+        guard let data = FileManager().contents(atPath: ConsumerRuntime.gatewayWatchdogIncidentURL.path),
+              let receipt = try? JSONDecoder().decode(ExternalWatchdogIncidentReceipt.self, from: data),
+              receipt.active
+        else {
+            self.externalWatchdogNotificationHandled = false
+            return
+        }
+
+        self.recoveryIncidentTracker.recordExternallyNotifiedUnavailable()
+        self.updateVisibleRecoveryIncident()
+        if receipt.notificationDelivered != true, !self.externalWatchdogNotificationHandled {
+            self.externalWatchdogNotificationHandled = true
+            let incident = GatewayRecoveryIncident.offline(appName: AppFlavor.current.appName)
+            await self.recoveryNotificationSender(incident)
         }
     }
 

@@ -871,11 +871,43 @@ extension GatewayLaunchAgentManager {
         // The app and gateway intentionally use different launchd labels, and the explicit
         // env keeps status/install/restart commands from drifting across authorities.
         env["OPENCLAW_LAUNCHD_LABEL"] = identity.gatewayLaunchdLabel
+        // Never trust an ambient shell value for a launchd mutation path.
+        env.removeValue(forKey: "OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE")
+        if identity.gatewayLaunchdLabel == "ai.jarvis.gateway",
+           ConsumerInstance.current.isDefault,
+           let watchdogPath = self.packagedGatewayWatchdogExecutablePath(bundleURL: Bundle.main.bundleURL)
+        {
+            // The external helper is shipped and signed inside the same app.
+            // Named tester instances never receive this path, so their daemon
+            // installs cannot accidentally create the production watchdog.
+            env["OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE"] = watchdogPath
+        }
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint
         }
         ConsumerRuntime.applyInheritedToolIsolationEnvironment(to: &env, base: base)
         return env
+    }
+
+    static func packagedGatewayWatchdogExecutablePath(
+        bundleURL: URL,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> String?
+    {
+        let bundle = bundleURL.standardizedFileURL
+        guard bundle.lastPathComponent == "Jarvis.app" else { return nil }
+        let bundlePath = bundle.path
+        guard !bundlePath.contains("/Programming_Projects/"),
+              !bundlePath.contains("/.codex/worktrees/"),
+              !bundlePath.contains("/.worktrees/")
+        else {
+            // Hotfix and developer builds may contain the binary, but cannot
+            // become durable production launchd ownership from a source tree.
+            return nil
+        }
+        let executable = bundle
+            .appendingPathComponent("Contents/MacOS/JarvisGatewayWatchdog")
+            .path
+        return isExecutable(executable) ? executable : nil
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {

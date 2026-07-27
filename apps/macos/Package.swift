@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "OpenClawDiscovery", targets: ["OpenClawDiscovery"]),
         .executable(name: "OpenClaw", targets: ["OpenClaw"]),
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
+        .executable(name: "JarvisGatewayWatchdog", targets: ["JarvisGatewayWatchdog"]),
     ],
     dependencies: [
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
@@ -77,12 +78,20 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
+        .executableTarget(
+            name: "JarvisGatewayWatchdog",
+            dependencies: [],
+            path: "Sources/JarvisGatewayWatchdog",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
         .testTarget(
             name: "OpenClawIPCTests",
             dependencies: [
                 "OpenClawIPC",
                 "OpenClaw",
                 "OpenClawDiscovery",
+                "JarvisGatewayWatchdog",
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
             ],

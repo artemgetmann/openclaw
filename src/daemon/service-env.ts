@@ -358,6 +358,10 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: serviceVersion,
     OPENCLAW_SERVICE_BUILD: serviceBuild,
+    // Packaged Jarvis alone supplies this signed native helper. Persist the
+    // absolute app-bundle path so later gateway-owned restarts can refresh the
+    // companion LaunchAgent without resolving through a source checkout.
+    OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE: env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE,
     // launchd/systemd/schtasks already supervise the gateway process. Letting
     // the CLI entrypoint respawn itself inside that service leaves launchd
     // tracking a short-lived parent while the real listener survives as an

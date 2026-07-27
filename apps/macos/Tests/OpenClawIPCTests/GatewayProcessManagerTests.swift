@@ -197,6 +197,33 @@ extension GatewayLaunchAgentManagerTests {
         #expect(nextIncidentShouldNotify)
     }
 
+    @Test func `external watchdog receipt activates card without duplicate notification`() {
+        var tracker = GatewayRecoveryIncidentTracker()
+
+        tracker.recordExternallyNotifiedUnavailable()
+
+        #expect(tracker.isIncidentActive)
+        let shouldNotifyAgain = tracker.recordUnavailable()
+        #expect(!shouldNotifyAgain)
+        tracker.recordHealthy()
+        #expect(!tracker.isIncidentActive)
+    }
+
+    @Test func `packaged watchdog path accepts installed Jarvis and rejects source builds`() {
+        let installed = URL(fileURLWithPath: "/Applications/Jarvis.app", isDirectory: true)
+        let source = URL(
+            fileURLWithPath: "/Users/test/Programming_Projects/openclaw/dist/Jarvis.app",
+            isDirectory: true)
+
+        #expect(GatewayLaunchAgentManager.packagedGatewayWatchdogExecutablePath(
+            bundleURL: installed,
+            isExecutable: { _ in true }) ==
+            "/Applications/Jarvis.app/Contents/MacOS/JarvisGatewayWatchdog")
+        #expect(GatewayLaunchAgentManager.packagedGatewayWatchdogExecutablePath(
+            bundleURL: source,
+            isExecutable: { _ in true }) == nil)
+    }
+
     @Test func `unverifiable service state does not alarm while health RPC works`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)

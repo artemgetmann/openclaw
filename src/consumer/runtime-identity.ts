@@ -12,6 +12,7 @@ export const CONSUMER_LOG_DIR_NAME = "logs" as const;
 export const CONSUMER_PROFILE_PREFIX = "consumer" as const;
 export const CONSUMER_LAUNCHD_LABEL_PREFIX = "ai.openclaw.consumer" as const;
 export const PUBLIC_JARVIS_GATEWAY_LAUNCHD_LABEL = "ai.jarvis.gateway" as const;
+export const PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL = "ai.jarvis.gateway-watchdog" as const;
 export const CONSUMER_GATEWAY_BIND = "loopback" as const;
 export const CANONICAL_GATEWAY_PORT = 18789 as const;
 export const CONSUMER_GATEWAY_PORT_MIN = 20000 as const;

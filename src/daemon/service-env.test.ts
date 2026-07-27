@@ -318,6 +318,20 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_SERVICE_BUILD).toBe("2026052201");
   });
 
+  it("preserves the packaged Jarvis watchdog helper path for later managed restarts", () => {
+    const helper = "/Applications/Jarvis.app/Contents/MacOS/JarvisGatewayWatchdog";
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE: helper,
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_JARVIS_GATEWAY_WATCHDOG_EXECUTABLE).toBe(helper);
+  });
+
   it("omits service build when caller does not provide one", () => {
     const env = buildServiceEnvironment({
       env: {

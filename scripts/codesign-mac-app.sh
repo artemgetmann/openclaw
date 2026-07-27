@@ -307,8 +307,13 @@ verify_team_ids() {
   fi
 }
 
-# Sign main binary
+# Sign sibling helpers before the main executable. codesign recognizes the
+# executable's containing app bundle and rejects unsigned nested code.
 main_binary_started_ms="$(phase_now_ms)"
+if [ -f "$APP_BUNDLE/Contents/MacOS/JarvisGatewayWatchdog" ]; then
+  echo "Signing Jarvis gateway watchdog"
+  sign_plain_item "$APP_BUNDLE/Contents/MacOS/JarvisGatewayWatchdog"
+fi
 if [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
   echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"
 fi

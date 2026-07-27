@@ -23,6 +23,7 @@ APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_ROOT="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
+WATCHDOG_PRODUCT="JarvisGatewayWatchdog"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
 APP_INSTANCE_ID="${APP_INSTANCE_ID:-}"
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
@@ -524,6 +525,10 @@ build_path_for_arch() {
 
 bin_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
+}
+
+watchdog_bin_for_arch() {
+  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$WATCHDOG_PRODUCT"
 }
 
 sparkle_framework_for_arch() {
@@ -1587,6 +1592,9 @@ swift_build_started_ms="$(phase_now_ms)"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  # The watchdog is a separate native process so a frozen Node event loop or
+  # terminated Jarvis UI process cannot freeze the observer with it.
+  swift build -c "$BUILD_CONFIG" --product "$WATCHDOG_PRODUCT" --build-path "$BUILD_PATH" --arch "$arch"
 done
 phase_log_elapsed "$swift_build_started_ms" "Swift app build"
 
@@ -1663,6 +1671,21 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+
+echo "🚑 Copying managed Jarvis gateway watchdog"
+WATCHDOG_BIN_PRIMARY="$(watchdog_bin_for_arch "$PRIMARY_ARCH")"
+cp "$WATCHDOG_BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/JarvisGatewayWatchdog"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  WATCHDOG_BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    WATCHDOG_BIN_INPUTS+=("$(watchdog_bin_for_arch "$arch")")
+  done
+  WATCHDOG_LIPO_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/jarvis-watchdog-bin.XXXXXX")"
+  /usr/bin/lipo -create "${WATCHDOG_BIN_INPUTS[@]}" -output "$WATCHDOG_LIPO_OUTPUT"
+  mv "$WATCHDOG_LIPO_OUTPUT" "$APP_ROOT/Contents/MacOS/JarvisGatewayWatchdog"
+fi
+chmod +x "$APP_ROOT/Contents/MacOS/JarvisGatewayWatchdog"
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/JarvisGatewayWatchdog" 2>/dev/null || true
 
 if [[ -n "$CLI_ARCHIVE_STAGED" && -f "$CLI_ARCHIVE_STAGED" ]]; then
   cp "$CLI_ARCHIVE_STAGED" "$APP_ROOT/Contents/Resources/$BUNDLED_CLI_ARCHIVE_NAME"
