@@ -153,6 +153,18 @@ enum JarvisGatewayWatchdogMain {
                 ManagedGatewayRecoveryNotification.clear()
                 self.log("healthy-incident-cleared")
             case let .recover(pid):
+                if let blocker = self.recoveryMutationBlocker(expectedPID: pid) {
+                    // evaluate() granted a lease before the final probe
+                    // completed. Cancel only that unconsumed lease, then let
+                    // the normal suppression/ownership policy reset the epoch.
+                    state.lastRecoveryAttemptAt = nil
+                    _ = self.policy.evaluate(
+                        observation: blocker,
+                        now: Date(),
+                        state: &state)
+                    self.log("recovery-cancelled-before-mutation")
+                    return
+                }
                 // The policy has already granted the recovery lease. Make that
                 // backoff durable before launchctl so a helper crash cannot
                 // forget the attempt and create a restart loop.
@@ -186,6 +198,29 @@ enum JarvisGatewayWatchdogMain {
                 }
                 self.log("manual-recovery-required")
             }
+        }
+
+        private func recoveryMutationBlocker(
+            expectedPID: Int32) -> ManagedGatewayWatchdogPolicy.Observation?
+        {
+            // Revalidate immediately before launchctl. A release or deliberate
+            // stop can begin during the five-second health request that granted
+            // recovery, and that newer owner always wins.
+            if self.fileManager.fileExists(atPath: self.environment.disableLaunchAgentURL.path) {
+                return .suppressed(reason: "launchagent-disabled")
+            }
+            if self.fileManager.fileExists(atPath: self.environment.releaseLockURL.path) {
+                return .suppressed(reason: "release-lock")
+            }
+            if case let .failure(error) =
+                self.environment.validateGatewayOwnership(fileManager: self.fileManager)
+            {
+                return .wrongOwnership(reason: error.localizedDescription)
+            }
+            guard let snapshot = self.readRunningGateway(), snapshot.pid == expectedPID else {
+                return .unavailable(reason: "gateway-changed-before-recovery")
+            }
+            return nil
         }
 
         private func launchContainingJarvisAppInBackground() {

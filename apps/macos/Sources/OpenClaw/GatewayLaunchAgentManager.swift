@@ -891,19 +891,20 @@ extension GatewayLaunchAgentManager {
 
     static func packagedGatewayWatchdogExecutablePath(
         bundleURL: URL,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> String?
     {
         let bundle = bundleURL.standardizedFileURL
         guard bundle.lastPathComponent == "Jarvis.app" else { return nil }
-        let bundlePath = bundle.path
-        guard !bundlePath.contains("/Programming_Projects/"),
-              !bundlePath.contains("/.codex/worktrees/"),
-              !bundlePath.contains("/.worktrees/")
-        else {
-            // Hotfix and developer builds may contain the binary, but cannot
-            // become durable production launchd ownership from a source tree.
-            return nil
-        }
+        let systemInstall = URL(fileURLWithPath: "/Applications/Jarvis.app", isDirectory: true)
+            .standardizedFileURL
+        let userInstall = homeURL
+            .appendingPathComponent("Applications/Jarvis.app", isDirectory: true)
+            .standardizedFileURL
+        // A LaunchAgent persists this absolute path beyond the app process.
+        // DMG, Downloads, App Translocation, source, and worktree bundles are
+        // not durable ownership and must never register the companion.
+        guard bundle == systemInstall || bundle == userInstall else { return nil }
         let executable = bundle
             .appendingPathComponent("Contents/MacOS/JarvisGatewayWatchdog")
             .path
