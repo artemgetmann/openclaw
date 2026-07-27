@@ -543,20 +543,28 @@ process_has_monitor_listener_instance() {
   local instance_id="$2"
   [[ "$pid" =~ ^[0-9]+$ && "$instance_id" =~ ^[a-f0-9]{48}$ ]] || return 1
 
-  # `ps eww` exposes the child environment, which includes secrets. Stream it
-  # directly into a matcher that emits nothing; never capture or print the
-  # process environment. Exact field equality prevents prefix collisions.
-  ps eww -p "$pid" -o command= 2>/dev/null |
-    awk -v expected="OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${instance_id}" '
-      {
-        for (field = 1; field <= NF; field += 1) {
-          if ($field == expected) {
-            found = 1
-          }
-        }
-      }
-      END { exit(found ? 0 : 1) }
-    '
+  # Node rewrites the process title, which can make `ps eww` omit the original
+  # environment entirely on macOS. The listener therefore publishes its
+  # child-only random instance marker in the isolated health record. Birth time
+  # and cwd still prove the live PID; this marker binds that PID to this spawn.
+  HEALTH_PATH="$MONITOR_LISTENER_HEALTH_STORE_PATH" \
+    EXPECTED_PID="$pid" \
+    EXPECTED_INSTANCE="$instance_id" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+try {
+  const store = JSON.parse(fs.readFileSync(process.env.HEALTH_PATH, "utf8"));
+  const owner = store?.records?.["telegram-user"]?.owner;
+  process.exit(
+    owner?.pid === Number.parseInt(process.env.EXPECTED_PID ?? "", 10) &&
+      owner?.instanceId === process.env.EXPECTED_INSTANCE
+      ? 0
+      : 1,
+  );
+} catch {
+  process.exit(1);
+}
+NODE
 }
 
 resolve_monitor_listener_owner() {
@@ -592,7 +600,7 @@ try {
     typeof owner.cwd === "string" &&
     typeof owner.envFile === "string" &&
     typeof owner.session === "string" &&
-    argv[0] === "scripts/run-node.mjs" &&
+    argv[0] === "openclaw.mjs" &&
     expects("--profile", owner.profileId) &&
     argv.includes("telegram-user") &&
     argv.includes("monitor-poll") &&
@@ -671,19 +679,17 @@ NODE
     return 0
   fi
 
-  local current_birth current_command current_cwd
+  local current_birth current_cwd
   current_birth="$(
     LC_ALL=C TZ=UTC ps -p "$owner_pid" -o lstart= 2>/dev/null |
       awk '{$1=$1; print}'
   )"
-  current_command="$(ps -ww -o command= -p "$owner_pid" 2>/dev/null || true)"
   current_cwd="$(lsof -a -p "$owner_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
-  # Birth time closes PID reuse. Exact full command equality retains argv order
-  # and every non-secret selector, while cwd binds the child to this worktree.
-  # This remains safe for paths containing spaces because no substring parsing
-  # is involved.
+  # OpenClaw intentionally rewrites the process title after launch, so the live
+  # command line cannot be compared with the immutable launch argv in the owner
+  # record. Birth time closes PID reuse, the random 192-bit child-only instance
+  # marker proves this exact spawn, and cwd binds it to this worktree.
   if [[ -z "$current_birth" || "$current_birth" != "$owner_birth" ]] ||
-    [[ "$current_command" != "$owner_command" ]] ||
     [[ "$current_cwd" != "$owner_cwd" ]] ||
     ! process_has_monitor_listener_instance "$owner_pid" "$owner_instance"; then
     MONITOR_LISTENER_OWNERSHIP="foreign-process"
@@ -700,6 +706,7 @@ probe_monitor_listener_health() {
   if HEALTH_PATH="$MONITOR_LISTENER_HEALTH_STORE_PATH" \
     EXPECTED_PID="$MONITOR_LISTENER_PID" \
     EXPECTED_PROFILE="$PROFILE_ID" \
+    EXPECTED_INSTANCE="$MONITOR_LISTENER_INSTANCE_ID" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 try {
@@ -710,7 +717,8 @@ try {
   const staleAfterMs = Math.max(30_000, interval * 3);
   const exactOwner =
     record?.owner?.pid === expectedPid &&
-    record?.owner?.profile === process.env.EXPECTED_PROFILE;
+    record?.owner?.profile === process.env.EXPECTED_PROFILE &&
+    record?.owner?.instanceId === process.env.EXPECTED_INSTANCE;
   const freshSuccess =
     Number.isFinite(record?.lastSuccessfulCheckAtMs) &&
     Date.now() - record.lastSuccessfulCheckAtMs < staleAfterMs;
@@ -1891,6 +1899,10 @@ const childEnv = buildTelegramLiveRuntimeChildEnv({
     // persisted in the ownership record, or exposed in argv.
     OPENCLAW_HOOKS_TOKEN: hooksToken,
     OPENCLAW_GATEWAY_TOKEN: "",
+    // The owner record must identify the process that reports listener health.
+    // Running the built CLI directly and disabling its optional respawn keeps
+    // lifecycle ownership on one exact PID instead of a wrapper process tree.
+    OPENCLAW_NO_RESPAWN: "1",
   },
 });
 const envFile = childEnv.OPENCLAW_TELEGRAM_USER_ENV_FILE;
@@ -1903,7 +1915,7 @@ const hookUrl =
 const instanceId = randomBytes(24).toString("hex");
 childEnv.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE = instanceId;
 const args = [
-  "scripts/run-node.mjs",
+  "openclaw.mjs",
   "--profile",
   process.env.PROFILE_ID,
   "telegram-user",
@@ -1938,52 +1950,40 @@ const readBirthIdentity = (pid) => {
     return "";
   }
 };
-const hasExactInstanceMarker = (pid, expectedInstanceId) => {
-  try {
-    const processWithEnv = execFileSync(
-      "/bin/ps",
-      ["eww", "-p", String(pid), "-o", "command="],
-      { encoding: "utf8" },
-    );
-    return processWithEnv
-      .split(/\s+/u)
-      .includes(`OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${expectedInstanceId}`);
-  } catch {
-    return false;
-  }
-};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const terminateExactSpawn = async (pid, birthIdentity, expectedInstanceId) => {
-  // A failed ownership commit must roll back the exact process it spawned.
-  // Birth identity is re-read before TERM, throughout the wait, and before
-  // KILL so PID recycling can never redirect cleanup at a replacement.
+const terminateExactSpawn = async (child, birthIdentity) => {
+  // Before owner publication, the still-referenced ChildProcess handle is the
+  // strongest identity available. It cannot accidentally select an unrelated
+  // process, and birth identity adds a second guard whenever macOS supplied it.
   if (
-    !hasExactInstanceMarker(pid, expectedInstanceId) ||
-    (birthIdentity && readBirthIdentity(pid) !== birthIdentity)
+    !child?.pid ||
+    child.exitCode !== null ||
+    child.signalCode !== null ||
+    (birthIdentity && readBirthIdentity(child.pid) !== birthIdentity)
   ) {
     return;
   }
   try {
-    process.kill(pid, "SIGTERM");
+    child.kill("SIGTERM");
   } catch {
     return;
   }
   for (let attempt = 0; attempt < 30; attempt += 1) {
     await sleep(100);
-    const currentBirth = readBirthIdentity(pid);
-    if (!hasExactInstanceMarker(pid, expectedInstanceId)) {
+    if (child.exitCode !== null || child.signalCode !== null) {
       return;
     }
-    if (birthIdentity && currentBirth !== birthIdentity) {
+    if (birthIdentity && readBirthIdentity(child.pid) !== birthIdentity) {
       return;
     }
   }
   if (
-    hasExactInstanceMarker(pid, expectedInstanceId) &&
-    (!birthIdentity || readBirthIdentity(pid) === birthIdentity)
+    child.exitCode === null &&
+    child.signalCode === null &&
+    (!birthIdentity || readBirthIdentity(child.pid) === birthIdentity)
   ) {
     try {
-      process.kill(pid, "SIGKILL");
+      child.kill("SIGKILL");
     } catch {
       // The exact child exited between the final birth check and signal.
     }
@@ -2039,7 +2039,7 @@ try {
 } catch (error) {
   fs.rmSync(tempPath, { force: true });
   if (child?.pid) {
-    await terminateExactSpawn(child.pid, childBirthIdentity, instanceId);
+    await terminateExactSpawn(child, childBirthIdentity);
   }
   throw error;
 } finally {

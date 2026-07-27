@@ -74,6 +74,7 @@ const {
 describe("telegram-user commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE;
   });
 
   it("forwards exact button selectors and renders bounded JSON", async () => {
@@ -1189,6 +1190,8 @@ describe("telegram-user commands", () => {
   });
 
   it("runs monitor-poll watch mode repeatedly until max-runs", async () => {
+    const instanceId = "c".repeat(48);
+    process.env.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE = instanceId;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-monitor-poll-"));
     const monitorStore = path.join(root, "monitors.json");
     await fs.writeFile(monitorStore, JSON.stringify({ version: 1, monitors: [] }), "utf-8");
@@ -1215,6 +1218,7 @@ describe("telegram-user commands", () => {
     expect(listenerHealthMocks.updateListenerHealth).toHaveBeenLastCalledWith(
       expect.objectContaining({
         check: "success",
+        owner: expect.objectContaining({ instanceId }),
         routedEvent: false,
         service: "telegram-user",
       }),

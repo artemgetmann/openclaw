@@ -8,7 +8,12 @@ import {
   updateListenerHealth,
 } from "./listener-health.js";
 
-const OWNER = { profile: "test", pid: 1234, startedAtMs: 900 };
+const OWNER = {
+  instanceId: "a".repeat(48),
+  profile: "test",
+  pid: 1234,
+  startedAtMs: 900,
+};
 
 async function tempStorePath(): Promise<{ root: string; storePath: string }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-listener-health-"));

@@ -1360,6 +1360,11 @@ export async function telegramUserMonitorPollCommand(
   };
 
   const listenerStartedAtMs = Date.now();
+  const listenerInstanceId = /^[a-f0-9]{48}$/u.test(
+    process.env.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE ?? "",
+  )
+    ? process.env.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE
+    : undefined;
   const healthStorePath = loop
     ? resolveListenerHealthStorePath({
         cronStorePath: basePollOptions.cronStorePath,
@@ -1407,6 +1412,7 @@ export async function telegramUserMonitorPollCommand(
           check: "failure",
           error: classifyFatalListenerHealthError(err),
           owner: {
+            ...(listenerInstanceId ? { instanceId: listenerInstanceId } : {}),
             pid: process.pid,
             profile: process.env.OPENCLAW_PROFILE,
             startedAtMs: listenerStartedAtMs,
@@ -1429,6 +1435,7 @@ export async function telegramUserMonitorPollCommand(
         // not. It may contain message bodies, selectors, paths, or credentials.
         error: operationalErrors.map((skip) => skip.reason).join(","),
         owner: {
+          ...(listenerInstanceId ? { instanceId: listenerInstanceId } : {}),
           pid: process.pid,
           profile: process.env.OPENCLAW_PROFILE,
           startedAtMs: listenerStartedAtMs,
