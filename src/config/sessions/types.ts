@@ -515,7 +515,13 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
-    entries: Array<{ name: string; blockChars: number; location?: string }>;
+    entries: Array<{
+      name: string;
+      blockChars: number;
+      descriptionChars: number;
+      detailed: boolean;
+      location?: string;
+    }>;
   };
   tools: {
     listChars: number;

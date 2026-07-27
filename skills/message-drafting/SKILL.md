@@ -9,6 +9,12 @@ user-invocable: false
 ## Composition Contract
 
 - Follow the destination channel's context, safety, freshness, and send rules.
+- Before writing recipient-facing text, scan the active skill catalog for an
+  applicable user-authored tone-of-voice, writing-voice, or message-style
+  profile. Read and follow that profile as a dependency. Prefer an
+  owner-specific profile; skip it in shared, non-owner, or ambiguous contexts.
+  If no profile is available, continue without one. An explicit current request
+  to write in the assistant's own voice overrides the profile for that draft.
 - Produce one final message by default, not a menu of stylistic alternatives.
 - Match the requested tone and preserve the user's facts, commitments, names,
   dates, numbers, and links.
