@@ -12,6 +12,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
+import { clearSentMessageCache, getSentMessageMetadata } from "./sent-message-cache.js";
 import { __testing as workLogTesting } from "./work-log.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
@@ -36,9 +37,12 @@ vi.mock("./bot/delivery.js", () => ({
   prepareTelegramReplyForDelivery,
 }));
 
-vi.mock("./send.js", () => ({
-  editMessageTelegram,
-}));
+vi.mock("./send.js", () => {
+  return {
+    buildInlineKeyboard: (buttons: unknown) => ({ inline_keyboard: buttons }),
+    editMessageTelegram,
+  };
+});
 
 vi.mock("./delete-guard.js", () => ({
   guardedTelegramDeleteMessage,
@@ -76,6 +80,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     guardedTelegramDeleteMessage.mockReset();
     guardedTelegramDeleteMessage.mockResolvedValue({ ok: true, deleted: false, suppressed: true });
     workLogTesting.resetTelegramWorkLogsForTests();
+    clearSentMessageCache();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
@@ -264,6 +269,59 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       );
       await expect(loadDurableFollowups()).resolves.toEqual([]);
       await expect(isDurableFollowupMessageProcessed({ queueKey, run })).resolves.toBe(true);
+    });
+  });
+
+  it("shows an exact Queue receipt only after a busy follow-up is durably accepted", async () => {
+    const durableId = "12345678-1234-4234-8234-123456789abc";
+    const bot = createBot();
+    vi.mocked(bot.api.sendMessage).mockResolvedValue({
+      message_id: 900,
+    } as never);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+      await replyOptions.onFollowupQueued?.({ durableId });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      bot,
+      streamMode: "off",
+    });
+
+    expect(bot.api.sendMessage).toHaveBeenCalledWith(
+      123,
+      "Queued behind the current task.",
+      expect.objectContaining({
+        message_thread_id: 777,
+        reply_parameters: {
+          message_id: 456,
+          allow_sending_without_reply: true,
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              expect.objectContaining({
+                text: "✓ Queue",
+                callback_data: `oqk:${durableId}`,
+              }),
+              expect.objectContaining({
+                text: "Steer",
+                callback_data: `oqs:${durableId}`,
+              }),
+            ],
+          ],
+        },
+      }),
+    );
+    expect(getSentMessageMetadata(123, 900)).toEqual({
+      sessionKey: "agent:main:telegram:direct:123",
+      messageThreadId: 777,
+      durableFollowupId: durableId,
     });
   });
 

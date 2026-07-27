@@ -9,6 +9,7 @@ import {
   answerCallbackQuerySpy,
   botCtorSpy,
   commandSpy,
+  editMessageTextSpy,
   getLoadConfigMock,
   getLoadWebMediaMock,
   getOnHandler,
@@ -33,6 +34,10 @@ import { resolveTelegramFetch } from "./fetch.js";
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { createTelegramBot, getTelegramSequentialKey } = await import("./bot.js");
+const { setActiveEmbeddedRun, __testing: embeddedRunTesting } =
+  await import("../../../src/agents/pi-embedded-runner/runs.js");
+const { FOLLOWUP_QUEUES, getFollowupQueue } =
+  await import("../../../src/auto-reply/reply/queue/state.js");
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -144,6 +149,97 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+  it("promotes one exact queued message through the Telegram Steer callback", async () => {
+    const durableId = "12345678-1234-4234-8234-123456789abc";
+    const queueMessage = vi.fn(async () => undefined);
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-steer-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    try {
+      const queue = getFollowupQueue("telegram-session", { mode: "collect" });
+      queue.draining = true;
+      queue.items.push({
+        durableId,
+        prompt: "Use the corrected requirement.",
+        messageId: "11",
+        enqueuedAt: Date.now(),
+        originatingChannel: "telegram",
+        originatingTo: "1234",
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-steer",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          config: {},
+          provider: "test",
+          model: "test",
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      });
+      setActiveEmbeddedRun("session-steer", {
+        queueMessage,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: () => undefined,
+      });
+
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-steer",
+          data: `oqs:${durableId}`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "Queued behind the current task.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-steer");
+      expect(queueMessage).toHaveBeenCalledWith("Use the corrected requirement.");
+      expect(queue.items).toEqual([]);
+      expect(editMessageTextSpy).toHaveBeenCalledWith(
+        1234,
+        10,
+        "Steering the current task.",
+        expect.objectContaining({
+          reply_markup: expect.objectContaining({
+            inline_keyboard: [
+              [
+                expect.objectContaining({
+                  text: "✓ Steer",
+                  callback_data: `oqd:${durableId}`,
+                }),
+              ],
+            ],
+          }),
+        }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      embeddedRunTesting.resetActiveEmbeddedRuns();
+      FOLLOWUP_QUEUES.clear();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      if (priorStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = priorStateDir;
+      }
+    }
   });
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {

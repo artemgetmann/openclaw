@@ -428,7 +428,21 @@ async function runReplyAgentWithFinalizationOwnership(
   if (activeRunQueueAction === "enqueue-followup") {
     // Await the atomic disk record before returning to channel middleware. For
     // Telegram this is what makes advancing the update offset crash-safe.
-    await enqueueFollowupRunDurable(queueKey, followupRun, resolvedQueue);
+    await enqueueFollowupRunDurable(
+      queueKey,
+      followupRun,
+      resolvedQueue,
+      "message-id",
+      async (durableId) => {
+        try {
+          await runOpts?.onFollowupQueued?.({ durableId });
+        } catch (err) {
+          // The durable queue is already the source of truth. A channel receipt
+          // failure must not strand accepted work by skipping drain scheduling.
+          defaultRuntime.error?.(`follow-up queue receipt failed: ${String(err)}`);
+        }
+      },
+    );
     // Offer the queue a fresh callback only after persistence. If the direct
     // turn still owns finalization, keep the callback pending so queued model
     // work cannot overtake its bookkeeping or reply delivery. With no owner,

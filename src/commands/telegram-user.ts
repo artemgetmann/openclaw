@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   getTelegramUserDefaultPollIntervalMs,
   getTelegramUserDefaultWaitTimeoutMs,
+  runTelegramUserButtonClick,
   runTelegramUserInbox,
   runTelegramUserLogin,
   runTelegramUserLogout,
@@ -28,6 +29,7 @@ import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
+  TelegramUserButtonClickResult,
   TelegramUserDoctorResult,
   TelegramUserDownloadResult,
   TelegramUserInboxDialog,
@@ -86,6 +88,11 @@ function readNumberOpt(opts: Record<string, unknown>, key: string): number | und
 function readStringOpt(opts: Record<string, unknown>, key: string): string | undefined {
   const value = opts[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readExactStringOpt(opts: Record<string, unknown>, key: string): string | undefined {
+  const value = opts[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function readTelegramReadFormat(opts: Record<string, unknown>): TelegramUserReadFormat {
@@ -614,6 +621,20 @@ function logSendText(runtime: RuntimeEnv, result: TelegramUserSendResult) {
   runtime.log(`text=${JSON.stringify(message.text)}`);
 }
 
+function logButtonClickText(runtime: RuntimeEnv, result: TelegramUserButtonClickResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  runtime.log(
+    ok(
+      `Telegram user button-click ok. message_id=${result.message_id} chat=${result.chat} text=${JSON.stringify(result.button.text)}`,
+    ),
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+  runtime.log(
+    `callback_data=${JSON.stringify(result.button.callback_data)} alert=${result.click_result.alert} response=${JSON.stringify(result.click_result.message)}`,
+  );
+}
+
 function logTopicCreateText(runtime: RuntimeEnv, result: TelegramUserTopicCreateResult) {
   const rich = isRich();
   const ok = rich ? theme.success : (text: string) => text;
@@ -962,6 +983,40 @@ export async function telegramUserSendCommand(opts: Record<string, unknown>, run
     return;
   }
   logSendText(runtime, result);
+}
+
+export async function telegramUserButtonClickCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  const messageId = readPositiveIntegerOpt(
+    opts,
+    "messageId",
+    "--message-id",
+    "Telegram user button-click",
+  );
+  // Visible text and callback bytes are exact-match safety selectors. Preserve
+  // caller whitespace instead of normalizing either value before the backend.
+  const buttonText = readExactStringOpt(opts, "buttonText");
+  const expectedCallbackData = readExactStringOpt(opts, "expectedCallbackData");
+  if (!chat || messageId === undefined || !buttonText || !expectedCallbackData) {
+    throw new Error(
+      "Telegram user button-click requires --chat, --message-id, --button-text, and --expected-callback-data.",
+    );
+  }
+  const result = await runTelegramUserButtonClick({
+    ...resolveBackendOptions(opts),
+    buttonText,
+    chat,
+    expectedCallbackData,
+    messageId,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logButtonClickText(runtime, result);
 }
 
 export async function telegramUserTopicCreateCommand(

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 from datetime import datetime
 import json
 import os
@@ -662,6 +663,53 @@ def resolve_download_output_path(output_raw: str, *, chat_raw: str, message) -> 
   return target_dir / f"telegram-{chat_component}-{message_id}{guess_media_extension(message)}"
 
 
+def build_button_metadata(button, *, column: int, row: int) -> dict[str, object]:
+  """Return bounded, JSON-safe identity metadata without following the button."""
+
+  text = str(getattr(button, "text", "") or "")
+  data = getattr(button, "data", None)
+  callback_bytes = bytes(data) if isinstance(data, (bytes, bytearray, memoryview)) else None
+  callback_text = None
+  if callback_bytes is not None:
+    try:
+      callback_text = callback_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+      callback_text = None
+  return {
+    "callback_data": callback_text,
+    "callback_data_base64": (
+      base64.b64encode(callback_bytes).decode("ascii") if callback_bytes is not None else None
+    ),
+    "column": column,
+    "row": row,
+    "text": text[:200],
+  }
+
+
+def list_message_buttons(message) -> list[tuple[object, dict[str, object]]]:
+  available = []
+  for row_index, row in enumerate(getattr(message, "buttons", None) or []):
+    for column_index, button in enumerate(row or []):
+      available.append(
+        (
+          button,
+          build_button_metadata(button, column = column_index, row = row_index),
+        )
+      )
+  return available
+
+
+def build_button_click_result_payload(result) -> dict[str, object | None]:
+  """Expose only bounded callback-answer fields, never an arbitrary RPC object."""
+
+  return {
+    "alert": bool(getattr(result, "alert", False)),
+    "cache_time": int(getattr(result, "cache_time", 0) or 0),
+    "message": str(getattr(result, "message", "") or "")[:400] or None,
+    "url": str(getattr(result, "url", "") or "")[:400] or None,
+  }
+
+
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description = "Telethon transport for OpenClaw Telegram user tooling")
   parser.add_argument("--session", help = "Telethon session path override")
@@ -720,6 +768,19 @@ def build_parser() -> argparse.ArgumentParser:
   download.add_argument("--chat", required = True, help = "Target chat username or id")
   download.add_argument("--message-id", type = int, required = True, help = "Message id containing media")
   download.add_argument("--output", required = True, help = "Output file path or directory")
+
+  button_click = subparsers.add_parser(
+    "button-click",
+    help = "Click one exact inline callback button on one exact message",
+  )
+  button_click.add_argument("--chat", required = True, help = "Exact target chat username or id")
+  button_click.add_argument("--message-id", type = int, required = True, help = "Exact message id")
+  button_click.add_argument("--button-text", required = True, help = "Exact visible button text")
+  button_click.add_argument(
+    "--expected-callback-data",
+    required = True,
+    help = "Exact UTF-8 callback data expected behind the button",
+  )
 
   inbox = subparsers.add_parser("inbox", help = "List dialogs with unread metadata")
   inbox.add_argument("--limit", type = int, default = 20, help = "Maximum number of dialogs")
@@ -1278,6 +1339,69 @@ async def run_download(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_button_click(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  message_id = int(args.message_id or 0)
+  button_text = str(args.button_text or "")
+  callback_data = str(args.expected_callback_data or "")
+  if message_id <= 0:
+    return fail("E_USAGE", "Telegram button-click requires a positive --message-id.")
+  if not button_text:
+    return fail("E_USAGE", "Telegram button-click requires --button-text.")
+  if not callback_data:
+    return fail("E_USAGE", "Telegram button-click requires --expected-callback-data.")
+
+  expected_callback_bytes = callback_data.encode("utf-8")
+  with acquire_session_lock(session_path, lock_path_override = getattr(args, "lock", None)):
+    client, _ = await connect_client(session_path)
+    try:
+      # Fetch by explicit id from the explicit chat. Never scan recent history:
+      # queue/steer proof must stay tied to the one message the caller observed.
+      message = await client.get_messages(resolve_chat(args.chat), ids = message_id)
+      if message is None or int(getattr(message, "id", 0) or 0) != message_id:
+        return fail(
+          "E_MESSAGE_NOT_FOUND",
+          f"Telegram message {message_id} was not found in the requested chat.",
+        )
+
+      available = list_message_buttons(message)
+      matches = [
+        (button, metadata)
+        for button, metadata in available
+        if str(getattr(button, "text", "") or "") == button_text
+        and getattr(button, "data", None) == expected_callback_bytes
+      ]
+      if len(matches) != 1:
+        # Fail closed and return enough bounded metadata to diagnose stale UI
+        # assumptions. Crucially, no Message.click call occurs on this branch.
+        return fail(
+          "E_BUTTON_MISMATCH",
+          "Expected exactly one inline button matching both text and callback data.",
+          details = {
+            "available_buttons": [metadata for _, metadata in available[:100]],
+            "match_count": len(matches),
+            "message_id": message_id,
+            "truncated": len(available) > 100,
+          },
+        )
+
+      _, matched = matches[0]
+      # Coordinates are derived only after the exact text+data uniqueness check.
+      # They are not accepted from callers and cannot select a latest/nearby UI.
+      click_result = await message.click(i = matched["row"], j = matched["column"])
+      return emit(
+        {
+          "button": matched,
+          "chat": args.chat,
+          "click_result": build_button_click_result_payload(click_result),
+          "clicked": True,
+          "message_id": message_id,
+        }
+      )
+    finally:
+      await client.disconnect()
+
+
 async def run_inbox(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   limit = max(1, min(int(args.limit or 20), 200))
@@ -1355,6 +1479,8 @@ async def run() -> int:
       return await run_mark_unread(args)
     if args.command == "download":
       return await run_download(args)
+    if args.command == "button-click":
+      return await run_button_click(args)
     if args.command == "inbox":
       return await run_inbox(args)
     return fail("E_USAGE", f"Unsupported command: {args.command}")

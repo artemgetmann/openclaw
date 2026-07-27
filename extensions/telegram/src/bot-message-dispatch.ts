@@ -47,6 +47,7 @@ import {
   type TelegramReplyDeliveredEvent,
 } from "./bot/delivery.js";
 import { resolveTelegramReplyId } from "./bot/helpers.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { guardedTelegramDeleteMessage } from "./delete-guard.js";
@@ -68,12 +69,14 @@ import {
   createTelegramProgressController,
   type TelegramProgressController,
 } from "./progress-controller.js";
+import { buildTelegramQueuedButtons } from "./queue-buttons.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
 import { getTelegramRichRawApi } from "./rich-message.js";
-import { editMessageTelegram } from "./send.js";
+import { buildInlineKeyboard, editMessageTelegram } from "./send.js";
+import { recordSentMessage } from "./sent-message-cache.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -3028,6 +3031,33 @@ export const dispatchTelegramMessage = async ({
           // Keep only the opaque id in the transport lifecycle; no prompt,
           // route, credential, or generated text is duplicated here.
           durableDirectTurnId = durableId;
+        },
+        onFollowupQueued: async ({ durableId }) => {
+          // This receipt is emitted only from the persist-before-enqueue
+          // boundary. It therefore means "queued behind active work", not the
+          // generic reaction state shown for every accepted Telegram update.
+          const sent = await bot.api.sendMessage(chatId, "Queued behind the current task.", {
+            ...buildTelegramThreadParams(threadSpec),
+            reply_parameters: {
+              message_id: msg.message_id,
+              allow_sending_without_reply: true,
+            },
+            reply_markup: buildInlineKeyboard(buildTelegramQueuedButtons(durableId)),
+          });
+          recordSentMessage(chatId, sent.message_id, {
+            sessionKey:
+              typeof ctxPayload.SessionKey === "string" ? ctxPayload.SessionKey : undefined,
+            messageThreadId: threadSpec?.id,
+            durableFollowupId: durableId,
+          });
+          recordChannelActivity({
+            channel: "telegram",
+            accountId: route.accountId,
+            direction: "outbound",
+          });
+          runtime.log?.(
+            `telegram.queue.receipt chat=${chatId} thread=${threadSpec?.id ?? "none"} message=${sent.message_id}`,
+          );
         },
       },
     }));

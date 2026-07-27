@@ -104,6 +104,28 @@ export type TelegramUserSendResult = {
   message: TelegramUserMessage;
 };
 
+export type TelegramUserButtonMetadata = {
+  callback_data: string | null;
+  callback_data_base64: string | null;
+  column: number;
+  row: number;
+  text: string;
+};
+
+export type TelegramUserButtonClickResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  button: TelegramUserButtonMetadata;
+  chat: string;
+  click_result: {
+    alert: boolean;
+    cache_time: number;
+    message: string | null;
+    url: string | null;
+  };
+  clicked: true;
+  message_id: number;
+};
+
 export type TelegramUserTopicCreateResult = {
   backend_meta?: TelegramUserBackendMeta;
   chat_id: number | null;

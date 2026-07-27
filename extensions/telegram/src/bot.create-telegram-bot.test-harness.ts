@@ -117,7 +117,7 @@ vi.mock("../../../src/infra/system-events.js", () => ({
 const sentMessageCacheHoisted = vi.hoisted(() => {
   const sentMessages = new Map<
     string,
-    Map<number, { sessionKey?: string; messageThreadId?: number }>
+    Map<number, { sessionKey?: string; messageThreadId?: number; durableFollowupId?: string }>
   >();
 
   const getChatKey = (chatId: number | string) => String(chatId);
@@ -126,7 +126,11 @@ const sentMessageCacheHoisted = vi.hoisted(() => {
     (
       chatId: number | string,
       messageId: number,
-      metadata?: { sessionKey?: string; messageThreadId?: number },
+      metadata?: {
+        sessionKey?: string;
+        messageThreadId?: number;
+        durableFollowupId?: string;
+      },
     ) => {
       const chatKey = getChatKey(chatId);
       const existing = sentMessages.get(chatKey) ?? new Map();
