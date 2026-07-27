@@ -696,6 +696,303 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      inputKind: "text",
+      ctxPayload: { SessionKey: "silent-codex-text" },
+    },
+    {
+      inputKind: "voice",
+      ctxPayload: {
+        SessionKey: "silent-codex-voice",
+        MediaPath: "/tmp/input.ogg",
+        MediaType: "audio/ogg",
+      },
+    },
+  ])(
+    "shows one sanitized delayed Codex Work log for a silent $inputKind tool turn",
+    async ({ ctxPayload }) => {
+      vi.useFakeTimers();
+      try {
+        const progressStream = createDraftStream(9050);
+        createTelegramDraftStream.mockReturnValue(progressStream);
+        let signalToolStarted: (() => void) | undefined;
+        const toolStarted = new Promise<void>((resolve) => {
+          signalToolStarted = resolve;
+        });
+        let finishTool: (() => void) | undefined;
+        const toolFinished = new Promise<void>((resolve) => {
+          finishTool = resolve;
+        });
+        dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+          async ({ dispatcherOptions, replyOptions }) => {
+            await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+            // Codex can repeat the lifecycle as an update. The second event
+            // must neither move the deadline nor create a second fallback.
+            await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "update" });
+            signalToolStarted?.();
+            await toolFinished;
+            await dispatcherOptions.deliver({ text: "Stable final answer." }, { kind: "final" });
+            return { queuedFinal: true };
+          },
+        );
+        deliverReplies.mockResolvedValue({ delivered: true });
+
+        const dispatchPromise = dispatchWithContext({
+          context: createContext({
+            ctxPayload: ctxPayload as unknown as TelegramMessageContext["ctxPayload"],
+          }),
+          streamMode: "partial",
+        });
+        await toolStarted;
+
+        await vi.advanceTimersByTimeAsync(2_999);
+        expect(progressStream.update).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(progressStream.update).toHaveBeenCalledTimes(1);
+        expect(progressStream.update).toHaveBeenCalledWith("Waiting for Codex…");
+
+        finishTool?.();
+        await dispatchPromise;
+
+        expect(progressStream.update).toHaveBeenCalledWith("Work log");
+        expect(
+          progressStream.update.mock.calls.filter(([text]) => text === "Work log"),
+        ).toHaveLength(1);
+        expect(progressStream.materialize).toHaveBeenCalledTimes(1);
+        expect(progressStream.clear).not.toHaveBeenCalled();
+        expect(deliverReplies).toHaveBeenCalledTimes(1);
+        expect(deliverReplies).toHaveBeenCalledWith(
+          expect.objectContaining({
+            replies: [expect.objectContaining({ text: "Stable final answer." })],
+          }),
+        );
+        expect(editMessageTelegram).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("cancels delayed tool progress when explicit commentary arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const progressStream = createDraftStream(9051);
+      createTelegramDraftStream.mockReturnValue(progressStream);
+      let signalToolStarted: (() => void) | undefined;
+      const toolStarted = new Promise<void>((resolve) => {
+        signalToolStarted = resolve;
+      });
+      let publishCommentary: (() => void) | undefined;
+      const commentaryGate = new Promise<void>((resolve) => {
+        publishCommentary = resolve;
+      });
+      let signalCommentaryPublished: (() => void) | undefined;
+      const commentaryPublished = new Promise<void>((resolve) => {
+        signalCommentaryPublished = resolve;
+      });
+      let publishFinal: (() => void) | undefined;
+      const finalGate = new Promise<void>((resolve) => {
+        publishFinal = resolve;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+          signalToolStarted?.();
+          await commentaryGate;
+          await dispatcherOptions.deliver(
+            {
+              text: "I’m checking the current state.",
+              channelData: { openclaw: { assistantPhase: "commentary" } },
+            },
+            { kind: "block" },
+          );
+          signalCommentaryPublished?.();
+          await finalGate;
+          await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      const dispatchPromise = dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "explicit-commentary-cancels-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await toolStarted;
+      await vi.advanceTimersByTimeAsync(1_000);
+      publishCommentary?.();
+      await commentaryPublished;
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(progressStream.update).toHaveBeenCalledWith("I’m checking the current state.");
+      expect(progressStream.update).not.toHaveBeenCalledWith("Waiting for Codex…");
+
+      publishFinal?.();
+      await dispatchPromise;
+      expect(progressStream.update.mock.calls.filter(([text]) => text === "Work log")).toHaveLength(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels delayed progress for a quick tool result and final", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+          await replyOptions?.onToolResult?.({ text: "🔧 exec: printf secret" });
+          await dispatcherOptions.deliver({ text: "Quick final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "quick-tool-cancels-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(createTelegramDraftStream).not.toHaveBeenCalled();
+      const deliveredTexts = deliverReplies.mock.calls.flatMap(([arg]) => {
+        return (
+          (arg as { replies?: Array<{ text?: string }> }).replies?.map((reply) => reply.text) ?? []
+        );
+      });
+      expect(deliveredTexts).toEqual(["Quick final."]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses generic delayed copy without exposing unknown tool identifiers or raw traces", async () => {
+    vi.useFakeTimers();
+    try {
+      const progressStream = createDraftStream(9052);
+      createTelegramDraftStream.mockReturnValue(progressStream);
+      let signalToolStarted: (() => void) | undefined;
+      const toolStarted = new Promise<void>((resolve) => {
+        signalToolStarted = resolve;
+      });
+      let finishTool: (() => void) | undefined;
+      const toolFinished = new Promise<void>((resolve) => {
+        finishTool = resolve;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onToolStart?.({
+            name: "private_plugin.run --token=secret",
+            phase: "start",
+          });
+          signalToolStarted?.();
+          await toolFinished;
+          await replyOptions?.onToolResult?.({
+            text: "🔧 private_plugin.run --token=secret",
+          });
+          await dispatcherOptions.deliver({ text: "Safe final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      const dispatchPromise = dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "unknown-tool-generic-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await toolStarted;
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(progressStream.update).toHaveBeenCalledWith("Still working on it.");
+      expect(progressStream.update).not.toHaveBeenCalledWith(expect.stringContaining("private"));
+      expect(progressStream.update).not.toHaveBeenCalledWith(expect.stringContaining("secret"));
+
+      finishTool?.();
+      await dispatchPromise;
+      const deliveredTexts = deliverReplies.mock.calls.flatMap(([arg]) => {
+        return (
+          (arg as { replies?: Array<{ text?: string }> }).replies?.map((reply) => reply.text) ?? []
+        );
+      });
+      expect(deliveredTexts).toEqual(["Safe final."]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels delayed progress when a tool-backed dispatch fails", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+        throw new Error("provider failed");
+      });
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "failed-tool-cancels-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(createTelegramDraftStream).not.toHaveBeenCalled();
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [
+            { text: "Something went wrong while processing your request. Please try again." },
+          ],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leave a delayed timer behind when a silent dispatch is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "cancelled-tool-dispatch",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(createTelegramDraftStream).not.toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not wait for a sentence before surfacing same-chat DM source previews", async () => {
     const progressStream = createDraftStream(9004);
     createTelegramDraftStream.mockReturnValue(progressStream);

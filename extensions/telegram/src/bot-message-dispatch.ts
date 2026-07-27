@@ -90,6 +90,19 @@ const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
 /** Keep fast DM previews responsive after the first send without token-by-token API spam. */
 const DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS = 250;
 const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
+const SILENT_TOOL_PROGRESS_DELAY_MS = 3_000;
+const GENERIC_SILENT_TOOL_PROGRESS = "Still working on it.";
+
+function resolveSilentToolProgressText(toolName?: string): string {
+  // Tool names are provider-controlled identifiers and may contain commands,
+  // arguments, or plugin internals. Only exact, reviewed identifiers may reach
+  // consumer copy; every unknown value deliberately collapses to generic text.
+  const normalized = toolName?.trim().toLowerCase();
+  if (normalized === "codex" || normalized === "codex_threads") {
+    return "Waiting for Codex…";
+  }
+  return GENERIC_SILENT_TOOL_PROGRESS;
+}
 
 // Continuation-style agent runs can re-enter Telegram delivery between tool
 // turns. A function-local progress controller gets cleared at the end of each
@@ -886,6 +899,29 @@ export const dispatchTelegramMessage = async ({
   let processingDraftLaneEvent = false;
   let progressController: TelegramProgressController | undefined;
   const workLogToolNames: string[] = [];
+  let silentToolProgressTimer: ReturnType<typeof setTimeout> | undefined;
+  let silentToolProgressGeneration = 0;
+  let silentToolFallbackRendered = false;
+  let sawExplicitProgress = false;
+  let finalPhaseStarted = false;
+  const cancelSilentToolProgressFallback = () => {
+    // Incrementing the generation also invalidates a callback that already left
+    // the timer queue but has not yet entered the serialized draft-lane queue.
+    // clearTimeout alone cannot close that race at final/teardown boundaries.
+    silentToolProgressGeneration += 1;
+    if (silentToolProgressTimer) {
+      clearTimeout(silentToolProgressTimer);
+      silentToolProgressTimer = undefined;
+    }
+  };
+  const noteExplicitProgress = () => {
+    sawExplicitProgress = true;
+    cancelSilentToolProgressFallback();
+  };
+  const noteFinalPhaseStarted = () => {
+    finalPhaseStarted = true;
+    cancelSilentToolProgressFallback();
+  };
   // Structured plan checklists own only explicit plan updates; later assistant
   // partials are answer candidates and must not be folded back into the plan.
   let activeProgressKind: "generic" | "plan" | undefined;
@@ -1232,6 +1268,7 @@ export const dispatchTelegramMessage = async ({
     // Final-answer text is user-visible output, not progress. Freeze any active
     // progress bubble first so the first final delta cannot briefly edit the
     // soon-to-be-retained Work Log message.
+    noteFinalPhaseStarted();
     routeToolStatusPartialsToProgress = false;
     const retainResult = await retainProgressControllerAsWorkLog(callsite);
     if (retainResult === "retained") {
@@ -1653,6 +1690,7 @@ export const dispatchTelegramMessage = async ({
     options: {
       progressKind?: "generic" | "plan";
       naturalCommentary?: boolean;
+      silentToolFallback?: boolean;
     } = {},
   ) => {
     if (!text) {
@@ -1661,6 +1699,12 @@ export const dispatchTelegramMessage = async ({
     const progressText = normalizeAdjacentProgressBoundaries(text).trim();
     if (!progressText) {
       return false;
+    }
+    if (options.silentToolFallback !== true) {
+      // Any real provider-authored commentary wins over the delayed fallback.
+      // Cancel before awaiting lane work so a due timer cannot race a known
+      // explicit update and briefly expose both messages.
+      noteExplicitProgress();
     }
     // Assistant partial callbacks are queued to preserve stream order. A later
     // structural progress boundary must wait for them before it decides whether
@@ -1712,6 +1756,38 @@ export const dispatchTelegramMessage = async ({
       skipNextAnswerMessageStartRotation = true;
     }
     return true;
+  };
+  const scheduleSilentToolProgressFallback = (toolName?: string) => {
+    if (
+      sawExplicitProgress ||
+      finalPhaseStarted ||
+      silentToolFallbackRendered ||
+      silentToolProgressTimer
+    ) {
+      return;
+    }
+    const generation = ++silentToolProgressGeneration;
+    const progressText = resolveSilentToolProgressText(toolName);
+    silentToolProgressTimer = setTimeout(() => {
+      silentToolProgressTimer = undefined;
+      // Timer callbacks never mutate Telegram state directly. Join the same
+      // serialized lane as provider callbacks, then re-check cancellation:
+      // final/tool-result events can arrive after timeout but before this task.
+      void enqueueDraftLaneEvent(async () => {
+        if (
+          generation !== silentToolProgressGeneration ||
+          sawExplicitProgress ||
+          finalPhaseStarted ||
+          silentToolFallbackRendered
+        ) {
+          return;
+        }
+        const rendered = await updateAnswerProgressFromBlock(progressText, {
+          silentToolFallback: true,
+        });
+        silentToolFallbackRendered = rendered;
+      });
+    }, SILENT_TOOL_PROGRESS_DELAY_MS);
   };
   const renderTextWithToolProgress = (text: string) => {
     return normalizeAdjacentProgressBoundaries(text);
@@ -2584,6 +2660,11 @@ export const dispatchTelegramMessage = async ({
               payload.audioAsVoice === true &&
               isFinalTtsSupplementPayload(payload);
             if (deliveryKind === "final") {
+              // Cancel synchronously, before draining queued partial work. A
+              // timeout callback may already be queued behind that work; its
+              // generation check then folds away instead of flashing progress
+              // immediately before the final answer.
+              noteFinalPhaseStarted();
               terminalDeliveryAttempted = true;
               // Assistant callbacks are fire-and-forget; ensure queued boundary
               // rotations/partials are applied before final delivery mapping.
@@ -2918,6 +2999,7 @@ export const dispatchTelegramMessage = async ({
           deliveryState.markNonSilentSkip();
         },
         onError: (err, info) => {
+          cancelSilentToolProgressFallback();
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
           const failedPayload = info.payload;
@@ -2967,14 +3049,20 @@ export const dispatchTelegramMessage = async ({
           releaseBusySequentialKey?.();
           releaseBusySequentialKey = undefined;
         },
-        onToolResult: (payload) =>
-          enqueueDraftLaneEvent(async () => {
+        onToolResult: (payload) => {
+          // Tool-result arrival closes the active-tool wait even when the
+          // result is intentionally suppressed (for example a raw 🔧 trace).
+          // A later tool start can schedule a fresh delay if the turn is still
+          // otherwise silent.
+          cancelSilentToolProgressFallback();
+          return enqueueDraftLaneEvent(async () => {
             await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
             await sendToolPayload(payload);
             if (getActiveProgressController() && activeProgressKind !== "plan") {
               routeToolStatusPartialsToProgress = true;
             }
-          }),
+          });
+        },
         onPartialReply:
           canStreamAnswerDraft || canStreamReasoningDraft
             ? (payload) =>
@@ -3036,6 +3124,10 @@ export const dispatchTelegramMessage = async ({
           if (getActiveProgressController() && activeProgressKind !== "plan") {
             routeToolStatusPartialsToProgress = true;
           }
+          // Providers can emit both start and update events for one tool. Keep
+          // the original deadline instead of resetting it or allocating a
+          // second fallback/Work log.
+          scheduleSilentToolProgressFallback(payload.name);
           if (!statusReactionController) {
             return;
           }
@@ -3096,9 +3188,14 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } catch (err) {
+    cancelSilentToolProgressFallback();
     dispatchError = err;
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
+    // Timers are dispatch-local and must never survive cancellation, restart
+    // recovery, or a silent/no-final return. A retained progress controller can
+    // safely span continuation dispatches; its old timer cannot.
+    cancelSilentToolProgressFallback();
     releaseBusySequentialKey?.();
     releaseBusySequentialKey = undefined;
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
