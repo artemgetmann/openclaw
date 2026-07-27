@@ -17,6 +17,7 @@ import type {
   TelegramUserBackendMeta,
   TelegramUserBackendError,
   TelegramUserBackendOptions,
+  TelegramUserButtonClickResult,
   TelegramUserDownloadResult,
   TelegramUserInboxResult,
   TelegramUserLoginResult,
@@ -1104,6 +1105,34 @@ export async function runTelegramUserSend(
     args.push("--voice");
   }
   return runBackendCommand<TelegramUserSendResult>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserButtonClick(
+  params: {
+    buttonText: string;
+    chat: string;
+    expectedCallbackData: string;
+    messageId: number;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserButtonClickResult> {
+  // All four selectors are mandatory and forwarded as separate argv entries.
+  // The Python transport performs the exact-message and unique-button checks
+  // under the canonical Telegram session lock before it mutates provider state.
+  const args = [
+    "button-click",
+    "--chat",
+    params.chat,
+    "--message-id",
+    String(params.messageId),
+    "--button-text",
+    params.buttonText,
+    "--expected-callback-data",
+    params.expectedCallbackData,
+  ];
+  return runBackendCommand<TelegramUserButtonClickResult>({
     ...params,
     args,
   });

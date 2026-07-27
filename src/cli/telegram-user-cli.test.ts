@@ -1,6 +1,7 @@
 import { Command, Option } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const telegramUserButtonClickCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserInboxCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserDoctorCommand = vi.fn().mockResolvedValue(undefined);
 const telegramUserMonitorListenCommand = vi.fn().mockResolvedValue(undefined);
@@ -19,6 +20,7 @@ const runTelegramMonitorServiceStop = vi.fn().mockResolvedValue(undefined);
 const runTelegramMonitorServiceUninstall = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/telegram-user.js", () => ({
+  telegramUserButtonClickCommand,
   telegramUserDoctorCommand,
   telegramUserInboxCommand,
   telegramUserMonitorListenCommand,
@@ -84,6 +86,9 @@ describe("telegram-user cli", () => {
     expect(help).toContain(
       "openclaw telegram-user download --chat @jarvis_tester_1_bot --message-id 52830",
     );
+    expect(help).toContain(
+      "openclaw telegram-user button-click --chat @jarvis_tester_1_bot --message-id 52831",
+    );
     expect(help).toContain("compact agent-friendly rows");
     expect(help).toContain("openclaw telegram-user monitor-listen --chat @jarvis_tester_1_bot");
     expect(help).toContain(
@@ -91,6 +96,42 @@ describe("telegram-user cli", () => {
     );
     expect(help).toContain("openclaw telegram-user monitor-service install --hook-url");
     expect(help).not.toContain("pnpm openclaw:local telegram-user");
+  });
+
+  it("registers button-click and forwards every exact selector", async () => {
+    const program = new Command();
+    registerTelegramUserCli(program);
+
+    const telegramUser = program.commands.find((command) => command.name() === "telegram-user");
+    expect(telegramUser?.commands.map((command) => command.name())).toContain("button-click");
+
+    await program.parseAsync(
+      [
+        "telegram-user",
+        "button-click",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message-id",
+        "52831",
+        "--button-text",
+        "Queue",
+        "--expected-callback-data",
+        "queue:proof",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(telegramUserButtonClickCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buttonText: "Queue",
+        chat: "@jarvis_tester_1_bot",
+        expectedCallbackData: "queue:proof",
+        json: true,
+        messageId: "52831",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("registers doctor and forwards optional chat/state flags", async () => {

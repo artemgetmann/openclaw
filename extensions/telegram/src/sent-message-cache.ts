@@ -14,6 +14,7 @@ type CacheEntry = {
 export type SentMessageMetadata = {
   sessionKey?: string;
   messageThreadId?: number;
+  durableFollowupId?: string;
 };
 
 /**
@@ -40,12 +41,14 @@ function normalizeSentMessageMetadata(
     typeof threadCandidate === "number" && Number.isFinite(threadCandidate) && threadCandidate > 0
       ? Math.trunc(threadCandidate)
       : undefined;
-  if (!sessionKey && messageThreadId == null) {
+  const durableFollowupId = metadata.durableFollowupId?.trim() || undefined;
+  if (!sessionKey && messageThreadId == null && !durableFollowupId) {
     return undefined;
   }
   return {
     ...(sessionKey ? { sessionKey } : {}),
     ...(messageThreadId != null ? { messageThreadId } : {}),
+    ...(durableFollowupId ? { durableFollowupId } : {}),
   };
 }
 

@@ -13,6 +13,7 @@ import {
   formatTelegramProviderCategoryText,
 } from "../../../src/auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../../../src/auto-reply/reply/model-selection.js";
+import { promoteQueuedFollowupToSteer } from "../../../src/auto-reply/reply/queue.js";
 import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../../../src/auto-reply/status.js";
 import { shouldDebounceTextInbound } from "../../../src/channels/inbound-debounce-policy.js";
@@ -108,6 +109,11 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import {
+  buildTelegramQueuedButtons,
+  buildTelegramSteeredButtons,
+  parseTelegramQueueCallback,
+} from "./queue-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { getSentMessageMetadata, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
@@ -1641,6 +1647,60 @@ export const registerTelegramHandlers = ({
         senderId,
         messageThreadId: messageThreadId ?? undefined,
       });
+      const queueCallback = parseTelegramQueueCallback(data);
+      if (queueCallback) {
+        // A cached receipt gives us an extra exact-message check in the hot
+        // process. After restart the durable queue record remains authoritative,
+        // and promotion still validates chat/account/thread before moving work.
+        if (
+          cachedCallbackMessageMeta?.durableFollowupId &&
+          cachedCallbackMessageMeta.durableFollowupId !== queueCallback.durableId
+        ) {
+          logVerbose("Blocked Telegram queue callback with mismatched receipt metadata");
+          return;
+        }
+        if (queueCallback.action === "queue" || queueCallback.action === "settled") {
+          return;
+        }
+
+        const callbackThreadId = messageThreadId ?? resolvedThreadId ?? dmThreadId ?? undefined;
+        const promotion = await promoteQueuedFollowupToSteer({
+          durableId: queueCallback.durableId,
+          expectedTelegramRoute: {
+            chatId: String(chatId),
+            accountId,
+            threadId: callbackThreadId,
+          },
+        });
+        if (promotion.status === "route-mismatch") {
+          logVerbose("Blocked Telegram queue callback whose durable route did not match");
+          return;
+        }
+        if (promotion.status === "promoted") {
+          const keyboard = buildInlineKeyboard(
+            buildTelegramSteeredButtons(queueCallback.durableId),
+          );
+          await editCallbackMessage("Steering the current task.", {
+            reply_markup: keyboard ?? { inline_keyboard: [] },
+          });
+          return;
+        }
+        if (promotion.status === "still-queued" && promotion.reason === "not-streaming") {
+          const keyboard = buildInlineKeyboard(buildTelegramQueuedButtons(queueCallback.durableId));
+          await editCallbackMessage("Still queued — the current task can’t be steered right now.", {
+            reply_markup: keyboard ?? { inline_keyboard: [] },
+          });
+          return;
+        }
+
+        await editCallbackMessage(
+          promotion.status === "still-queued"
+            ? "Already starting as the next task."
+            : "This queued message has already started.",
+          { reply_markup: { inline_keyboard: [] } },
+        );
+        return;
+      }
       const workLogCallback = parseTelegramWorkLogCallbackData(data);
       if (workLogCallback) {
         const workLog = getTelegramWorkLog(workLogCallback.id);

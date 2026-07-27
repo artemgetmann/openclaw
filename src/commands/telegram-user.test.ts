@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 const backendMocks = vi.hoisted(() => ({
   getTelegramUserDefaultPollIntervalMs: vi.fn(() => 1),
   getTelegramUserDefaultWaitTimeoutMs: vi.fn(() => 5),
+  runTelegramUserButtonClick: vi.fn(),
   runTelegramUserInbox: vi.fn(),
   runTelegramUserLogin: vi.fn(),
   runTelegramUserLogout: vi.fn(),
@@ -49,6 +50,7 @@ const runtime: RuntimeEnv = {
 };
 
 const {
+  telegramUserButtonClickCommand,
   telegramUserInboxCommand,
   telegramUserMonitorListenCommand,
   telegramUserMonitorPollCommand,
@@ -70,6 +72,60 @@ const {
 describe("telegram-user commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("forwards exact button selectors and renders bounded JSON", async () => {
+    backendMocks.runTelegramUserButtonClick.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      button: {
+        callback_data: "queue:proof",
+        callback_data_base64: "cXVldWU6cHJvb2Y=",
+        column: 0,
+        row: 1,
+        text: " Queue ",
+      },
+      chat: "@jarvis_tester_1_bot",
+      click_result: { alert: false, cache_time: 0, message: "Queued", url: null },
+      clicked: true,
+      message_id: 52831,
+    });
+
+    await telegramUserButtonClickCommand(
+      {
+        buttonText: " Queue ",
+        chat: "@jarvis_tester_1_bot",
+        expectedCallbackData: " queue:proof ",
+        json: true,
+        messageId: "52831",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserButtonClick).toHaveBeenCalledWith({
+      buttonText: " Queue ",
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      expectedCallbackData: " queue:proof ",
+      messageId: 52831,
+      session: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"clicked": true'));
+  });
+
+  it("rejects a non-positive button-click message id before the backend", async () => {
+    await expect(
+      telegramUserButtonClickCommand(
+        {
+          buttonText: "Queue",
+          chat: "@jarvis_tester_1_bot",
+          expectedCallbackData: "queue:proof",
+          messageId: "0",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("positive integer");
+
+    expect(backendMocks.runTelegramUserButtonClick).not.toHaveBeenCalled();
   });
 
   it("renders precheck JSON output", async () => {
@@ -605,6 +661,15 @@ describe("telegram-user commands", () => {
           date: "2026-03-24T00:00:00.000Z",
           direct_messages_topic: { topic_id: 7001 },
           direct_messages_topic_id: 7001,
+          inline_buttons: [
+            {
+              callback_data: "oqs:12345678-1234-4234-8234-123456789abc",
+              callback_data_base64: "b3FzOjEyMzQ1Njc4LTEyMzQtNDIzNC04MjM0LTEyMzQ1Njc4OWFiYw==",
+              column: 1,
+              row: 0,
+              text: "Steer",
+            },
+          ],
           media_kind: "voice",
           message_id: 200,
           out: false,
@@ -629,7 +694,7 @@ describe("telegram-user commands", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining(
-        'id=200 date=2026-03-24T00:00:00.000Z dir=in sender=555 reply_to=123 top=120 topic=7001 media=voice text="reply text"',
+        'id=200 date=2026-03-24T00:00:00.000Z dir=in sender=555 reply_to=123 top=120 topic=7001 media=voice buttons=[{"callback_data":"oqs:12345678-1234-4234-8234-123456789abc"',
       ),
     );
     expect(runtime.log).toHaveBeenCalledWith(
@@ -669,6 +734,7 @@ describe("telegram-user commands", () => {
       chat: "@jarvis_tester_1_bot",
       messages: [
         {
+          buttons: [],
           date: "2026-03-24T00:00:00.000Z",
           dir: "out",
           id: 201,

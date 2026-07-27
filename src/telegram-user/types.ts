@@ -2,6 +2,14 @@ export type TelegramUserDirectMessagesTopic = {
   topic_id: number | null;
 };
 
+export type TelegramUserInlineButton = {
+  callback_data: string | null;
+  callback_data_base64: string | null;
+  column: number;
+  row: number;
+  text: string;
+};
+
 export type TelegramUserMessage = {
   chat_id: number | null;
   chat_username: string | null;
@@ -9,6 +17,7 @@ export type TelegramUserMessage = {
   date: string | null;
   direct_messages_topic: TelegramUserDirectMessagesTopic | null;
   direct_messages_topic_id: number | null;
+  inline_buttons?: TelegramUserInlineButton[];
   media_kind?: "audio" | "document" | "photo" | "video" | "voice" | null;
   message_id: number;
   out: boolean;
@@ -102,6 +111,28 @@ export type TelegramUserOwnerClaimResult = {
 export type TelegramUserSendResult = {
   backend_meta?: TelegramUserBackendMeta;
   message: TelegramUserMessage;
+};
+
+export type TelegramUserButtonMetadata = {
+  callback_data: string | null;
+  callback_data_base64: string | null;
+  column: number;
+  row: number;
+  text: string;
+};
+
+export type TelegramUserButtonClickResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  button: TelegramUserButtonMetadata;
+  chat: string;
+  click_result: {
+    alert: boolean;
+    cache_time: number;
+    message: string | null;
+    url: string | null;
+  };
+  clicked: true;
+  message_id: number;
 };
 
 export type TelegramUserTopicCreateResult = {

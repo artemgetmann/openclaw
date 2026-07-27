@@ -38,7 +38,7 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { hasFollowupFinalizationOwnership, runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -65,8 +65,9 @@ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node"
 export function resolveSessionRunActive(params: {
   embeddedRunActive: boolean;
   queueOwned: boolean;
+  finalizationOwned?: boolean;
 }): boolean {
-  return params.embeddedRunActive || params.queueOwned;
+  return params.embeddedRunActive || params.queueOwned || params.finalizationOwned === true;
 }
 
 function buildResetSessionNoticeText(params: {
@@ -544,6 +545,7 @@ export async function runPreparedReply(
   const isActive = resolveSessionRunActive({
     embeddedRunActive: isEmbeddedPiRunActive(sessionIdFinal),
     queueOwned,
+    finalizationOwned: hasFollowupFinalizationOwnership(queueKey),
   });
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";

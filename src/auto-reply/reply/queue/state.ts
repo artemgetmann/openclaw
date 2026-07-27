@@ -16,6 +16,13 @@ export type SummarizedDurableFollowup = FollowupQueueSummaryEntry & {
 export type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
+  /**
+   * Exact disk-backed inputs already claimed by a drain turn.
+   *
+   * A Telegram callback may promote only work that has not crossed this
+   * boundary; otherwise one message could run both as steering and a follow-up.
+   */
+  inFlightDurableIds: Set<string>;
   lastEnqueuedAt: number;
   /** Latest eligibility boundary among ordered durable work in this queue. */
   nextAttemptAt?: number;
@@ -129,6 +136,9 @@ export function recordFollowupQueueSummaryDrops(
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
+    // Process-global queue state can survive a module reload from an older
+    // bundle that predates targeted steering claims.
+    existing.inFlightDurableIds ??= new Set<string>();
     applyQueueRuntimeSettings({
       target: existing,
       settings,
@@ -139,6 +149,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
   const created: FollowupQueueState = {
     items: [],
     draining: false,
+    inFlightDurableIds: new Set<string>(),
     lastEnqueuedAt: 0,
     nextAttemptAt: undefined,
     mode: settings.mode,
@@ -186,6 +197,7 @@ export function clearFollowupQueue(key: string): number {
   // Mutate RAM only after all disk acknowledgement succeeds, so an unlink or
   // scan failure leaves the queue available for a safe cancellation retry.
   queue.items.length = 0;
+  queue.inFlightDurableIds.clear();
   queue.droppedCount = 0;
   queue.summaryLines = [];
   queue.processLocalDroppedCount = 0;

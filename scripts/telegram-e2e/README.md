@@ -228,6 +228,13 @@ openclaw telegram-user download \
   --output /tmp/openclaw-media \
   --json
 
+openclaw telegram-user button-click \
+  --chat @jarvis_tester_1_bot \
+  --message-id 52831 \
+  --button-text "Steer" \
+  --expected-callback-data "oqs:12345678-1234-4234-8234-123456789abc" \
+  --json
+
 openclaw media transcribe \
   --file /tmp/openclaw-media/telegram-jarvis_tester_1_bot-52830.oga \
   --json
@@ -256,6 +263,11 @@ For media-bearing Telegram messages, keep fetching and understanding separate:
 `read` discovers `media_kind`, `telegram-user download` saves the payload by
 chat and message id, and `media transcribe` turns local audio into text through
 the configured media audio provider path.
+
+Inline callback clicks are fail-closed: callers must name the exact chat,
+message id, visible button text, and callback data. A mismatch returns bounded
+button metadata without clicking anything; the CLI never falls back to a
+latest message, label-only match, or row/column guess.
 
 Session states returned by `telegram-user status`:
 
