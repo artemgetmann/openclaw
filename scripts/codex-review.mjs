@@ -6,12 +6,12 @@ const DEFAULT_BASE = "origin/main";
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const FORCE_KILL_GRACE_MS = 5_000;
 
-function usage(message) {
+function usage(message, exitCode = 2) {
   if (message) {
     process.stderr.write(`${message}\n\n`);
   }
   process.stderr.write("Usage: scripts/codex-review.mjs [--base <ref>] [--timeout <seconds>]\n");
-  process.exit(2);
+  process.exit(exitCode);
 }
 
 function parsePositiveInteger(rawValue, label) {
@@ -35,7 +35,7 @@ function parseArgs(argv) {
       const rawTimeout = argv[++index] ?? usage("--timeout requires seconds");
       options.timeoutSeconds = parsePositiveInteger(rawTimeout, "--timeout");
     } else if (argument === "--help" || argument === "-h") {
-      usage();
+      usage(undefined, 0);
     } else {
       usage(`Unknown argument: ${argument}`);
     }

@@ -81,6 +81,15 @@ describe("scripts/codex-review.mjs", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("--timeout must be a positive integer");
   });
+
+  it("prints help successfully without spawning Codex", () => {
+    const stubDirectory = makeCodexStub("process.exit(99);\n");
+
+    const result = runReview(stubDirectory, ["--help"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("Usage: scripts/codex-review.mjs");
+  });
 });
 
 describe("disabled Copilot review compatibility command", () => {
