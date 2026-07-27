@@ -35,7 +35,6 @@ describe("evaluateGuiPolicy", () => {
   });
 
   it.each([
-    ["Sign in", "sign in"],
     ["Payment method", "payment"],
     ["Confirm purchase", "confirm purchase"],
     ["Delete account", "delete"],
@@ -70,6 +69,202 @@ describe("evaluateGuiPolicy", () => {
     expect(approved.allowed).toBe(true);
     expect(approved.risk).toBe("allowed-mutation");
     expect(approved.approvalScope).toBeTruthy();
+  });
+
+  it("allows the known App Store redemption sign-in handoff", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "App Store", windowTitle: "Sign-In Required" },
+      snapshot: snapshot({
+        appName: "App Store",
+        windowTitle: "Sign-In Required",
+        summary: [
+          "App=App Store",
+          'Window: "Sign-In Required", App: App Store.',
+          "7 textField Search Description: Search the App Store Value: previous query",
+          "8 button Sign In",
+          "Tap continue and sign in to redeem code.",
+        ].join("\n"),
+        visibleText: [
+          "Tap continue and sign in to redeem code.",
+          "Sign In",
+          "Search",
+          "Search the App Store",
+          "previous query",
+        ],
+        elements: [
+          {
+            ref: "@search",
+            role: "textField",
+            label: "Search",
+            description: "Search the App Store",
+            value: "previous query",
+          },
+        ],
+      }),
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      reason: "Open Apple's authentication sheet without entering credentials.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.risk).toBe("allowed-mutation");
+    expect(decision.requiredSensitiveApproval).toBeUndefined();
+  });
+
+  it("allows the known handoff in OCU's role-prefixed text-dump format", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "App Store", windowTitle: "Sign-In Required" },
+      snapshot: snapshot({
+        appName: "App Store",
+        windowTitle: "Sign-In Required",
+        summary: "Tap continue and sign in to redeem code.",
+        visibleText: [
+          "Tap continue and sign in to redeem code.",
+          "textField Search",
+          "Search the App Store",
+          "previous query",
+          "button Sign In",
+        ],
+        elements: [
+          {
+            ref: "@search",
+            role: "textField Search",
+            label: "textField Search",
+            description: "Search the App Store",
+            value: "previous query",
+          },
+        ],
+      }),
+      element: { ref: "@sign-in", role: "button Sign In", label: "button Sign In" },
+      reason: "Open Apple's authentication sheet without entering credentials.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiredSensitiveApproval).toBeUndefined();
+  });
+
+  it.each([
+    ["secure field", { ref: "@secret", role: "secure text field" }],
+    ["editable identifier", { ref: "@identity", role: "text field", label: "Apple Account" }],
+    ["OCU editable identifier", { ref: "@identity", role: "textField", label: "Apple Account" }],
+    ["OCU secure field", { ref: "@secret", role: "secureTextField" }],
+    ["web editable identifier", { ref: "@identity", role: "textbox", label: "Apple Account" }],
+    ["passwordless action", { ref: "@magic", role: "static text", label: "Magic Link" }],
+    [
+      "static account identifier",
+      { ref: "@identity", role: "static text", label: "Apple Account artem@example.com" },
+    ],
+  ])("keeps a structurally exposed %s behind approval in the known prompt", (_name, element) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "App Store", windowTitle: "Sign-In Required" },
+      snapshot: snapshot({
+        appName: "App Store",
+        windowTitle: "Sign-In Required",
+        summary: "Tap continue and sign in to redeem code.",
+        visibleText: ["Tap continue and sign in to redeem code.", "Sign In"],
+        elements: [element],
+      }),
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      reason: "Submit the current sign-in challenge.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("explicit sensitive-action approval required");
+    expect(decision.requiredSensitiveApproval).toBeTruthy();
+  });
+
+  it.each([
+    ["password form", "Password challenge with an autofilled password", ["Password", "Sign In"]],
+    ["passkey prompt", "Use your passkey to continue", ["Passkey", "Sign In"]],
+    ["Touch ID prompt", "Use Touch ID to continue", ["Touch ID", "Sign In"]],
+    ["Face ID prompt", "Use Face ID to continue", ["Face ID", "Sign In"]],
+    ["OTP prompt", "Enter the verification code", ["Verification Code", "Sign In"]],
+    ["one-time-code prompt", "Enter the one-time code", ["One-Time Code", "Sign In"]],
+    ["authentication-code prompt", "Enter the authentication code", ["Code", "Sign In"]],
+    ["numeric-code prompt", "Enter the 6-digit code", ["6-Digit Code", "Sign In"]],
+    ["PIN prompt", "Enter your PIN", ["PIN", "Sign In"]],
+    ["access-token prompt", "Use the saved access token", ["Access Token", "Sign In"]],
+    ["secret prompt", "Use the saved client secret", ["Client Secret", "Sign In"]],
+    ["username form", "Continue with your username", ["Username", "Sign In"]],
+    ["phone form", "Continue with your phone", ["Phone", "Sign In"]],
+    ["passwordless form", "Send a magic link", ["Magic Link", "Sign In"]],
+    ["prefilled email form", "Continue as artem@example.com", ["artem@example.com", "Sign In"]],
+    ["CAPTCHA prompt", "Complete the CAPTCHA challenge", ["CAPTCHA", "Sign In"]],
+    ["security-key prompt", "Use your security key", ["Security Key", "Sign In"]],
+    ["sign-in approval prompt", "Approve this sign-in request", ["Approve Sign In", "Sign In"]],
+  ])("still requires approval for Sign In on a $name", (_name, summary, visibleText) => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Example", windowTitle: "Sign In" },
+      snapshot: snapshot({
+        appName: "Example",
+        windowTitle: "Sign In",
+        summary,
+        visibleText,
+      }),
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      reason: "Submit the current sign-in challenge.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("explicit sensitive-action approval required");
+    expect(decision.requiredSensitiveApproval).toBeTruthy();
+  });
+
+  it("uses selected-control metadata to detect a hidden credential submission", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Example", windowTitle: "Sign In" },
+      snapshot: snapshot({
+        appName: "Example",
+        windowTitle: "Sign In",
+        summary: "Welcome",
+        visibleText: ["Welcome", "Sign In"],
+      }),
+      element: {
+        ref: "@sign-in",
+        role: "button",
+        label: "Sign In",
+        description: "Submit saved password",
+      },
+      reason: "Submit the current sign-in challenge.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("explicit sensitive-action approval required");
+    expect(decision.requiredSensitiveApproval).toBeTruthy();
+  });
+
+  it("does not let authentication entry bypass a mixed payment context", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "Example", windowTitle: "Sign In" },
+      snapshot: snapshot({
+        appName: "Example",
+        windowTitle: "Sign In",
+        summary: "Payment authorization requires authentication.",
+        visibleText: ["Payment", "Sign In"],
+      }),
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      reason: "Sign in to approve the payment.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("Blocked sensitive GUI surface");
   });
 
   it("binds sensitive approval to visible transaction amounts", () => {
@@ -454,6 +649,62 @@ describe("evaluateGuiPolicy", () => {
 
     expect(decision.allowed).toBe(true);
     expect(decision.risk).toBe("allowed-mutation");
+  });
+
+  it.each(["Touch ID", "Face ID", "Biometric", "Fingerprint"])(
+    "allows dismissing a %s prompt without approving an assertion",
+    (prompt) => {
+      const decision = evaluateGuiPolicy({
+        actionType: "click",
+        target: { appName: "SecurityAgent", windowTitle: prompt },
+        snapshot: snapshot({
+          appName: "SecurityAgent",
+          windowTitle: prompt,
+          summary: `${prompt} authentication prompt`,
+          visibleText: [prompt, "Cancel"],
+        }),
+        element: { ref: "@cancel", role: "button", label: "Cancel" },
+        reason: `Dismiss the ${prompt} prompt.`,
+        approvedPolicyRisk: true,
+        verificationMode: "post_state",
+      });
+
+      expect(decision.allowed).toBe(true);
+      expect(decision.risk).toBe("allowed-mutation");
+    },
+  );
+
+  it("does not erase challenge text that matches a populated Search query", () => {
+    const decision = evaluateGuiPolicy({
+      actionType: "click",
+      target: { appName: "App Store", windowTitle: "Sign-In Required" },
+      snapshot: snapshot({
+        appName: "App Store",
+        windowTitle: "Sign-In Required",
+        summary: [
+          "7 textField Search Description: Search the App Store Value: password",
+          "Password",
+          "Tap continue and sign in to redeem code.",
+        ].join("\n"),
+        visibleText: ["Search", "Search the App Store", "password", "Password", "Sign In"],
+        elements: [
+          {
+            ref: "@search",
+            role: "textField",
+            label: "Search",
+            description: "Search the App Store",
+            value: "password",
+          },
+        ],
+      }),
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      reason: "Submit the current sign-in challenge.",
+      approvedPolicyRisk: true,
+      verificationMode: "post_state",
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("explicit sensitive-action approval required");
   });
 
   it.each([
