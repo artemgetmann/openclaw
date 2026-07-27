@@ -59,6 +59,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
         "goal-mode",
         "monitor-router",
         "message-drafting",
+        "personal-tone-of-voice",
         "media-editor",
         "video-frames",
         "jarvis-computer-use",
@@ -307,6 +308,12 @@ describe("applyNonInteractiveSkillsConfig", () => {
       body: "# Message Drafting\n",
     });
     await writeSkill({
+      dir: path.join(bundledDir, "personal-tone-of-voice"),
+      name: "personal-tone-of-voice",
+      description: "Set up and apply a personal writing voice to external drafts.",
+      body: "# Personal Tone of Voice\n",
+    });
+    await writeSkill({
       dir: path.join(bundledDir, "jarvis-computer-use"),
       name: "jarvis-computer-use",
       description: "Use for Jarvis Computer Use tasks and GUI proof requests.",
@@ -331,6 +338,8 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(prompt).toContain("Route monitor status questions");
     expect(prompt).toContain("<name>message-drafting</name>");
     expect(prompt).toContain("Compose approval-ready recipient-facing messages.");
+    expect(prompt).toContain("<name>personal-tone-of-voice</name>");
+    expect(prompt).toContain("apply a personal writing voice");
     expect(prompt).toContain("Jarvis Computer Use tasks");
     expect(prompt).toContain("Manage Telegram chats, topics, threads");
   });

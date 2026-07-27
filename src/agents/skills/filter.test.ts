@@ -33,14 +33,25 @@ describe("skills/filter", () => {
   });
 
   it.each(messageDraftingOwners)(
-    "%s closes over message-drafting in effective filters",
+    "%s closes over drafting and personal tone in effective filters",
     (owner) => {
       const filter = [owner];
 
-      expect(resolveSkillFilter(filter)).toEqual([owner, "message-drafting"]);
+      expect(resolveSkillFilter(filter)).toEqual([
+        owner,
+        "message-drafting",
+        "personal-tone-of-voice",
+      ]);
       expect(filter).toEqual([owner]);
     },
   );
+
+  it("closes a direct drafting filter over personal tone", () => {
+    const filter = ["message-drafting"];
+
+    expect(resolveSkillFilter(filter)).toEqual(["message-drafting", "personal-tone-of-voice"]);
+    expect(filter).toEqual(["message-drafting"]);
+  });
 
   it("skips disabled-only owners but closes over another enabled owner", () => {
     const config: OpenClawConfig = {
@@ -54,6 +65,7 @@ describe("skills/filter", () => {
       "wacli",
       "slack",
       "message-drafting",
+      "personal-tone-of-voice",
     ]);
     expect(normalizeSkillFilter(disabledOnly)).toEqual(["wacli"]);
     expect(normalizeSkillFilter(withEnabledOwner)).toEqual(["wacli", "slack"]);
