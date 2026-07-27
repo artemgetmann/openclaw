@@ -18,6 +18,11 @@ default runtime.
 - Nonblocking owner delegation through `delegate_async`: Jarvis returns after
   Codex accepts the turn, then the completed result starts a new delivered
   Jarvis turn in the exact originating session.
+- Launcher-owned worker handback for every async turn: Codex receives the
+  delegation id, exact native thread id, and instructions to finish with
+  `complete`, `blocked`, or `decision-needed`, plus the useful result and
+  relevant proof/next-action details. The owner task remains unchanged inside
+  a delegation-specific payload boundary.
 - Exact return attribution for async relays: the continuation carries the
   native Codex thread and turn ids plus trusted inter-session provenance.
 - Async replies can target the same native thread through `message_async`;
@@ -41,6 +46,11 @@ The relay covers native turns started by this Jarvis-owned App Server process.
 It does not claim that messages sent through an unrelated Codex process are
 broadcast into this stdio client. Cross-process subscription requires a shared
 supervisor or broker and is outside this compatibility slice.
+
+The worker does not call `send_message_to_thread` back to Jarvis. A Jarvis
+session is not a native Codex thread address; the launcher-owned listener is
+the return transport. This supports terminal complete/blocked/decision-needed
+handback, not proactive intermediate worker callbacks.
 
 The native thread remains durable across normal follow-up turns, but an active
 async relay is process-local: stopping the Gateway also stops the App Server

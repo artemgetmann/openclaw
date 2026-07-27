@@ -193,7 +193,7 @@ describe("Codex natural-language delegation", () => {
     }) as AnyAgentTool;
     const accepted = await tool.execute("delegate-async-1", {
       action: "delegate_async",
-      text: "Inspect the browser issue without blocking Jarvis.",
+      text: "\nInspect the browser issue without blocking Jarvis.\nKeep this spacing.\n",
       workspace_dir: "/repo/openclaw",
     });
 
@@ -206,6 +206,34 @@ describe("Codex natural-language delegation", () => {
       },
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    const delegatedTurn = appServer.requests.find((request) => request.method === "turn/start");
+    const delegatedPrompt = (
+      delegatedTurn?.params as {
+        input?: Array<{ text?: string }>;
+      }
+    )?.input?.[0]?.text;
+    expect(delegatedPrompt).toMatch(
+      /Jarvis-owned Codex worker return contract:[\s\S]*Native Codex thread ID: thread-natural/,
+    );
+    expect(delegatedPrompt).toContain("Do not call send_message_to_thread to report to Jarvis.");
+    expect(delegatedPrompt).toContain(
+      "- Start the terminal handback with exactly one of: STATUS: complete, STATUS: blocked, or STATUS: decision-needed.",
+    );
+    const delegatedBoundary = delegatedPrompt?.match(
+      /-----BEGIN (JARVIS_TASK_PAYLOAD_[^\n]+)-----/,
+    )?.[1];
+    expect(delegatedBoundary).toBeTruthy();
+    expect(delegatedPrompt).toContain(
+      `-----BEGIN ${delegatedBoundary}-----\n\nInspect the browser issue without blocking Jarvis.\nKeep this spacing.\n\n-----END ${delegatedBoundary}-----`,
+    );
+    const delegatedId = delegatedPrompt?.match(/- Delegation ID: ([^\n]+)/)?.[1];
+    expect(delegatedId).toBeTruthy();
+    expect(accepted).toMatchObject({
+      details: {
+        delegationId: delegatedId,
+      },
+    });
 
     finishNaturalTurn();
     await vi.waitFor(() => {
@@ -288,12 +316,36 @@ describe("Codex natural-language delegation", () => {
           threadId: "thread-natural",
           input: [
             expect.objectContaining({
-              text: "Use the approved option and report back when finished.",
+              text: expect.stringMatching(
+                /Jarvis-owned Codex worker return contract:[\s\S]*Native Codex thread ID: thread-natural/,
+              ),
             }),
           ],
         }),
       },
     ]);
+    const followupPrompt = (
+      appServer.requests[1]?.params as {
+        input?: Array<{ text?: string }>;
+      }
+    )?.input?.[0]?.text;
+    expect(followupPrompt).toContain(
+      "The launcher watches this exact turn and automatically relays your terminal output to the originating Jarvis session.",
+    );
+    const followupBoundary = followupPrompt?.match(
+      /-----BEGIN (JARVIS_TASK_PAYLOAD_[^\n]+)-----/,
+    )?.[1];
+    expect(followupBoundary).toBeTruthy();
+    expect(followupPrompt).toContain(
+      `-----BEGIN ${followupBoundary}-----\nUse the approved option and report back when finished.\n-----END ${followupBoundary}-----`,
+    );
+    const followupId = followupPrompt?.match(/- Delegation ID: ([^\n]+)/)?.[1];
+    expect(followupId).toBeTruthy();
+    expect(accepted).toMatchObject({
+      details: {
+        delegationId: followupId,
+      },
+    });
 
     finishNaturalTurn();
     await vi.waitFor(() => {
