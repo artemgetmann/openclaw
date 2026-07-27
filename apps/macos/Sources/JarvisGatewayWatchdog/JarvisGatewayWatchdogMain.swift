@@ -71,6 +71,7 @@ enum JarvisGatewayWatchdogMain {
                 previous.pidFirstObservedAt != current.pidFirstObservedAt ||
                 previous.consecutiveFailures != current.consecutiveFailures ||
                 previous.lastRecoveryAttemptAt != current.lastRecoveryAttemptAt ||
+                previous.recoveryPendingSince != current.recoveryPendingSince ||
                 previous.lastNotificationAt != current.lastNotificationAt ||
                 previous.incidentActive != current.incidentActive ||
                 previous.lastOutcome != current.lastOutcome

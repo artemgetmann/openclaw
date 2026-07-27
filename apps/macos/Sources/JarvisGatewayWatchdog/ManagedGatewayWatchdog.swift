@@ -61,9 +61,26 @@ struct ManagedGatewayWatchdogPolicy: Sendable {
             // Forget the old epoch so the resumed watcher grants full cold-start
             // grace instead of racing the owner that just released its lock.
             state.resetObservationEpoch(now: now, reason: "suppressed:\(reason)")
+            state.recoveryPendingSince = nil
             return .none(reason: "suppressed:\(reason)")
 
         case let .unavailable(reason):
+            if state.recoveryPendingSince != nil {
+                // A successful launchctl command is not recovery proof. If the
+                // replacement disappears, wait through the same bounded failure
+                // window, then surface manual recovery without another kickstart.
+                state.observedPID = nil
+                state.consecutiveFailures += 1
+                state.lastOutcome = "replacement-unavailable-\(state.consecutiveFailures)"
+                guard state.consecutiveFailures >= self.configuration.failureThreshold else {
+                    return .none(reason: "bounded-replacement-unavailable")
+                }
+                state.incidentActive = true
+                return self.notificationActionIfDue(
+                    now: now,
+                    state: &state,
+                    reason: "automatic recovery replacement is unavailable")
+            }
             // Never resurrect an intentionally stopped or unregistered service.
             state.resetObservationEpoch(now: now, reason: "unavailable:\(reason)")
             return .none(reason: "unavailable:\(reason)")
@@ -71,6 +88,7 @@ struct ManagedGatewayWatchdogPolicy: Sendable {
         case let .wrongOwnership(reason):
             // Wrong provenance is diagnostic evidence, never restart authority.
             state.resetObservationEpoch(now: now, reason: "wrong-ownership:\(reason)")
+            state.recoveryPendingSince = nil
             return .none(reason: "wrong-ownership:\(reason)")
 
         case let .running(pid, healthy):
@@ -85,6 +103,7 @@ struct ManagedGatewayWatchdogPolicy: Sendable {
                 let hadIncident = state.incidentActive
                 state.consecutiveFailures = 0
                 state.incidentActive = false
+                state.recoveryPendingSince = nil
                 state.lastOutcome = "healthy"
                 return hadIncident ? .clearIncident : .none(reason: "healthy")
             }
@@ -129,11 +148,13 @@ struct ManagedGatewayWatchdogPolicy: Sendable {
         if succeeded {
             // Command success is not health proof. Keep the recovery timestamp
             // for rate limiting; the replacement PID must pass its own health.
+            state.recoveryPendingSince = now
             state.lastOutcome = "automatic-recovery-command-succeeded"
             return .none(reason: "awaiting-replacement-health")
         }
 
         state.incidentActive = true
+        state.recoveryPendingSince = nil
         state.lastOutcome = "automatic-recovery-command-failed"
         return self.notificationActionIfDue(
             now: now,
@@ -167,6 +188,9 @@ struct ManagedGatewayWatchdogState: Codable, Equatable, Sendable {
     var pidFirstObservedAt: Date?
     var consecutiveFailures = 0
     var lastRecoveryAttemptAt: Date?
+    /// Non-nil after launchctl accepts recovery until replacement health proves
+    /// success. Optional for backwards-compatible decoding of existing state.
+    var recoveryPendingSince: Date?
     var lastNotificationAt: Date?
     var lastCheckedAt: Date?
     var incidentActive = false

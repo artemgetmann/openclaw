@@ -43,8 +43,6 @@ const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
 const WATCHDOG_STDOUT_PATH = "/tmp/openclaw/gateway-watchdog.log";
 const WATCHDOG_STDERR_PATH = "/tmp/openclaw/gateway-watchdog.err.log";
-const JARVIS_WATCHDOG_STDOUT_PATH = "/tmp/openclaw/jarvis-gateway-watchdog.log";
-const JARVIS_WATCHDOG_STDERR_PATH = "/tmp/openclaw/jarvis-gateway-watchdog.err.log";
 
 function normalizePathForComparison(filePath: string | null | undefined): string | null {
   const trimmed = filePath?.trim();
@@ -409,9 +407,22 @@ async function movePublicJarvisWatchdogPlistToTrash(
   // current job. Otherwise RunAtLoad resurrects an orphaned KeepAlive helper.
   const home = toPosixPath(resolveHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
-  const dest = path.join(trashDir, `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`);
+  const defaultDest = path.join(trashDir, `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
+    // Finder's Trash does not replace an existing file. Preserve both copies
+    // so uninstall remains recoverable while still removing the live
+    // registration that launchd would otherwise resurrect at next login.
+    let dest = defaultDest;
+    try {
+      await fs.access(defaultDest);
+      dest = path.join(
+        trashDir,
+        `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}-${Date.now()}-${process.pid}.plist`,
+      );
+    } catch {
+      // The stable destination is free.
+    }
     await fs.rename(plistPath, dest);
     stdout.write(`${formatLine("Moved Jarvis Watchdog LaunchAgent to Trash", dest)}\n`);
   } catch {
@@ -441,13 +452,20 @@ async function installPublicJarvisWatchdogLaunchAgent(args: {
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(path.posix.join(home, "Library"));
   await ensureSecureDirectory(path.dirname(plistPath));
+  // launchd opens StandardOutPath/StandardErrorPath before exec. Keep these
+  // app-owned and create the parent before bootstrap so first install works on
+  // a machine that has never run any source-checkout watchdog.
+  const logDir = path.posix.join(args.env.OPENCLAW_STATE_DIR!, "logs");
+  await ensureSecureDirectory(logDir);
+  const stdoutPath = path.posix.join(logDir, "gateway-watchdog.log");
+  const stderrPath = path.posix.join(logDir, "gateway-watchdog.err.log");
 
   const plist = buildLaunchAgentPlist({
     label: PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL,
     comment: "Jarvis Managed Gateway Watchdog",
     programArguments: [executable],
-    stdoutPath: JARVIS_WATCHDOG_STDOUT_PATH,
-    stderrPath: JARVIS_WATCHDOG_STDERR_PATH,
+    stdoutPath,
+    stderrPath,
     environment: {
       HOME: home,
       OPENCLAW_PROFILE: "consumer",

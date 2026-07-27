@@ -121,6 +121,37 @@ struct ManagedGatewayWatchdogPolicyTests {
             state: &state) == .none(reason: "notification-rate-limited"))
     }
 
+    @Test func `kickstarted replacement disappearance becomes a bounded manual incident`() {
+        var policy = ManagedGatewayWatchdogPolicy(configuration: self.configuration)
+        var state = ManagedGatewayWatchdogState(
+            observedPID: 450,
+            pidFirstObservedAt: Date(timeIntervalSince1970: 1000),
+            consecutiveFailures: 3)
+        let now = Date(timeIntervalSince1970: 4500)
+
+        #expect(policy.evaluate(
+            observation: .running(pid: 450, healthy: false),
+            now: now,
+            state: &state) == .recover(pid: 450))
+        #expect(policy.recordRecoveryResult(
+            succeeded: true,
+            now: now,
+            state: &state) == .none(reason: "awaiting-replacement-health"))
+        for offset in [15.0, 30.0, 45.0] {
+            #expect(policy.evaluate(
+                observation: .unavailable(reason: "gateway-not-running"),
+                now: now.addingTimeInterval(offset),
+                state: &state) == .none(reason: "bounded-replacement-unavailable"))
+        }
+        #expect(policy.evaluate(
+            observation: .unavailable(reason: "gateway-not-running"),
+            now: now.addingTimeInterval(60),
+            state: &state) == .notify(
+                reason: "automatic recovery replacement is unavailable"))
+        #expect(state.incidentActive)
+        #expect(state.lastRecoveryAttemptAt == now)
+    }
+
     @Test func `repeated failure inside global backoff does not restart loop`() {
         var policy = ManagedGatewayWatchdogPolicy(configuration: self.configuration)
         let lastRecovery = Date(timeIntervalSince1970: 6000)

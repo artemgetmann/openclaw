@@ -1032,6 +1032,11 @@ describe("launchd install", () => {
     expect(watchdogPlist).toContain(fixture.executable);
     expect(watchdogPlist).toContain("<string>ai.jarvis.gateway</string>");
     expect(watchdogPlist).not.toContain("Programming_Projects");
+    expect(watchdogPlist).toContain(`${fixture.env.OPENCLAW_STATE_DIR}/logs/gateway-watchdog.log`);
+    expect(watchdogPlist).toContain(
+      `${fixture.env.OPENCLAW_STATE_DIR}/logs/gateway-watchdog.err.log`,
+    );
+    expect(state.dirs.has(`${fixture.env.OPENCLAW_STATE_DIR}/logs`)).toBe(true);
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, fixture.plistPath]);
   });
 
@@ -1170,6 +1175,30 @@ describe("launchd install", () => {
     const watchdogTrashPath = `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
     expect(state.files.has(fixture.plistPath)).toBe(false);
     expect(state.files.get(watchdogTrashPath)).toBe("<watchdog/>");
+  });
+
+  it("public Jarvis uninstall uses a unique Trash name when the stable name exists", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const gatewayPlistPath = resolveLaunchAgentPlistPath(fixture.env);
+    const stableTrashPath = `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
+    state.files.set(gatewayPlistPath, "<plist/>");
+    state.files.set(fixture.plistPath, "<watchdog/>");
+    state.files.set(stableTrashPath, "<older-watchdog/>");
+
+    await uninstallLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    expect(state.files.has(fixture.plistPath)).toBe(false);
+    expect(state.files.get(stableTrashPath)).toBe("<older-watchdog/>");
+    const uniqueCopies = [...state.files.entries()].filter(
+      ([candidate, contents]) =>
+        candidate.startsWith(
+          `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}-`,
+        ) && contents === "<watchdog/>",
+    );
+    expect(uniqueCopies).toHaveLength(1);
   });
 
   it("boots out the watchdog before stopping the canonical shared service", async () => {
