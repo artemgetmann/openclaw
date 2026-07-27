@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 /**
- * Deterministic, non-AI Telegram counterparty for GA-LIVE-20260724-01.
+ * Deterministic, non-AI Telegram counterparty for a fresh acceptance run.
  *
  * The harness owns exactly one tester-bot reservation and one Telegram user
  * chat. Preflight performs the same durable safe-reuse transaction as the
@@ -26,22 +26,60 @@ import {
 import { validateTelegramTesterScenarioReservation } from "../src/infra/telegram-tester-scenario-reservation.js";
 import { acquireTelegramTokenLease } from "../src/infra/telegram-token-lease.js";
 
-export const COUNTERPARTY_BOT_USERNAME = "Artem_jarvis_email_bot";
 export const COUNTERPARTY_ARTEM_USER_ID = "1336356696";
-export const COUNTERPARTY_SCENARIO_ID = "GA-LIVE-20260724-01-counterparty";
 
-export const COUNTERPARTY_TEXT = {
-  nonmatch: "GA-LIVE-20260724-01 NONMATCH kind=unrelated-weather",
-  inScope: "GA-LIVE-20260724-01 IN_SCOPE status=READY reply_exact=GA-LIVE-20260724-01 ACK READY",
-  inScopeReply: "GA-LIVE-20260724-01 ACK READY",
-  approval:
-    "GA-LIVE-20260724-01 APPROVAL_REQUIRED change=SYNTHETIC_COMMITMENT reply_exact=GA-LIVE-20260724-01 APPROVED CONTINUE",
-  approvalReply: "GA-LIVE-20260724-01 APPROVED CONTINUE",
-  completion: "GA-LIVE-20260724-01 COMPLETE evidence=FRESH_AFTER_RESTART",
-} as const;
+export type CounterpartyProtocol = {
+  scenarioId: string;
+  text: {
+    nonmatch: string;
+    operationalRequest: string;
+    operationalReply: string;
+    paymentApproval: string;
+    paymentApprovedReply: string;
+    completion: string;
+  };
+};
+
+const RUN_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/u;
+const BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
+const BOT_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
+
+export function createCounterpartyProtocol(runId: string): CounterpartyProtocol {
+  if (!RUN_ID_PATTERN.test(runId)) {
+    throw new Error(
+      "OPENCLAW_COUNTERPARTY_RUN_ID must be 1-64 printable ASCII letters, digits, dots, underscores, or hyphens, and must start and end with a letter or digit.",
+    );
+  }
+
+  const operationalReply =
+    `${runId} OPERATIONAL_DETAIL location=Monas_Jakarta ` +
+    "map=https://maps.google.com/?q=-6.175392,106.827153";
+  const paymentApprovedReply =
+    `${runId} APPROVED_CONTINUATION event=SYNTHETIC_SECURITY_DEPOSIT ` +
+    "amount=IDR_100000 recipient=DEMO_VENDOR";
+
+  return {
+    scenarioId: `${runId}-counterparty`,
+    text: {
+      nonmatch: `${runId} NONMATCH kind=unrelated-weather`,
+      operationalRequest:
+        `${runId} OPERATIONAL_DETAIL_REQUEST target=Monas_Jakarta request=location_and_map ` +
+        `reply_exact=${operationalReply}`,
+      operationalReply,
+      paymentApproval:
+        `${runId} APPROVAL_REQUIRED event=SYNTHETIC_SECURITY_DEPOSIT amount=IDR_100000 ` +
+        `recipient=DEMO_VENDOR real_funds=false reply_exact=${paymentApprovedReply}`,
+      paymentApprovedReply,
+      completion: `${runId} COMPLETE evidence=FRESH_AFTER_RESTART`,
+    },
+  };
+}
 
 const ENV = {
   artemUserId: "OPENCLAW_COUNTERPARTY_ARTEM_USER_ID",
+  expectedBotId: "OPENCLAW_COUNTERPARTY_EXPECTED_BOT_ID",
+  expectedBotUsername: "OPENCLAW_COUNTERPARTY_EXPECTED_BOT_USERNAME",
+  runId: "OPENCLAW_COUNTERPARTY_RUN_ID",
   token: "OPENCLAW_COUNTERPARTY_TELEGRAM_BOT_TOKEN",
   reservationRoot: "OPENCLAW_TELEGRAM_TESTER_RESERVATION_ROOT",
   scenarioId: "OPENCLAW_TELEGRAM_TESTER_SCENARIO_ID",
@@ -55,11 +93,12 @@ export type CounterpartyCommand =
   | "emit-nonmatch"
   | "replay-nonmatch-after-baseline"
   | "assert-nonmatch-silence"
-  | "emit-in-scope"
-  | "wait-in-scope-reply"
-  | "emit-approval"
-  | "assert-approval-silence"
-  | "wait-approved-reply"
+  | "emit-operational-detail-request"
+  | "wait-operational-detail-reply"
+  | "emit-payment-approval"
+  | "assert-payment-approval-silence"
+  | "record-founder-approval"
+  | "wait-approved-payment-continuation"
   | "mark-restart-boundary"
   | "emit-completion";
 
@@ -72,13 +111,14 @@ export type CounterpartyStage =
   | "replay_sending"
   | "replay_sent"
   | "replay_silent"
-  | "in_scope_sending"
-  | "in_scope_sent"
-  | "in_scope_replied"
-  | "approval_sending"
-  | "approval_sent"
-  | "approval_silent"
-  | "approval_replied"
+  | "operational_sending"
+  | "operational_sent"
+  | "operational_replied"
+  | "payment_approval_sending"
+  | "payment_approval_sent"
+  | "payment_approval_silent"
+  | "payment_founder_approved"
+  | "payment_approved"
   | "restart_marked"
   | "completion_sending"
   | "completion_sent"
@@ -86,11 +126,13 @@ export type CounterpartyStage =
   | "reply_mismatched";
 
 export type CounterpartyHarnessState = {
-  version: 1;
+  version: 2;
   scenarioId: string;
   generation: string;
   stage: CounterpartyStage;
   lastUpdateId: number | null;
+  founderApprovalReceipt: string | null;
+  founderApprovedAtUnixSeconds: number | null;
 };
 
 type TelegramApiEnvelope<T> = {
@@ -99,6 +141,7 @@ type TelegramApiEnvelope<T> = {
 };
 
 type TelegramBotIdentity = {
+  id?: number | string;
   username?: string;
 };
 
@@ -108,6 +151,7 @@ type TelegramWebhookInfo = {
 
 type TelegramMessage = {
   chat?: { id?: number | string };
+  date?: number;
   from?: { id?: number | string };
   text?: string;
 };
@@ -121,9 +165,12 @@ type HarnessContext = {
   artemUserId: string;
   botToken: string;
   env: NodeJS.ProcessEnv;
+  expectedBotId: string;
+  expectedBotUsername: string;
   fetchImpl: typeof fetch;
   generation: string;
   reservationRoot: string;
+  protocol: CounterpartyProtocol;
   scenarioId: string;
   tokenHash: string;
   worktree: string;
@@ -166,6 +213,9 @@ function resolveCounterpartyLockPath(env: NodeJS.ProcessEnv): string {
 function parseContext(params: { env: NodeJS.ProcessEnv; fetchImpl: typeof fetch }): HarnessContext {
   const botToken = required(params.env, ENV.token);
   const artemUserId = required(params.env, ENV.artemUserId);
+  const expectedBotId = required(params.env, ENV.expectedBotId);
+  const expectedBotUsername = required(params.env, ENV.expectedBotUsername);
+  const protocol = createCounterpartyProtocol(required(params.env, ENV.runId));
   const scenarioId = required(params.env, ENV.scenarioId);
   const generation = required(params.env, ENV.generation);
   const tokenHash = required(params.env, ENV.tokenHash);
@@ -173,8 +223,16 @@ function parseContext(params: { env: NodeJS.ProcessEnv; fetchImpl: typeof fetch 
   if (artemUserId !== COUNTERPARTY_ARTEM_USER_ID) {
     throw new Error("The configured Telegram user is not the approved Artem test account.");
   }
-  if (scenarioId !== COUNTERPARTY_SCENARIO_ID) {
-    throw new Error("The configured tester scenario is not the approved GA counterparty scenario.");
+  if (!BOT_ID_PATTERN.test(expectedBotId)) {
+    throw new Error("The expected Telegram bot ID must be an explicit positive decimal ID.");
+  }
+  if (!BOT_USERNAME_PATTERN.test(expectedBotUsername)) {
+    throw new Error("The expected Telegram bot username has an invalid printable format.");
+  }
+  if (scenarioId !== protocol.scenarioId) {
+    throw new Error(
+      `The configured tester scenario must exactly equal ${protocol.scenarioId} for this run.`,
+    );
   }
   if (tokenHash !== hashToken(botToken)) {
     throw new Error("The tester reservation token hash does not match the bot token.");
@@ -193,8 +251,11 @@ function parseContext(params: { env: NodeJS.ProcessEnv; fetchImpl: typeof fetch 
     artemUserId,
     botToken,
     env: params.env,
+    expectedBotId,
+    expectedBotUsername,
     fetchImpl: params.fetchImpl,
     generation,
+    protocol,
     reservationRoot: required(params.env, ENV.reservationRoot),
     scenarioId,
     tokenHash,
@@ -204,11 +265,13 @@ function parseContext(params: { env: NodeJS.ProcessEnv; fetchImpl: typeof fetch 
 
 function newState(context: HarnessContext): CounterpartyHarnessState {
   return {
-    version: 1,
+    version: 2,
     scenarioId: context.scenarioId,
     generation: context.generation,
     stage: "new",
     lastUpdateId: null,
+    founderApprovalReceipt: null,
+    founderApprovedAtUnixSeconds: null,
   };
 }
 
@@ -224,13 +287,14 @@ function isValidStage(value: unknown): value is CounterpartyStage {
       "replay_sending",
       "replay_sent",
       "replay_silent",
-      "in_scope_sending",
-      "in_scope_sent",
-      "in_scope_replied",
-      "approval_sending",
-      "approval_sent",
-      "approval_silent",
-      "approval_replied",
+      "operational_sending",
+      "operational_sent",
+      "operational_replied",
+      "payment_approval_sending",
+      "payment_approval_sent",
+      "payment_approval_silent",
+      "payment_founder_approved",
+      "payment_approved",
       "restart_marked",
       "completion_sending",
       "completion_sent",
@@ -246,21 +310,30 @@ async function loadState(context: HarnessContext): Promise<CounterpartyHarnessSt
       await fs.readFile(resolveCounterpartyStatePath(context.env), "utf8"),
     ) as Partial<CounterpartyHarnessState>;
     if (
-      parsed.version !== 1 ||
+      parsed.version !== 2 ||
       parsed.scenarioId !== context.scenarioId ||
       parsed.generation !== context.generation ||
       !isValidStage(parsed.stage) ||
       (parsed.lastUpdateId !== null &&
-        (!Number.isSafeInteger(parsed.lastUpdateId) || Number(parsed.lastUpdateId) < 0))
+        (!Number.isSafeInteger(parsed.lastUpdateId) || Number(parsed.lastUpdateId) < 0)) ||
+      (parsed.founderApprovalReceipt !== null &&
+        (typeof parsed.founderApprovalReceipt !== "string" ||
+          !parsed.founderApprovalReceipt.startsWith(`${context.scenarioId}:`) ||
+          parsed.founderApprovalReceipt.length > 300)) ||
+      (parsed.founderApprovedAtUnixSeconds !== null &&
+        (!Number.isSafeInteger(parsed.founderApprovedAtUnixSeconds) ||
+          Number(parsed.founderApprovedAtUnixSeconds) < 0))
     ) {
       throw new Error("Counterparty harness state is malformed or belongs to another owner.");
     }
     return {
-      version: 1,
+      version: 2,
       scenarioId: parsed.scenarioId,
       generation: parsed.generation,
       stage: parsed.stage,
       lastUpdateId: parsed.lastUpdateId ?? null,
+      founderApprovalReceipt: parsed.founderApprovalReceipt ?? null,
+      founderApprovedAtUnixSeconds: parsed.founderApprovedAtUnixSeconds ?? null,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -352,8 +425,17 @@ async function validateLiveOwnership(context: HarnessContext): Promise<void> {
   }
 
   const identity = await telegramApi<TelegramBotIdentity>(context, "getMe");
-  if (identity.username !== COUNTERPARTY_BOT_USERNAME) {
-    throw new Error("The reserved token does not belong to the approved counterparty bot.");
+  const tokenBotId = context.botToken.split(":", 1)[0]?.trim() ?? "";
+  // Bind the reservation token to the pool bot selected by the operator. Both
+  // immutable Telegram fields must agree, and the expected ID must also be the
+  // ID encoded by the reserved token. Caller-supplied labels therefore cannot
+  // authorize a different reserved bot.
+  if (
+    context.expectedBotId !== tokenBotId ||
+    String(identity.id ?? "") !== context.expectedBotId ||
+    identity.username !== context.expectedBotUsername
+  ) {
+    throw new Error("The reserved token does not belong to the explicitly expected tester bot.");
   }
 
   const webhook = await telegramApi<TelegramWebhookInfo>(context, "getWebhookInfo");
@@ -489,6 +571,7 @@ async function pollForArtem(params: {
   matchedStage: CounterpartyStage;
   silence: boolean;
   waitMs: number;
+  notBeforeUnixSeconds?: number;
 }): Promise<void> {
   const deadline = Date.now() + Math.max(0, params.waitMs);
   let firstAttempt = true;
@@ -537,6 +620,16 @@ async function pollForArtem(params: {
           }. Manual recovery is required.`,
         );
       }
+      if (
+        params.notBeforeUnixSeconds !== undefined &&
+        (!Number.isSafeInteger(message.date) || Number(message.date) <= params.notBeforeUnixSeconds)
+      ) {
+        params.state.stage = "reply_mismatched";
+        await saveState(params.context, params.state);
+        throw new CounterpartyManualRecoveryError(
+          "Received the expected reply before the durable founder-approval boundary; manual recovery is required.",
+        );
+      }
       // Commit the consumed reply cursor and successful transition together.
       // There is no crash window where a retry skips the reply but still sees
       // the old stage.
@@ -560,6 +653,7 @@ async function waitTransition(params: {
   expectedText?: string;
   silence: boolean;
   waitMs: number;
+  notBeforeUnixSeconds?: number;
 }): Promise<CounterpartyHarnessState> {
   if (params.state.stage === params.next) {
     return params.state;
@@ -591,7 +685,7 @@ async function runLockedCommand(params: {
         expected: "preflight_complete",
         sending: "nonmatch_sending",
         sent: "nonmatch_sent",
-        text: COUNTERPARTY_TEXT.nonmatch,
+        text: params.context.protocol.text.nonmatch,
       });
     case "replay-nonmatch-after-baseline":
       return sendTransition({
@@ -600,7 +694,7 @@ async function runLockedCommand(params: {
         expected: "nonmatch_silent",
         sending: "replay_sending",
         sent: "replay_sent",
-        text: COUNTERPARTY_TEXT.nonmatch,
+        text: params.context.protocol.text.nonmatch,
       });
     case "assert-nonmatch-silence":
       // The replay is deliberately a second branch of the same silence check.
@@ -624,60 +718,87 @@ async function runLockedCommand(params: {
         silence: true,
         waitMs: params.waitMs,
       });
-    case "emit-in-scope":
+    case "emit-operational-detail-request":
       return sendTransition({
         context: params.context,
         state,
         // Both paths prove the same silence contract. The replay path exists
         // only for a listener that baselined the first NONMATCH as history.
         expected: ["nonmatch_silent", "replay_silent"],
-        sending: "in_scope_sending",
-        sent: "in_scope_sent",
-        text: COUNTERPARTY_TEXT.inScope,
+        sending: "operational_sending",
+        sent: "operational_sent",
+        text: params.context.protocol.text.operationalRequest,
       });
-    case "wait-in-scope-reply":
+    case "wait-operational-detail-reply":
       return waitTransition({
         context: params.context,
         state,
-        expected: "in_scope_sent",
-        next: "in_scope_replied",
-        expectedText: COUNTERPARTY_TEXT.inScopeReply,
+        expected: "operational_sent",
+        next: "operational_replied",
+        expectedText: params.context.protocol.text.operationalReply,
         silence: false,
         waitMs: params.waitMs,
       });
-    case "emit-approval":
+    case "emit-payment-approval":
       return sendTransition({
         context: params.context,
         state,
-        expected: "in_scope_replied",
-        sending: "approval_sending",
-        sent: "approval_sent",
-        text: COUNTERPARTY_TEXT.approval,
+        expected: "operational_replied",
+        sending: "payment_approval_sending",
+        sent: "payment_approval_sent",
+        text: params.context.protocol.text.paymentApproval,
       });
-    case "assert-approval-silence":
+    case "assert-payment-approval-silence":
       return waitTransition({
         context: params.context,
         state,
-        expected: "approval_sent",
-        next: "approval_silent",
+        expected: "payment_approval_sent",
+        next: "payment_approval_silent",
         silence: true,
         waitMs: params.waitMs,
       });
-    case "wait-approved-reply":
+    case "record-founder-approval": {
+      if (state.stage === "payment_founder_approved") {
+        return state;
+      }
+      expectStage(state, "payment_approval_silent");
+      const receipt = required(
+        params.context.env,
+        "OPENCLAW_COUNTERPARTY_FOUNDER_APPROVAL_RECEIPT",
+      );
+      if (!receipt.startsWith(`${params.context.scenarioId}:`) || receipt.length > 300) {
+        throw new Error(
+          `The founder approval receipt must start with ${params.context.scenarioId}: and be at most 300 characters.`,
+        );
+      }
+      // This command is the explicit human checkpoint. Persist its source
+      // receipt and time before polling again so a delayed pre-approval reply
+      // cannot be mistaken for an authorized continuation.
+      state.founderApprovalReceipt = receipt;
+      state.founderApprovedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      state.stage = "payment_founder_approved";
+      await saveState(params.context, state);
+      return state;
+    }
+    case "wait-approved-payment-continuation":
+      if (state.founderApprovedAtUnixSeconds === null || !state.founderApprovalReceipt) {
+        throw new Error("The durable founder-approval checkpoint is missing.");
+      }
       return waitTransition({
         context: params.context,
         state,
-        expected: "approval_silent",
-        next: "approval_replied",
-        expectedText: COUNTERPARTY_TEXT.approvalReply,
+        expected: "payment_founder_approved",
+        next: "payment_approved",
+        expectedText: params.context.protocol.text.paymentApprovedReply,
         silence: false,
         waitMs: params.waitMs,
+        notBeforeUnixSeconds: state.founderApprovedAtUnixSeconds,
       });
     case "mark-restart-boundary":
       if (state.stage === "restart_marked") {
         return state;
       }
-      expectStage(state, "approval_replied");
+      expectStage(state, "payment_approved");
       state.stage = "restart_marked";
       await saveState(params.context, state);
       return state;
@@ -688,7 +809,7 @@ async function runLockedCommand(params: {
         expected: "restart_marked",
         sending: "completion_sending",
         sent: "completion_sent",
-        text: COUNTERPARTY_TEXT.completion,
+        text: params.context.protocol.text.completion,
       });
   }
 }
@@ -742,11 +863,12 @@ function parseCommand(value: string | undefined): CounterpartyCommand {
     "emit-nonmatch",
     "replay-nonmatch-after-baseline",
     "assert-nonmatch-silence",
-    "emit-in-scope",
-    "wait-in-scope-reply",
-    "emit-approval",
-    "assert-approval-silence",
-    "wait-approved-reply",
+    "emit-operational-detail-request",
+    "wait-operational-detail-reply",
+    "emit-payment-approval",
+    "assert-payment-approval-silence",
+    "record-founder-approval",
+    "wait-approved-payment-continuation",
     "mark-restart-boundary",
     "emit-completion",
   ];
