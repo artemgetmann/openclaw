@@ -256,11 +256,18 @@ describe("CodexThreadService", () => {
     expect(client.requests.slice(-2)).toEqual([
       {
         method: "thread/list",
-        params: expect.not.objectContaining({ cursor: expect.anything() }),
+        params: expect.objectContaining({
+          sourceKinds: expect.arrayContaining(["cli", "exec", "subAgent", "subAgentThreadSpawn"]),
+          useStateDbOnly: true,
+        }),
       },
       {
         method: "thread/list",
-        params: expect.objectContaining({ cursor: "page-2" }),
+        params: expect.objectContaining({
+          cursor: "page-2",
+          sourceKinds: expect.arrayContaining(["cli", "exec", "subAgent", "subAgentThreadSpawn"]),
+          useStateDbOnly: true,
+        }),
       },
     ]);
   });

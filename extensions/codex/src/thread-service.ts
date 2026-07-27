@@ -2,6 +2,19 @@ import type { CodexNotification, CodexRpcClient } from "./app-server-client.js";
 
 type JsonObject = Record<string, unknown>;
 
+const ALL_CODEX_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+] as const;
+
 export type CodexThreadRunResult = {
   threadId: string;
   turnId: string;
@@ -82,6 +95,8 @@ export class CodexThreadService {
     archived?: boolean;
     limit?: number;
     cursor?: string;
+    sourceKinds?: readonly string[];
+    useStateDbOnly?: boolean;
   }): Promise<unknown> {
     const client = await this.client();
     return await client.request("thread/list", {
@@ -91,6 +106,8 @@ export class CodexThreadService {
       sortKey: "recency_at",
       sortDirection: "desc",
       ...(params.cursor ? { cursor: params.cursor } : {}),
+      ...(params.sourceKinds ? { sourceKinds: params.sourceKinds } : {}),
+      ...(params.useStateDbOnly === true ? { useStateDbOnly: true } : {}),
       ...(params.search?.trim() ? { searchTerm: params.search.trim() } : {}),
     });
   }
@@ -106,7 +123,20 @@ export class CodexThreadService {
     // many newer idle threads exist. Cursor repetition fails closed instead of
     // returning a plausible but incomplete fleet.
     do {
-      const response = asRecord(await this.list({ limit: 100, cursor }));
+      const response = asRecord(
+        await this.list({
+          limit: 100,
+          cursor,
+          // App Server defaults to interactive sources only. A fleet roster
+          // must also include exec and every sub-agent source or it can hide
+          // the exact workers the coordinator is responsible for.
+          sourceKinds: ALL_CODEX_THREAD_SOURCE_KINDS,
+          // Fleet pagination is inventory, not metadata repair. Re-scanning
+          // rollout JSONL once per page can create severe I/O pressure on a
+          // large catalog and is unnecessary for live status coordination.
+          useStateDbOnly: true,
+        }),
+      );
       catalog.push(...asRecords(response.data));
       const nextCursor = readString(response.nextCursor);
       if (!nextCursor) {
