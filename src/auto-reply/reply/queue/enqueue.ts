@@ -145,24 +145,28 @@ export function enqueueFollowupRun(
  * inbound messages. Callers must await this function before allowing their
  * transport offset/cursor to advance.
  */
-export async function enqueueFollowupRunDurable(
+export type DurableFollowupEnqueueResult =
+  | { accepted: true; durableId: string }
+  | { accepted: false };
+
+export async function enqueueFollowupRunDurableWithReceipt(
   key: string,
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
-): Promise<boolean> {
+): Promise<DurableFollowupEnqueueResult> {
   // A provider may redeliver after this queue has successfully drained but
   // before its transport cursor reaches disk. Check the bounded durable receipt
   // before creating a second replayable input record.
   if (await isDurableFollowupMessageProcessed({ queueKey: key, run })) {
-    return false;
+    return { accepted: false };
   }
   let record;
   try {
     record = await persistDurableFollowup({ queueKey: key, run, settings });
   } catch (err) {
     if (err instanceof DurableFollowupCancelledError) {
-      return false;
+      return { accepted: false };
     }
     throw err;
   }
@@ -171,13 +175,13 @@ export async function enqueueFollowupRunDurable(
   // so this final cutoff check closes the remaining interleaving window.
   if (isDurableFollowupRecordCancelled(record)) {
     await ackDurableFollowup(record.id);
-    return false;
+    return { accepted: false };
   }
   // Close the race where the original drain publishes its success receipt
   // while this duplicate's initial receipt lookup/persist is in flight.
   if (await isDurableFollowupRecordProcessed(record)) {
     await ackDurableFollowup(record.id);
-    return false;
+    return { accepted: false };
   }
   const beforeItems = new Map(
     (getExistingFollowupQueue(key)?.items ?? [])
@@ -192,7 +196,7 @@ export async function enqueueFollowupRunDurable(
   );
   if (!accepted) {
     await ackDurableFollowup(record.id);
-    return false;
+    return { accepted: false };
   }
   const afterIds = new Set(
     (getExistingFollowupQueue(key)?.items ?? [])
@@ -204,7 +208,26 @@ export async function enqueueFollowupRunDurable(
     beforeItems,
     afterIds,
   });
-  return true;
+  return { accepted: true, durableId: record.id };
+}
+
+/**
+ * Compatibility wrapper for callers that only need the historical boolean.
+ * Channel UX should use the receipt variant so the visible control addresses
+ * one exact durable item instead of inferring queue state.
+ */
+export async function enqueueFollowupRunDurable(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  dedupeMode: QueueDedupeMode = "message-id",
+  onAccepted?: (durableId: string) => Promise<void> | void,
+): Promise<boolean> {
+  const result = await enqueueFollowupRunDurableWithReceipt(key, run, settings, dedupeMode);
+  if (result.accepted) {
+    await onAccepted?.(result.durableId);
+  }
+  return result.accepted;
 }
 
 async function handleRemovedDurableFollowups(params: {

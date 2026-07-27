@@ -66,6 +66,24 @@ function collectQueueDurableIds(queue: FollowupQueueState): string[] {
   return collectDurableIds(queue.items, snapshotSummarizedDurableFollowups(queue));
 }
 
+async function runWithInFlightDurableIds<T>(
+  queue: FollowupQueueState,
+  ids: Iterable<string | undefined>,
+  task: () => Promise<T>,
+): Promise<T> {
+  const claimed = [...new Set(ids)].filter((id): id is string => Boolean(id?.trim()));
+  for (const id of claimed) {
+    queue.inFlightDurableIds.add(id);
+  }
+  try {
+    return await task();
+  } finally {
+    for (const id of claimed) {
+      queue.inFlightDurableIds.delete(id);
+    }
+  }
+}
+
 /**
  * Return a completed delivery carrier only when it owns the FIFO queue head.
  *
@@ -317,7 +335,9 @@ export function scheduleFollowupDrain(
           // A completed turn owns only this FIFO head. A later enqueue must
           // survive for a fresh model turn after the staged send succeeds.
           attemptedDurableIds = [stagedHead.carrierId];
-          await runFollowup(stagedHead.run);
+          await runWithInFlightDurableIds(queue, attemptedDurableIds, () =>
+            runFollowup(stagedHead.run),
+          );
           await completeDurableFollowup(stagedHead.carrierId);
           consumeStagedDeliveryQueueHead(queue, stagedHead.sourceDurableIds);
           attemptedDurableIds = [];
@@ -339,7 +359,7 @@ export function scheduleFollowupDrain(
             run: async (item) => {
               attemptedDurableIds = collectDurableIds([item]);
               attemptedRun = item;
-              await runFollowup(item);
+              await runWithInFlightDurableIds(queue, attemptedDurableIds, () => runFollowup(item));
               // Mixed-target collect mode shifts exactly one item after this
               // callback succeeds. Match that removal boundary on disk so a
               // restart cannot resurrect work that already completed.
@@ -382,7 +402,9 @@ export function scheduleFollowupDrain(
           };
           attemptedDurableIds = collectDurableIds(items, summarizedDurableIds);
           attemptedRun = collectedRun;
-          await runFollowup(collectedRun);
+          await runWithInFlightDurableIds(queue, attemptedDurableIds, () =>
+            runFollowup(collectedRun),
+          );
           // The collected turn represents every snapshotted item. Only remove
           // their records after the agent turn and reply routing both return.
           await Promise.all(items.map((item) => completeDurableFollowup(item.durableId)));
@@ -419,7 +441,9 @@ export function scheduleFollowupDrain(
               };
               attemptedDurableIds = collectDurableIds([item], summarizedDurableIds);
               attemptedRun = summaryRun;
-              await runFollowup(summaryRun);
+              await runWithInFlightDurableIds(queue, attemptedDurableIds, () =>
+                runFollowup(summaryRun),
+              );
               await completeDurableFollowup(item.durableId);
               await completeSummarizedDurableFollowups(queue, summarizedDurableIds);
               consumeQueueSummarySnapshot(queue, summaryState);
@@ -435,7 +459,7 @@ export function scheduleFollowupDrain(
           !(await drainNextQueueItem(queue.items, async (item) => {
             attemptedDurableIds = collectDurableIds([item]);
             attemptedRun = item;
-            await runFollowup(item);
+            await runWithInFlightDurableIds(queue, attemptedDurableIds, () => runFollowup(item));
             await completeDurableFollowup(item.durableId);
             attemptedDurableIds = [];
           }))

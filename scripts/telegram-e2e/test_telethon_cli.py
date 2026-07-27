@@ -187,6 +187,31 @@ class FakeDownloadClient:
     return file
 
 
+class FakeInlineButtonMessage:
+  def __init__(self, *, buttons: list[list[SimpleNamespace]], message_id: int) -> None:
+    self.buttons = buttons
+    self.click_calls: list[dict[str, int]] = []
+    self.id = message_id
+
+  async def click(self, *, i: int, j: int):
+    self.click_calls.append({"i": i, "j": j})
+    return SimpleNamespace(alert = False, cache_time = 5, message = "Queued", url = None)
+
+
+class FakeButtonClickClient:
+  def __init__(self, message: FakeInlineButtonMessage | None) -> None:
+    self.disconnected = False
+    self.get_messages_calls: list[dict[str, object]] = []
+    self.message = message
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+  async def get_messages(self, chat, *, ids: int):
+    self.get_messages_calls.append({"chat": chat, "ids": ids})
+    return self.message
+
+
 class FakeSentMessage:
   def __init__(
     self,
@@ -983,6 +1008,89 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(exit_code, 1)
     self.assertTrue(fake_client.disconnected)
 
+  async def test_run_button_click_requires_one_exact_text_and_callback_match(self) -> None:
+    message = FakeInlineButtonMessage(
+      buttons = [
+        [SimpleNamespace(data = b"queue:other", text = "Queue")],
+        [SimpleNamespace(data = b"queue:exact", text = "Queue")],
+      ],
+      message_id = 52831,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Queue",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = "queue:exact",
+            message_id = 52831,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(
+      fake_client.get_messages_calls,
+      [{"chat": "@jarvis_tester_1_bot", "ids": 52831}],
+    )
+    self.assertEqual(message.click_calls, [{"i": 1, "j": 0}])
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(emitted["message_id"], 52831)
+    self.assertEqual(emitted["button"]["callback_data"], "queue:exact")
+    self.assertEqual(emitted["click_result"]["message"], "Queued")
+
+  async def test_run_button_click_duplicate_match_lists_buttons_without_clicking(self) -> None:
+    message = FakeInlineButtonMessage(
+      buttons = [
+        [SimpleNamespace(data = b"queue:actual", text = "Queue")],
+        [SimpleNamespace(data = b"queue:actual", text = "Queue")],
+      ],
+      message_id = 52831,
+    )
+    fake_client = FakeButtonClickClient(message)
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_kwargs: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_button_click(
+          argparse.Namespace(
+            button_text = "Queue",
+            chat = "@jarvis_tester_1_bot",
+            expected_callback_data = "queue:actual",
+            message_id = 52831,
+            session = str(session_path),
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(message.click_calls, [])
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(emitted["error"]["code"], "E_BUTTON_MISMATCH")
+    details = emitted["error"]["details"]
+    self.assertEqual(details["match_count"], 2)
+    self.assertEqual(details["available_buttons"][0]["callback_data"], "queue:actual")
+
   async def test_run_send_uploads_media_as_voice_with_caption_and_reply_target(self) -> None:
     fake_client = FakeSendClient()
     emitted: dict[str, object] = {}
@@ -1435,6 +1543,22 @@ class TelethonCliSyncTests(unittest.TestCase):
     self.assertEqual(download_args.command, "download")
     self.assertEqual(download_args.message_id, 52830)
     self.assertEqual(download_args.output, "/tmp/downloads")
+
+    button_click_args = parser.parse_args([
+      "button-click",
+      "--chat",
+      "@jarvis_tester_1_bot",
+      "--message-id",
+      "52831",
+      "--button-text",
+      "Queue",
+      "--expected-callback-data",
+      "queue:proof",
+    ])
+    self.assertEqual(button_click_args.command, "button-click")
+    self.assertEqual(button_click_args.message_id, 52831)
+    self.assertEqual(button_click_args.button_text, "Queue")
+    self.assertEqual(button_click_args.expected_callback_data, "queue:proof")
 
     mark_read_args = parser.parse_args([
       "mark-read",

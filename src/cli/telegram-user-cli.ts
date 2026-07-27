@@ -87,6 +87,10 @@ export function registerTelegramUserCli(program: Command) {
             "Download media from a known Telegram message id before running generic media tools.",
           ],
           [
+            'openclaw telegram-user button-click --chat @jarvis_tester_1_bot --message-id 52831 --button-text "Queue" --expected-callback-data "queue:proof" --json',
+            "Click only when one exact message has exactly one button matching both visible text and callback data.",
+          ],
+          [
             "openclaw telegram-user inbox --contains Artem --unread --dm-only --limit 10 --json",
             "List matching inbox dialogs for unread DM triage with raw metadata.",
           ],
@@ -276,6 +280,24 @@ export function registerTelegramUserCli(program: Command) {
     await runTelegramUserCommand(async () => {
       const { telegramUserDownloadCommand } = await import("../commands/telegram-user.js");
       await telegramUserDownloadCommand(opts, defaultRuntime);
+    });
+  });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("button-click")
+      .description("Click one exact inline callback button on one exact Telegram message")
+      .requiredOption("--chat <target>", "Exact target chat username or id")
+      .requiredOption("--message-id <id>", "Exact positive message id")
+      .requiredOption("--button-text <text>", "Exact visible button text")
+      .requiredOption(
+        "--expected-callback-data <data>",
+        "Exact UTF-8 callback data expected behind the button",
+      ),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserButtonClickCommand } = await import("../commands/telegram-user.js");
+      await telegramUserButtonClickCommand(opts, defaultRuntime);
     });
   });
 

@@ -406,6 +406,30 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
+  it("publishes the exact durable id after a busy follow-up is accepted", async () => {
+    const onFollowupQueued = vi.fn();
+    vi.mocked(enqueueFollowupRunDurable).mockImplementationOnce(
+      async (_key, _run, _settings, _dedupeMode, onAccepted) => {
+        await onAccepted?.("12345678-1234-4234-8234-123456789abc");
+        return true;
+      },
+    );
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false, onFollowupQueued },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(onFollowupQueued).toHaveBeenCalledWith({
+      durableId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(onFollowupQueued).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
   it("arms a fresh drain only after an active non-heartbeat run is durably enqueued", async () => {
     let finishDurableEnqueue: (() => void) | undefined;
     const durableEnqueueFinished = new Promise<boolean>((resolve) => {

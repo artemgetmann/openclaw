@@ -70,6 +70,13 @@ export type GetReplyOptions = {
    * blocker instead of blindly replaying tools or ambiguous external actions.
    */
   onDurableReplyAccepted?: (durableId: string) => Promise<void> | void;
+  /**
+   * Called only after a busy-session message is durably accepted as queued work.
+   *
+   * Channel adapters can use the opaque record id to expose a precise queue
+   * receipt without guessing from an empty reply or the generic typing lifecycle.
+   */
+  onFollowupQueued?: (receipt: { durableId: string }) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */

@@ -1,6 +1,10 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { describe, expect, it } from "vitest";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import {
+  getTelegramBusyAwareSequentialKey,
+  getTelegramSequentialKey,
+  markTelegramSequentialKeyBusy,
+} from "./sequential-key.js";
 
 const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
   chat as Chat;
@@ -114,5 +118,58 @@ describe("getTelegramSequentialKey", () => {
     ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
+  });
+});
+
+describe("getTelegramBusyAwareSequentialKey", () => {
+  it("gives a busy conversation plain follow-ups a unique ingress key", () => {
+    const ctx = {
+      message: mockMessage({
+        chat: mockChat({ id: 123, type: "private" }),
+        message_id: 44,
+        text: "change the requirement",
+      }),
+    };
+    const release = markTelegramSequentialKeyBusy("telegram:123");
+    try {
+      expect(getTelegramBusyAwareSequentialKey(ctx)).toBe("telegram:123:queued-message:44");
+    } finally {
+      release();
+    }
+    expect(getTelegramBusyAwareSequentialKey(ctx)).toBe("telegram:123");
+  });
+
+  it("lets an exact Queue/Steer callback bypass the busy message handler", () => {
+    const ctx = {
+      update: {
+        callback_query: {
+          id: "callback-9",
+          data: "oqs:12345678-1234-4234-8234-123456789abc",
+          message: mockMessage({ chat: mockChat({ id: 123, type: "private" }) }),
+        },
+      },
+    };
+    const release = markTelegramSequentialKeyBusy("telegram:123");
+    try {
+      expect(getTelegramBusyAwareSequentialKey(ctx)).toBe("telegram:123:queue-control:callback-9");
+    } finally {
+      release();
+    }
+  });
+
+  it("keeps commands serialized while the conversation is busy", () => {
+    const ctx = {
+      message: mockMessage({
+        chat: mockChat({ id: 123, type: "private" }),
+        message_id: 45,
+        text: "/status",
+      }),
+    };
+    const release = markTelegramSequentialKeyBusy("telegram:123");
+    try {
+      expect(getTelegramBusyAwareSequentialKey(ctx)).toBe("telegram:123");
+    } finally {
+      release();
+    }
   });
 });

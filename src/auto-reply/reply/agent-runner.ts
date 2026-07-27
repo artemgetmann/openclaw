@@ -135,6 +135,17 @@ function acquireFollowupFinalizationOwnership(queueKey: string): () => void {
   };
 }
 
+/**
+ * Treat the post-model finalization window as part of the active session turn.
+ *
+ * The embedded provider lane can become idle before usage persistence and
+ * outbound reply delivery finish. Inbound admission must keep serializing
+ * behind that owner or a new direct turn can start against stale session state.
+ */
+export function hasFollowupFinalizationOwnership(queueKey: string): boolean {
+  return (FOLLOWUP_FINALIZATION_OWNERS.get(queueKey)?.owners ?? 0) > 0;
+}
+
 function scheduleOrDeferFollowupDrain(
   queueKey: string,
   runner: (run: FollowupRun) => Promise<void>,
@@ -428,7 +439,21 @@ async function runReplyAgentWithFinalizationOwnership(
   if (activeRunQueueAction === "enqueue-followup") {
     // Await the atomic disk record before returning to channel middleware. For
     // Telegram this is what makes advancing the update offset crash-safe.
-    await enqueueFollowupRunDurable(queueKey, followupRun, resolvedQueue);
+    await enqueueFollowupRunDurable(
+      queueKey,
+      followupRun,
+      resolvedQueue,
+      "message-id",
+      async (durableId) => {
+        try {
+          await runOpts?.onFollowupQueued?.({ durableId });
+        } catch (err) {
+          // The durable queue is already the source of truth. A channel receipt
+          // failure must not strand accepted work by skipping drain scheduling.
+          defaultRuntime.error?.(`follow-up queue receipt failed: ${String(err)}`);
+        }
+      },
+    );
     // Offer the queue a fresh callback only after persistence. If the direct
     // turn still owns finalization, keep the callback pending so queued model
     // work cannot overtake its bookkeeping or reply delivery. With no owner,
