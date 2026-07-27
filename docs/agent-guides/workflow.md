@@ -268,7 +268,9 @@ ready`.
   - Root cause in code with file and line
   - Fix touching that code path
   - Regression proof or explicit manual validation notes
-- For risky fork PRs, use the `codex review` sidecar rule in `FORK_CONTRIBUTING.md`; keep trivial docs/chore/typo PRs fast by reviewer judgment.
+- For risky fork PRs, use the bounded Codex sidecar rule in
+  `FORK_CONTRIBUTING.md`; run it once, never retry a timeout automatically, and
+  keep trivial docs/chore/typo PRs fast by reviewer judgment.
 - Before `/landpr`, run `/reviewpr`.
 
 ## tmux and Codex panes
