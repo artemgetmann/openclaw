@@ -1154,6 +1154,24 @@ describe("launchd install", () => {
     expect(gatewayIndex).toBeGreaterThan(watchdogIndex);
   });
 
+  it("public Jarvis uninstall moves the companion watchdog plist to Trash", async () => {
+    const fixture = createPublicJarvisWatchdogFixture();
+    const gatewayPlistPath = resolveLaunchAgentPlistPath(fixture.env);
+    state.files.set(gatewayPlistPath, "<plist/>");
+    state.files.set(fixture.plistPath, "<watchdog/>");
+    state.fileModes.set(gatewayPlistPath, 0o644);
+    state.fileModes.set(fixture.plistPath, 0o644);
+
+    await uninstallLaunchAgent({
+      env: fixture.env,
+      stdout: new PassThrough(),
+    });
+
+    const watchdogTrashPath = `/Users/test/.Trash/${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`;
+    expect(state.files.has(fixture.plistPath)).toBe(false);
+    expect(state.files.get(watchdogTrashPath)).toBe("<watchdog/>");
+  });
+
   it("boots out the watchdog before stopping the canonical shared service", async () => {
     const canonicalMain = makeTempDir();
     fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");

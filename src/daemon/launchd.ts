@@ -391,6 +391,34 @@ async function bootoutPublicJarvisWatchdogLaunchAgent(env: GatewayServiceEnv): P
   await execLaunchctl(["unload", plistPath]);
 }
 
+async function movePublicJarvisWatchdogPlistToTrash(
+  env: GatewayServiceEnv,
+  stdout: NodeJS.WritableStream,
+): Promise<void> {
+  if (!isPublicJarvisLaunchAgentTarget(env)) {
+    return;
+  }
+  const plistPath = resolvePublicJarvisWatchdogPlistPath(env);
+  try {
+    await fs.access(plistPath);
+  } catch {
+    return;
+  }
+
+  // Uninstall must remove persistent registration, not merely boot out the
+  // current job. Otherwise RunAtLoad resurrects an orphaned KeepAlive helper.
+  const home = toPosixPath(resolveHomeDir(env));
+  const trashDir = path.posix.join(home, ".Trash");
+  const dest = path.join(trashDir, `${PUBLIC_JARVIS_GATEWAY_WATCHDOG_LAUNCHD_LABEL}.plist`);
+  try {
+    await fs.mkdir(trashDir, { recursive: true });
+    await fs.rename(plistPath, dest);
+    stdout.write(`${formatLine("Moved Jarvis Watchdog LaunchAgent to Trash", dest)}\n`);
+  } catch {
+    stdout.write(`Jarvis Watchdog LaunchAgent remains at ${plistPath} (could not move)\n`);
+  }
+}
+
 async function installPublicJarvisWatchdogLaunchAgent(args: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
@@ -882,6 +910,7 @@ export async function uninstallLaunchAgent({
   });
   await bootoutSharedGatewayWatchdogLaunchAgent(env);
   await bootoutPublicJarvisWatchdogLaunchAgent(env);
+  await movePublicJarvisWatchdogPlistToTrash(env, stdout);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
