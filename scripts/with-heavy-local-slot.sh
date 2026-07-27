@@ -57,6 +57,8 @@ git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/nu
 lock_dir="$git_common_dir/openclaw-heavy-local.lock"
 owner_token="$$-$(date +%s)-${RANDOM:-0}"
 child_pid=''
+monitor_pid=''
+health_stop_file="$lock_dir/health_stop_reason"
 
 remove_owned_lock() {
   # A late trap from an old owner must never delete a newer owner's lock.
@@ -64,6 +66,7 @@ remove_owned_lock() {
     rm -f \
       "$lock_dir/pid" \
       "$lock_dir/child_pid" \
+      "$health_stop_file" \
       "$lock_dir/label" \
       "$lock_dir/token" \
       "$lock_dir/started_at"
@@ -104,8 +107,17 @@ stop_guarded_child() {
   fi
 }
 
+stop_health_monitor() {
+  [ -n "$monitor_pid" ] || return 0
+  kill -0 "$monitor_pid" 2>/dev/null || return 0
+
+  kill -TERM "$monitor_pid" 2>/dev/null || true
+  wait "$monitor_pid" 2>/dev/null || true
+}
+
 handle_interrupt() {
   local status=$1
+  stop_health_monitor
   stop_guarded_child
   exit "$status"
 }
@@ -133,6 +145,7 @@ clear_stale_lock() {
   rm -f \
     "$lock_dir/pid" \
     "$lock_dir/child_pid" \
+    "$health_stop_file" \
     "$lock_dir/label" \
     "$lock_dir/token" \
     "$lock_dir/started_at"
@@ -241,34 +254,48 @@ printf '%s\n' "$child_pid" >"$lock_dir/child_pid"
 
 runtime_min_cpu_idle=${OPENCLAW_FLEET_RUNTIME_MIN_CPU_IDLE_PERCENT:-20}
 monitor_interval=${OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS:-15}
-unhealthy_strikes=0
-terminated_for_health=false
 
-while kill -0 "$child_pid" 2>/dev/null; do
-  runtime_reason=$(host_health_reason "$runtime_min_cpu_idle")
-  if [ -n "$runtime_reason" ]; then
-    unhealthy_strikes=$((unhealthy_strikes + 1))
-  else
-    unhealthy_strikes=0
-  fi
+monitor_guarded_child() {
+  local unhealthy_strikes=0
+  local runtime_reason
 
-  # Two consecutive unhealthy samples ignore a transient spike while still
-  # stopping a runaway job before a multi-minute VNC/Jarvis starvation event.
-  if [ "$unhealthy_strikes" -ge 2 ] && kill -0 "$child_pid" 2>/dev/null; then
-    printf 'Stopping guarded work after repeated host-health failures: %s\n' "$runtime_reason" >&2
-    terminated_for_health=true
-    stop_guarded_child
-    break
-  fi
-  sleep "$monitor_interval"
-done
+  # The monitor is a background subshell. It must never inherit the parent's
+  # lease-cleanup traps or release a lock still owned by the waiting wrapper.
+  trap - EXIT INT TERM HUP
+
+  while kill -0 "$child_pid" 2>/dev/null; do
+    runtime_reason=$(host_health_reason "$runtime_min_cpu_idle")
+    if [ -n "$runtime_reason" ]; then
+      unhealthy_strikes=$((unhealthy_strikes + 1))
+    else
+      unhealthy_strikes=0
+    fi
+
+    # Two consecutive unhealthy samples ignore a transient spike while still
+    # stopping a runaway job before a multi-minute VNC/Jarvis starvation event.
+    if [ "$unhealthy_strikes" -ge 2 ] && kill -0 "$child_pid" 2>/dev/null; then
+      printf '%s\n' "$runtime_reason" >"$health_stop_file"
+      printf 'Stopping guarded work after repeated host-health failures: %s\n' "$runtime_reason" >&2
+      stop_guarded_child
+      return 0
+    fi
+    sleep "$monitor_interval"
+  done
+}
+
+# Supervision runs beside the child rather than in the parent's wait path.
+# Fast commands therefore finish immediately instead of waiting up to one
+# monitoring interval for the next health sample.
+monitor_guarded_child &
+monitor_pid=$!
 
 set +e
 wait "$child_pid"
 child_status=$?
 set -e
+stop_health_monitor
 
-if [ "$terminated_for_health" = true ]; then
+if [ -s "$health_stop_file" ]; then
   exit 75
 fi
 exit "$child_status"
