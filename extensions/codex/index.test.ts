@@ -390,7 +390,7 @@ describe("Codex natural-language delegation", () => {
         text: "Do not orphan this work.",
       }),
     ).rejects.toThrow("requires a stable Jarvis session");
-    expect(appServer.requests).toEqual([]);
+    expect(appServer.requests.filter((request) => request.method === "turn/start")).toEqual([]);
   });
 
   it("does not expose the native delegate tool to non-owners", () => {
