@@ -113,6 +113,7 @@ write_healthy_samples() {
 
 create_instrumented_runtime() {
   local fixture_helper="$FIXTURE_ROOT/scripts/lib/heavy-local-slot.sh"
+  local fixture_helper_tmp="$fixture_helper.tmp"
   local fixture_health_hook="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-health-fixture.sh"
   local fixture_hotfix="$FIXTURE_ROOT/scripts/ship-jarvis-hotfix.sh"
   local fixture_runner="$FIXTURE_ROOT/scripts/lib/heavy-local-slot-runner.pl"
@@ -122,12 +123,30 @@ create_instrumented_runtime() {
   local injected_runner_hook_count=0
   local injected_session_hook_count=0
   local injected_stop_receipt_count=0
+  local injected_transient_identity_hook_count=0
 
   mkdir -p "$FIXTURE_ROOT/scripts/lib"
   cp "$ROOT_DIR/scripts/lib/heavy-local-slot.sh" "$fixture_helper"
   cp \
     "$ROOT_DIR/scripts/lib/jarvis-release-lock.sh" \
     "$FIXTURE_ROOT/scripts/lib/jarvis-release-lock.sh"
+
+  # Force one disposable post-commit identity read to report the exact
+  # transient ambiguity produced when a very fast child exits between probes.
+  # Production has no environment hook; this exists only in the copied helper.
+  /usr/bin/awk '
+    $0 == "openclaw_heavy_local_slot_child_group_status() {" {
+      print
+      print "  if [[ -n \"${OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_TRANSIENT_IDENTITY_FILE:-}\" &&"
+      print "    ! -e \"$OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_TRANSIENT_IDENTITY_FILE\" ]]; then"
+      print "    : >\"$OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_TRANSIENT_IDENTITY_FILE\""
+      print "    return 2"
+      print "  fi"
+      next
+    }
+    { print }
+  ' "$fixture_helper" >"$fixture_helper_tmp"
+  /bin/mv "$fixture_helper_tmp" "$fixture_helper"
 
   # Pause only the disposable runner immediately after metadata publication and
   # before the atomic commit transition. This makes the formerly racy state
@@ -255,6 +274,12 @@ EOF
   )"
   [[ "$injected_session_hook_count" -eq 1 ]] ||
     fail "instrumented runner contains $injected_session_hook_count session hooks instead of 1"
+  injected_transient_identity_hook_count="$(
+    grep -Fc 'OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_TRANSIENT_IDENTITY_FILE' \
+      "$fixture_helper" || true
+  )"
+  [[ "$injected_transient_identity_hook_count" -eq 3 ]] ||
+    fail "instrumented helper contains $injected_transient_identity_hook_count transient identity hooks instead of 3"
 }
 
 create_sigint_reset_launcher() {
@@ -509,6 +534,48 @@ test_authoritative_session_identity_ignores_macos_ps_zero() {
   pass "syscall SID accepts actual match and rejects mismatch despite macOS ps sess=0"
 }
 
+test_persistent_committed_identity_ambiguity_fails_closed() {
+  local lock_path="$TMP_DIR/persistent-session-mismatch.lock"
+  local health_path="$TMP_DIR/persistent-session-mismatch.health"
+  local err_path="$TMP_DIR/persistent-session-mismatch.err"
+  local out_path="$TMP_DIR/persistent-session-mismatch.out"
+  local child_pid="" status=0
+
+  write_healthy_samples "$health_path"
+  export OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_SESSION_MISMATCH=1
+  set +e
+  run_test_wrapper \
+    "$lock_path" \
+    "$health_path" \
+    "persistent-session-mismatch" \
+    /bin/sleep 30 \
+    >"$out_path" 2>"$err_path"
+  status=$?
+  set -e
+  unset OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_SESSION_MISMATCH
+
+  if [[ "$status" -ne 75 ]]; then
+    printf 'Persistent mismatch fixture returned status %s.\n' "$status" >&2
+    printf 'Fixture stdout:\n' >&2
+    /usr/bin/sed -n '1,120p' "$out_path" >&2
+    printf 'Fixture stderr:\n' >&2
+    /usr/bin/sed -n '1,160p' "$err_path" >&2
+    fail "persistent committed identity mismatch returned $status instead of 75"
+  fi
+  grep -Fq 'guarded child session metadata was not published safely' "$err_path" ||
+    fail "persistent committed identity mismatch omitted the refusal"
+  grep -Fq 'lease retained because guarded process cleanup was not proven safe' "$err_path" ||
+    fail "persistent committed identity mismatch did not retain the lease"
+  [[ -f "$lock_path/owner" && -f "$lock_path/child_committed" ]] ||
+    fail "persistent committed identity mismatch released fail-closed metadata"
+  child_pid="$(/usr/bin/sed -n 's/^pid=//p' "$lock_path/child_pid")"
+  [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] ||
+    fail "persistent committed identity mismatch published an invalid child PID"
+  ! kill -0 "$child_pid" 2>/dev/null ||
+    fail "persistent committed identity mismatch left its guarded child alive"
+  pass "persistent committed identity ambiguity remains fail-closed"
+}
+
 test_hostile_health_environment_cannot_weaken_policy() {
   local lock_path="$TMP_DIR/hostile-health.lock"
   local health_path="$TMP_DIR/hostile-health.health"
@@ -721,18 +788,22 @@ test_nested_reuse_without_reacquire() {
   local health_path="$TMP_DIR/nested.health"
   local body_log="$TMP_DIR/nested.body"
   local output="$TMP_DIR/nested.out"
+  local transient_identity_file="$TMP_DIR/nested.transient-identity"
   local grant_count=0 body_count=0 token_count=0
 
   fixture="$(create_nested_fixture)"
   write_healthy_samples "$health_path"
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_LOCK_PATH="$lock_path" \
   OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_HEALTH_FILE="$health_path" \
+  OPENCLAW_HEAVY_LOCAL_SLOT_FIXTURE_TRANSIENT_IDENTITY_FILE="$transient_identity_file" \
     "$fixture" "$FIXTURE_ROOT" "$body_log" nested 0 >"$output"
 
   grant_count="$(grep -c 'Heavy-local slot granted' "$output" || true)"
   body_count="$(wc -l <"$body_log" | tr -d ' ')"
   token_count="$(awk -F'token=' '{print $2}' "$body_log" | sort -u | wc -l | tr -d ' ')"
   [[ "$grant_count" -eq 1 ]] || fail "nested entrypoint acquired $grant_count wrappers"
+  [[ -f "$transient_identity_file" ]] ||
+    fail "nested fixture did not exercise the transient committed-identity retry"
   [[ "$body_count" -eq 2 ]] || fail "nested fixture executed $body_count bodies"
   [[ "$token_count" -eq 1 ]] || fail "nested fixture did not inherit one lease token"
   [[ ! -e "$lock_path" ]] || fail "nested fixture left its lock behind"
@@ -1445,9 +1516,11 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
     scripts/package-mac-app.sh \
     scripts/package-mac-dist.sh \
     scripts/deploy-shared-main-runtime.sh \
+    scripts/gateway-recover-main.sh \
     scripts/restart-mac.sh \
     scripts/ship-main-gateway-fix.sh \
     scripts/build-shared-runtime.sh \
+    scripts/package-jarvis-consumer-rc.sh \
     scripts/new-worktree.sh \
     scripts/bootstrap-worktree-runtime.sh \
     scripts/prewarm-worktree.sh; do
@@ -1461,6 +1534,9 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
     scripts/deploy-shared-main-runtime.sh \
     '^[[:space:]]*run_or_print git -C .* pull --ff-only$'
   assert_guard_precedes_mutation \
+    scripts/gateway-recover-main.sh \
+    '^[[:space:]]*ensure_gateway_launch_agent_started_or_exit$'
+  assert_guard_precedes_mutation \
     scripts/restart-mac.sh \
     '^kill_all_openclaw$'
   assert_guard_precedes_mutation \
@@ -1469,6 +1545,9 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
   assert_guard_precedes_mutation \
     scripts/build-shared-runtime.sh \
     '^[[:space:]]*openclaw_run_repo_pnpm "\$\{ROOT\}" build$'
+  assert_guard_precedes_mutation \
+    scripts/package-jarvis-consumer-rc.sh \
+    '^[[:space:]]*package_rc_app_fast$'
   assert_guard_precedes_mutation \
     scripts/new-worktree.sh \
     '^if ! git fetch origin; then$'
@@ -1497,6 +1576,7 @@ create_term_attribution_holder
 run_suite_test test_production_has_no_ambient_test_bypass
 run_suite_test test_wrapper_waits_for_explicit_handshake_commit
 run_suite_test test_authoritative_session_identity_ignores_macos_ps_zero
+run_suite_test test_persistent_committed_identity_ambiguity_fails_closed
 run_suite_test test_hostile_health_environment_cannot_weaken_policy
 run_suite_test test_machine_wide_default_and_separate_clone_contention
 run_suite_test test_nested_reuse_without_reacquire

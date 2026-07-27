@@ -38,6 +38,35 @@ describe("Jarvis Consumer RC packaging wrapper", () => {
     expect(script).toContain("--reuse-runtime/--shell-only-fast is only valid with --fast");
   });
 
+  it("owns one fleet lease across package, notarize, install, and relaunch", () => {
+    const helpExitIndex = script.indexOf("      usage\n      exit 0");
+    const guardCallIndex = script.indexOf(
+      'openclaw_heavy_local_slot_require_or_reexec \\\n  "package-jarvis-consumer-rc:${MODE}"',
+    );
+    const transactionIndex = script.indexOf('case "$MODE" in', guardCallIndex);
+    const packageIndex = script.indexOf("    package_rc_app_fast", transactionIndex);
+    const notarizeIndex = script.indexOf("    notarize_rc_app", transactionIndex);
+    const fastInstallIndex = script.indexOf("    install_rc_app", packageIndex);
+    const fastRelaunchIndex = script.indexOf("    relaunch_rc_app", fastInstallIndex);
+    const notarizedInstallIndex = script.indexOf("    install_rc_app", notarizeIndex);
+    const notarizedRelaunchIndex = script.indexOf("    relaunch_rc_app", notarizedInstallIndex);
+
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"');
+    expect(script).toContain('ORIGINAL_ARGS=("$@")');
+    expect(helpExitIndex).toBeGreaterThanOrEqual(0);
+    expect(guardCallIndex).toBeGreaterThan(helpExitIndex);
+    expect(transactionIndex).toBeGreaterThan(guardCallIndex);
+    expect(packageIndex).toBeGreaterThan(transactionIndex);
+    expect(notarizeIndex).toBeGreaterThan(transactionIndex);
+    expect(fastInstallIndex).toBeGreaterThan(packageIndex);
+    expect(fastRelaunchIndex).toBeGreaterThan(fastInstallIndex);
+    expect(notarizedInstallIndex).toBeGreaterThan(notarizeIndex);
+    expect(notarizedRelaunchIndex).toBeGreaterThan(notarizedInstallIndex);
+    expect(script).toContain(
+      '"$ROOT_DIR/scripts/package-jarvis-consumer-rc.sh" \\\n  "${ORIGINAL_ARGS[@]}"',
+    );
+  });
+
   it("bounds AppleScript relaunch activation", () => {
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/macos-activation.sh"');
     expect(script).toContain("OPENCLAW_MAC_APP_ACTIVATION_TIMEOUT_SECS=12");

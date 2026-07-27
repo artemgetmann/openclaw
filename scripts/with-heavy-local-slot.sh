@@ -73,6 +73,7 @@ child_pgid=''
 monitor_pid=''
 health_stop_file=''
 child_cleanup_safe=1
+committed_identity_status=1
 PERL_BIN="$(command -v perl 2>/dev/null || true)"
 
 resolve_command_path() {
@@ -131,6 +132,31 @@ load_guarded_group_identity() {
   fi
   [ "$status" -ne 2 ] || return 2
   return 0
+}
+
+load_committed_guarded_group_identity() {
+  local attempt=0
+  local status=0
+
+  [ -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_committed" ] || return 1
+  [ ! -e "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" ] || return 1
+
+  # A fast command can exit between child_group_status's live-PID probe and its
+  # syscall-backed identity read. Retry only that transient ambiguous result:
+  # the next read must either validate the same live identity or prove the
+  # committed process group is gone. Persistent ambiguity remains fail-closed.
+  while [ "$attempt" -lt 5 ]; do
+    if load_guarded_group_identity; then
+      return 0
+    else
+      status=$?
+    fi
+    [ "$status" -eq 2 ] || return "$status"
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 5 ] || break
+    sleep 0.01
+  done
+  return 2
 }
 
 stop_guarded_child() {
@@ -376,9 +402,17 @@ while [ "$metadata_wait" -lt 200 ]; do
   sleep 0.05
   metadata_wait=$((metadata_wait + 1))
 done
-if [ ! -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_committed" ] ||
-  [ -e "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" ] ||
-  ! load_guarded_group_identity; then
+if [ -f "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_committed" ] &&
+  [ ! -e "$OPENCLAW_HEAVY_LOCAL_SLOT_PATH/child_pending" ]; then
+  if load_committed_guarded_group_identity; then
+    committed_identity_status=0
+  else
+    # Capture the helper's internal reason before the boolean admission check.
+    # No raw identity status may bypass the wrapper's fail-closed exit 75.
+    committed_identity_status=$?
+  fi
+fi
+if [ "$committed_identity_status" -ne 0 ]; then
   child_cleanup_safe=0
   kill -KILL "$child_pid" 2>/dev/null || true
   wait "$child_pid" 2>/dev/null || true
