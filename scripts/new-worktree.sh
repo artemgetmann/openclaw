@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ORIGINAL_ARGS=("$@")
+
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
   local value="$1"
@@ -330,13 +332,21 @@ fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
 source "${REPO_ROOT}/scripts/lib/worktree-guards.sh"
 source "${REPO_ROOT}/scripts/lib/validated-node.sh"
-
-if ! git fetch origin; then
-  echo "Warning: git fetch origin failed; continuing with local refs." >&2
-fi
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "${REPO_ROOT}/scripts/lib/heavy-local-slot.sh"
 
 if [[ -z "$BASE_BRANCH" ]]; then
   BASE_BRANCH="$(resolve_default_base_branch)"
+fi
+
+openclaw_heavy_local_slot_require_or_reexec \
+  "new-worktree:${FEATURE_NAME}:${LANE_MODE}" \
+  "$REPO_ROOT" \
+  "$REPO_ROOT/scripts/new-worktree.sh" \
+  "${ORIGINAL_ARGS[@]}"
+
+if ! git fetch origin; then
+  echo "Warning: git fetch origin failed; continuing with local refs." >&2
 fi
 
 maybe_reexec_from_sacred_home_clone "$BASE_BRANCH"

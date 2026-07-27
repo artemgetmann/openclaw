@@ -7,10 +7,13 @@ set -euo pipefail
 # different: Swift/package warmup is expensive, and release agents mostly need a
 # clean, current, already-warmed lane that fails early when it goes stale.
 
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOME_CLONE="${OPENCLAW_MAIN_HOME_CLONE:-/Users/user/Programming_Projects/openclaw}"
 RELEASE_NAME="${OPENCLAW_JARVIS_RELEASE_WORKTREE_NAME:-jarvis-release-current}"
 RELEASE_BRANCH="codex/${RELEASE_NAME}"
 RELEASE_WORKTREE="${HOME_CLONE}/.worktrees/${RELEASE_NAME}"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$SCRIPT_ROOT/scripts/lib/heavy-local-slot.sh"
 
 usage() {
   cat <<'EOF'
@@ -38,6 +41,14 @@ case "${1:-}" in
     exit 1
     ;;
 esac
+
+# Refreshing and prewarming the blessed lane can fetch, install, and compile.
+# Acquire before any home-clone or release-worktree mutation.
+openclaw_heavy_local_slot_require_or_reexec \
+  "jarvis-release-worktree:refresh-prewarm" \
+  "$SCRIPT_ROOT" \
+  "$SCRIPT_ROOT/scripts/jarvis-release-worktree.sh" \
+  "$@"
 
 if [[ ! -d "$HOME_CLONE/.git" ]]; then
   cat >&2 <<EOF

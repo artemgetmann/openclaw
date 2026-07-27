@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "${SCRIPT_ROOT}/scripts/lib/heavy-local-slot.sh"
+
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
 EXPECTED_RUNTIME="${MAIN_REPO}/dist/index.js"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
@@ -731,6 +736,15 @@ main() {
     log "canonical gateway is already healthy; exiting without restart"
     return 0
   fi
+
+  # Recovery owns one outer lease from the first possible launchd mutation
+  # through rebuild, reinstall, readiness, and watchdog stabilization. The
+  # nested shared-runtime build may reuse only this verified ancestor lease.
+  openclaw_heavy_local_slot_require_or_reexec \
+    "gateway-recover-main:${RECOVERY_MODE}" \
+    "$SCRIPT_ROOT" \
+    "$SCRIPT_ROOT/scripts/gateway-recover-main.sh" \
+    "$@"
 
   if [[ "${RECOVERY_MODE}" == "shallow" ]]; then
     log_block "Shallow launchd recovery"

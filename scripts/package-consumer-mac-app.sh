@@ -2,8 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 
+ORIGINAL_ARGS=("$@")
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 
 usage() {
@@ -40,6 +43,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# The consumer wrapper performs verification after the lower-level app build,
+# so it owns one fleet lease across both stages.
+openclaw_heavy_local_slot_require_or_reexec \
+  "package-consumer-mac-app:${INSTANCE_ID:-auto}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/package-consumer-mac-app.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 if [[ -z "$INSTANCE_ID" ]]; then
   # Linked git worktrees should not silently share the default consumer runtime.

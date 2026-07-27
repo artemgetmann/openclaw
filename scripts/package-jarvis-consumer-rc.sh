@@ -9,10 +9,13 @@ set -euo pipefail
 # churn between iterations.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/macos-activation.sh"
 
+ORIGINAL_ARGS=("$@")
 MODE=""
 REUSE_RUNTIME=0
 RC_INSTANCE_ID="jarvis-consumer-rc"
@@ -299,6 +302,15 @@ assert_rc_inputs
 if [[ "$REUSE_RUNTIME" == "1" && "$MODE" != "fast" ]]; then
   die "--reuse-runtime/--shell-only-fast is only valid with --fast"
 fi
+
+# The RC wrapper owns the transaction, not only its nested package build. Keep
+# one verified lease across bundle verification, notarization, replacement in
+# /Applications, and relaunch; nested package guards reuse this ancestor lease.
+openclaw_heavy_local_slot_require_or_reexec \
+  "package-jarvis-consumer-rc:${MODE}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/package-jarvis-consumer-rc.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 case "$MODE" in
   fast)

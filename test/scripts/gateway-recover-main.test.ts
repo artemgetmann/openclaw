@@ -85,6 +85,34 @@ describe("scripts/gateway-recover-main.sh", () => {
     expect(healthyMessageIndex).toBeLessThan(fullStopIndex);
   });
 
+  it("owns one fleet lease before either recovery path can mutate the gateway", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    const healthyCallIndex = script.indexOf("if canonical_gateway_healthy; then");
+    const guardCallIndex = script.indexOf(
+      'openclaw_heavy_local_slot_require_or_reexec \\\n    "gateway-recover-main:${RECOVERY_MODE}"',
+    );
+    const shallowMutationIndex = script.indexOf(
+      "    ensure_gateway_launch_agent_started_or_exit\n",
+      guardCallIndex,
+    );
+    const fullStopIndex = script.indexOf('log_block "Full clean stop"', guardCallIndex);
+    const nestedBuildIndex = script.indexOf(
+      "  run_strict run_shared_runtime_build",
+      guardCallIndex,
+    );
+    const finalVerificationIndex = script.indexOf('log_block "Final verification"', fullStopIndex);
+
+    expect(script).toContain('source "${SCRIPT_ROOT}/scripts/lib/heavy-local-slot.sh"');
+    expect(healthyCallIndex).toBeGreaterThanOrEqual(0);
+    expect(guardCallIndex).toBeGreaterThan(healthyCallIndex);
+    expect(shallowMutationIndex).toBeGreaterThan(guardCallIndex);
+    expect(fullStopIndex).toBeGreaterThan(guardCallIndex);
+    expect(nestedBuildIndex).toBeGreaterThan(fullStopIndex);
+    expect(finalVerificationIndex).toBeGreaterThan(nestedBuildIndex);
+    expect(script).toContain('"$SCRIPT_ROOT/scripts/gateway-recover-main.sh" \\\n    "$@"');
+  });
+
   it("refuses shared gateway recovery while Jarvis owns the same port unless explicitly overridden", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 

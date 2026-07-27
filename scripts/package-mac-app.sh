@@ -5,6 +5,18 @@ set -euo pipefail
 # Outputs to dist/OpenClaw.app by default, or a custom bundle name when requested.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+
+# This remains a documented direct packaging command as well as a nested
+# implementation detail. Direct callers self-admit; consumer/release wrappers
+# pass a verified live capability and continue without reacquiring.
+openclaw_heavy_local_slot_require_or_reexec \
+  "package-mac-app:${APP_VARIANT:-consumer}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/package-mac-app.sh" \
+  "$@"
+
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 source "$ROOT_DIR/scripts/lib/macos-runtime-prune.sh"
 source "$ROOT_DIR/scripts/lib/consumer-runtime-manifest.sh"

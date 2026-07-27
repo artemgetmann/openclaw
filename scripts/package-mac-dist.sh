@@ -9,6 +9,18 @@ set -euo pipefail
 # - dist/<app-name>-<version>.dmg
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+
+# The generic macOS distribution command continues from app build into ZIP,
+# DMG, and optional notarization work. Guard the whole outer transaction so the
+# nested package-mac-app invocation reuses the same lease.
+openclaw_heavy_local_slot_require_or_reexec \
+  "package-mac-dist" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/package-mac-dist.sh" \
+  "$@"
+
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
