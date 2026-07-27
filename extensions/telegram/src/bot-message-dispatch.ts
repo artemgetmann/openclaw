@@ -1760,6 +1760,8 @@ export const dispatchTelegramMessage = async ({
   const scheduleSilentToolProgressFallback = (toolName?: string) => {
     if (
       sawExplicitProgress ||
+      answerLane.lastPartialText.trim() ||
+      pendingAnswerPartialDuringPlan?.trim() ||
       finalPhaseStarted ||
       silentToolFallbackRendered ||
       silentToolProgressTimer
@@ -1777,6 +1779,8 @@ export const dispatchTelegramMessage = async ({
         if (
           generation !== silentToolProgressGeneration ||
           sawExplicitProgress ||
+          answerLane.lastPartialText.trim() ||
+          pendingAnswerPartialDuringPlan?.trim() ||
           finalPhaseStarted ||
           silentToolFallbackRendered
         ) {
@@ -3050,11 +3054,10 @@ export const dispatchTelegramMessage = async ({
           releaseBusySequentialKey = undefined;
         },
         onToolResult: (payload) => {
-          // Tool-result arrival closes the active-tool wait even when the
-          // result is intentionally suppressed (for example a raw 🔧 trace).
-          // A later tool start can schedule a fresh delay if the turn is still
-          // otherwise silent.
-          cancelSilentToolProgressFallback();
+          // Verbose providers reuse this callback for a hidden tool-start
+          // summary before execution begins. It is therefore not a reliable
+          // completion boundary. Keep the timer alive; a quick tool's final,
+          // failure, or dispatch teardown still cancels it before three seconds.
           return enqueueDraftLaneEvent(async () => {
             await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
             await sendToolPayload(payload);
@@ -3121,6 +3124,12 @@ export const dispatchTelegramMessage = async ({
         onToolStart: async (payload) => {
           noteWorkLogToolName(payload.name);
           await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
+          // Partial callbacks share the draft lane but can arrive immediately
+          // before this tool event. Drain them before deciding the turn is
+          // silent: a rendered or intentionally buffered answer acknowledgment
+          // already tells the user that work started and must not gain a second
+          // generic receipt three seconds later.
+          await waitForDraftLaneIdle();
           if (getActiveProgressController() && activeProgressKind !== "plan") {
             routeToolStatusPartialsToProgress = true;
           }

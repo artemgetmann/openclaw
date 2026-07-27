@@ -878,6 +878,106 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     }
   });
 
+  it("keeps delayed progress armed across a hidden verbose tool-start summary", async () => {
+    vi.useFakeTimers();
+    try {
+      const progressStream = createDraftStream(9053);
+      createTelegramDraftStream.mockReturnValue(progressStream);
+      let signalToolStarted: (() => void) | undefined;
+      const toolStarted = new Promise<void>((resolve) => {
+        signalToolStarted = resolve;
+      });
+      let finishTool: (() => void) | undefined;
+      const toolFinished = new Promise<void>((resolve) => {
+        finishTool = resolve;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+          // Verbose mode emits this internal summary at tool start. Telegram
+          // suppresses its raw trace, so it must not count as visible progress
+          // or cancel the sanitized receipt.
+          await replyOptions?.onToolResult?.({ text: "🔧 codex_threads" });
+          signalToolStarted?.();
+          await toolFinished;
+          await dispatcherOptions.deliver({ text: "Verbose final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      const dispatchPromise = dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "verbose-start-summary-keeps-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await toolStarted;
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(progressStream.update).toHaveBeenCalledWith("Waiting for Codex…");
+      expect(progressStream.update).not.toHaveBeenCalledWith(expect.stringContaining("🔧"));
+
+      finishTool?.();
+      await dispatchPromise;
+      expect(progressStream.update.mock.calls.filter(([text]) => text === "Work log")).toHaveLength(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not add delayed progress after a visible assistant acknowledgment", async () => {
+    vi.useFakeTimers();
+    try {
+      const answerStream = createDraftStream(9054);
+      createTelegramDraftStream.mockReturnValue(answerStream);
+      let signalToolStarted: (() => void) | undefined;
+      const toolStarted = new Promise<void>((resolve) => {
+        signalToolStarted = resolve;
+      });
+      let finishTool: (() => void) | undefined;
+      const toolFinished = new Promise<void>((resolve) => {
+        finishTool = resolve;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "I’m checking that now." });
+          await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+          signalToolStarted?.();
+          await toolFinished;
+          await dispatcherOptions.deliver({ text: "Acknowledged final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      const dispatchPromise = dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "visible-partial-suppresses-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await toolStarted;
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(answerStream.update).toHaveBeenCalledWith("I’m checking that now.");
+      expect(answerStream.update).not.toHaveBeenCalledWith("Waiting for Codex…");
+      expect(answerStream.update).not.toHaveBeenCalledWith("Still working on it.");
+
+      finishTool?.();
+      await dispatchPromise;
+      expect(answerStream.update).not.toHaveBeenCalledWith("Work log");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses generic delayed copy without exposing unknown tool identifiers or raw traces", async () => {
     vi.useFakeTimers();
     try {
