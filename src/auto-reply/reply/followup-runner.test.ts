@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { releaseDirectTurnRestartContinuation } from "../../infra/restart-continuation.js";
+import { drainSystemEventEntries } from "../../infra/system-events.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
@@ -34,11 +36,13 @@ import {
   ackDurableFollowup,
   hydrateDurableFollowup,
   loadDurableFollowups,
+  markDurableFollowupRestartReceiptDelivering,
   persistDurableFollowup,
   persistDurableFollowupDelivery,
 } from "./queue/durable-store.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { RESTART_INTERRUPTED_TURN_PAYLOAD } from "./restart-recovery.js";
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -785,7 +789,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow("agent exploded");
     const [record] = await loadDurableFollowups();
     expect(record?.delivery?.payloads).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+      expect.objectContaining({ text: expect.stringContaining("Jarvis restarted") }),
     ]);
     expect(typing.markRunComplete).toHaveBeenCalled();
     expect(typing.markDispatchIdle).toHaveBeenCalled();
@@ -819,7 +823,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
     const [carrier] = await loadDurableFollowups();
     expect(carrier?.delivery?.sourceDurableIds).toEqual([first.id, second.id]);
     expect(carrier?.delivery?.payloads).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+      expect.objectContaining({ text: expect.stringContaining("Jarvis restarted") }),
     ]);
   });
 
@@ -839,12 +843,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
     });
     const staged = await persistDurableFollowupDelivery({
       run: { ...directTurn, durableId: input.id },
-      payloads: [
-        {
-          text: "I was interrupted by a Jarvis restart. Send Continue so I can inspect state.",
-          isError: true,
-        },
-      ],
+      payloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
     });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
@@ -853,21 +852,142 @@ describe("createFollowupRunner durable delivery recovery", () => {
       failureMode: "throw-durable",
     });
 
-    await runner(hydrateDurableFollowup(staged!, {}));
+    const restored = hydrateDurableFollowup(staged!, {});
+    await expect(runner(restored)).rejects.toThrow("awaiting terminal delivery");
+    const firstWake = drainSystemEventEntries(restored.run.sessionKey ?? "");
+    const [reconciledRecord] = await loadDurableFollowups();
+    await expect(runner(hydrateDurableFollowup(reconciledRecord, {}))).rejects.toThrow(
+      "awaiting terminal delivery",
+    );
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(routeReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         payload: expect.objectContaining({
-          isError: true,
-          text: expect.stringContaining("interrupted"),
+          text: expect.stringContaining("Jarvis restarted"),
         }),
         channel: "telegram",
         to: "-1003783709877",
         accountId: "default",
         threadId: 21876,
+        mirror: true,
+        mirrorIdempotencyKey: `restart-recovery:${input.id}`,
+        skipQueue: true,
       }),
     );
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload.text).not.toContain("Continue");
+    expect(firstWake).toEqual([
+      expect.objectContaining({
+        contextKey: `restart-followup:${input.id}`,
+        text: expect.stringContaining("Continue from the saved conversation"),
+      }),
+    ]);
+    // The first heartbeat has drained its event but has not delivered yet.
+    // A durable queue retry must not enqueue a second recovery run.
+    expect(drainSystemEventEntries(restored.run.sessionKey ?? "")).toEqual([]);
+    const [recovering] = await loadDurableFollowups();
+    expect(recovering?.restartRecovery).toEqual(
+      expect.objectContaining({ receipt: "delivered", continuation: "delivering" }),
+    );
+    releaseDirectTurnRestartContinuation(input.id);
+  });
+
+  it("does not resend a restart receipt left at an ambiguous provider boundary", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+    });
+    const record = await persistDurableFollowup({
+      queueKey: "ambiguous-restart-receipt",
+      run: queued,
+      settings: { mode: "followup", debounceMs: 0, cap: 20 },
+      deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
+    });
+    await markDurableFollowupRestartReceiptDelivering(record.id);
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner(hydrateDurableFollowup(record, {}))).rejects.toThrow(
+      "awaiting terminal delivery",
+    );
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const [reconciled] = await loadDurableFollowups();
+    expect(reconciled?.restartRecovery).toEqual(
+      expect.objectContaining({ receipt: "delivered", continuation: "delivering" }),
+    );
+    releaseDirectTurnRestartContinuation(record.id);
+    drainSystemEventEntries(queued.run.sessionKey ?? "");
+  });
+
+  it("does not resend a restart receipt after an ambiguous provider error", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+    });
+    const record = await persistDurableFollowup({
+      queueKey: "errored-restart-receipt",
+      run: queued,
+      settings: { mode: "followup", debounceMs: 0, cap: 20 },
+      deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "provider timeout" });
+
+    await expect(runner(hydrateDurableFollowup(record, {}))).rejects.toThrow("provider timeout");
+    const [ambiguous] = await loadDurableFollowups();
+    expect(ambiguous?.restartRecovery?.receipt).toBe("delivering");
+
+    await expect(runner(hydrateDurableFollowup(ambiguous, {}))).rejects.toThrow(
+      "awaiting terminal delivery",
+    );
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    releaseDirectTurnRestartContinuation(record.id);
+    drainSystemEventEntries(queued.run.sessionKey ?? "");
+  });
+
+  it("defers recovery while the process that accepted the turn is still alive", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003783709877",
+    });
+    const record = await persistDurableFollowup({
+      queueKey: "live-owner-restart-recovery",
+      run: queued,
+      settings: { mode: "followup", debounceMs: 0, cap: 20 },
+      deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
+    });
+    const filePath = path.join(stateDir, "followup-queue", `${record.id}.json`);
+    const persisted = JSON.parse(await fs.readFile(filePath, "utf8"));
+    // PID 1 is the live init/launchd process in supported runtime environments
+    // and cannot be this Vitest worker.
+    persisted.activeOwnerPid = 1;
+    await fs.writeFile(filePath, JSON.stringify(persisted));
+    const [ownedByOtherProcess] = await loadDurableFollowups();
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+
+    await expect(runner(hydrateDurableFollowup(ownedByOtherProcess, {}))).rejects.toThrow(
+      "active process 1",
+    );
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(drainSystemEventEntries(queued.run.sessionKey ?? "")).toEqual([]);
   });
 
   it("awaits explicit provider routing for a durable same-channel followup", async () => {
@@ -957,7 +1077,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
     await vi.waitFor(() => expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1));
     const [active] = await loadDurableFollowups();
     expect(active?.delivery?.payloads).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+      expect.objectContaining({ text: expect.stringContaining("Jarvis restarted") }),
     ]);
 
     finishAgent?.();
@@ -1006,6 +1126,13 @@ describe("createFollowupRunner durable delivery recovery", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
     const [record] = await loadDurableFollowups();
     expect(record?.delivery?.payloads).toEqual([{ text: "Provider-confirmed final only." }]);
+
+    routeReplyMock.mockResolvedValueOnce({ ok: true });
+    await runner(hydrateDurableFollowup(record, {}));
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    const [delivered] = await loadDurableFollowups();
+    expect(delivered?.delivery?.payloads).toEqual([]);
   });
 
   it.each([
@@ -1040,7 +1167,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
     const [record] = await loadDurableFollowups();
     expect(record?.id).toBe(input.id);
     expect(record?.delivery?.payloads).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("interrupted after accepting") }),
+      expect.objectContaining({ text: expect.stringContaining("Jarvis restarted") }),
     ]);
   });
 
@@ -1236,7 +1363,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
         delivery: expect.objectContaining({
           payloads: [
             expect.objectContaining({
-              text: expect.stringContaining("interrupted after accepting"),
+              text: expect.stringContaining("Jarvis restarted"),
             }),
           ],
         }),

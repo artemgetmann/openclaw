@@ -16,6 +16,10 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import {
+  markDurableFollowupRestartContinuationConsumed,
+  markDurableFollowupRestartContinuationFailed,
+} from "../auto-reply/reply/queue/durable-store.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -94,6 +98,11 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import {
+  isRestartContinuationContext,
+  parseRestartContinuationContext,
+  releaseDirectTurnRestartContinuation,
+} from "./restart-continuation.js";
+import {
   markRestartContinuationConsumed,
   markRestartContinuationFailed,
 } from "./restart-sentinel.js";
@@ -108,6 +117,53 @@ export type HeartbeatDeps = OutboundSendDeps &
 
 const log = createSubsystemLogger("gateway/heartbeat");
 const RESTART_CONTINUATION_RETRY_MS = 1_000;
+
+async function consumeTaggedRestartContinuations(params: {
+  sessionKey: string;
+  contextKeys: Iterable<string | null | undefined>;
+}): Promise<void> {
+  const contextKeys = [...params.contextKeys];
+  await markRestartContinuationConsumed({ ...params, contextKeys });
+  for (const contextKey of contextKeys) {
+    const parsed = parseRestartContinuationContext(contextKey);
+    if (parsed?.kind === "direct-turn") {
+      const consumed = await markDurableFollowupRestartContinuationConsumed({
+        id: parsed.id,
+        sessionKey: params.sessionKey,
+      });
+      if (consumed) {
+        releaseDirectTurnRestartContinuation(parsed.id);
+      }
+    }
+  }
+}
+
+async function failTaggedRestartContinuations(params: {
+  sessionKey: string;
+  contextKeys: Iterable<string | null | undefined>;
+  error: string;
+}): Promise<string[]> {
+  const contextKeys = [...params.contextKeys];
+  const retryContextKeys: string[] = [];
+  const sentinelRetry = await markRestartContinuationFailed({ ...params, contextKeys });
+  if (sentinelRetry) {
+    retryContextKeys.push(sentinelRetry);
+  }
+  for (const contextKey of contextKeys) {
+    const parsed = parseRestartContinuationContext(contextKey);
+    if (
+      parsed?.kind === "direct-turn" &&
+      (await markDurableFollowupRestartContinuationFailed({
+        id: parsed.id,
+        sessionKey: params.sessionKey,
+        error: params.error,
+      }))
+    ) {
+      retryContextKeys.push(contextKey!.trim().toLowerCase());
+    }
+  }
+  return [...new Set(retryContextKeys)];
+}
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
 export {
@@ -528,7 +584,7 @@ async function resolveHeartbeatPreflight(params: {
   );
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
   const hasTaggedRestartEvents = pendingEventEntries.some((event) =>
-    event.contextKey?.startsWith("restart:"),
+    isRestartContinuationContext(event.contextKey),
   );
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -752,7 +808,7 @@ export async function runHeartbeatOnce(opts: {
     opts.reason === "restart-continuation" &&
     Boolean(forcedSessionKey) &&
     peekSystemEventEntries(forcedSessionKey ?? "").some((event) =>
-      event.contextKey?.startsWith("restart:"),
+      isRestartContinuationContext(event.contextKey),
     );
   if (!isForcedRestartContinuation && !areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
@@ -810,7 +866,7 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const hasRestartContinuation = preflight.pendingEventEntries.some((event) =>
-    event.contextKey?.startsWith("restart:"),
+    isRestartContinuationContext(event.contextKey),
   );
   // Restart continuation must reuse the original transcript: that is where the
   // interrupted task and its safety state live. An isolated heartbeat session
@@ -1030,18 +1086,21 @@ export async function runHeartbeatOnce(opts: {
     // Agent setup drains system events before it knows whether an actual model
     // run can start. Restore durable replay state first, then put only the
     // matching tagged event back in RAM and request a bounded retry.
-    const retryContextKey = await markRestartContinuationFailed({
+    const retryContextKeys = await failTaggedRestartContinuations({
       sessionKey,
       contextKeys: params.events.map((event) => event.contextKey),
       error: params.error,
     });
-    const retryEvent = retryContextKey
-      ? params.events.find(
-          (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
-        )
-      : undefined;
-    if (retryEvent && retryContextKey) {
+    for (const retryContextKey of retryContextKeys) {
+      const retryEvent = params.events.find(
+        (event) => event.contextKey?.toLowerCase() === retryContextKey.toLowerCase(),
+      );
+      if (!retryEvent) {
+        continue;
+      }
       enqueueSystemEvent(retryEvent.text, { sessionKey, contextKey: retryContextKey });
+    }
+    if (retryContextKeys.length > 0) {
       requestHeartbeatNow({
         reason: "restart-continuation",
         sessionKey,
@@ -1090,7 +1149,7 @@ export async function runHeartbeatOnce(opts: {
       .map((event) => event.contextKey)
       .filter(
         (contextKey): contextKey is string =>
-          Boolean(contextKey?.startsWith("restart:")) && !remainingEventContexts.has(contextKey),
+          isRestartContinuationContext(contextKey) && !remainingEventContexts.has(contextKey),
       );
     const consumedRestartEvents = preflight.pendingEventEntries.filter((event) =>
       consumedRestartContexts.includes(event.contextKey ?? ""),
@@ -1122,7 +1181,7 @@ export async function runHeartbeatOnce(opts: {
       // the continuation prompt. They intentionally produce no user payload,
       // so acknowledge the drained event instead of making it replay forever.
       try {
-        await markRestartContinuationConsumed({
+        await consumeTaggedRestartContinuations({
           sessionKey,
           contextKeys: consumedRestartContexts,
         });
@@ -1488,7 +1547,7 @@ export async function runHeartbeatOnce(opts: {
         // This is deliberately after the awaited send. Agent execution proves
         // the work ran; only resolved outbound delivery proves the recovered
         // result crossed the user-visible boundary.
-        await markRestartContinuationConsumed({
+        await consumeTaggedRestartContinuations({
           sessionKey,
           contextKeys: consumedRestartContexts,
         });
@@ -1536,7 +1595,7 @@ export async function runHeartbeatOnce(opts: {
     );
     const consumedRestartEvents = preflight.pendingEventEntries.filter(
       (event) =>
-        Boolean(event.contextKey?.startsWith("restart:")) &&
+        isRestartContinuationContext(event.contextKey) &&
         !remainingEventContexts.has(event.contextKey),
     );
     if (consumedRestartEvents.length > 0) {
@@ -1681,7 +1740,7 @@ export function startHeartbeatRunner(opts: {
       reason === "restart-continuation" &&
       Boolean(requestedSessionKey) &&
       peekSystemEventEntries(requestedSessionKey ?? "").some((event) =>
-        event.contextKey?.startsWith("restart:"),
+        isRestartContinuationContext(event.contextKey),
       );
     if (!isForcedRestartContinuation && !areHeartbeatsEnabled()) {
       return {

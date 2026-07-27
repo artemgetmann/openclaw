@@ -6,6 +6,7 @@ import { captureEnv } from "../../../test-utils/env.js";
 import { retainSummarizedDurableFollowups, scheduleFollowupDrain } from "./drain.js";
 import {
   DURABLE_FOLLOWUP_RETRY_MAX_MS,
+  DurableFollowupActiveOwnerError,
   hydrateDurableFollowup,
   loadDurableFollowups,
   persistDurableFollowup,
@@ -92,6 +93,22 @@ describe("durable followup retry backoff", () => {
     expect(runFollowup).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not rewrite retry metadata while another process owns finalization", async () => {
+    const record = await persistDurableFollowup({ queueKey: key, run: createRun(), settings });
+    enqueueFollowupRun(key, hydrateDurableFollowup(record, {}), settings, "none");
+    const runFollowup = vi
+      .fn<(run: FollowupRun) => Promise<void>>()
+      .mockRejectedValue(new DurableFollowupActiveOwnerError(record.id, 4321));
+
+    scheduleFollowupDrain(key, runFollowup);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledTimes(1));
+
+    const [untouched] = await loadDurableFollowups();
+    expect(untouched?.retryCount).toBeUndefined();
+    expect(untouched?.nextAttemptAt).toBeUndefined();
   });
 
   it("grows retry delay exponentially and caps it", async () => {

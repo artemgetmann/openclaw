@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { writeJsonAtomic } from "../../../infra/json-files.js";
+import { createAsyncLock, writeJsonAtomic } from "../../../infra/json-files.js";
 import { generateSecureUuid } from "../../../infra/secure-random.js";
 import type { ReplyPayload } from "../../types.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
@@ -35,6 +35,9 @@ type ProcessedMessagePruneResult = {
 // Startup seeds exact pressure/expiry state. Normal completions then avoid a
 // directory scan until the known max-size or TTL boundary actually becomes due.
 const processedMessagePruneStates = new Map<string, ProcessedMessagePruneState>();
+// Recovery reconciliation and heartbeat completion can touch the same carrier.
+// Serialize those tiny read-modify-write transitions to avoid stale overwrites.
+const withDurableFollowupMutationLock = createAsyncLock();
 
 type DurableFollowupCancellation = {
   version: typeof STORE_VERSION;
@@ -58,6 +61,16 @@ export class DurableFollowupCancelledError extends Error {
   }
 }
 
+export class DurableFollowupActiveOwnerError extends Error {
+  constructor(
+    readonly durableId: string,
+    readonly ownerPid: number,
+  ) {
+    super(`Durable followup ${durableId} is still owned by active process ${ownerPid}`);
+    this.name = "DurableFollowupActiveOwnerError";
+  }
+}
+
 export type DurableFollowupRecord = {
   version: typeof STORE_VERSION;
   id: string;
@@ -73,6 +86,22 @@ export type DurableFollowupRecord = {
     processedMessageKeys: string[];
     payloads: ReplyPayload[];
   };
+  /**
+   * Durable handshake for a direct turn that stopped before producing a final.
+   * Receipt and wake are separate so startup reconciliation can safely repeat
+   * without sending duplicate notices or scheduling parallel continuations.
+   */
+  restartRecovery?: {
+    receipt: "pending" | "delivering" | "delivered";
+    continuation: "pending" | "delivering" | "delivered";
+    updatedAt: number;
+    lastError?: string;
+  };
+  /**
+   * Process that still owns the accepted turn through terminal transport
+   * confirmation. A replacement gateway defers recovery while this PID lives.
+   */
+  activeOwnerPid?: number;
   /** Opaque identity used only after successful drain to suppress provider redelivery. */
   processedMessageKey?: string;
   /** Cancellation generation already present when this new work began. */
@@ -473,6 +502,18 @@ export async function persistDurableFollowup(params: {
             processedMessageKeys: processedMessageKey ? [processedMessageKey] : [],
             payloads: params.deliveryPayloads,
           },
+          // The tagged blocker is not a terminal error message. It is the
+          // durable authority that startup converts into a receipt + wake.
+          ...(params.deliveryPayloads.some((payload) => payload.restartRecovery === true)
+            ? {
+                activeOwnerPid: process.pid,
+                restartRecovery: {
+                  receipt: "pending" as const,
+                  continuation: "pending" as const,
+                  updatedAt: now,
+                },
+              }
+            : {}),
         }
       : {}),
     processedMessageKey,
@@ -489,7 +530,7 @@ export async function persistDurableFollowup(params: {
   // rename so a late record cannot land behind the cancellation scan.
   const cancellationAfterWrite = loadDurableFollowupCancellationSync(record.queueKey, params.env);
   if (cancellationAfterWrite?.id !== cancellationAtStart?.id) {
-    await ackDurableFollowup(record.id, params.env);
+    await ackDurableFollowupUnlocked(record.id, params.env);
     throw new DurableFollowupCancelledError(record.queueKey);
   }
   return record;
@@ -527,6 +568,16 @@ export type DurableFollowupRetryUpdate = {
  * boundary. Older records simply begin at attempt zero.
  */
 export async function scheduleDurableFollowupRetries(params: {
+  ids: Iterable<string | undefined>;
+  now?: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ scheduled: DurableFollowupRetryUpdate[]; terminalIds: string[] }> {
+  return await withDurableFollowupMutationLock(async () => {
+    return await scheduleDurableFollowupRetriesUnlocked(params);
+  });
+}
+
+async function scheduleDurableFollowupRetriesUnlocked(params: {
   ids: Iterable<string | undefined>;
   now?: number;
   env?: NodeJS.ProcessEnv;
@@ -571,6 +622,11 @@ export async function scheduleDurableFollowupRetries(params: {
       ensureDirMode: 0o700,
       trailingNewline: true,
     });
+    if (isDurableFollowupRecordCancelled(updated, env)) {
+      await fs.rm(filePath, { force: true });
+      terminalIds.push(updated.id);
+      continue;
+    }
     scheduled.push({ id: record.id, retryCount, nextAttemptAt, expiresAt: record.expiresAt });
   }
   return { scheduled, terminalIds };
@@ -591,6 +647,16 @@ function normalizeDurableIds(run: FollowupRun): string[] {
  * several files. Runtime config remains excluded from the rewritten record.
  */
 export async function persistDurableFollowupDelivery(params: {
+  run: FollowupRun;
+  payloads: ReplyPayload[];
+  env?: NodeJS.ProcessEnv;
+}): Promise<DurableFollowupRecord | undefined> {
+  return await withDurableFollowupMutationLock(async () => {
+    return await persistDurableFollowupDeliveryUnlocked(params);
+  });
+}
+
+async function persistDurableFollowupDeliveryUnlocked(params: {
   run: FollowupRun;
   payloads: ReplyPayload[];
   env?: NodeJS.ProcessEnv;
@@ -624,11 +690,26 @@ export async function persistDurableFollowupDelivery(params: {
   // this transition writes. Stop here when possible; the post-write check
   // below closes the unavoidable async-write window and removes a late carrier.
   if (isDurableFollowupRecordCancelled(carrier, env)) {
-    await ackDurableFollowup(carrier.id, env);
+    await ackDurableFollowupUnlocked(carrier.id, env);
     throw new DurableFollowupCancelledError(carrier.queueKey);
   }
   const record: DurableFollowupRecord = {
     ...carrier,
+    activeOwnerPid:
+      carrier.activeOwnerPid ??
+      (params.payloads.some((payload) => payload.restartRecovery === true)
+        ? process.pid
+        : undefined),
+    // A completed model/tool turn supersedes the interruption handshake. Only
+    // an explicit blocker payload creates/retains recovery state; every exact
+    // terminal envelope is delivery-only and needs no receipt or wake.
+    restartRecovery: params.payloads.some((payload) => payload.restartRecovery === true)
+      ? (carrier.restartRecovery ?? {
+          receipt: "pending",
+          continuation: "pending",
+          updatedAt: Date.now(),
+        })
+      : undefined,
     // This is the exact user-facing outbound envelope, including channelData
     // required by adapters (Slack blocks, Telegram flags, etc.). It may contain
     // generated user content, but never runtime config/auth: those remain only
@@ -663,7 +744,7 @@ export async function persistDurableFollowupDelivery(params: {
   // this must remain the final await before returning a routable delivery.
   // Deleting here handles a carrier rewritten after the cancellation scan.
   if (isDurableFollowupRecordCancelled(record, env)) {
-    await ackDurableFollowup(record.id, env);
+    await ackDurableFollowupUnlocked(record.id, env);
     throw new DurableFollowupCancelledError(record.queueKey);
   }
   return record;
@@ -682,6 +763,16 @@ export async function checkpointDurableFollowupDelivery(
   completedPayloadCount = 1,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DurableFollowupRecord | undefined> {
+  return await withDurableFollowupMutationLock(async () => {
+    return await checkpointDurableFollowupDeliveryUnlocked(id, completedPayloadCount, env);
+  });
+}
+
+async function checkpointDurableFollowupDeliveryUnlocked(
+  id: string | undefined,
+  completedPayloadCount = 1,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DurableFollowupRecord | undefined> {
   const cleaned = id?.trim();
   const count = Math.max(0, Math.floor(completedPayloadCount));
   if (!cleaned || count === 0) {
@@ -693,7 +784,7 @@ export async function checkpointDurableFollowupDelivery(
     throw new Error(`Durable followup delivery checkpoint lost carrier ${cleaned}`);
   }
   if (isDurableFollowupRecordCancelled(parsed, env)) {
-    await ackDurableFollowup(parsed.id, env);
+    await ackDurableFollowupUnlocked(parsed.id, env);
     throw new DurableFollowupCancelledError(parsed.queueKey);
   }
   const updated: DurableFollowupRecord = {
@@ -711,10 +802,245 @@ export async function checkpointDurableFollowupDelivery(
   // Cancellation can race the atomic replacement. Remove a carrier rewritten
   // after the cancellation scan instead of resurrecting cancelled delivery.
   if (isDurableFollowupRecordCancelled(updated, env)) {
-    await ackDurableFollowup(updated.id, env);
+    await ackDurableFollowupUnlocked(updated.id, env);
     throw new DurableFollowupCancelledError(updated.queueKey);
   }
   return updated;
+}
+
+export async function loadDurableFollowupRestartRecovery(
+  id: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DurableFollowupRecord | undefined> {
+  const cleaned = id?.trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(resolveDurableFollowupPath(cleaned, env), "utf8"),
+    ) as unknown;
+    return isDurableFollowupRecord(parsed) && parsed.restartRecovery ? parsed : undefined;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+export function isDurableFollowupOwnedByOtherLiveProcess(
+  record: DurableFollowupRecord,
+  options?: {
+    currentPid?: number;
+    isProcessAlive?: (pid: number) => boolean;
+  },
+): boolean {
+  const ownerPid = record.activeOwnerPid;
+  const currentPid = options?.currentPid ?? process.pid;
+  if (!ownerPid || ownerPid === currentPid) {
+    return false;
+  }
+  const isProcessAlive =
+    options?.isProcessAlive ??
+    ((pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (err) {
+        // EPERM still proves a process owns the PID; ESRCH proves it exited.
+        return (err as NodeJS.ErrnoException).code === "EPERM";
+      }
+    });
+  return isProcessAlive(ownerPid);
+}
+
+async function updateDurableFollowupRestartRecovery(params: {
+  id: string;
+  sessionKey?: string;
+  env?: NodeJS.ProcessEnv;
+  mutate: (record: DurableFollowupRecord) => DurableFollowupRecord["restartRecovery"] | undefined;
+}): Promise<DurableFollowupRecord | undefined> {
+  return await withDurableFollowupMutationLock(async () => {
+    const env = params.env ?? process.env;
+    const filePath = resolveDurableFollowupPath(params.id, env);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw err;
+    }
+    if (!isDurableFollowupRecord(parsed) || !parsed.restartRecovery) {
+      return undefined;
+    }
+    if (isDurableFollowupRecordCancelled(parsed, env)) {
+      await ackDurableFollowupUnlocked(parsed.id, env);
+      return undefined;
+    }
+    if (params.sessionKey && parsed.run.run.sessionKey !== params.sessionKey) {
+      return undefined;
+    }
+    const restartRecovery = params.mutate(parsed);
+    if (!restartRecovery) {
+      return undefined;
+    }
+    const updated: DurableFollowupRecord = { ...parsed, restartRecovery };
+    await writeJsonAtomic(filePath, updated, {
+      mode: 0o600,
+      ensureDirMode: 0o700,
+      trailingNewline: true,
+    });
+    if (isDurableFollowupRecordCancelled(updated, env)) {
+      await ackDurableFollowupUnlocked(updated.id, env);
+      return undefined;
+    }
+    return updated;
+  });
+}
+
+export async function markDurableFollowupRestartReceiptDelivered(
+  id: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const updated = await updateDurableFollowupRestartRecovery({
+    id,
+    env,
+    mutate: (record) =>
+      record.restartRecovery?.receipt === "delivered"
+        ? record.restartRecovery
+        : {
+            ...record.restartRecovery!,
+            receipt: "delivered",
+            updatedAt: Date.now(),
+            lastError: undefined,
+          },
+  });
+  return updated?.restartRecovery?.receipt === "delivered";
+}
+
+export async function markDurableFollowupRestartReceiptDelivering(
+  id: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const updated = await updateDurableFollowupRestartRecovery({
+    id,
+    env,
+    mutate: (record) =>
+      record.restartRecovery?.receipt === "pending"
+        ? {
+            ...record.restartRecovery,
+            receipt: "delivering",
+            updatedAt: Date.now(),
+            lastError: undefined,
+          }
+        : undefined,
+  });
+  return updated?.restartRecovery?.receipt === "delivering";
+}
+
+export async function markDurableFollowupRestartContinuationDelivering(
+  id: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const updated = await updateDurableFollowupRestartRecovery({
+    id,
+    env,
+    mutate: (record) =>
+      record.restartRecovery?.continuation === "pending"
+        ? {
+            ...record.restartRecovery,
+            continuation: "delivering",
+            updatedAt: Date.now(),
+            lastError: undefined,
+          }
+        : record.restartRecovery?.continuation === "delivering"
+          ? record.restartRecovery
+          : undefined,
+  });
+  return updated?.restartRecovery?.continuation === "delivering";
+}
+
+/**
+ * Complete the interrupted-turn carrier only after the tagged continuation
+ * reaches a terminal no-op or provider-accepted final. Empty delivery keeps
+ * the queue's existing FIFO completion path authoritative.
+ */
+export async function markDurableFollowupRestartContinuationConsumed(params: {
+  id: string;
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const updated = await withDurableFollowupMutationLock(async () => {
+    const env = params.env ?? process.env;
+    const filePath = resolveDurableFollowupPath(params.id, env);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw err;
+    }
+    if (
+      !isDurableFollowupRecord(parsed) ||
+      !parsed.restartRecovery ||
+      parsed.run.run.sessionKey !== params.sessionKey
+    ) {
+      return undefined;
+    }
+    if (isDurableFollowupRecordCancelled(parsed, env)) {
+      await ackDurableFollowupUnlocked(parsed.id, env);
+      return undefined;
+    }
+    const record: DurableFollowupRecord = {
+      ...parsed,
+      delivery: parsed.delivery ? { ...parsed.delivery, payloads: [] } : parsed.delivery,
+      restartRecovery: {
+        ...parsed.restartRecovery,
+        continuation: "delivered",
+        updatedAt: Date.now(),
+        lastError: undefined,
+      },
+    };
+    await writeJsonAtomic(filePath, record, {
+      mode: 0o600,
+      ensureDirMode: 0o700,
+      trailingNewline: true,
+    });
+    if (isDurableFollowupRecordCancelled(record, env)) {
+      await ackDurableFollowupUnlocked(record.id, env);
+      return undefined;
+    }
+    return record;
+  });
+  return updated?.restartRecovery?.continuation === "delivered";
+}
+
+export async function markDurableFollowupRestartContinuationFailed(params: {
+  id: string;
+  sessionKey: string;
+  error: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const updated = await updateDurableFollowupRestartRecovery({
+    id: params.id,
+    sessionKey: params.sessionKey,
+    env: params.env,
+    mutate: (record) =>
+      record.restartRecovery?.continuation === "delivering"
+        ? {
+            ...record.restartRecovery,
+            continuation: "pending",
+            updatedAt: Date.now(),
+            lastError: params.error,
+          }
+        : undefined,
+  });
+  return updated?.restartRecovery?.continuation === "pending";
 }
 
 async function removeCoveredInputRecords(
@@ -781,6 +1107,15 @@ export async function ackDurableFollowup(
   id: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  await withDurableFollowupMutationLock(async () => {
+    await ackDurableFollowupUnlocked(id, env);
+  });
+}
+
+async function ackDurableFollowupUnlocked(
+  id: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   const cleaned = id?.trim();
   if (!cleaned) {
     return;
@@ -795,6 +1130,15 @@ export async function ackDurableFollowup(
  * agent turn. Plain `ackDurableFollowup` remains cancellation/drop semantics.
  */
 export async function completeDurableFollowup(
+  id: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  await withDurableFollowupMutationLock(async () => {
+    await completeDurableFollowupUnlocked(id, env);
+  });
+}
+
+async function completeDurableFollowupUnlocked(
   id: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
@@ -963,6 +1307,10 @@ function isDurableFollowupRecord(value: unknown): value is DurableFollowupRecord
         record.retryCount >= 0)) &&
     (record.nextAttemptAt === undefined ||
       (typeof record.nextAttemptAt === "number" && Number.isFinite(record.nextAttemptAt))) &&
+    (record.activeOwnerPid === undefined ||
+      (typeof record.activeOwnerPid === "number" &&
+        Number.isInteger(record.activeOwnerPid) &&
+        record.activeOwnerPid > 0)) &&
     typeof record.expiresAt === "number"
   );
 }

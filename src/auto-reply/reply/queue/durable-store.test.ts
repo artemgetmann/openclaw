@@ -26,11 +26,16 @@ import {
   completeDurableFollowup,
   DurableFollowupCancelledError,
   hydrateDurableFollowup,
+  isDurableFollowupOwnedByOtherLiveProcess,
   isDurableFollowupMessagePending,
   isDurableFollowupMessageProcessed,
   isDurableFollowupRecordProcessed,
   loadDurableFollowupDelivery,
   loadDurableFollowups,
+  markDurableFollowupRestartContinuationConsumed,
+  markDurableFollowupRestartContinuationDelivering,
+  markDurableFollowupRestartContinuationFailed,
+  markDurableFollowupRestartReceiptDelivered,
   persistDurableFollowup,
   persistDurableFollowupDelivery,
 } from "./durable-store.js";
@@ -120,18 +125,75 @@ describe("durable followup queue", () => {
       queueKey: "atomic-direct-recovery",
       run,
       settings,
-      deliveryPayloads: [{ text: "Visible recovery receipt.", isError: true }],
+      deliveryPayloads: [{ text: "Visible recovery receipt.", restartRecovery: true }],
     });
 
     expect(record.delivery).toEqual({
       sourceDurableIds: [record.id],
       processedMessageKeys: [expect.any(String)],
-      payloads: [{ text: "Visible recovery receipt.", isError: true }],
+      payloads: [{ text: "Visible recovery receipt.", restartRecovery: true }],
     });
+    expect(record.restartRecovery).toEqual(
+      expect.objectContaining({ receipt: "pending", continuation: "pending" }),
+    );
+    expect(record.activeOwnerPid).toBe(process.pid);
+    expect(
+      isDurableFollowupOwnedByOtherLiveProcess(record, {
+        currentPid: process.pid + 1,
+        isProcessAlive: () => true,
+      }),
+    ).toBe(true);
+    expect(
+      isDurableFollowupOwnedByOtherLiveProcess(record, {
+        currentPid: process.pid + 1,
+        isProcessAlive: () => false,
+      }),
+    ).toBe(false);
     const [loaded] = await loadDurableFollowups();
     expect(hydrateDurableFollowup(loaded, {}).deliveryPayloads).toEqual([
-      { text: "Visible recovery receipt.", isError: true },
+      { text: "Visible recovery receipt.", restartRecovery: true },
     ]);
+  });
+
+  it("binds restart receipt and continuation transitions to the original session", async () => {
+    const run = createRun("never replay this original request");
+    const record = await persistDurableFollowup({
+      queueKey: "direct-restart-state-machine",
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Restart receipt", restartRecovery: true }],
+    });
+
+    await expect(markDurableFollowupRestartReceiptDelivered(record.id)).resolves.toBe(true);
+    await expect(markDurableFollowupRestartContinuationDelivering(record.id)).resolves.toBe(true);
+    await expect(
+      markDurableFollowupRestartContinuationFailed({
+        id: record.id,
+        sessionKey: "agent:main:wrong-session",
+        error: "wrong route",
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      markDurableFollowupRestartContinuationConsumed({
+        id: record.id,
+        sessionKey: run.run.sessionKey!,
+      }),
+    ).resolves.toBe(true);
+    await expect(markDurableFollowupRestartContinuationDelivering(record.id)).resolves.toBe(false);
+    await expect(
+      markDurableFollowupRestartContinuationFailed({
+        id: record.id,
+        sessionKey: run.run.sessionKey!,
+        error: "stale retry",
+      }),
+    ).resolves.toBe(false);
+
+    const [completed] = await loadDurableFollowups();
+    expect(completed?.run.run.sessionKey).toBe(run.run.sessionKey);
+    expect(completed?.delivery?.payloads).toEqual([]);
+    expect(completed?.restartRecovery).toEqual(
+      expect.objectContaining({ receipt: "delivered", continuation: "delivered" }),
+    );
   });
 
   it("does not let a malformed legacy delivery identity block inbound dedupe", async () => {
@@ -369,6 +431,21 @@ describe("durable followup queue", () => {
     await expect(delivery).rejects.toBeInstanceOf(DurableFollowupCancelledError);
     await expect(loadDurableFollowups()).resolves.toEqual([]);
     await expect(fs.readdir(path.join(stateDir, "followup-queue"))).resolves.toEqual([]);
+  });
+
+  it("does not resurrect recovery state when synchronous cancellation races its write", async () => {
+    const record = await persistDurableFollowup({
+      queueKey: "cancelled-restart-recovery",
+      run: createRun("interrupted direct turn"),
+      settings,
+      deliveryPayloads: [{ text: "Restart receipt", restartRecovery: true }],
+    });
+    writeGate.afterWrite = async () => {
+      ackDurableFollowupsForQueueSync("cancelled-restart-recovery");
+    };
+
+    await expect(markDurableFollowupRestartReceiptDelivered(record.id)).resolves.toBe(false);
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
   });
 
   it("rejects a failed durable write so callers cannot acknowledge transport input", async () => {

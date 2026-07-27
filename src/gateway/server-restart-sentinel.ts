@@ -9,6 +9,10 @@ import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  buildSentinelRestartContinuationContext,
+  RESTART_CONTINUATION_PROMPT,
+} from "../infra/restart-continuation.js";
+import {
   consumeRestartSentinelIfTerminal,
   consumeRestartSentinel,
   formatRestartSentinelMessage,
@@ -26,13 +30,6 @@ import { loadSessionEntry } from "./session-utils.js";
 const withRestartOperationLock = createAsyncLock();
 const RESTART_OPERATION_RETRY_MS = 1_000;
 const restartOperationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-const RESTART_CONTINUATION_PROMPT = [
-  "The gateway restarted while this session had active work.",
-  "Reassess the current external state before continuing from the latest user intent.",
-  "Never blindly repeat an irreversible side effect such as sending, publishing, deleting, paying, or restarting.",
-  "If the task is already complete, report that and stop. If no task remains active, do nothing.",
-].join(" ");
 
 function buildRecoveryReceipt(operation: RestartOperationRecord): string {
   const detail = operation.note ?? operation.reason;
@@ -283,7 +280,7 @@ async function reconcileRestartOperation(params: {
     field: "continuation",
     state: "delivering",
   });
-  const contextKey = `restart:${afterReceipt.id}`;
+  const contextKey = buildSentinelRestartContinuationContext(afterReceipt.id);
   const alreadyQueued = peekSystemEventEntries(afterReceipt.sessionKey).some(
     (event) => event.contextKey === contextKey,
   );
