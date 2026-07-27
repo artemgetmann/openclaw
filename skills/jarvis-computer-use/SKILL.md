@@ -136,13 +136,16 @@ fresh invocation. Never infer approval from the original task, an earlier
 approval, or approval of a neighboring control.
 
 Reversible navigation before an authentication act is allowed. This includes
-selecting a known signed-out account on an account chooser, using
-`Try another way` to discover available methods, and dismissing an
+opening the App Store's known `Tap continue and sign in to redeem code` handoff
+with its exact `Sign In` control when no password, passkey, OTP, CAPTCHA,
+security-key, or sign-in approval challenge is visible; selecting a known
+signed-out account on an account chooser; using
+`Try another way` to discover available methods; and dismissing an
 unavailable-passkey dialog with `Close`, `Cancel`, or `Back`. This does not
-silently authorize generic `Next` or `Continue` controls on a password, passkey,
-OTP, CAPTCHA, security-key, or approval challenge; those controls may submit an
-autofilled or already-entered credential and require their own explicit
-sensitive-action approval.
+silently authorize `Sign In`, `Next`, or `Continue` controls on a visible
+credential or approval challenge; those controls may submit an autofilled or
+already-entered credential and require their own explicit sensitive-action
+approval.
 
 If a command reports the wrong app/window, ambiguous target, stale element ref,
 blocked policy risk, or missing post-state verification, stop and report the

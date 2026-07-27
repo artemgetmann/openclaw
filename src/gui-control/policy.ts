@@ -61,6 +61,10 @@ export const DEFAULT_DENIED_GUI_SURFACE_TERMS = [
   "authentication",
   "password",
   "passkey",
+  "touch id",
+  "face id",
+  "biometric",
+  "fingerprint",
   "otp",
   "one-time password",
   "verification code",
@@ -768,6 +772,10 @@ const AUTHENTICATION_BOUNDARY_TERMS = [
   "secret",
   "password",
   "passkey",
+  "touch id",
+  "face id",
+  "biometric",
+  "fingerprint",
   "otp",
   "one-time password",
   "verification code",
@@ -782,6 +790,135 @@ const AUTHENTICATION_BOUNDARY_TERMS = [
   "approve sign in",
   "approve login",
 ];
+
+// Opening an authentication flow is navigation; completing a challenge is an
+// authentication act. Keep this list limited to visible evidence that a click
+// can use or assert a credential. Generic "Sign In" text is intentionally not
+// included: many native apps and websites use it only to open the next screen.
+const AUTHENTICATION_ACT_CONTEXT_TERMS = [
+  "password",
+  "text field",
+  "textfield",
+  "textbox",
+  "secure text field",
+  "securetextfield",
+  "axtextfield",
+  "axsecuretextfield",
+  "passkey",
+  "touch id",
+  "face id",
+  "biometric",
+  "fingerprint",
+  "otp",
+  "pin",
+  "one-time password",
+  "one-time code",
+  "authentication code",
+  "verification code",
+  "security code",
+  "access code",
+  "recovery code",
+  "backup code",
+  "digit code",
+  "apple account",
+  "apple id",
+  "email",
+  "e-mail",
+  "username",
+  "user name",
+  "phone",
+  "mobile",
+  "magic link",
+  "account identifier",
+  "two-factor",
+  "2fa",
+  "captcha",
+  "security key",
+  "token",
+  "secret",
+  "authentication request",
+  "sign-in request",
+  "login request",
+  "approve authentication",
+  "approve sign in",
+  "approve login",
+];
+
+function hasAuthenticationActContext(input: GuiPolicyInput): boolean {
+  // Include every observed element's role and metadata. Some runtimes attach
+  // challenge evidence only to a secure field or to the selected button's
+  // description instead of duplicating it into visibleText. App Store exposes
+  // its persistent toolbar Search field in the same flat AX tree as the modal,
+  // so exclude only that exact chrome control; all other editable fields remain
+  // challenge evidence.
+  const ignoredSearchMetadata = new Set<string>();
+  const elementContext = (input.snapshot?.elements ?? []).flatMap((element) => {
+    const stableIdentity = [element.name, element.title, element.label]
+      .map(normalizeText)
+      .filter(Boolean);
+    const metadata = [
+      element.name,
+      element.title,
+      element.label,
+      element.description,
+      element.value,
+    ]
+      .map(normalizeText)
+      .filter(Boolean);
+    const role = normalizeText(element.role);
+    const rolePrefixedSearch = [role, ...stableIdentity].some((part) =>
+      /^(?:textfield|text field|textbox|axtextfield)\s+(?:search|search app store)$/.test(part),
+    );
+    const isKnownToolbarSearch =
+      rolePrefixedSearch ||
+      (/^(?:textfield|text field|textbox|axtextfield)$/.test(role) &&
+        stableIdentity.some((part) => ["search", "search app store"].includes(part)));
+    if (isKnownToolbarSearch) {
+      const stableSearchMetadata = [element.name, element.title, element.label, element.description]
+        .map(normalizeText)
+        .filter(Boolean);
+      for (const part of stableSearchMetadata) {
+        ignoredSearchMetadata.add(part);
+      }
+      const value = normalizeText(element.value);
+      if (value && !hasAnyTerm(value, AUTHENTICATION_ACT_CONTEXT_TERMS)) {
+        ignoredSearchMetadata.add(value);
+      }
+      ignoredSearchMetadata.add([role, ...stableSearchMetadata, value].filter(Boolean).join(" "));
+    }
+    return isKnownToolbarSearch ? [] : [element.role, ...metadata];
+  });
+  const visibleContext = [
+    input.target.appName,
+    input.target.windowTitle,
+    input.snapshot?.appName,
+    input.snapshot?.windowTitle,
+    ...(input.snapshot?.summary?.split(/\r?\n/).filter((line) => {
+      const normalized = normalizeText(line);
+      return (
+        !ignoredSearchMetadata.has(normalized) &&
+        !/^\d+\s+(?:textfield|text field|textbox|axtextfield)\s+(?:search|search app store)\b/.test(
+          normalized,
+        )
+      );
+    }) ?? []),
+    ...(input.snapshot?.visibleText ?? []).filter(
+      (part) => !ignoredSearchMetadata.has(normalizeText(part)),
+    ),
+    ...elementContext,
+    ...selectedMutationSurfaceParts(input),
+  ]
+    .filter(Boolean)
+    .map((part) => normalizeText(part))
+    .join(" ");
+  if (hasAnyTerm(visibleContext, AUTHENTICATION_ACT_CONTEXT_TERMS)) {
+    return true;
+  }
+
+  return /\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b/i.test(
+    visibleContext,
+  );
+}
 
 function selectedMutationSurfaceParts(input: GuiPolicyInput): string[] {
   return [
@@ -821,6 +958,52 @@ function isSafeAccountChooserSelection(input: GuiPolicyInput): boolean {
   );
 }
 
+function isReversibleAuthenticationEntry(input: GuiPolicyInput): boolean {
+  if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
+    return false;
+  }
+
+  // Specialized profiles intentionally narrow the default capability. For
+  // example, the web dry-run profile must still stop at every login boundary.
+  // This parity rule applies only to Jarvis's founder-local trusted GUI mode.
+  const taskPolicyId = input.taskPolicy?.taskId ?? DEFAULT_GUI_TASK_POLICY.taskId;
+  if (taskPolicyId !== "trusted_local_gui_control") {
+    return false;
+  }
+
+  // This is a proven native App Store handoff: the button opens Apple's
+  // authentication sheet before redemption. Do not generalize from the label
+  // alone because a browser or SSO Sign In control can complete authentication
+  // immediately when an existing session is present.
+  if (
+    normalizeText(input.target.appName) !== "app store" ||
+    normalizeText(input.snapshot?.appName) !== "app store" ||
+    !/\btap continue and sign in to redeem code\b/.test(visibleContextText(input))
+  ) {
+    return false;
+  }
+
+  const role = normalizeText(input.element?.role);
+  if (!/\b(button|link|menu item|row|cell)\b/.test(role)) {
+    return false;
+  }
+
+  const selectedParts = selectedMutationSurfaceParts(input);
+  // OCU's structured snapshots separate role and label, while its supported
+  // text-dump parser can expose the combined string "button Sign In" in both
+  // fields. Accept only that bounded role prefix plus the exact action label.
+  const opensAuthentication = selectedParts.some((part) =>
+    /^(?:(?:button|link|menu item|row|cell)\s+)?(?:sign in|sign-in|log in|login)$/.test(part),
+  );
+  if (!opensAuthentication) {
+    return false;
+  }
+
+  // Even inside the known prompt, fail closed if accessibility exposes an
+  // actual password, passkey, OTP, secure field, or approval challenge.
+  return !hasAuthenticationActContext(input);
+}
+
 function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
   if (input.actionType !== "click" && input.actionType !== "secondaryAction") {
     return false;
@@ -839,7 +1022,7 @@ function isReversiblePreAuthNavigation(input: GuiPolicyInput): boolean {
     return true;
   }
 
-  return isSafeAccountChooserSelection(input);
+  return isSafeAccountChooserSelection(input) || isReversibleAuthenticationEntry(input);
 }
 
 function isAuthenticationBoundaryTerm(term: string): boolean {

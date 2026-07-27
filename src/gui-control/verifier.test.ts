@@ -71,12 +71,57 @@ function snapshot(params: Partial<GuiSnapshot> = {}): GuiSnapshot {
 }
 
 describe("performVerifiedAction", () => {
+  it("opens a reversible Sign In entry without requesting sensitive approval", async () => {
+    const requestSensitiveApproval = vi.fn(async () => "allow-once" as const);
+    const runtime = new MockGuiRuntime({
+      observations: [
+        snapshot({
+          id: "pre",
+          appName: "App Store",
+          windowTitle: "Sign-In Required",
+          summary: "Tap continue and sign in to redeem code.",
+          visibleText: ["Tap continue and sign in to redeem code.", "Sign In"],
+          elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
+        }),
+        snapshot({
+          id: "post",
+          appName: "App Store",
+          windowTitle: "Sign-In Required",
+          summary: "Apple Account sign-in options are visible.",
+          visibleText: ["Apple Account"],
+          elements: [],
+        }),
+      ],
+      actions: [{ ok: true, actionCount: 1 }],
+    });
+
+    const result = await performVerifiedAction({
+      runtime,
+      target: { appName: "App Store", windowTitle: "Sign-In Required" },
+      element: { ref: "@sign-in", role: "button", label: "Sign In" },
+      actionType: "click",
+      reason: "Open the App Store sign-in flow without entering credentials.",
+      approvedPolicyRisk: true,
+      requestSensitiveApproval,
+      verify: (post) => ({
+        ok: post.visibleText?.includes("Apple Account") === true,
+        summary: "Apple Account sign-in options are visible.",
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.stats.actionCount).toBe(1);
+    expect(requestSensitiveApproval).not.toHaveBeenCalled();
+  });
+
   it("executes no sensitive mutation when one-time approval is denied", async () => {
     const runtime = new MockGuiRuntime({
       observations: [
         snapshot({
           appName: "System Settings",
           windowTitle: "Sign-In Required",
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Sign In"],
           elements: [{ ref: "@sign-in", role: "button", label: "Sign In" }],
         }),
       ],
@@ -133,11 +178,15 @@ describe("performVerifiedAction", () => {
         snapshot({
           appName: "System Settings",
           windowTitle: "Sign-In Required",
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Sign In"],
           elements: [{ ref: "@action", role: "button", label: "Sign In" }],
         }),
         snapshot({
           appName: "System Settings",
           windowTitle: "Sign-In Required",
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Pay Now"],
           elements: [{ ref: "@action", role: "button", label: "Pay Now" }],
         }),
       ],
@@ -166,11 +215,15 @@ describe("performVerifiedAction", () => {
         snapshot({
           appName: "System Settings",
           windowTitle: "Sign-In Required",
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Sign In"],
           elements: [{ ref: "@action", role: "button", label: "Sign In" }],
         }),
         snapshot({
           appName: "System Settings",
           windowTitle: "Sign-In Required",
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Continue"],
           elements: [{ ref: "@action", role: "button", label: "Continue" }],
         }),
       ],
@@ -239,14 +292,16 @@ describe("performVerifiedAction", () => {
           id: "pre",
           appName: "System Settings",
           windowTitle: "Sign-In Required",
-          visibleText: ["Tap continue and sign in to redeem code."],
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Tap continue and sign in to redeem code."],
           elements: [{ ref: "@confirm", role: "button", label: "Sign In" }],
         }),
         snapshot({
           id: "approved-pre",
           appName: "System Settings",
           windowTitle: "Sign-In Required",
-          visibleText: ["Tap continue and sign in to redeem code."],
+          summary: "Password challenge with an autofilled password",
+          visibleText: ["Password", "Tap continue and sign in to redeem code."],
           elements: [{ ref: "@confirm", role: "button", label: "Sign In" }],
         }),
         snapshot({
