@@ -133,16 +133,20 @@ bash pty:true workdir:~/project background:true command:"codex --yolo 'Refactor 
 Clone to temp folder or use git worktree.
 
 ```bash
-# Clone to temp for safe review
+# Clone to temp for safe review of a generic repository
 REVIEW_DIR=$(mktemp -d)
 git clone https://github.com/user/repo.git $REVIEW_DIR
 cd $REVIEW_DIR && gh pr checkout 130
-bash pty:true workdir:$REVIEW_DIR command:"codex review --base origin/main"
+bash pty:true timeout:600 workdir:$REVIEW_DIR command:"codex review --base origin/main"
 # Clean up after: trash $REVIEW_DIR
 
-# Or use git worktree (keeps main intact)
+# In OpenClaw, use the repo helper: one attempt, 10-minute deadline, no auto-retry
 git worktree add /tmp/pr-130-review pr-130-branch
-bash pty:true workdir:/tmp/pr-130-review command:"codex review --base main"
+bash pty:true timeout:660 workdir:/tmp/pr-130-review command:"scripts/codex-review.mjs --base origin/main"
+
+# In another repo, use a worktree plus an explicit tool deadline
+git worktree add /tmp/pr-130-generic-review pr-130-branch
+bash pty:true timeout:600 workdir:/tmp/pr-130-generic-review command:"codex review --base main"
 ```
 
 ### Batch PR Reviews (parallel army!)
@@ -237,7 +241,11 @@ git worktree remove /tmp/issue-99
 2. **Respect tool choice** - if user asks for Codex, use Codex.
    - Orchestrator mode: do NOT hand-code patches yourself.
    - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
-3. **Be patient** - don't kill sessions because they're "slow"
+3. **Use explicit deadlines** - do not kill work merely for being slow before
+   its declared deadline, but never leave a review unbounded. In OpenClaw, use
+   `scripts/codex-review.mjs`; if it times out, report the missing verdict and
+   continue with direct diff review plus executable proof instead of retrying
+   automatically.
 4. **Monitor with process:log** - check progress without interfering
 5. **--full-auto for building** - auto-approves changes
 6. **vanilla for reviewing** - no special flags needed

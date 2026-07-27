@@ -119,8 +119,17 @@ Default review flow:
 
 ## Codex Review Sidecar
 
-Use `codex review` as a parallel sidecar for risky fork PRs. Do not turn it
-into a blocker for every typo fix.
+Use the bounded Codex review helper as a parallel sidecar for risky fork PRs.
+Do not turn it into a blocker for every typo fix:
+
+```bash
+scripts/codex-review.mjs --base origin/main
+```
+
+The helper makes one attempt with a 10-minute deadline. If it times out, do not
+retry automatically or keep the shipping lane blocked. Record that no verdict
+was produced, then finish a direct diff review and the relevant executable
+proof. A timeout is not a clean Codex review.
 
 Run it before or during merge flow when a PR touches:
 

@@ -48,15 +48,14 @@ successfully and the PR is no longer a draft.
 Fast path for normal PRs:
 
 ```bash
-scripts/pr-merge copilot-check <PR>
 scripts/pr-merge watch-auto <PR>
 ```
 
-`copilot-check` explicitly requests GitHub Copilot review with
-`gh pr edit <PR> --add-reviewer @copilot`, then polls for a Copilot-authored
-review, comment, or review-thread comment. A zero exit from the request command
-is not proof; if no Copilot artifact appears before the timeout, the command
-fails loudly and points at Copilot plan/account/repository settings.
+GitHub Copilot pull-request review is disabled for this repository because the
+current account has no code-review entitlement. Do not request `@copilot` or
+wait for a Copilot artifact. The legacy `copilot-check` command remains only as
+a fast compatibility no-op for resumed agent sessions; its successful exit is
+an explicit skip, not review proof.
 
 `watch-auto` enables GitHub squash auto-merge when the PR is open and not a
 draft, then watches only merge-relevant blockers. It does not require local
@@ -123,9 +122,8 @@ Agents should:
 
 - Diagnose failed or missing relevant checks.
 - Handle actionable review-bot comments.
-- Request Copilot review with `scripts/pr-merge copilot-check <PR>` when
-  advisory Copilot proof is expected, and report absence as unproven rather
-  than silently trusting repository rulesets.
+- Do not request Copilot review while the repository policy above marks it
+  disabled.
 - Push narrowly scoped fixes for failed CI.
 - Report exact check names and statuses, not vibes.
 - Ship runtime changes only after merge and only when explicitly requested.
@@ -221,15 +219,16 @@ Recommended `main` protection/ruleset shape:
 - Allow auto-merge.
 - Keep merge queue disabled until collision rate justifies it.
 - Keep settings mutation manual and explicit.
-- Add an advisory branch ruleset that automatically requests GitHub Copilot
-  review on new PRs targeting `main`, with draft PR and new-push re-review
-  disabled at first. Copilot review should provide comments only; it must not
-  satisfy or replace human approval.
+- Keep automatic GitHub Copilot review disabled while the repository account
+  lacks code-review entitlement. If that entitlement is added later, re-enable
+  advisory review deliberately and keep it non-blocking; it must not satisfy or
+  replace human approval.
 
-Read-only observation on 2026-06-03 for `artemgetmann/openclaw`: classic branch
-protection for `main` returned `Branch not protected`, repository rulesets
-returned `[]`, and repository `allow_auto_merge` was `false`. That is observed
-state, not permission to change it.
+Current repository state on 2026-07-27: the active `main PR CI` ruleset requires
+pull requests, `pr-required`, and `actionlint`, blocks deletion and
+non-fast-forward updates, and does not request Copilot review. The Copilot rule
+was removed because the account lacks code-review entitlement; reassess it
+deliberately if that entitlement changes.
 
 ## Job Overview
 
