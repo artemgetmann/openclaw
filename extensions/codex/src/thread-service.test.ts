@@ -12,9 +12,6 @@ class FakeCodexClient implements CodexRpcClient {
     string,
     { data: Array<Record<string, unknown>>; nextCursor?: string }
   >();
-  readStatus = "idle";
-  readTurns: Array<Record<string, unknown>> = [];
-  steerTurnId: string | undefined;
 
   async initialize() {}
 
@@ -36,16 +33,7 @@ class FakeCodexClient implements CodexRpcClient {
     if (method === "thread/start") {
       return { thread: { id: "thread-new", status: { type: "idle" } } } as T;
     }
-    if (method === "thread/read") {
-      return {
-        thread: {
-          id: threadId,
-          status: { type: this.readStatus },
-          turns: this.readTurns,
-        },
-      } as T;
-    }
-    if (method === "thread/resume") {
+    if (method === "thread/read" || method === "thread/resume") {
       return { thread: { id: threadId, status: { type: "idle" } } } as T;
     }
     if (method === "thread/fork") {
@@ -56,9 +44,6 @@ class FakeCodexClient implements CodexRpcClient {
         queueMicrotask(() => this.finishTurn(threadId));
       }
       return { turn: { id: "turn-1" } } as T;
-    }
-    if (method === "turn/steer") {
-      return { turnId: this.steerTurnId ?? record.expectedTurnId } as T;
     }
     return {} as T;
   }
@@ -270,57 +255,6 @@ describe("CodexThreadService", () => {
         }),
       },
     ]);
-  });
-
-  it("steers only the freshly observed active turn", async () => {
-    const client = new FakeCodexClient();
-    client.readStatus = "active";
-    client.readTurns = [
-      { id: "turn-old", status: "completed" },
-      { id: "turn-active", status: "inProgress" },
-    ];
-    const service = createService(client);
-
-    await expect(service.steer("thread-1", "Stop before deployment.")).resolves.toEqual({
-      mode: "native-codex-steer",
-      threadId: "thread-1",
-      turnId: "turn-active",
-    });
-    expect(client.requests.slice(-2)).toEqual([
-      {
-        method: "thread/read",
-        params: { threadId: "thread-1", includeTurns: true },
-      },
-      {
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-active",
-          input: [{ type: "text", text: "Stop before deployment.", text_elements: [] }],
-        },
-      },
-    ]);
-  });
-
-  it("does not turn failed steering into queued future work", async () => {
-    const client = new FakeCodexClient();
-    client.readStatus = "idle";
-    const service = createService(client);
-
-    await expect(service.steer("thread-1", "Do not deploy.")).rejects.toThrow(
-      "cannot steer Codex thread thread-1 while status is idle",
-    );
-    expect(client.requests.map((request) => request.method)).toEqual(["thread/read"]);
-  });
-
-  it("rejects a steering response for a different active turn", async () => {
-    const client = new FakeCodexClient();
-    client.readStatus = "active";
-    client.readTurns = [{ id: "turn-active", status: "inProgress" }];
-    client.steerTurnId = "turn-replacement";
-    const service = createService(client);
-
-    await expect(service.steer("thread-1", "Pause.")).rejects.toThrow("steered a different turn");
   });
 
   it("starts the first turn on a freshly created empty thread without resuming it", async () => {

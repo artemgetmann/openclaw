@@ -34,18 +34,6 @@ vi.mock("./src/app-server-client.js", () => ({
           ],
         };
       }
-      if (method === "thread/read") {
-        return {
-          thread: {
-            id: "thread-active",
-            status: { type: "active", activeFlags: [] },
-            turns: [{ id: "turn-active", status: "inProgress", items: [] }],
-          },
-        };
-      }
-      if (method === "turn/steer") {
-        return { turnId: "turn-active" };
-      }
       if (method === "turn/start") {
         // The service registers its collector before starting the turn. Delay
         // the terminal notification one event-loop tick so it first records
@@ -176,7 +164,7 @@ describe("Codex natural-language delegation", () => {
     expect(factory?.({ senderIsOwner: false, sandboxed: false })).toBeNull();
   });
 
-  it("gives the owner a compact fleet roster and race-safe steering", async () => {
+  it("gives the owner a compact read-only fleet roster", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
     let factory: OpenClawPluginToolFactory | undefined;
@@ -214,31 +202,9 @@ describe("Codex natural-language delegation", () => {
         threads: [{ threadId: "thread-active", status: "active" }],
       },
     });
-    await expect(
-      tool.execute("steer-1", {
-        action: "steer",
-        thread_id: "thread-active",
-        text: "Do not deploy; hand back source proof only.",
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        mode: "native-codex-steer",
-        threadId: "thread-active",
-        turnId: "turn-active",
-      },
+    expect(appServer.requests.at(-1)).toMatchObject({
+      method: "thread/list",
+      params: { useStateDbOnly: true },
     });
-    expect(appServer.requests.slice(-2)).toEqual([
-      {
-        method: "thread/read",
-        params: { threadId: "thread-active", includeTurns: true },
-      },
-      {
-        method: "turn/steer",
-        params: expect.objectContaining({
-          threadId: "thread-active",
-          expectedTurnId: "turn-active",
-        }),
-      },
-    ]);
   });
 });

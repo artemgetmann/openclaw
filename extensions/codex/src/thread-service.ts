@@ -22,12 +22,6 @@ export type CodexThreadRunResult = {
   progress: string[];
 };
 
-export type CodexThreadSteerResult = {
-  mode: "native-codex-steer";
-  threadId: string;
-  turnId: string;
-};
-
 export type CodexFleetSnapshot = {
   mode: "native-codex-fleet";
   counts: {
@@ -300,63 +294,6 @@ export class CodexThreadService {
     } finally {
       this.activeThreadIds.delete(normalizedThreadId);
     }
-  }
-
-  async steer(threadId: string, text: string): Promise<CodexThreadSteerResult> {
-    const normalizedThreadId = requireId(threadId);
-    const prompt = text.trim();
-    if (!prompt) {
-      throw new Error("text is required");
-    }
-
-    // Read and steer through one App Server generation. The active turn id is
-    // an optimistic-concurrency token: if the worker finishes or a replacement
-    // turn starts after this read, turn/steer fails instead of modifying the
-    // wrong work. Never fall back to turn/start because that would silently
-    // change an immediate coordination instruction into queued future work.
-    const client = await this.client();
-    const response = asRecord(
-      await client.request("thread/read", {
-        threadId: normalizedThreadId,
-        includeTurns: true,
-      }),
-    );
-    const returnedThreadId = readNestedString(response, ["thread", "id"]);
-    if (returnedThreadId !== normalizedThreadId) {
-      throw new Error("Codex App Server returned a different thread while preparing steering");
-    }
-    const status = readNestedString(response, ["thread", "status", "type"]);
-    if (status !== "active") {
-      throw new Error(
-        `cannot steer Codex thread ${normalizedThreadId} while status is ${status ?? "unknown"}`,
-      );
-    }
-    const activeTurnIds = asRecords(asRecord(response.thread).turns)
-      .filter((turn) => readString(turn.status) === "inProgress")
-      .map((turn) => readString(turn.id))
-      .filter((turnId): turnId is string => Boolean(turnId));
-    if (activeTurnIds.length !== 1) {
-      throw new Error(
-        `cannot steer Codex thread ${normalizedThreadId}: expected one active turn, found ${activeTurnIds.length}`,
-      );
-    }
-    const expectedTurnId = activeTurnIds[0];
-    const steered = asRecord(
-      await client.request("turn/steer", {
-        threadId: normalizedThreadId,
-        expectedTurnId,
-        input: [{ type: "text", text: prompt, text_elements: [] }],
-      }),
-    );
-    const returnedTurnId = readString(steered.turnId);
-    if (returnedTurnId !== expectedTurnId) {
-      throw new Error("Codex App Server steered a different turn than requested");
-    }
-    return {
-      mode: "native-codex-steer",
-      threadId: normalizedThreadId,
-      turnId: expectedTurnId,
-    };
   }
 
   async archive(threadId: string): Promise<void> {
