@@ -15,6 +15,14 @@ default runtime.
   App Server is unavailable, the request is not passed to Pi.
 - One active continuation per thread, selected progress projection, and one
   stable final reply.
+- Nonblocking owner delegation through `delegate_async`: Jarvis returns after
+  Codex accepts the turn, then the completed result starts a new delivered
+  Jarvis turn in the exact originating session.
+- Exact return attribution for async relays: the continuation carries the
+  native Codex thread and turn ids plus trusted inter-session provenance.
+- Async replies can target the same native thread through `message_async`;
+  receipt-only acknowledgements and relay-triggered recursive delegation are
+  explicitly forbidden to prevent ping-pong loops.
 - Fleet inventory paginates the metadata-only catalog, always retains every
   active thread, and reports how many inactive historical threads were omitted
   from the compact roster.
@@ -26,6 +34,18 @@ default runtime.
 
 The extension never creates Telegram topics automatically. Binding an existing
 conversation or topic is always explicit.
+
+## Async relay boundary
+
+The relay covers native turns started by this Jarvis-owned App Server process.
+It does not claim that messages sent through an unrelated Codex process are
+broadcast into this stdio client. Cross-process subscription requires a shared
+supervisor or broker and is outside this compatibility slice.
+
+The native thread remains durable across normal follow-up turns, but an active
+async relay is process-local: stopping the Gateway also stops the App Server
+child and its completion listener. The extension never retries that interrupted
+turn automatically because doing so could duplicate work or side effects.
 
 ## Configuration
 

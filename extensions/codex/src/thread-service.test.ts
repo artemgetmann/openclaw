@@ -147,6 +147,29 @@ describe("CodexThreadService", () => {
     });
   });
 
+  it("starts a native turn without holding the caller until completion", async () => {
+    const client = new FakeCodexClient();
+    client.holdTurn = true;
+    const service = createService(client);
+
+    const started = await service.startMessage("thread-async", "Work independently.");
+    expect(started).toMatchObject({
+      threadId: "thread-async",
+      turnId: "turn-1",
+    });
+
+    // The active-turn fence remains held after startMessage returns. Releasing
+    // the Jarvis caller must not allow a second turn into the same thread.
+    await expect(service.message("thread-async", "overlap")).rejects.toThrow(
+      "already has an active continuation",
+    );
+    client.finishTurn("thread-async");
+    await expect(started.completion).resolves.toMatchObject({
+      threadId: "thread-async",
+      finalText: "stable final",
+    });
+  });
+
   it("returns a compact fleet snapshot without loading every thread transcript", async () => {
     const client = new FakeCodexClient();
     client.listedThreads = [
