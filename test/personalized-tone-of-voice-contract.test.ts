@@ -34,6 +34,63 @@ function runStatus(workspace: string): {
   );
 }
 
+function configuredProfile(coreVoice: string): string {
+  return `---
+schema_version: 1
+status: configured
+source: explicit-user-setup
+---
+
+# Personal Tone of Voice
+
+## Core Voice
+
+${coreVoice}
+
+## Mechanics
+
+- Sentence length and rhythm: Concise, varied sentences.
+- Directness and warmth: Direct and warm.
+- Formality and politeness: Context-aware and polite.
+- Capitalization and punctuation: Standard capitalization and light punctuation.
+- Vocabulary and jargon: Plain language.
+- Formatting: Short paragraphs.
+
+## Context Rules
+
+### Professional email and outreach
+
+Lead with the purpose and close with a clear next step.
+
+### Chat, SMS, WhatsApp, Telegram, and iMessage
+
+Keep messages conversational and compact.
+
+### Follow-ups and replies
+
+Answer the open point before adding context.
+
+## Use
+
+- Concrete requests and natural phrasing.
+
+## Avoid
+
+- Empty pleasantries and invented familiarity.
+
+## Evidence Basis
+
+- Basis: interview
+- Confidence and uncertainty: Confirmed defaults; adapt to explicit requests.
+- Raw example retention: none
+
+## Confirmation
+
+- Confirmed by user: yes
+- Profile revision: 1
+`;
+}
+
 describe("personal-tone-of-voice contract", () => {
   it("routes all common recipient-facing draft requests through one hidden capability", () => {
     for (const trigger of [
@@ -194,9 +251,8 @@ status: unconfigured
     });
   });
 
-  it("reports configured without leaking profile prose or paths", () => {
+  it("rejects a status-only profile that omits schema-v1 completion sections", () => {
     const workspace = makeWorkspace();
-    const privateSentinel = "PRIVATE_SENTINEL_PHRASE";
     fs.writeFileSync(
       path.join(workspace, "TONE_OF_VOICE.md"),
       `---
@@ -209,9 +265,51 @@ source: explicit-user-setup
 
 ## Core Voice
 
-${privateSentinel}
+Minimal voice description.
 `,
     );
+
+    expect(runStatus(workspace)).toEqual({
+      event: "personal_tone_profile_status",
+      state: "unconfigured",
+      schemaVersion: 1,
+      reason: "missing_required_sections",
+    });
+  });
+
+  it.each([
+    {
+      name: "explicit user confirmation",
+      profile: configuredProfile("Direct and warm.").replace(
+        "- Confirmed by user: yes",
+        "- Confirmed by user: no",
+      ),
+      reason: "user_not_confirmed",
+    },
+    {
+      name: "a positive integer revision",
+      profile: configuredProfile("Direct and warm.").replace(
+        "- Profile revision: 1",
+        "- Profile revision: 0",
+      ),
+      reason: "invalid_revision",
+    },
+  ])("rejects a complete profile without $name", ({ profile, reason }) => {
+    const workspace = makeWorkspace();
+    fs.writeFileSync(path.join(workspace, "TONE_OF_VOICE.md"), profile);
+
+    expect(runStatus(workspace)).toEqual({
+      event: "personal_tone_profile_status",
+      state: "unconfigured",
+      schemaVersion: 1,
+      reason,
+    });
+  });
+
+  it("reports a complete confirmed profile as configured without leaking prose or paths", () => {
+    const workspace = makeWorkspace();
+    const privateSentinel = "PRIVATE_SENTINEL_PHRASE";
+    fs.writeFileSync(path.join(workspace, "TONE_OF_VOICE.md"), configuredProfile(privateSentinel));
 
     const raw = execFileSync(process.execPath, [statusScript, "--workspace", workspace], {
       encoding: "utf8",

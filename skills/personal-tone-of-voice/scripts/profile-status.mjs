@@ -5,6 +5,33 @@ import path from "node:path";
 
 const PROFILE_FILENAME = "TONE_OF_VOICE.md";
 const SUPPORTED_SCHEMA_VERSION = 1;
+const REQUIRED_PROFILE_HEADINGS = [
+  [1, "Personal Tone of Voice"],
+  [2, "Core Voice"],
+  [2, "Mechanics"],
+  [2, "Context Rules"],
+  [3, "Professional email and outreach"],
+  [3, "Chat, SMS, WhatsApp, Telegram, and iMessage"],
+  [3, "Follow-ups and replies"],
+  [2, "Use"],
+  [2, "Avoid"],
+  [2, "Evidence Basis"],
+  [2, "Confirmation"],
+];
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Schema v1 is deliberately structural. A status flag cannot turn an
+ * incomplete or unrelated Markdown file into an applicable voice profile.
+ */
+function hasRequiredProfileHeadings(content) {
+  return REQUIRED_PROFILE_HEADINGS.every(([level, title]) =>
+    new RegExp(`^${"#".repeat(level)} ${escapeRegExp(title)}[ \\t]*$`, "m").test(content),
+  );
+}
 
 /**
  * The shipped schema uses flat scalar frontmatter. Reject every construct
@@ -54,6 +81,21 @@ function parseState(content) {
   // A marker flip without filling the neutral template is not configuration.
   if (content.includes("{{") || content.includes("}}")) {
     return { state: "unconfigured", schemaVersion, reason: "placeholders_remaining" };
+  }
+  if (frontmatter.get("source") !== "explicit-user-setup") {
+    return { state: "unconfigured", schemaVersion, reason: "invalid_source" };
+  }
+  if (!hasRequiredProfileHeadings(content)) {
+    return { state: "unconfigured", schemaVersion, reason: "missing_required_sections" };
+  }
+  if (!/^- Raw example retention:[ \t]+none[ \t]*$/m.test(content)) {
+    return { state: "unconfigured", schemaVersion, reason: "raw_examples_not_discarded" };
+  }
+  if (!/^- Confirmed by user:[ \t]+yes[ \t]*$/m.test(content)) {
+    return { state: "unconfigured", schemaVersion, reason: "user_not_confirmed" };
+  }
+  if (!/^- Profile revision:[ \t]+[1-9]\d*[ \t]*$/m.test(content)) {
+    return { state: "unconfigured", schemaVersion, reason: "invalid_revision" };
   }
 
   return { state: "configured", schemaVersion, reason: "configured" };

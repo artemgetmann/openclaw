@@ -55,6 +55,19 @@ describe("resolveOpenClawMetadata install validation", () => {
     expect(metadata?.dependencies).toEqual(["message-drafting", "personal-tone-of-voice"]);
   });
 
+  it("rejects the reserved __none__ sentinel from skill dependencies", () => {
+    const mixed = resolveOpenClawMetadata({
+      metadata:
+        '{"openclaw":{"dependencies":["message-drafting","__none__","personal-tone-of-voice"]}}',
+    });
+    const sentinelOnly = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"dependencies":["__none__"]}}',
+    });
+
+    expect(mixed?.dependencies).toEqual(["message-drafting", "personal-tone-of-voice"]);
+    expect(sentinelOnly?.dependencies).toBeUndefined();
+  });
+
   it("drops unsafe brew formula values", () => {
     const install = resolveInstall({
       metadata: '{"openclaw":{"install":[{"kind":"brew","formula":"wget --HEAD"}]}}',
