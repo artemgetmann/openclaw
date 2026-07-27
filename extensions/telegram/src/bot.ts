@@ -44,7 +44,7 @@ import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpe
 import { resolveTelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { getTelegramBusyAwareSequentialKey, getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type TelegramBotOptions = {
@@ -73,7 +73,7 @@ export type TelegramBotOptions = {
   };
 };
 
-export { getTelegramSequentialKey };
+export { getTelegramBusyAwareSequentialKey, getTelegramSequentialKey };
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
@@ -342,7 +342,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
-  bot.use(sequentialize(getTelegramSequentialKey));
+  bot.use(sequentialize(getTelegramBusyAwareSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

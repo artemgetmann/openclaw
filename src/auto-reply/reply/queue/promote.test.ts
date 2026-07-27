@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./types.js";
 
-const queueEmbeddedPiMessage = vi.fn();
+const queueEmbeddedPiMessageAsync = vi.fn();
 
 vi.mock("../../../agents/pi-embedded.js", () => ({
-  queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageAsync,
 }));
 
 const { promoteQueuedFollowupToSteer } = await import("./promote.js");
@@ -52,7 +52,7 @@ describe("promoteQueuedFollowupToSteer", () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-queue-promote-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     FOLLOWUP_QUEUES.clear();
-    queueEmbeddedPiMessage.mockReset();
+    queueEmbeddedPiMessageAsync.mockReset();
   });
 
   afterEach(async () => {
@@ -61,67 +61,77 @@ describe("promoteQueuedFollowupToSteer", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("removes one exact queued item only when Pi accepts steering", () => {
+  it("removes one exact queued item only when Pi accepts steering", async () => {
     const queue = getFollowupQueue("session-key", {
       mode: "collect",
       debounceMs: 1_000,
     });
     queue.draining = true;
     queue.items.push(createRun());
-    queueEmbeddedPiMessage.mockImplementation(
-      (_sessionId: string, _prompt: string, opts?: { beforeQueue?: () => void }) => {
-        opts?.beforeQueue?.();
-        return true;
-      },
-    );
+    queueEmbeddedPiMessageAsync.mockResolvedValue(true);
 
-    expect(
+    await expect(
       promoteQueuedFollowupToSteer({
         durableId: DURABLE_ID,
         expectedTelegramRoute: ROUTE,
       }),
-    ).toEqual({ status: "promoted" });
+    ).resolves.toEqual({ status: "promoted" });
     expect(queue.items).toEqual([]);
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith(
+    expect(queueEmbeddedPiMessageAsync).toHaveBeenCalledWith(
       "session-1",
       "Use the new constraint.",
-      expect.objectContaining({ beforeQueue: expect.any(Function) }),
     );
   });
 
-  it("leaves the item queued when the active run cannot accept steering", () => {
+  it("leaves the item queued when the active run cannot accept steering", async () => {
     const queue = getFollowupQueue("session-key", { mode: "collect" });
     queue.items.push(createRun());
-    queueEmbeddedPiMessage.mockReturnValue(false);
+    queueEmbeddedPiMessageAsync.mockResolvedValue(false);
 
-    expect(
+    await expect(
       promoteQueuedFollowupToSteer({
         durableId: DURABLE_ID,
         expectedTelegramRoute: ROUTE,
       }),
-    ).toEqual({ status: "still-queued", reason: "not-streaming" });
+    ).resolves.toEqual({ status: "still-queued", reason: "not-streaming" });
     expect(queue.items).toHaveLength(1);
   });
 
-  it("rejects an in-flight or wrong-route item", () => {
+  it("restores FIFO ownership when Pi rejects steering", async () => {
+    const queue = getFollowupQueue("session-key", { mode: "collect" });
+    const first = createRun();
+    const second = { ...createRun(), durableId: "22345678-1234-4234-8234-123456789abc" };
+    queue.items.push(first, second);
+    queueEmbeddedPiMessageAsync.mockRejectedValue(new Error("steer rejected"));
+
+    await expect(
+      promoteQueuedFollowupToSteer({
+        durableId: DURABLE_ID,
+        expectedTelegramRoute: ROUTE,
+      }),
+    ).rejects.toThrow("steer rejected");
+    expect(queue.items).toEqual([first, second]);
+  });
+
+  it("rejects an in-flight or wrong-route item", async () => {
     const queue = getFollowupQueue("session-key", { mode: "collect" });
     queue.items.push(createRun());
     queue.inFlightDurableIds.add(DURABLE_ID);
 
-    expect(
+    await expect(
       promoteQueuedFollowupToSteer({
         durableId: DURABLE_ID,
         expectedTelegramRoute: ROUTE,
       }),
-    ).toEqual({ status: "still-queued", reason: "in-flight" });
+    ).resolves.toEqual({ status: "still-queued", reason: "in-flight" });
 
     queue.inFlightDurableIds.clear();
-    expect(
+    await expect(
       promoteQueuedFollowupToSteer({
         durableId: DURABLE_ID,
         expectedTelegramRoute: { ...ROUTE, threadId: 99 },
       }),
-    ).toEqual({ status: "route-mismatch" });
-    expect(queueEmbeddedPiMessage).not.toHaveBeenCalled();
+    ).resolves.toEqual({ status: "route-mismatch" });
+    expect(queueEmbeddedPiMessageAsync).not.toHaveBeenCalled();
   });
 });

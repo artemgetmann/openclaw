@@ -295,7 +295,7 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
 
     expect(bot.api.sendMessage).toHaveBeenCalledWith(
       123,
-      "Queued behind the current task.",
+      "Queued behind the current task. Tap Steer to send it to the current task now.",
       expect.objectContaining({
         message_thread_id: 777,
         reply_parameters: {
@@ -323,6 +323,36 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
       messageThreadId: 777,
       durableFollowupId: durableId,
     });
+  });
+
+  it("does not expose a dead Queue/Steer keyboard when inline buttons are off", async () => {
+    const bot = createBot();
+    vi.mocked(bot.api.sendMessage).mockResolvedValue({ message_id: 901 } as never);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+      await replyOptions.onFollowupQueued?.({
+        durableId: "12345678-1234-4234-8234-123456789abc",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: {
+        channels: {
+          telegram: {
+            capabilities: { inlineButtons: "off" },
+          },
+        },
+      },
+      bot,
+      streamMode: "off",
+    });
+
+    expect(bot.api.sendMessage).toHaveBeenCalledWith(
+      123,
+      "Queued behind the current task. Tap Steer to send it to the current task now.",
+      expect.not.objectContaining({ reply_markup: expect.anything() }),
+    );
   });
 
   it("retains direct-turn recovery when only a non-terminal payload was delivered", async () => {

@@ -54,6 +54,7 @@ import { guardedTelegramDeleteMessage } from "./delete-guard.js";
 import { createTelegramDraftStream, type TelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   type ArchivedPreview,
   createLaneDeliveryStateTracker,
@@ -77,6 +78,7 @@ import {
 import { getTelegramRichRawApi } from "./rich-message.js";
 import { buildInlineKeyboard, editMessageTelegram } from "./send.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { getTelegramSequentialKey, markTelegramSequentialKeyBusy } from "./sequential-key.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -641,6 +643,15 @@ export const dispatchTelegramMessage = async ({
     ? DRAFT_DM_MESSAGE_PREVIEW_THROTTLE_MS
     : undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+    cfg,
+    accountId: route.accountId,
+  });
+  const canShowQueueButtons =
+    inlineButtonsScope === "all" ||
+    inlineButtonsScope === "allowlist" ||
+    (inlineButtonsScope === "dm" && !isGroup) ||
+    (inlineButtonsScope === "group" && isGroup);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   let partialCallbackCount = 0;
@@ -2526,6 +2537,7 @@ export const dispatchTelegramMessage = async ({
 
   let dispatchError: unknown;
   let durableDirectTurnId: string | undefined;
+  let releaseBusySequentialKey: (() => void) | undefined;
   try {
     latencyTrace?.mark("reply_dispatch_started", {
       streamMode,
@@ -2942,6 +2954,19 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
+        onAgentRunStart: () => {
+          // grammY normally serializes a whole Telegram conversation until
+          // this dispatch returns. Once real model work starts, temporarily
+          // admit plain follow-ups and Queue/Steer callbacks on unique keys so
+          // they can reach the durable queue instead of waiting invisibly.
+          releaseBusySequentialKey ??= markTelegramSequentialKeyBusy(
+            getTelegramSequentialKey({ message: msg }),
+          );
+        },
+        onTypingCleanup: () => {
+          releaseBusySequentialKey?.();
+          releaseBusySequentialKey = undefined;
+        },
         onToolResult: (payload) =>
           enqueueDraftLaneEvent(async () => {
             await flushAmbiguousAnswerBlockAsProgress("before-tool-result");
@@ -3036,14 +3061,21 @@ export const dispatchTelegramMessage = async ({
           // This receipt is emitted only from the persist-before-enqueue
           // boundary. It therefore means "queued behind active work", not the
           // generic reaction state shown for every accepted Telegram update.
-          const sent = await bot.api.sendMessage(chatId, "Queued behind the current task.", {
-            ...buildTelegramThreadParams(threadSpec),
-            reply_parameters: {
-              message_id: msg.message_id,
-              allow_sending_without_reply: true,
+          const queueKeyboard = canShowQueueButtons
+            ? buildInlineKeyboard(buildTelegramQueuedButtons(durableId))
+            : undefined;
+          const sent = await bot.api.sendMessage(
+            chatId,
+            "Queued behind the current task. Tap Steer to send it to the current task now.",
+            {
+              ...buildTelegramThreadParams(threadSpec),
+              reply_parameters: {
+                message_id: msg.message_id,
+                allow_sending_without_reply: true,
+              },
+              ...(queueKeyboard ? { reply_markup: queueKeyboard } : {}),
             },
-            reply_markup: buildInlineKeyboard(buildTelegramQueuedButtons(durableId)),
-          });
+          );
           recordSentMessage(chatId, sent.message_id, {
             sessionKey:
               typeof ctxPayload.SessionKey === "string" ? ctxPayload.SessionKey : undefined,
@@ -3065,6 +3097,8 @@ export const dispatchTelegramMessage = async ({
     dispatchError = err;
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
+    releaseBusySequentialKey?.();
+    releaseBusySequentialKey = undefined;
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
     await draftLaneEventQueue;

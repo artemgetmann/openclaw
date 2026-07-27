@@ -434,6 +434,7 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     media_kind = "video"
   elif getattr(message, "document", None) is not None:
     media_kind = "document"
+  inline_buttons = [metadata for _, metadata in list_message_buttons(message)[:100]]
   return {
     "chat_id": int(getattr(message, "chat_id", 0) or 0) or None,
     "chat_title": getattr(resolved_chat, "title", None),
@@ -441,6 +442,7 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     "date": getattr(message, "date", None).isoformat() if getattr(message, "date", None) else None,
     "direct_messages_topic": {"topic_id": int(direct_topic_id)} if direct_topic_id is not None else None,
     "direct_messages_topic_id": int(direct_topic_id) if direct_topic_id is not None else None,
+    "inline_buttons": inline_buttons,
     "message_id": int(getattr(message, "id", 0) or 0),
     "media_kind": media_kind,
     "out": bool(getattr(message, "out", False)),

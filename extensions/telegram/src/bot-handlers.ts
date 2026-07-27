@@ -1664,7 +1664,7 @@ export const registerTelegramHandlers = ({
         }
 
         const callbackThreadId = messageThreadId ?? resolvedThreadId ?? dmThreadId ?? undefined;
-        const promotion = promoteQueuedFollowupToSteer({
+        const promotion = await promoteQueuedFollowupToSteer({
           durableId: queueCallback.durableId,
           expectedTelegramRoute: {
             chatId: String(chatId),

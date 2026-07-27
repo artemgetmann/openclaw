@@ -33,7 +33,7 @@ import {
 import { resolveTelegramFetch } from "./fetch.js";
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const { createTelegramBot, getTelegramSequentialKey } = await import("./bot.js");
+const { createTelegramBot, getTelegramBusyAwareSequentialKey } = await import("./bot.js");
 const { setActiveEmbeddedRun, __testing: embeddedRunTesting } =
   await import("../../../src/agents/pi-embedded-runner/runs.js");
 const { FOLLOWUP_QUEUES, getFollowupQueue } =
@@ -121,7 +121,7 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(sequentializeKey).toBe(getTelegramBusyAwareSequentialKey);
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });

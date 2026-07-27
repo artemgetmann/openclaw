@@ -1,4 +1,4 @@
-import { queueEmbeddedPiMessage } from "../../../agents/pi-embedded.js";
+import { queueEmbeddedPiMessageAsync } from "../../../agents/pi-embedded.js";
 import { ackDurableFollowupsSync } from "./durable-store.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 
@@ -47,10 +47,10 @@ function matchesExpectedTelegramRoute(
  * boundary. If Pi is no longer streamable (or is compacting), nothing moves
  * and the message remains safely queued for its ordinary follow-up turn.
  */
-export function promoteQueuedFollowupToSteer(params: {
+export async function promoteQueuedFollowupToSteer(params: {
   durableId: string;
   expectedTelegramRoute: ExpectedTelegramRoute;
-}): PromoteQueuedFollowupResult {
+}): Promise<PromoteQueuedFollowupResult> {
   const durableId = params.durableId.trim();
   if (!durableId) {
     return { status: "missing" };
@@ -70,25 +70,33 @@ export function promoteQueuedFollowupToSteer(params: {
       return { status: "route-mismatch" };
     }
 
-    const accepted = queueEmbeddedPiMessage(item.run.sessionId, item.prompt, {
-      beforeQueue: () => {
-        // Disk first: if the unlink fails, Pi never receives a second copy.
-        // RAM then follows in the same synchronous turn so the drain cannot
-        // observe this item after steering accepts it.
-        ackDurableFollowupsSync([durableId]);
-        const currentIndex = queue.items.findIndex(
-          (candidate) => candidate.durableId === durableId,
-        );
-        if (currentIndex < 0 || queue.inFlightDurableIds.has(durableId)) {
-          throw new Error(`Queued follow-up ${durableId} changed before steering`);
-        }
-        queue.items.splice(currentIndex, 1);
-        if (!queue.draining && queue.items.length === 0 && queue.droppedCount === 0) {
-          FOLLOWUP_QUEUES.delete(queueKey);
-        }
-      },
-    });
-    return accepted ? { status: "promoted" } : { status: "still-queued", reason: "not-streaming" };
+    // Remove the RAM item as the promotion claim while retaining its durable
+    // disk record. A concurrent drain cannot see the item during the awaited
+    // Pi steer, while a crash still restores it from disk.
+    queue.items.splice(itemIndex, 1);
+    try {
+      const accepted = await queueEmbeddedPiMessageAsync(item.run.sessionId, item.prompt);
+      if (!accepted) {
+        queue.items.splice(Math.min(itemIndex, queue.items.length), 0, item);
+        return { status: "still-queued", reason: "not-streaming" };
+      }
+
+      // Pi accepted the instruction. Only now remove restart ownership.
+      // If unlinking fails, the disk record remains for conservative replay;
+      // accepted user work is never silently discarded.
+      ackDurableFollowupsSync([durableId]);
+      if (!queue.draining && queue.items.length === 0 && queue.droppedCount === 0) {
+        FOLLOWUP_QUEUES.delete(queueKey);
+      }
+      return { status: "promoted" };
+    } catch (err) {
+      // A rejected Pi steer has not accepted the instruction. Restore its
+      // original FIFO position so the ordinary follow-up drain remains valid.
+      if (!queue.items.some((candidate) => candidate.durableId === durableId)) {
+        queue.items.splice(Math.min(itemIndex, queue.items.length), 0, item);
+      }
+      throw err;
+    }
   }
 
   return { status: "missing" };

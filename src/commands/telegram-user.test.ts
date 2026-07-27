@@ -661,6 +661,15 @@ describe("telegram-user commands", () => {
           date: "2026-03-24T00:00:00.000Z",
           direct_messages_topic: { topic_id: 7001 },
           direct_messages_topic_id: 7001,
+          inline_buttons: [
+            {
+              callback_data: "oqs:12345678-1234-4234-8234-123456789abc",
+              callback_data_base64: "b3FzOjEyMzQ1Njc4LTEyMzQtNDIzNC04MjM0LTEyMzQ1Njc4OWFiYw==",
+              column: 1,
+              row: 0,
+              text: "Steer",
+            },
+          ],
           media_kind: "voice",
           message_id: 200,
           out: false,
@@ -685,7 +694,7 @@ describe("telegram-user commands", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining(
-        'id=200 date=2026-03-24T00:00:00.000Z dir=in sender=555 reply_to=123 top=120 topic=7001 media=voice text="reply text"',
+        'id=200 date=2026-03-24T00:00:00.000Z dir=in sender=555 reply_to=123 top=120 topic=7001 media=voice buttons=[{"callback_data":"oqs:12345678-1234-4234-8234-123456789abc"',
       ),
     );
     expect(runtime.log).toHaveBeenCalledWith(
@@ -725,6 +734,7 @@ describe("telegram-user commands", () => {
       chat: "@jarvis_tester_1_bot",
       messages: [
         {
+          buttons: [],
           date: "2026-03-24T00:00:00.000Z",
           dir: "out",
           id: 201,

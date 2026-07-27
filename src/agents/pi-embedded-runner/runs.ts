@@ -70,6 +70,35 @@ export function queueEmbeddedPiMessage(
 }
 
 /**
+ * Await Pi's steering acceptance before reporting success.
+ *
+ * Durable transport promotion uses this form because a rejected AgentSession
+ * steer must restore its queued item instead of silently dropping accepted
+ * user work. Historical fire-and-forget callers keep the synchronous helper.
+ */
+export async function queueEmbeddedPiMessageAsync(
+  sessionId: string,
+  text: string,
+): Promise<boolean> {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
+    return false;
+  }
+  if (!handle.isStreaming()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+    return false;
+  }
+  if (handle.isCompacting()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    return false;
+  }
+  await handle.queueMessage(text);
+  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+  return true;
+}
+
+/**
  * Abort embedded PI runs.
  *
  * - With a sessionId, aborts that single run.

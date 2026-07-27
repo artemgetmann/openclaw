@@ -56,6 +56,7 @@ const telegramReadFormats = new Set(["table", "compact"]);
 
 type TelegramUserReadFormat = "table" | "compact";
 type TelegramUserCompactMessage = {
+  buttons: TelegramUserMessage["inline_buttons"];
   date: string | null;
   dir: "in" | "out";
   id: number;
@@ -193,6 +194,7 @@ function getTelegramMessageTopicId(message: TelegramUserMessage): number | null 
 
 function toTelegramCompactMessage(message: TelegramUserMessage): TelegramUserCompactMessage {
   return {
+    buttons: message.inline_buttons ?? [],
     date: message.date,
     dir: message.out ? "out" : "in",
     id: message.message_id,
@@ -252,6 +254,7 @@ function formatTelegramCompactMessages(result: TelegramUserReadResult, chat: str
         `top=${formatTelegramCompactField(message.top)}`,
         `topic=${formatTelegramCompactField(message.topic)}`,
         `media=${formatTelegramCompactField(message.media)}`,
+        `buttons=${JSON.stringify(message.buttons)}`,
         `text=${JSON.stringify(message.text)}`,
       ].join(" "),
     );

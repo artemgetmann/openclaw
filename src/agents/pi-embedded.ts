@@ -10,6 +10,7 @@ export {
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageAsync,
   resolveEmbeddedSessionLane,
   runEmbeddedPiAgent,
   waitForEmbeddedPiRunEnd,
