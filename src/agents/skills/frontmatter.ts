@@ -257,8 +257,15 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  // `__none__` is a filter/allowlist control sentinel, never a skill id.
+  // Dropping it here prevents untrusted skill metadata from turning dependency
+  // expansion into a request to suppress the entire bundled catalog.
+  const dependencies = normalizeStringList(metadataObj.dependencies).filter(
+    (dependency) => dependency !== "__none__",
+  );
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    dependencies: dependencies.length > 0 ? dependencies : undefined,
     displayName: typeof metadataObj.displayName === "string" ? metadataObj.displayName : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
     homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,

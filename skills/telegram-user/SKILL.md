@@ -7,6 +7,7 @@ metadata:
       {
         "emoji": "✈️",
         "displayName": "Telegram as Me",
+        "dependencies": ["message-drafting"],
         "requires": { "bins": ["openclaw"] },
       },
   }

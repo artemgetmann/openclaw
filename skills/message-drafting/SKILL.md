@@ -2,6 +2,7 @@
 name: message-drafting
 description: "Compose, draft, revise, shorten, translate, review, approve, or prepare recipient-facing messages for sending across email, chat, and messaging channels. Use for direct requests involving message wording, tone, cross-language presentation, revisions, approval-ready output, or sending a message to another person."
 user-invocable: false
+metadata: { "openclaw": { "dependencies": ["personal-tone-of-voice"] } }
 ---
 
 # Message Drafting
@@ -9,6 +10,10 @@ user-invocable: false
 ## Composition Contract
 
 - Follow the destination channel's context, safety, freshness, and send rules.
+- Before composing external recipient-facing text, apply the bundled
+  `personal-tone-of-voice` skill. It owns private profile setup, safe profile
+  state checks, per-draft overrides, and personalized style. This drafting skill
+  still owns recipient-ready output, review, approval, and send safety.
 - Produce one final message by default, not a menu of stylistic alternatives.
 - Match the requested tone and preserve the user's facts, commitments, names,
   dates, numbers, and links.

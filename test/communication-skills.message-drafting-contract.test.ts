@@ -307,6 +307,14 @@ describe("message-drafting cross-language contract", () => {
 });
 
 describe("communication channel owners reference the canonical contract", () => {
+  const entries = loadWorkspaceSkillEntries(
+    path.join(process.cwd(), ".message-drafting-owner-contract-workspace"),
+    {
+      bundledSkillsDir: path.join(process.cwd(), "skills"),
+      managedSkillsDir: path.join(process.cwd(), ".message-drafting-owner-contract-managed"),
+    },
+  );
+
   for (const owner of channelOwners) {
     it(`${owner} points to message-drafting`, () => {
       const ownerSkill = readFileSync(
@@ -315,7 +323,17 @@ describe("communication channel owners reference the canonical contract", () => 
       );
 
       expect(ownerSkill).toContain(canonicalPointer);
-      expect(ownerSkill.match(/message-drafting/g)).toHaveLength(1);
+      // One semantic pointer plus one machine-readable dependency declaration.
+      expect(ownerSkill.match(/message-drafting/g)).toHaveLength(2);
+      expect(entries.find((entry) => entry.skill.name === owner)?.metadata?.dependencies).toContain(
+        "message-drafting",
+      );
     });
   }
+
+  it("declares personal tone as a generic message-drafting dependency", () => {
+    expect(
+      entries.find((entry) => entry.skill.name === "message-drafting")?.metadata?.dependencies,
+    ).toEqual(["personal-tone-of-voice"]);
+  });
 });

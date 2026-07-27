@@ -8,6 +8,7 @@ metadata:
       {
         "emoji": "📧",
         "displayName": "Email",
+        "dependencies": ["message-drafting"],
         "requires": { "bins": ["himalaya"] },
         "install":
           [

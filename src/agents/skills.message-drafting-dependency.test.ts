@@ -26,7 +26,15 @@ const referencingOwners = [
 
 const tempDirs: string[] = [];
 
+function fixtureDependencies(name: string): string[] | undefined {
+  if (referencingOwners.includes(name as (typeof referencingOwners)[number])) {
+    return ["message-drafting"];
+  }
+  return name === "message-drafting" ? ["personal-tone-of-voice"] : undefined;
+}
+
 function makeBundledEntry(name: string, skillKey?: string): SkillEntry {
+  const dependencies = fixtureDependencies(name);
   return {
     skill: {
       name,
@@ -37,7 +45,14 @@ function makeBundledEntry(name: string, skillKey?: string): SkillEntry {
       disableModelInvocation: false,
     },
     frontmatter: {},
-    ...(skillKey ? { metadata: { skillKey } } : {}),
+    ...(skillKey || dependencies
+      ? {
+          metadata: {
+            ...(skillKey ? { skillKey } : {}),
+            ...(dependencies ? { dependencies } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -51,6 +66,9 @@ async function createBundledFixture(names: readonly string[]) {
       dir: path.join(bundledSkillsDir, name),
       name,
       description: `Bundled ${name}`,
+      metadata: JSON.stringify({
+        openclaw: { dependencies: fixtureDependencies(name) },
+      }),
     });
   }
 
@@ -64,16 +82,39 @@ afterEach(async () => {
 });
 
 describe("message-drafting bundled allowlist dependency", () => {
-  it.each(referencingOwners)("%s closes over message-drafting", (owner) => {
+  it.each(referencingOwners)("%s closes over drafting and personal tone", (owner) => {
     const config: OpenClawConfig = { skills: { allowBundled: [owner] } };
+    const entries = [
+      makeBundledEntry(owner),
+      makeBundledEntry("message-drafting"),
+      makeBundledEntry("personal-tone-of-voice"),
+    ];
 
-    expect(resolveBundledAllowlist(config)).toEqual([owner, "message-drafting"]);
+    expect(resolveBundledAllowlist(config, entries)).toEqual([
+      owner,
+      "message-drafting",
+      "personal-tone-of-voice",
+    ]);
+  });
+
+  it("closes direct message drafting selection over personal tone", () => {
+    const config: OpenClawConfig = {
+      skills: { allowBundled: ["message-drafting"] },
+    };
+
+    expect(
+      resolveBundledAllowlist(config, [
+        makeBundledEntry("message-drafting"),
+        makeBundledEntry("personal-tone-of-voice"),
+      ]),
+    ).toEqual(["message-drafting", "personal-tone-of-voice"]);
   });
 
   it("exposes the dependency for a non-consumer custom allowlist", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",
       "message-drafting",
+      "personal-tone-of-voice",
     ]);
     const config: OpenClawConfig = { skills: { allowBundled: ["wacli"] } };
 
@@ -85,6 +126,7 @@ describe("message-drafting bundled allowlist dependency", () => {
 
     expect(prompt).toContain("<name>wacli</name>");
     expect(prompt).toContain("<name>message-drafting</name>");
+    expect(prompt).toContain("<name>personal-tone-of-voice</name>");
     expect(config.skills?.allowBundled).toEqual(["wacli"]);
   });
 
@@ -94,6 +136,7 @@ describe("message-drafting bundled allowlist dependency", () => {
       const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
         "wacli",
         "message-drafting",
+        "personal-tone-of-voice",
       ]);
       const config: OpenClawConfig = {
         skills: {
@@ -111,6 +154,7 @@ describe("message-drafting bundled allowlist dependency", () => {
 
       expect(prompt).not.toContain("<name>wacli</name>");
       expect(prompt).not.toContain("<name>message-drafting</name>");
+      expect(prompt).not.toContain("<name>personal-tone-of-voice</name>");
       if (selectionBoundary === "allowBundled") {
         expect(resolveBundledAllowlist(config)).toEqual(["wacli"]);
       }
@@ -124,6 +168,7 @@ describe("message-drafting bundled allowlist dependency", () => {
         "wacli",
         "slack",
         "message-drafting",
+        "personal-tone-of-voice",
       ]);
       const selection = ["wacli", "slack"];
       const config: OpenClawConfig = {
@@ -143,6 +188,7 @@ describe("message-drafting bundled allowlist dependency", () => {
       expect(prompt).not.toContain("<name>wacli</name>");
       expect(prompt).toContain("<name>slack</name>");
       expect(prompt).toContain("<name>message-drafting</name>");
+      expect(prompt).toContain("<name>personal-tone-of-voice</name>");
     },
   );
 
@@ -152,6 +198,7 @@ describe("message-drafting bundled allowlist dependency", () => {
       const entries = [
         makeBundledEntry("wacli", "whatsapp-profile"),
         makeBundledEntry("message-drafting"),
+        makeBundledEntry("personal-tone-of-voice"),
       ];
       const config: OpenClawConfig = {
         skills: {
@@ -171,8 +218,13 @@ describe("message-drafting bundled allowlist dependency", () => {
 
       expect(prompt).toContain("<name>wacli</name>");
       expect(prompt).toContain("<name>message-drafting</name>");
+      expect(prompt).toContain("<name>personal-tone-of-voice</name>");
       if (selectionBoundary === "allowBundled") {
-        expect(resolveBundledAllowlist(config, entries)).toEqual(["wacli", "message-drafting"]);
+        expect(resolveBundledAllowlist(config, entries)).toEqual([
+          "wacli",
+          "message-drafting",
+          "personal-tone-of-voice",
+        ]);
       }
     },
   );
@@ -183,6 +235,7 @@ describe("message-drafting bundled allowlist dependency", () => {
       const entries = [
         makeBundledEntry("wacli", "whatsapp-profile"),
         makeBundledEntry("message-drafting"),
+        makeBundledEntry("personal-tone-of-voice"),
       ];
       const config: OpenClawConfig = {
         skills: {
@@ -202,6 +255,7 @@ describe("message-drafting bundled allowlist dependency", () => {
 
       expect(prompt).not.toContain("<name>wacli</name>");
       expect(prompt).not.toContain("<name>message-drafting</name>");
+      expect(prompt).not.toContain("<name>personal-tone-of-voice</name>");
       if (selectionBoundary === "allowBundled") {
         expect(resolveBundledAllowlist(config, entries)).toEqual(["wacli"]);
       }
@@ -212,6 +266,7 @@ describe("message-drafting bundled allowlist dependency", () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",
       "message-drafting",
+      "personal-tone-of-voice",
       "custom-skill",
     ]);
     const skillFilter = ["wacli"];
@@ -227,9 +282,11 @@ describe("message-drafting bundled allowlist dependency", () => {
 
     expect(prompt).toContain("<name>wacli</name>");
     expect(prompt).toContain("<name>message-drafting</name>");
+    expect(prompt).toContain("<name>personal-tone-of-voice</name>");
     expect(prompt).not.toContain("<name>custom-skill</name>");
     expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
       "message-drafting",
+      "personal-tone-of-voice",
       "wacli",
     ]);
     expect(snapshot.skillFilter).toEqual(["wacli"]);
@@ -241,6 +298,7 @@ describe("message-drafting bundled allowlist dependency", () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",
       "message-drafting",
+      "personal-tone-of-voice",
     ]);
     const workspaceSkillNames = Array.from(
       { length: 149 },
@@ -288,18 +346,24 @@ describe("message-drafting bundled allowlist dependency", () => {
     for (const snapshot of [allowlistSnapshot, filterSnapshot]) {
       expect(snapshot.prompt).toContain("<name>wacli</name>");
       expect(snapshot.prompt).toContain("<name>message-drafting</name>");
+      expect(snapshot.prompt).toContain("<name>personal-tone-of-voice</name>");
+      expect(snapshot.prompt).toContain(
+        "<description>Bundled personal-tone-of-voice</description>",
+      );
       expect(snapshot.prompt).toContain("Skills truncated");
       expect(snapshot.prompt).not.toContain("<name>workspace-148</name>");
     }
     expect(config.skills?.allowBundled).toEqual(["wacli"]);
     expect(filterSnapshot.skillFilter).toEqual(skillFilter);
     expect(skillFilter).not.toContain("message-drafting");
+    expect(skillFilter).not.toContain("personal-tone-of-voice");
   });
 
   it("keeps an explicitly disabled dependency hidden from scoped filters", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",
       "message-drafting",
+      "personal-tone-of-voice",
     ]);
 
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
@@ -315,12 +379,14 @@ describe("message-drafting bundled allowlist dependency", () => {
 
     expect(prompt).toContain("<name>wacli</name>");
     expect(prompt).not.toContain("<name>message-drafting</name>");
+    expect(prompt).not.toContain("<name>personal-tone-of-voice</name>");
   });
 
   it("keeps unrelated, __none__, and empty scoped filters restrictive", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",
       "message-drafting",
+      "personal-tone-of-voice",
       "custom-skill",
     ]);
     const baseOptions = {
@@ -343,6 +409,7 @@ describe("message-drafting bundled allowlist dependency", () => {
 
     expect(unrelatedPrompt).toContain("<name>custom-skill</name>");
     expect(unrelatedPrompt).not.toContain("<name>message-drafting</name>");
+    expect(unrelatedPrompt).not.toContain("<name>personal-tone-of-voice</name>");
     expect(nonePrompt).toBe("");
     expect(emptyPrompt).toBe("");
   });
@@ -353,11 +420,27 @@ describe("message-drafting bundled allowlist dependency", () => {
     Object.freeze(config.skills);
     Object.freeze(config);
     const messageDrafting = makeBundledEntry("message-drafting");
+    const personalTone = makeBundledEntry("personal-tone-of-voice");
+    const entries = [makeBundledEntry("wacli"), messageDrafting, personalTone];
 
-    expect(resolveBundledAllowlist(config)).toEqual(["wacli", "message-drafting"]);
-    expect(evaluateSkillEntry({ entry: messageDrafting, config }).blockedByAllowlist).toBe(false);
-    expect(shouldIncludeSkill({ entry: messageDrafting, config })).toBe(true);
-    expect(resolveBundledAllowlist(config)).toEqual(["wacli", "message-drafting"]);
+    expect(resolveBundledAllowlist(config, entries)).toEqual([
+      "wacli",
+      "message-drafting",
+      "personal-tone-of-voice",
+    ]);
+    expect(evaluateSkillEntry({ entry: messageDrafting, entries, config }).blockedByAllowlist).toBe(
+      false,
+    );
+    expect(shouldIncludeSkill({ entry: messageDrafting, entries, config })).toBe(true);
+    expect(evaluateSkillEntry({ entry: personalTone, entries, config }).blockedByAllowlist).toBe(
+      false,
+    );
+    expect(shouldIncludeSkill({ entry: personalTone, entries, config })).toBe(true);
+    expect(resolveBundledAllowlist(config, entries)).toEqual([
+      "wacli",
+      "message-drafting",
+      "personal-tone-of-voice",
+    ]);
     expect(config.skills?.allowBundled).toEqual(["wacli"]);
   });
 
@@ -365,6 +448,7 @@ describe("message-drafting bundled allowlist dependency", () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "wacli",
       "message-drafting",
+      "personal-tone-of-voice",
     ]);
     const config: OpenClawConfig = {
       skills: {
@@ -373,10 +457,15 @@ describe("message-drafting bundled allowlist dependency", () => {
       },
     };
     const messageDrafting = makeBundledEntry("message-drafting");
+    const entries = [
+      makeBundledEntry("wacli"),
+      messageDrafting,
+      makeBundledEntry("personal-tone-of-voice"),
+    ];
 
-    expect(resolveBundledAllowlist(config)).toEqual(["wacli", "message-drafting"]);
-    expect(evaluateSkillEntry({ entry: messageDrafting, config }).disabled).toBe(true);
-    expect(shouldIncludeSkill({ entry: messageDrafting, config })).toBe(false);
+    expect(resolveBundledAllowlist(config, entries)).toEqual(["wacli", "message-drafting"]);
+    expect(evaluateSkillEntry({ entry: messageDrafting, entries, config }).disabled).toBe(true);
+    expect(shouldIncludeSkill({ entry: messageDrafting, entries, config })).toBe(false);
 
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
       bundledSkillsDir,
@@ -385,12 +474,79 @@ describe("message-drafting bundled allowlist dependency", () => {
     });
     expect(prompt).toContain("<name>wacli</name>");
     expect(prompt).not.toContain("<name>message-drafting</name>");
+    expect(prompt).not.toContain("<name>personal-tone-of-voice</name>");
+  });
+
+  it("keeps an explicitly disabled personal tone skill hidden", async () => {
+    const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
+      "wacli",
+      "message-drafting",
+      "personal-tone-of-voice",
+    ]);
+    const config: OpenClawConfig = {
+      skills: {
+        allowBundled: ["wacli"],
+        entries: { "personal-tone-of-voice": { enabled: false } },
+      },
+    };
+    const entries = [
+      makeBundledEntry("wacli"),
+      makeBundledEntry("message-drafting"),
+      makeBundledEntry("personal-tone-of-voice"),
+    ];
+
+    expect(resolveBundledAllowlist(config, entries)).toEqual([
+      "wacli",
+      "message-drafting",
+      "personal-tone-of-voice",
+    ]);
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config,
+    });
+    expect(prompt).toContain("<name>wacli</name>");
+    expect(prompt).toContain("<name>message-drafting</name>");
+    expect(prompt).not.toContain("<name>personal-tone-of-voice</name>");
+  });
+
+  it("expands arbitrary metadata dependencies without named routing code", () => {
+    const entries: SkillEntry[] = [
+      { ...makeBundledEntry("alpha"), metadata: { dependencies: ["beta"] } },
+      { ...makeBundledEntry("beta"), metadata: { dependencies: ["gamma"] } },
+      makeBundledEntry("gamma"),
+    ];
+
+    expect(
+      resolveBundledAllowlist(
+        {
+          skills: { allowBundled: ["alpha"] },
+        },
+        entries,
+      ),
+    ).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  it("expands dependencies when selection uses an effective skill key", () => {
+    const drafting = makeBundledEntry("message-drafting", "drafting-profile");
+    const entries = [drafting, makeBundledEntry("personal-tone-of-voice")];
+
+    expect(
+      resolveBundledAllowlist(
+        {
+          skills: { allowBundled: ["drafting-profile"] },
+        },
+        entries,
+      ),
+    ).toEqual(["drafting-profile", "personal-tone-of-voice"]);
   });
 
   it("leaves unrelated custom allowlists unchanged", async () => {
     const { workspaceDir, bundledSkillsDir } = await createBundledFixture([
       "custom-skill",
       "message-drafting",
+      "personal-tone-of-voice",
     ]);
     const config: OpenClawConfig = { skills: { allowBundled: ["custom-skill"] } };
 
@@ -403,6 +559,7 @@ describe("message-drafting bundled allowlist dependency", () => {
     });
     expect(prompt).toContain("<name>custom-skill</name>");
     expect(prompt).not.toContain("<name>message-drafting</name>");
+    expect(prompt).not.toContain("<name>personal-tone-of-voice</name>");
   });
 
   it("keeps the __none__ sentinel restrictive", () => {
@@ -413,5 +570,8 @@ describe("message-drafting bundled allowlist dependency", () => {
     expect(resolveBundledAllowlist(config)).toEqual(["__none__", "wacli"]);
     expect(shouldIncludeSkill({ entry: makeBundledEntry("wacli"), config })).toBe(false);
     expect(shouldIncludeSkill({ entry: makeBundledEntry("message-drafting"), config })).toBe(false);
+    expect(shouldIncludeSkill({ entry: makeBundledEntry("personal-tone-of-voice"), config })).toBe(
+      false,
+    );
   });
 });

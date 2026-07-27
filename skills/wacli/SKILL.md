@@ -8,6 +8,7 @@ metadata:
       {
         "emoji": "📱",
         "displayName": "WhatsApp as Me",
+        "dependencies": ["message-drafting"],
         "requires":
           {
             "bins":

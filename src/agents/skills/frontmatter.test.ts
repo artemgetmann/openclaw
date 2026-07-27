@@ -46,11 +46,26 @@ describe("resolveOpenClawMetadata install validation", () => {
 
   it("parses consumer display names without replacing the skill id", () => {
     const metadata = resolveOpenClawMetadata({
-      metadata: '{"openclaw":{"displayName":"Google Workspace","skillKey":"gog"}}',
+      metadata:
+        '{"openclaw":{"displayName":"Google Workspace","skillKey":"gog","dependencies":["message-drafting"," personal-tone-of-voice "]}}',
     });
 
     expect(metadata?.displayName).toBe("Google Workspace");
     expect(metadata?.skillKey).toBe("gog");
+    expect(metadata?.dependencies).toEqual(["message-drafting", "personal-tone-of-voice"]);
+  });
+
+  it("rejects the reserved __none__ sentinel from skill dependencies", () => {
+    const mixed = resolveOpenClawMetadata({
+      metadata:
+        '{"openclaw":{"dependencies":["message-drafting","__none__","personal-tone-of-voice"]}}',
+    });
+    const sentinelOnly = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"dependencies":["__none__"]}}',
+    });
+
+    expect(mixed?.dependencies).toEqual(["message-drafting", "personal-tone-of-voice"]);
+    expect(sentinelOnly?.dependencies).toBeUndefined();
   });
 
   it("drops unsafe brew formula values", () => {

@@ -63,6 +63,22 @@ describe("scripts/consumer-capabilities-manifest.mjs", () => {
     expect(parsed.skills["find-food"].sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("includes the bundled personal tone skill and all profile assets", () => {
+    const output = execFileSync(process.execPath, [manifestScript, path.join(root, "skills")], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(output);
+
+    expect(parsed.skills["personal-tone-of-voice"]).toMatchObject({
+      files: 3,
+      displayName: "Personal Tone of Voice",
+    });
+    expect(parsed.skills["personal-tone-of-voice"].description).toContain(
+      "every WhatsApp, Telegram, email, SMS/iMessage",
+    );
+    expect(parsed.skills["personal-tone-of-voice"].sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it("emits skill hashes and packaged managed tool version expectations", () => {
     const skillsRoot = makeTempRoot();
     writeSkill({

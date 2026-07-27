@@ -8,6 +8,7 @@ metadata:
       {
         "emoji": "🎮",
         "displayName": "Google Workspace",
+        "dependencies": ["message-drafting"],
         "requires": { "bins": ["gog"] },
         "install":
           [
