@@ -48,8 +48,12 @@ by every worktree in the clone. On macOS it refuses admission when:
 - the managed Jarvis gateway is installed but unhealthy.
 
 Admitted commands run with background scheduling and reduced process priority.
-The slot is released when the command exits. Exit code `75` means "temporarily
-unavailable"; wait for host health instead of bypassing the guard.
+While the command runs, the wrapper rechecks the host every 15 seconds. Two
+consecutive unhealthy samples stop only the guarded command and its worker tree
+before VNC, Tailscale, or Jarvis can remain starved for minutes. The slot is
+released when the command exits. Exit code `75` means "temporarily unavailable"
+or "stopped to protect host health"; wait for recovery instead of bypassing the
+guard.
 
 ## Resume sequence after an incident
 

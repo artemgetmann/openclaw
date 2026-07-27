@@ -56,13 +56,58 @@ git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/nu
 }
 lock_dir="$git_common_dir/openclaw-heavy-local.lock"
 owner_token="$$-$(date +%s)-${RANDOM:-0}"
+child_pid=''
 
 remove_owned_lock() {
   # A late trap from an old owner must never delete a newer owner's lock.
   if [ -f "$lock_dir/token" ] && [ "$(cat "$lock_dir/token" 2>/dev/null || true)" = "$owner_token" ]; then
-    rm -f "$lock_dir/pid" "$lock_dir/label" "$lock_dir/token" "$lock_dir/started_at"
+    rm -f \
+      "$lock_dir/pid" \
+      "$lock_dir/child_pid" \
+      "$lock_dir/label" \
+      "$lock_dir/token" \
+      "$lock_dir/started_at"
     rmdir "$lock_dir" 2>/dev/null || true
   fi
+}
+
+signal_descendants() {
+  local parent_pid=$1
+  local signal_name=$2
+  local descendant_pid
+
+  # Walk children before parents so test-worker pools cannot immediately spawn
+  # replacements after their coordinator receives the signal.
+  while IFS= read -r descendant_pid; do
+    [ -n "$descendant_pid" ] || continue
+    signal_descendants "$descendant_pid" "$signal_name"
+  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+
+  kill "-$signal_name" "$parent_pid" 2>/dev/null || true
+}
+
+stop_guarded_child() {
+  [ -n "$child_pid" ] || return 0
+  kill -0 "$child_pid" 2>/dev/null || return 0
+
+  signal_descendants "$child_pid" TERM
+  local attempt=0
+  while kill -0 "$child_pid" 2>/dev/null && [ "$attempt" -lt 10 ]; do
+    sleep 0.5
+    attempt=$((attempt + 1))
+  done
+
+  # A wedged compiler or worker must not keep starving the remote desktop after
+  # its graceful shutdown window. Scope KILL to the exact guarded tree.
+  if kill -0 "$child_pid" 2>/dev/null; then
+    signal_descendants "$child_pid" KILL
+  fi
+}
+
+handle_interrupt() {
+  local status=$1
+  stop_guarded_child
+  exit "$status"
 }
 
 clear_stale_lock() {
@@ -85,7 +130,12 @@ clear_stale_lock() {
   # Re-read the token before cleanup so a concurrent owner cannot be removed
   # after replacing a stale lease.
   [ "$(cat "$lock_dir/token" 2>/dev/null || true)" = "$existing_token" ] || return 1
-  rm -f "$lock_dir/pid" "$lock_dir/label" "$lock_dir/token" "$lock_dir/started_at"
+  rm -f \
+    "$lock_dir/pid" \
+    "$lock_dir/child_pid" \
+    "$lock_dir/label" \
+    "$lock_dir/token" \
+    "$lock_dir/started_at"
   rmdir "$lock_dir" 2>/dev/null
 }
 
@@ -105,17 +155,20 @@ printf '%s\n' "$$" >"$lock_dir/pid"
 printf '%s\n' "$label" >"$lock_dir/label"
 date -u '+%Y-%m-%dT%H:%M:%SZ' >"$lock_dir/started_at"
 trap remove_owned_lock EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
+trap 'handle_interrupt 130' INT
+trap 'handle_interrupt 143' TERM HUP
 
 deny() {
   printf 'Refusing heavy work: %s\n' "$1" >&2
   exit 75
 }
 
-if [ "$(uname -s)" = "Darwin" ]; then
+host_health_reason() {
+  local required_cpu_idle=$1
+
+  [ "$(uname -s)" = "Darwin" ] || return 0
+
   min_memory_free=${OPENCLAW_FLEET_MIN_MEMORY_FREE_PERCENT:-25}
-  min_cpu_idle=${OPENCLAW_FLEET_MIN_CPU_IDLE_PERCENT:-35}
 
   # memory_pressure already accounts for compressed memory. Raw "free pages"
   # alone would falsely reject healthy Macs that are using their cache.
@@ -123,9 +176,14 @@ if [ "$(uname -s)" = "Darwin" ]; then
     /usr/bin/memory_pressure 2>/dev/null |
       awk -F': ' '/System-wide memory free percentage/{gsub(/%/, "", $2); print int($2); exit}'
   )
-  [ -n "$memory_free" ] || deny 'could not measure memory pressure'
-  [ "$memory_free" -ge "$min_memory_free" ] ||
-    deny "memory headroom is ${memory_free}% (minimum ${min_memory_free}%)"
+  if [ -z "$memory_free" ]; then
+    printf 'could not measure memory pressure'
+    return 0
+  fi
+  if [ "$memory_free" -lt "$min_memory_free" ]; then
+    printf 'memory headroom is %s%% (minimum %s%%)' "$memory_free" "$min_memory_free"
+    return 0
+  fi
 
   # Heavy jobs are admitted only while the interactive desktop still has
   # substantial CPU headroom. This protects WindowServer, VNC, and Tailscale.
@@ -133,23 +191,37 @@ if [ "$(uname -s)" = "Darwin" ]; then
     /usr/bin/top -l 1 -n 0 2>/dev/null |
       awk '/CPU usage:/{gsub(/%/, "", $7); print int($7); exit}'
   )
-  [ -n "$cpu_idle" ] || deny 'could not measure CPU headroom'
-  [ "$cpu_idle" -ge "$min_cpu_idle" ] ||
-    deny "CPU idle is ${cpu_idle}% (minimum ${min_cpu_idle}%)"
+  if [ -z "$cpu_idle" ]; then
+    printf 'could not measure CPU headroom'
+    return 0
+  fi
+  if [ "$cpu_idle" -lt "$required_cpu_idle" ]; then
+    printf 'CPU idle is %s%% (minimum %s%%)' "$cpu_idle" "$required_cpu_idle"
+    return 0
+  fi
 
   # If Tailscale is configured on this Mac, disconnected means the remote
   # operator may already be losing access. Local work must wait.
   tailscale_line=$(scutil --nc list 2>/dev/null | grep -i '"Tailscale"' | head -n 1 || true)
   if [ -n "$tailscale_line" ] && ! printf '%s\n' "$tailscale_line" | grep -q '(Connected)'; then
-    deny 'Tailscale is configured but not connected'
+    printf 'Tailscale is configured but not connected'
+    return 0
   fi
 
   # Only require Jarvis health when this user actually owns the managed
   # LaunchAgent. Development Macs without that service remain supported.
   if launchctl print "gui/$(id -u)/ai.jarvis.gateway" >/dev/null 2>&1; then
-    curl -fsS --max-time 3 http://127.0.0.1:18789/healthz >/dev/null ||
-      deny 'managed Jarvis health check failed'
+    if ! curl -fsS --max-time 3 http://127.0.0.1:18789/healthz >/dev/null; then
+      printf 'managed Jarvis health check failed'
+      return 0
+    fi
   fi
+}
+
+min_cpu_idle=${OPENCLAW_FLEET_MIN_CPU_IDLE_PERCENT:-35}
+preflight_reason=$(host_health_reason "$min_cpu_idle")
+if [ -n "$preflight_reason" ]; then
+  deny "$preflight_reason"
 fi
 
 printf 'Heavy-local slot granted to "%s".\n' "$label"
@@ -160,7 +232,43 @@ fi
 # Background scheduling reduces competition with the interactive desktop.
 # The lock remains held by this wrapper until the child exits.
 if [ "$(uname -s)" = "Darwin" ] && command -v taskpolicy >/dev/null 2>&1; then
-  taskpolicy -b nice -n 15 "$@"
-  exit $?
+  taskpolicy -b nice -n 15 "$@" &
+else
+  nice -n 15 "$@" &
 fi
-nice -n 15 "$@"
+child_pid=$!
+printf '%s\n' "$child_pid" >"$lock_dir/child_pid"
+
+runtime_min_cpu_idle=${OPENCLAW_FLEET_RUNTIME_MIN_CPU_IDLE_PERCENT:-20}
+monitor_interval=${OPENCLAW_FLEET_MONITOR_INTERVAL_SECONDS:-15}
+unhealthy_strikes=0
+terminated_for_health=false
+
+while kill -0 "$child_pid" 2>/dev/null; do
+  runtime_reason=$(host_health_reason "$runtime_min_cpu_idle")
+  if [ -n "$runtime_reason" ]; then
+    unhealthy_strikes=$((unhealthy_strikes + 1))
+  else
+    unhealthy_strikes=0
+  fi
+
+  # Two consecutive unhealthy samples ignore a transient spike while still
+  # stopping a runaway job before a multi-minute VNC/Jarvis starvation event.
+  if [ "$unhealthy_strikes" -ge 2 ] && kill -0 "$child_pid" 2>/dev/null; then
+    printf 'Stopping guarded work after repeated host-health failures: %s\n' "$runtime_reason" >&2
+    terminated_for_health=true
+    stop_guarded_child
+    break
+  fi
+  sleep "$monitor_interval"
+done
+
+set +e
+wait "$child_pid"
+child_status=$?
+set -e
+
+if [ "$terminated_for_health" = true ]; then
+  exit 75
+fi
+exit "$child_status"
