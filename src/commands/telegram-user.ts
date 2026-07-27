@@ -349,7 +349,12 @@ async function postTelegramUserMonitorEventHook(
   opts: Record<string, unknown>,
   hookUrl: string,
 ) {
-  const hookToken = readStringOpt(opts, "hookToken") ?? process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const hookToken =
+    readStringOpt(opts, "hookToken") ??
+    // Hook endpoints authenticate with hooks.token, which is deliberately
+    // separate from gateway RPC auth. Retain the gateway token only as the
+    // compatibility fallback for existing manually supervised listeners.
+    (process.env.OPENCLAW_HOOKS_TOKEN?.trim() || process.env.OPENCLAW_GATEWAY_TOKEN?.trim());
   const response = await fetch(hookUrl, {
     method: "POST",
     headers: {

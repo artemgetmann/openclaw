@@ -44,6 +44,20 @@ PARITY_UPLOAD_DIR_READY="unknown"
 PARITY_UNEXPECTED_DIFFS="unknown"
 RUNTIME_STOP_RESULT="skip"
 STOPPED_RUNTIME_PID=""
+MONITOR_LISTENER_ENABLED="no"
+MONITOR_LISTENER_PID=""
+MONITOR_LISTENER_BIRTH_IDENTITY=""
+MONITOR_LISTENER_INSTANCE_ID=""
+MONITOR_LISTENER_OWNERSHIP="not-requested"
+MONITOR_LISTENER_HEALTH="not-requested"
+MONITOR_LISTENER_START_ACTION="not-requested"
+MONITOR_LISTENER_STOP_RESULT="skip"
+MONITOR_LISTENER_CRON_STORE_PATH=""
+MONITOR_LISTENER_MONITOR_STORE_PATH=""
+MONITOR_LISTENER_CURSOR_STORE_PATH=""
+MONITOR_LISTENER_HEALTH_STORE_PATH=""
+MONITOR_LISTENER_OWNER_PATH=""
+MONITOR_LISTENER_LOG_PATH=""
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
@@ -398,6 +412,15 @@ NODE
   PROFILE_COMMAND_LOCK_DIR="$(printf '%s\n' "$profile_lines" | sed -n '4p')"
   RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
   RUNTIME_LOG_PATH="/tmp/openclaw-telegram-live-${PROFILE_ID}.log"
+  # Every listener artifact lives under the already-derived tester state tree.
+  # These paths are never inferred from the host default, so a healthy shared
+  # listener cannot satisfy this lane's ownership or health checks.
+  MONITOR_LISTENER_CRON_STORE_PATH="${RUNTIME_STATE_DIR}/cron/jobs.json"
+  MONITOR_LISTENER_MONITOR_STORE_PATH="${RUNTIME_STATE_DIR}/cron/monitors.json"
+  MONITOR_LISTENER_CURSOR_STORE_PATH="${RUNTIME_STATE_DIR}/cron/telegram-user-listener-cursors.json"
+  MONITOR_LISTENER_HEALTH_STORE_PATH="${RUNTIME_STATE_DIR}/cron/listener-health.json"
+  MONITOR_LISTENER_OWNER_PATH="${RUNTIME_STATE_DIR}/telegram-user-monitor-listener.owner.json"
+  MONITOR_LISTENER_LOG_PATH="${RUNTIME_STATE_DIR}/telegram-user-monitor-listener.log"
 
   if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ||
     -z "$PROFILE_COMMAND_LOCK_DIR" ]]; then
@@ -512,6 +535,265 @@ stop_owned_runtime() {
       RUNTIME_STOP_RESULT="fail"
       add_failure "runtime_stop_failed"
     fi
+  fi
+}
+
+process_has_monitor_listener_instance() {
+  local pid="$1"
+  local instance_id="$2"
+  [[ "$pid" =~ ^[0-9]+$ && "$instance_id" =~ ^[a-f0-9]{48}$ ]] || return 1
+
+  # `ps eww` exposes the child environment, which includes secrets. Stream it
+  # directly into a matcher that emits nothing; never capture or print the
+  # process environment. Exact field equality prevents prefix collisions.
+  ps eww -p "$pid" -o command= 2>/dev/null |
+    awk -v expected="OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${instance_id}" '
+      {
+        for (field = 1; field <= NF; field += 1) {
+          if ($field == expected) {
+            found = 1
+          }
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    '
+}
+
+resolve_monitor_listener_owner() {
+  MONITOR_LISTENER_PID=""
+  MONITOR_LISTENER_BIRTH_IDENTITY=""
+  MONITOR_LISTENER_INSTANCE_ID=""
+  MONITOR_LISTENER_OWNERSHIP="missing"
+
+  [[ -n "$MONITOR_LISTENER_OWNER_PATH" && -f "$MONITOR_LISTENER_OWNER_PATH" ]] || return 0
+
+  local owner_lines=""
+  owner_lines="$(
+    OWNER_PATH="$MONITOR_LISTENER_OWNER_PATH" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+try {
+  const owner = JSON.parse(fs.readFileSync(process.env.OWNER_PATH, "utf8"));
+  const argv = Array.isArray(owner.argv) && owner.argv.every((value) => typeof value === "string")
+    ? owner.argv
+    : [];
+  const expects = (flag, value) => {
+    const index = argv.indexOf(flag);
+    return index >= 0 && argv[index + 1] === value;
+  };
+  const completeIdentity =
+    owner.version === 2 &&
+    Number.isSafeInteger(owner.pid) &&
+    typeof owner.birthIdentity === "string" &&
+    owner.birthIdentity.trim() &&
+    typeof owner.instanceId === "string" &&
+    /^[a-f0-9]{48}$/u.test(owner.instanceId) &&
+    typeof owner.executable === "string" &&
+    owner.executable.startsWith("/") &&
+    typeof owner.cwd === "string" &&
+    typeof owner.envFile === "string" &&
+    typeof owner.session === "string" &&
+    argv[0] === "scripts/run-node.mjs" &&
+    expects("--profile", owner.profileId) &&
+    argv.includes("telegram-user") &&
+    argv.includes("monitor-poll") &&
+    argv.includes("--watch") &&
+    expects("--cron-store", owner.cronStorePath) &&
+    expects("--monitor-store", owner.monitorStorePath) &&
+    expects("--cursor-store", owner.cursorStorePath) &&
+    expects("--hook-url", owner.hookUrl) &&
+    expects("--env-file", owner.envFile) &&
+    expects("--session", owner.session);
+  if (!completeIdentity) {
+    process.exit(1);
+  }
+  process.stdout.write([
+    owner.pid,
+    owner.profileId,
+    owner.worktree,
+    owner.cronStorePath,
+    owner.monitorStorePath,
+    owner.cursorStorePath,
+    owner.hookUrl,
+    owner.birthIdentity.trim(),
+    owner.instanceId,
+    owner.executable,
+    `${owner.executable} ${argv.join(" ")}`,
+    owner.cwd,
+    owner.envFile,
+    owner.session,
+  ].map((value) => String(value ?? "")).join("\n"));
+} catch {
+  process.exit(1);
+}
+NODE
+  )" || {
+    MONITOR_LISTENER_OWNERSHIP="invalid-record"
+    return 0
+  }
+
+  local owner_pid owner_profile owner_worktree owner_cron owner_monitor owner_cursor owner_hook
+  local owner_birth owner_executable owner_command owner_cwd owner_env_file owner_session
+  local owner_instance
+  owner_pid="$(printf '%s\n' "$owner_lines" | sed -n '1p')"
+  owner_profile="$(printf '%s\n' "$owner_lines" | sed -n '2p')"
+  owner_worktree="$(printf '%s\n' "$owner_lines" | sed -n '3p')"
+  owner_cron="$(printf '%s\n' "$owner_lines" | sed -n '4p')"
+  owner_monitor="$(printf '%s\n' "$owner_lines" | sed -n '5p')"
+  owner_cursor="$(printf '%s\n' "$owner_lines" | sed -n '6p')"
+  owner_hook="$(printf '%s\n' "$owner_lines" | sed -n '7p')"
+  owner_birth="$(printf '%s\n' "$owner_lines" | sed -n '8p')"
+  owner_instance="$(printf '%s\n' "$owner_lines" | sed -n '9p')"
+  owner_executable="$(printf '%s\n' "$owner_lines" | sed -n '10p')"
+  owner_command="$(printf '%s\n' "$owner_lines" | sed -n '11p')"
+  owner_cwd="$(printf '%s\n' "$owner_lines" | sed -n '12p')"
+  owner_env_file="$(printf '%s\n' "$owner_lines" | sed -n '13p')"
+  owner_session="$(printf '%s\n' "$owner_lines" | sed -n '14p')"
+  MONITOR_LISTENER_PID="$owner_pid"
+  MONITOR_LISTENER_BIRTH_IDENTITY="$owner_birth"
+  MONITOR_LISTENER_INSTANCE_ID="$owner_instance"
+
+  if [[ ! "$owner_pid" =~ ^[0-9]+$ ]] ||
+    [[ "$owner_profile" != "$PROFILE_ID" ]] ||
+    [[ "$owner_worktree" != "$WORKTREE" ]] ||
+    [[ "$owner_cron" != "$MONITOR_LISTENER_CRON_STORE_PATH" ]] ||
+    [[ "$owner_monitor" != "$MONITOR_LISTENER_MONITOR_STORE_PATH" ]] ||
+    [[ "$owner_cursor" != "$MONITOR_LISTENER_CURSOR_STORE_PATH" ]] ||
+    [[ "$owner_hook" != "http://127.0.0.1:${RUNTIME_PORT}/hooks/telegram-user-monitor-event" ]] ||
+    [[ "$owner_cwd" != "$WORKTREE" ]] ||
+    [[ -z "$owner_executable" || -z "$owner_env_file" || -z "$owner_session" ]]; then
+    MONITOR_LISTENER_OWNERSHIP="foreign-record"
+    return 0
+  fi
+
+  if ! kill -0 "$owner_pid" 2>/dev/null; then
+    MONITOR_LISTENER_PID=""
+    MONITOR_LISTENER_OWNERSHIP="stale-record"
+    return 0
+  fi
+
+  local current_birth current_command current_cwd
+  current_birth="$(
+    LC_ALL=C TZ=UTC ps -p "$owner_pid" -o lstart= 2>/dev/null |
+      awk '{$1=$1; print}'
+  )"
+  current_command="$(ps -ww -o command= -p "$owner_pid" 2>/dev/null || true)"
+  current_cwd="$(lsof -a -p "$owner_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
+  # Birth time closes PID reuse. Exact full command equality retains argv order
+  # and every non-secret selector, while cwd binds the child to this worktree.
+  # This remains safe for paths containing spaces because no substring parsing
+  # is involved.
+  if [[ -z "$current_birth" || "$current_birth" != "$owner_birth" ]] ||
+    [[ "$current_command" != "$owner_command" ]] ||
+    [[ "$current_cwd" != "$owner_cwd" ]] ||
+    ! process_has_monitor_listener_instance "$owner_pid" "$owner_instance"; then
+    MONITOR_LISTENER_OWNERSHIP="foreign-process"
+    return 0
+  fi
+
+  MONITOR_LISTENER_OWNERSHIP="ok"
+}
+
+probe_monitor_listener_health() {
+  MONITOR_LISTENER_HEALTH="fail"
+  [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" && -n "$MONITOR_LISTENER_PID" ]] || return 0
+
+  if HEALTH_PATH="$MONITOR_LISTENER_HEALTH_STORE_PATH" \
+    EXPECTED_PID="$MONITOR_LISTENER_PID" \
+    EXPECTED_PROFILE="$PROFILE_ID" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+try {
+  const store = JSON.parse(fs.readFileSync(process.env.HEALTH_PATH, "utf8"));
+  const record = store?.records?.["telegram-user"];
+  const expectedPid = Number.parseInt(process.env.EXPECTED_PID ?? "", 10);
+  const interval = Number.isFinite(record?.pollIntervalMs) ? Math.max(1, record.pollIntervalMs) : 1000;
+  const staleAfterMs = Math.max(30_000, interval * 3);
+  const exactOwner =
+    record?.owner?.pid === expectedPid &&
+    record?.owner?.profile === process.env.EXPECTED_PROFILE;
+  const freshSuccess =
+    Number.isFinite(record?.lastSuccessfulCheckAtMs) &&
+    Date.now() - record.lastSuccessfulCheckAtMs < staleAfterMs;
+  process.exit(exactOwner && freshSuccess && record?.state === "healthy" ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+  then
+    MONITOR_LISTENER_HEALTH="ok"
+  fi
+}
+
+stop_owned_monitor_listener() {
+  MONITOR_LISTENER_STOP_RESULT="not-running"
+  resolve_monitor_listener_owner
+
+  if [[ "$MONITOR_LISTENER_OWNERSHIP" == "stale-record" ]]; then
+    rm -f "$MONITOR_LISTENER_OWNER_PATH" "$MONITOR_LISTENER_HEALTH_STORE_PATH"
+    MONITOR_LISTENER_STOP_RESULT="stale-cleaned"
+    return 0
+  fi
+  if [[ "$MONITOR_LISTENER_OWNERSHIP" == "missing" ]]; then
+    return 0
+  fi
+  if [[ "$MONITOR_LISTENER_OWNERSHIP" != "ok" ]]; then
+    MONITOR_LISTENER_STOP_RESULT="not-owned"
+    add_failure "monitor_listener_not_owned:${MONITOR_LISTENER_OWNERSHIP}"
+    return 0
+  fi
+
+  local owned_pid="$MONITOR_LISTENER_PID"
+  local owned_birth="$MONITOR_LISTENER_BIRTH_IDENTITY"
+  local owned_instance="$MONITOR_LISTENER_INSTANCE_ID"
+  # Re-resolve immediately before TERM. Validation done even milliseconds ago
+  # is not authority to signal a PID that may since have been recycled.
+  resolve_monitor_listener_owner
+  if [[ "$MONITOR_LISTENER_OWNERSHIP" != "ok" ||
+    "$MONITOR_LISTENER_PID" != "$owned_pid" ||
+    "$MONITOR_LISTENER_BIRTH_IDENTITY" != "$owned_birth" ||
+    "$MONITOR_LISTENER_INSTANCE_ID" != "$owned_instance" ]]; then
+    MONITOR_LISTENER_STOP_RESULT="identity-changed"
+    add_failure "monitor_listener_identity_changed_before_term"
+    return 0
+  fi
+  if kill "$owned_pid" 2>/dev/null; then
+    local waited=0
+    while [[ "$waited" -lt 15 ]]; do
+      resolve_monitor_listener_owner
+      if [[ "$MONITOR_LISTENER_OWNERSHIP" == "stale-record" ]]; then
+        break
+      fi
+      if [[ "$MONITOR_LISTENER_OWNERSHIP" != "ok" ||
+        "$MONITOR_LISTENER_PID" != "$owned_pid" ||
+        "$MONITOR_LISTENER_BIRTH_IDENTITY" != "$owned_birth" ||
+        "$MONITOR_LISTENER_INSTANCE_ID" != "$owned_instance" ]]; then
+        MONITOR_LISTENER_STOP_RESULT="identity-changed"
+        add_failure "monitor_listener_identity_changed_while_stopping"
+        return 0
+      fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+    resolve_monitor_listener_owner
+    if [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" &&
+      "$MONITOR_LISTENER_PID" == "$owned_pid" &&
+      "$MONITOR_LISTENER_BIRTH_IDENTITY" == "$owned_birth" &&
+      "$MONITOR_LISTENER_INSTANCE_ID" == "$owned_instance" ]]; then
+      # KILL is separately authorized against the same birth identity; never
+      # inherit authority from the earlier TERM validation.
+      kill -9 "$owned_pid" 2>/dev/null || true
+    elif [[ "$MONITOR_LISTENER_OWNERSHIP" != "stale-record" ]]; then
+      MONITOR_LISTENER_STOP_RESULT="identity-changed"
+      add_failure "monitor_listener_identity_changed_before_kill"
+      return 0
+    fi
+    MONITOR_LISTENER_STOP_RESULT="stopped"
+    MONITOR_LISTENER_PID=""
+    MONITOR_LISTENER_OWNERSHIP="missing"
+    rm -f "$MONITOR_LISTENER_OWNER_PATH" "$MONITOR_LISTENER_HEALTH_STORE_PATH"
+  else
+    MONITOR_LISTENER_STOP_RESULT="failed"
+    add_failure "monitor_listener_stop_failed"
   fi
 }
 
@@ -768,6 +1050,7 @@ prepare_isolated_runtime_config() {
     OPENCLAW_TELEGRAM_LIVE_DM_POLICY="${OPENCLAW_TELEGRAM_LIVE_DM_POLICY:-}" \
     OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" \
     OPENCLAW_TELEGRAM_LIVE_MODEL="${OPENCLAW_TELEGRAM_LIVE_MODEL:-}" \
+    OPENCLAW_TELEGRAM_LIVE_ENABLE_MONITOR_LISTENER="${OPENCLAW_TELEGRAM_LIVE_ENABLE_MONITOR_LISTENER:-0}" \
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
@@ -783,6 +1066,7 @@ const workspaceDir = process.env.OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR;
 const dmPolicy = process.env.OPENCLAW_TELEGRAM_LIVE_DM_POLICY;
 const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const acpValidation = process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION ?? "";
+const enableHooks = process.env.OPENCLAW_TELEGRAM_LIVE_ENABLE_MONITOR_LISTENER === "1";
 const helperPath = process.env.HELPER_MODULE;
 
 if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
@@ -805,12 +1089,17 @@ if (basePath && fs.existsSync(basePath)) {
   }
 }
 let gatewayAuthToken = "";
+let hooksToken = "";
 if (fs.existsSync(runtimeConfigPath)) {
   try {
     const existing = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf8"));
     const token = existing?.gateway?.auth?.token;
     if (typeof token === "string" && token.trim()) {
       gatewayAuthToken = token.trim();
+    }
+    const existingHooksToken = existing?.hooks?.token;
+    if (typeof existingHooksToken === "string" && existingHooksToken.trim()) {
+      hooksToken = existingHooksToken.trim();
     }
   } catch {
     // Ignore corrupt prior runtime config; a fresh isolated token is safer.
@@ -819,11 +1108,20 @@ if (fs.existsSync(runtimeConfigPath)) {
 if (!gatewayAuthToken) {
   gatewayAuthToken = crypto.randomBytes(32).toString("base64url");
 }
+if (enableHooks && (!hooksToken || hooksToken === gatewayAuthToken)) {
+  // Reuse the isolated hook secret on restart, but never reuse gateway auth.
+  // Neither token is printed or placed in process arguments.
+  do {
+    hooksToken = crypto.randomBytes(32).toString("base64url");
+  } while (hooksToken === gatewayAuthToken);
+}
 config = buildTelegramLiveRuntimeConfig({
   acpValidation,
   baseConfig: config,
   assignedToken,
+  enableHooks,
   gatewayAuthToken,
+  hooksToken,
   preferredModel,
   preferCodexAuth: isLocalCodexAuthAvailable(),
   runtimePort,
@@ -1519,6 +1817,287 @@ NODE
   fi
 }
 
+probe_monitor_hook_readiness() {
+  [[ "$MONITOR_LISTENER_ENABLED" == "yes" ]] || return 0
+  # A healthy gateway process is insufficient: it may have booted before this
+  # ensure enabled hooks. An authenticated malformed request must reach the
+  # exact isolated route (HTTP 400); 401/404 prove auth/registration is absent.
+  RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" RUNTIME_PORT="$RUNTIME_PORT" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+const config = JSON.parse(fs.readFileSync(process.env.RUNTIME_CONFIG_PATH, "utf8"));
+const token = config?.hooks?.token;
+if (config?.hooks?.enabled !== true || typeof token !== "string" || !token.trim()) {
+  process.exit(1);
+}
+try {
+  const response = await fetch(
+    `http://127.0.0.1:${process.env.RUNTIME_PORT}/hooks/telegram-user-monitor-event`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(2500),
+    },
+  );
+  process.exit(response.status === 400 ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+start_isolated_monitor_listener() {
+  MONITOR_LISTENER_START_ACTION="start-failed"
+  mkdir -p "$(dirname "$MONITOR_LISTENER_CRON_STORE_PATH")"
+  rm -f "$MONITOR_LISTENER_OWNER_PATH" "$MONITOR_LISTENER_HEALTH_STORE_PATH"
+
+  if REPO_ROOT="$REPO_ROOT" \
+    WORKTREE="$WORKTREE" \
+    PROFILE_ID="$PROFILE_ID" \
+    RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    RUNTIME_PORT="$RUNTIME_PORT" \
+    LISTENER_CRON_STORE_PATH="$MONITOR_LISTENER_CRON_STORE_PATH" \
+    LISTENER_MONITOR_STORE_PATH="$MONITOR_LISTENER_MONITOR_STORE_PATH" \
+    LISTENER_CURSOR_STORE_PATH="$MONITOR_LISTENER_CURSOR_STORE_PATH" \
+    LISTENER_OWNER_PATH="$MONITOR_LISTENER_OWNER_PATH" \
+    LISTENER_LOG_PATH="$MONITOR_LISTENER_LOG_PATH" \
+    HELPER_MODULE="$HELPER_MODULE" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { once } from "node:events";
+import { pathToFileURL } from "node:url";
+
+const config = JSON.parse(fs.readFileSync(process.env.RUNTIME_CONFIG_PATH, "utf8"));
+const hooksToken = config?.hooks?.token;
+if (config?.hooks?.enabled !== true || typeof hooksToken !== "string" || !hooksToken.trim()) {
+  throw new Error("Isolated monitor hooks are not configured.");
+}
+const { buildTelegramLiveRuntimeChildEnv } = await import(
+  pathToFileURL(process.env.HELPER_MODULE).href
+);
+const childEnv = buildTelegramLiveRuntimeChildEnv({
+  repoRoot: process.env.REPO_ROOT,
+  parentEnv: {
+    ...process.env,
+    OPENCLAW_PROFILE: process.env.PROFILE_ID,
+    OPENCLAW_STATE_DIR: process.env.RUNTIME_STATE_DIR,
+    OPENCLAW_CONFIG_PATH: process.env.RUNTIME_CONFIG_PATH,
+    OPENCLAW_GATEWAY_PORT: process.env.RUNTIME_PORT,
+    // The dedicated hook bearer stays in child env only. It is never printed,
+    // persisted in the ownership record, or exposed in argv.
+    OPENCLAW_HOOKS_TOKEN: hooksToken,
+    OPENCLAW_GATEWAY_TOKEN: "",
+  },
+});
+const envFile = childEnv.OPENCLAW_TELEGRAM_USER_ENV_FILE;
+const session = childEnv.OPENCLAW_TELEGRAM_USER_SESSION;
+if (!envFile || !session) {
+  throw new Error("Telegram-user selectors were not resolved for the isolated listener.");
+}
+const hookUrl =
+  `http://127.0.0.1:${process.env.RUNTIME_PORT}/hooks/telegram-user-monitor-event`;
+const instanceId = randomBytes(24).toString("hex");
+childEnv.OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE = instanceId;
+const args = [
+  "scripts/run-node.mjs",
+  "--profile",
+  process.env.PROFILE_ID,
+  "telegram-user",
+  "monitor-poll",
+  "--watch",
+  "--poll-interval-ms",
+  "1000",
+  "--cron-store",
+  process.env.LISTENER_CRON_STORE_PATH,
+  "--monitor-store",
+  process.env.LISTENER_MONITOR_STORE_PATH,
+  "--cursor-store",
+  process.env.LISTENER_CURSOR_STORE_PATH,
+  "--hook-url",
+  hookUrl,
+  "--env-file",
+  envFile,
+  "--session",
+  session,
+  "--json",
+];
+const readBirthIdentity = (pid) => {
+  if (process.env.OPENCLAW_TELEGRAM_LIVE_TEST_FORCE_LISTENER_LSTART_MISSING === "1") {
+    return "";
+  }
+  try {
+    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    }).trim().replace(/\s+/g, " ");
+  } catch {
+    return "";
+  }
+};
+const hasExactInstanceMarker = (pid, expectedInstanceId) => {
+  try {
+    const processWithEnv = execFileSync(
+      "/bin/ps",
+      ["eww", "-p", String(pid), "-o", "command="],
+      { encoding: "utf8" },
+    );
+    return processWithEnv
+      .split(/\s+/u)
+      .includes(`OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_INSTANCE=${expectedInstanceId}`);
+  } catch {
+    return false;
+  }
+};
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const terminateExactSpawn = async (pid, birthIdentity, expectedInstanceId) => {
+  // A failed ownership commit must roll back the exact process it spawned.
+  // Birth identity is re-read before TERM, throughout the wait, and before
+  // KILL so PID recycling can never redirect cleanup at a replacement.
+  if (
+    !hasExactInstanceMarker(pid, expectedInstanceId) ||
+    (birthIdentity && readBirthIdentity(pid) !== birthIdentity)
+  ) {
+    return;
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await sleep(100);
+    const currentBirth = readBirthIdentity(pid);
+    if (!hasExactInstanceMarker(pid, expectedInstanceId)) {
+      return;
+    }
+    if (birthIdentity && currentBirth !== birthIdentity) {
+      return;
+    }
+  }
+  if (
+    hasExactInstanceMarker(pid, expectedInstanceId) &&
+    (!birthIdentity || readBirthIdentity(pid) === birthIdentity)
+  ) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // The exact child exited between the final birth check and signal.
+    }
+  }
+};
+fs.mkdirSync(process.env.RUNTIME_STATE_DIR, { recursive: true });
+const logFd = fs.openSync(process.env.LISTENER_LOG_PATH, "a");
+const tempPath = `${process.env.LISTENER_OWNER_PATH}.${process.pid}.tmp`;
+let child;
+let childBirthIdentity = "";
+try {
+  child = spawn(process.execPath, args, {
+    cwd: process.env.REPO_ROOT,
+    detached: true,
+    env: childEnv,
+    stdio: ["ignore", logFd, logFd],
+  });
+  await once(child, "spawn");
+  for (let attempt = 0; attempt < 20 && !childBirthIdentity; attempt += 1) {
+    childBirthIdentity = readBirthIdentity(child.pid);
+    if (!childBirthIdentity) {
+      await sleep(25);
+    }
+  }
+  if (!childBirthIdentity) {
+    throw new Error("Could not capture isolated monitor listener birth identity.");
+  }
+  const owner = {
+    version: 2,
+    pid: child.pid,
+    birthIdentity: childBirthIdentity,
+    instanceId,
+    executable: process.execPath,
+    argv: args,
+    cwd: process.env.REPO_ROOT,
+    profileId: process.env.PROFILE_ID,
+    worktree: process.env.WORKTREE,
+    cronStorePath: process.env.LISTENER_CRON_STORE_PATH,
+    monitorStorePath: process.env.LISTENER_MONITOR_STORE_PATH,
+    cursorStorePath: process.env.LISTENER_CURSOR_STORE_PATH,
+    envFile,
+    session,
+    hookUrl,
+    startedAtMs: Date.now(),
+  };
+  if (process.env.OPENCLAW_TELEGRAM_LIVE_TEST_FAIL_LISTENER_OWNER_WRITE === "1") {
+    await sleep(100);
+    throw new Error("Injected listener owner write failure.");
+  }
+  fs.writeFileSync(tempPath, `${JSON.stringify(owner, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tempPath, process.env.LISTENER_OWNER_PATH);
+  child.unref();
+} catch (error) {
+  fs.rmSync(tempPath, { force: true });
+  if (child?.pid) {
+    await terminateExactSpawn(child.pid, childBirthIdentity, instanceId);
+  }
+  throw error;
+} finally {
+  fs.closeSync(logFd);
+}
+NODE
+  then
+    MONITOR_LISTENER_START_ACTION="started"
+  else
+    add_failure "monitor_listener_start_failed"
+  fi
+}
+
+ensure_isolated_monitor_listener() {
+  [[ "$MONITOR_LISTENER_ENABLED" == "yes" ]] || return 0
+  if [[ "$RUNTIME_OWNERSHIP" != "ok" || "$RUNTIME_HEALTH" != "ok" ]]; then
+    add_failure "monitor_listener_gateway_not_ready"
+    return 0
+  fi
+
+  resolve_monitor_listener_owner
+  probe_monitor_listener_health
+  if [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" && "$MONITOR_LISTENER_HEALTH" == "ok" ]]; then
+    MONITOR_LISTENER_START_ACTION="reused"
+    return 0
+  fi
+  if [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" ]]; then
+    stop_owned_monitor_listener
+  elif [[ "$MONITOR_LISTENER_OWNERSHIP" == "stale-record" ]]; then
+    rm -f "$MONITOR_LISTENER_OWNER_PATH" "$MONITOR_LISTENER_HEALTH_STORE_PATH"
+  elif [[ "$MONITOR_LISTENER_OWNERSHIP" != "missing" ]]; then
+    add_failure "monitor_listener_not_owned:${MONITOR_LISTENER_OWNERSHIP}"
+    return 0
+  fi
+  [[ "$FAIL" -eq 0 ]] || return 0
+
+  start_isolated_monitor_listener
+  local waited=0
+  local timeout="${OPENCLAW_TELEGRAM_LIVE_MONITOR_LISTENER_TIMEOUT_SECS:-30}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=30
+  while [[ "$waited" -lt "$timeout" ]]; do
+    resolve_monitor_listener_owner
+    probe_monitor_listener_health
+    if [[ "$MONITOR_LISTENER_OWNERSHIP" == "ok" && "$MONITOR_LISTENER_HEALTH" == "ok" ]]; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  # A child that never publishes exact health is not useful and must not keep
+  # polling after ensure fails. The stop path revalidates its complete birth
+  # identity before every signal.
+  if [[ "$MONITOR_LISTENER_START_ACTION" == "started" ]]; then
+    stop_owned_monitor_listener
+  fi
+  add_failure "monitor_listener_readiness_failed"
+}
+
 emit_ensure_proof_lines() {
   echo "branch=${BRANCH:-unknown}"
   echo "worktree=${WORKTREE}"
@@ -1531,6 +2110,14 @@ emit_ensure_proof_lines() {
   echo "runtime_start_action=${RUNTIME_START_ACTION}"
   echo "runtime_start_timeout_secs=${RUNTIME_START_TIMEOUT_SECS}"
   echo "runtime_plugin_mode=${RUNTIME_PLUGIN_MODE}"
+  echo "monitor_listener_enabled=${MONITOR_LISTENER_ENABLED}"
+  echo "monitor_listener_pid=${MONITOR_LISTENER_PID:-}"
+  echo "monitor_listener_ownership=${MONITOR_LISTENER_OWNERSHIP}"
+  echo "monitor_listener_health=${MONITOR_LISTENER_HEALTH}"
+  echo "monitor_listener_start_action=${MONITOR_LISTENER_START_ACTION}"
+  echo "monitor_listener_cron_store=${MONITOR_LISTENER_CRON_STORE_PATH:-}"
+  echo "monitor_listener_monitor_store=${MONITOR_LISTENER_MONITOR_STORE_PATH:-}"
+  echo "monitor_listener_cursor_store=${MONITOR_LISTENER_CURSOR_STORE_PATH:-}"
   echo "token_present=${TOKEN_PRESENT}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
   echo "token_bootstrap_status=${TOKEN_BOOTSTRAP_STATUS}"
@@ -1635,6 +2222,9 @@ with_profile_command_lock() (
 ensure_command_unlocked() {
   resolve_profile
   resolve_base_config_path
+  if [[ "${OPENCLAW_TELEGRAM_LIVE_ENABLE_MONITOR_LISTENER:-0}" == "1" ]]; then
+    MONITOR_LISTENER_ENABLED="yes"
+  fi
 
   if [[ -z "${BRANCH}" || "${BRANCH}" == "HEAD" ]]; then
     add_failure "branch_detached_head"
@@ -1708,6 +2298,36 @@ ensure_command_unlocked() {
   if [[ "$FAIL" -eq 0 && "$RUNTIME_HEALTH" != "ok" ]]; then
     add_failure "runtime_health_check_failed"
   fi
+  if [[ "$FAIL" -eq 0 && "$MONITOR_LISTENER_ENABLED" == "yes" ]]; then
+    if ! probe_monitor_hook_readiness; then
+      # Reload is disabled in tester profiles. If this gateway predated the
+      # opt-in config, restart only the owned isolated gateway so it registers
+      # the newly enabled hook route and token.
+      stop_owned_runtime
+      if [[ "$FAIL" -eq 0 ]]; then
+        start_isolated_runtime
+        local hook_waited=0
+        local hook_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-240}"
+        [[ "$hook_timeout" =~ ^[0-9]+$ ]] || hook_timeout=240
+        while [[ "$hook_waited" -lt "$hook_timeout" ]]; do
+          resolve_runtime_owner
+          probe_runtime_health
+          if [[ "$RUNTIME_OWNERSHIP" == "ok" && "$RUNTIME_HEALTH" == "ok" ]] &&
+            probe_monitor_hook_readiness; then
+            break
+          fi
+          sleep 1
+          hook_waited=$((hook_waited + 1))
+        done
+      fi
+      if [[ "$FAIL" -eq 0 ]] && ! probe_monitor_hook_readiness; then
+        add_failure "monitor_listener_hook_not_ready"
+      fi
+    fi
+  fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    ensure_isolated_monitor_listener
+  fi
   if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
     add_failure "token_claim_count:${TOKEN_CLAIM_COUNT}"
   fi
@@ -1741,6 +2361,7 @@ emit_handoff_proof_lines() {
 
 handoff_main_command_unlocked() {
   resolve_profile
+  stop_owned_monitor_listener
   resolve_runtime_owner
   stop_owned_runtime
   emit_handoff_proof_lines
@@ -1792,6 +2413,9 @@ handoff_main_command() {
 
 release_command_unlocked() {
   resolve_profile
+  # The listener is a sibling child, not a launchd service and not a gateway
+  # descendant. Stop it first while its isolated ownership record still exists.
+  stop_owned_monitor_listener
   resolve_runtime_owner
 
   local env_local="${REPO_ROOT}/.env.local"
@@ -1921,6 +2545,7 @@ NODE
   echo "release_runtime_stop=${RUNTIME_STOP_RESULT}"
   echo "release_runtime_state_dir=${RUNTIME_STATE_DIR:-}"
   echo "release_runtime_state_removed=${release_runtime_state_removed}"
+  echo "release_monitor_listener_stop=${MONITOR_LISTENER_STOP_RESULT}"
   echo "release_token_present_before=${release_token_present_before}"
   echo "release_token_cleared=${release_token_cleared}"
   echo "release_token_fingerprint=${release_token_fingerprint}"

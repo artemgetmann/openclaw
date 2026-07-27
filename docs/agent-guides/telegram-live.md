@@ -200,6 +200,25 @@ erasure.
     (`cron.list`, `cron.runs`, or logs showing `cron: timer armed` and a
     delivered run). A manually forced `cron run` proves delivery semantics, not
     unattended persistence.
+  - Telegram-as-me local-listener proof is a second, separate opt-in. Start it
+    only for monitor acceptance:
+
+    ```bash
+    OPENCLAW_TELEGRAM_LIVE_ENABLE_CRON=1 \
+    OPENCLAW_TELEGRAM_LIVE_ENABLE_MONITOR_LISTENER=1 \
+      pnpm openclaw:local telegram runtime ensure
+    ```
+
+  - That flag creates one ephemeral child owned by the worktree profile. It
+    uses the isolated `cron/jobs.json`, `cron/monitors.json`, cursor store,
+    gateway port, hook token, and canonical Telegram-user selectors. It never
+    installs launchd/systemd state and never treats a healthy shared listener
+    as tester-lane readiness.
+  - Rerunning `ensure` validates and reuses the exact healthy owned child;
+    unhealthy owned children are replaced. End the lifecycle with
+    `pnpm openclaw:local telegram runtime release`, which stops only the child
+    matching the isolated ownership record and removes the lane artifacts.
+
 - User E2E operator path:
   - Start broad triage with `openclaw telegram-user inbox --json`
   - Use `openclaw telegram-user inbox --unread --json` for unread-only sweeps
