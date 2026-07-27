@@ -7,6 +7,7 @@ import { whatsappOutbound } from "../../test/channel-outbounds.js";
 import { detectImageReferences } from "../agents/pi-embedded-runner/run/images.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
+import * as durableStore from "../auto-reply/reply/queue/durable-store.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -1769,6 +1770,46 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("runs a direct-turn restart continuation in the same transcript without replaying input", async () => {
+    const { cfg, sessionKey, sendWhatsApp } = await seedRestartContinuationHeartbeat(
+      "restart-followup:durable-direct-1",
+    );
+    const durableAckSpy = vi
+      .spyOn(durableStore, "markDurableFollowupRestartContinuationConsumed")
+      .mockResolvedValue(true);
+    const sentinelAckSpy = vi
+      .spyOn(restartSentinel, "markRestartContinuationConsumed")
+      .mockResolvedValue(false);
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (ctx, options) => {
+      expect(ctx.Body).not.toContain("original irreversible request");
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("direct-restart-agent-run");
+      return { text: "Recovered direct turn" };
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(durableAckSpy).toHaveBeenCalledWith({
+        id: "durable-direct-1",
+        sessionKey,
+      });
+    } finally {
+      replySpy.mockRestore();
+      sentinelAckSpy.mockRestore();
+      durableAckSpy.mockRestore();
+    }
+  });
+
   it("consumes a restart continuation when the agent returns an empty result", async () => {
     const { cfg, sessionKey, sendWhatsApp } =
       await seedRestartContinuationHeartbeat("restart:op-empty");
@@ -2159,6 +2200,55 @@ describe("runHeartbeatOnce", () => {
     } finally {
       replySpy.mockRestore();
       ackSpy.mockRestore();
+      failureSpy.mockRestore();
+      wakeSpy.mockRestore();
+    }
+  });
+
+  it("retries an unavailable direct-turn recovery route without consuming its carrier", async () => {
+    const { cfg, sessionKey, storePath, sendWhatsApp } = await seedRestartContinuationHeartbeat(
+      "restart-followup:direct-no-route",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId: "sid", updatedAt: Date.now() } }),
+    );
+    const failureSpy = vi
+      .spyOn(durableStore, "markDurableFollowupRestartContinuationFailed")
+      .mockResolvedValue(true);
+    const wakeSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow").mockImplementation(() => {});
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockImplementation(async (_ctx, options) => {
+      drainSystemEventEntries(sessionKey);
+      options?.onAgentRunStart?.("direct-no-route-run");
+      return { text: "Recovered direct turn" };
+    });
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "restart-continuation",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(failureSpy).toHaveBeenCalledWith({
+        id: "direct-no-route",
+        sessionKey,
+        error: "restart continuation has no outbound route: no-target",
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({ contextKey: "restart-followup:direct-no-route" }),
+      ]);
+      expect(wakeSpy).toHaveBeenCalledWith({
+        reason: "restart-continuation",
+        sessionKey,
+        coalesceMs: 1_000,
+      });
+    } finally {
+      replySpy.mockRestore();
       failureSpy.mockRestore();
       wakeSpy.mockRestore();
     }

@@ -13,6 +13,7 @@ import { isRoutableChannel } from "../route-reply.js";
 import {
   ackDurableFollowup,
   completeDurableFollowup,
+  DurableFollowupActiveOwnerError,
   DURABLE_FOLLOWUP_RETRY_BASE_MS,
   hydrateDurableFollowup,
   loadDurableFollowupDeliveryCarrier,
@@ -470,6 +471,15 @@ export function scheduleFollowupDrain(
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
       retainStagedDeliveryOnQueue(queue, attemptedRun);
+      if (err instanceof DurableFollowupActiveOwnerError) {
+        // A replacement gateway may restore disk state while the old process
+        // still owns transport finalization. Never rewrite that carrier from
+        // this process: the live owner can still replace its blocker with an
+        // exact final or delete it after provider confirmation.
+        queue.nextAttemptAt = Date.now() + DURABLE_FOLLOWUP_RETRY_BASE_MS;
+        defaultRuntime.log?.(`followup queue waiting for active owner ${err.ownerPid}`);
+        return;
+      }
       try {
         // Only the attempted turn earns backoff. Collect/summary attempts name
         // every represented record; untouched FIFO items keep attempt zero.

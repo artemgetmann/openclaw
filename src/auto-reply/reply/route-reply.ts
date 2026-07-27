@@ -50,6 +50,8 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Stable key used to deduplicate a mirrored transcript entry across retries. */
+  mirrorIdempotencyKey?: string;
   /** Skip the generic write-ahead queue when a caller already owns durable delivery state. */
   skipQueue?: boolean;
   /** Whether this message is being sent in a group/channel context */
@@ -110,8 +112,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (!normalized) {
     return { ok: true };
   }
+  // Internal recovery metadata controls transcript behavior but must never
+  // leak into a channel adapter's user-facing payload.
+  const { restartRecovery: _restartRecovery, ...channelPayload } = normalized;
   const externalPayload: ReplyPayload = {
-    ...normalized,
+    ...channelPayload,
     text: formatBtwTextForExternalDelivery(normalized),
   };
 
@@ -195,6 +200,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
               agentId: resolvedAgentId,
               text,
               mediaUrls,
+              idempotencyKey: params.mirrorIdempotencyKey,
               ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
               ...(params.groupId ? { groupId: params.groupId } : {}),
             }
