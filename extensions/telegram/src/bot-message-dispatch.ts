@@ -1760,8 +1760,7 @@ export const dispatchTelegramMessage = async ({
   const scheduleSilentToolProgressFallback = (toolName?: string) => {
     if (
       sawExplicitProgress ||
-      answerLane.lastPartialText.trim() ||
-      pendingAnswerPartialDuringPlan?.trim() ||
+      answerLane.hasStreamedMessage ||
       finalPhaseStarted ||
       silentToolFallbackRendered ||
       silentToolProgressTimer
@@ -1779,8 +1778,7 @@ export const dispatchTelegramMessage = async ({
         if (
           generation !== silentToolProgressGeneration ||
           sawExplicitProgress ||
-          answerLane.lastPartialText.trim() ||
-          pendingAnswerPartialDuringPlan?.trim() ||
+          answerLane.hasStreamedMessage ||
           finalPhaseStarted ||
           silentToolFallbackRendered
         ) {
@@ -3126,9 +3124,10 @@ export const dispatchTelegramMessage = async ({
           await flushAmbiguousAnswerBlockAsProgress("before-tool-start");
           // Partial callbacks share the draft lane but can arrive immediately
           // before this tool event. Drain them before deciding the turn is
-          // silent: a rendered or intentionally buffered answer acknowledgment
-          // already tells the user that work started and must not gain a second
-          // generic receipt three seconds later.
+          // silent: a rendered answer acknowledgment already tells the user
+          // that work started and must not gain a second generic receipt.
+          // Incomplete DM text can be buffered without reaching Telegram; that
+          // remains silent and is folded into the fallback Work log at timeout.
           await waitForDraftLaneIdle();
           if (getActiveProgressController() && activeProgressKind !== "plan") {
             routeToolStatusPartialsToProgress = true;

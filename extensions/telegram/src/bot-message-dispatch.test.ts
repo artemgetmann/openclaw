@@ -978,6 +978,58 @@ describe("dispatchTelegramMessage Telegram delivery", () => {
     }
   });
 
+  it("shows delayed progress when an incomplete assistant fragment stayed buffered", async () => {
+    vi.useFakeTimers();
+    try {
+      const progressStream = createDraftStream(9055);
+      createTelegramDraftStream.mockReturnValue(progressStream);
+      let signalToolStarted: (() => void) | undefined;
+      const toolStarted = new Promise<void>((resolve) => {
+        signalToolStarted = resolve;
+      });
+      let finishTool: (() => void) | undefined;
+      const toolFinished = new Promise<void>((resolve) => {
+        finishTool = resolve;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          // DM previews wait for a completion boundary, so this fragment stays
+          // internal and must not suppress the user-visible fallback.
+          await replyOptions?.onPartialReply?.({ text: "I’m checking" });
+          await replyOptions?.onToolStart?.({ name: "codex_threads", phase: "start" });
+          signalToolStarted?.();
+          await toolFinished;
+          await dispatcherOptions.deliver({ text: "Buffered final." }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      const dispatchPromise = dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "buffered-partial-keeps-fallback",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "partial",
+      });
+      await toolStarted;
+      expect(progressStream.update).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(progressStream.update).toHaveBeenCalledWith("I’m checking");
+      expect(progressStream.update).toHaveBeenCalledWith("I’m checking\n\nWaiting for Codex…");
+
+      finishTool?.();
+      await dispatchPromise;
+      expect(progressStream.update.mock.calls.filter(([text]) => text === "Work log")).toHaveLength(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses generic delayed copy without exposing unknown tool identifiers or raw traces", async () => {
     vi.useFakeTimers();
     try {
