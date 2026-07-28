@@ -101,7 +101,8 @@ Default manual-rotation thresholds are the first of:
 
 Use `scripts/measure_epoch.py` against the tower transcript to measure actual
 `event_msg.payload.type == "context_compacted"` records, elapsed time, and
-bytes. The dashboard owns the terminal-transition counter.
+bytes. Copy its `elapsed_hours`, `rotation_due`, and `rotation_reasons` receipt
+into the dashboard; the dashboard owns the terminal-transition counter.
 
 Do not automatically create the replacement tower. When a limit is reached,
 freeze intake, write a verified handoff, notify the user, and remain idle.
@@ -187,7 +188,15 @@ epoch:
   alert_required: false
   context_compactions: 0
   terminal_lane_transitions: 0
+  elapsed_hours: 0
   transcript_bytes: 0
+  rotation_due: false
+  rotation_reasons: []
+  rotate_at:
+    context_compactions: 10
+    terminal_lane_transitions: 10
+    elapsed_hours: 24
+    transcript_bytes: 8388608
   rotation_status: healthy
 campaign:
   max_open_lanes: 20

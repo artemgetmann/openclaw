@@ -35,6 +35,17 @@ def require_int(mapping: dict[str, Any], key: str, label: str, errors: list[str]
     return 0
 
 
+def require_number(
+    mapping: dict[str, Any], key: str, label: str, errors: list[str]
+) -> float:
+    """Read a real number while rejecting YAML booleans."""
+    value = mapping.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    errors.append(f"{label}.{key} must be a number")
+    return 0.0
+
+
 def validate_dashboard(document: Any) -> list[str]:
     """Return every deterministic dashboard violation in one pass."""
     errors: list[str] = []
@@ -222,18 +233,40 @@ def validate_dashboard(document: Any) -> list[str]:
     # Rotation is deterministic: once any measured threshold is reached, the
     # dashboard must drain rather than rely on the coordinator remembering.
     rotate_at = require_mapping(epoch.get("rotate_at"), "epoch.rotate_at", errors)
-    measured_thresholds = (
-        ("context_compactions", "context_compactions"),
-        ("terminal_lane_transitions", "terminal_lane_transitions"),
-        ("transcript_bytes", "transcript_bytes"),
+    integer_thresholds = (
+        "context_compactions",
+        "terminal_lane_transitions",
+        "transcript_bytes",
     )
-    rotation_due = False
-    for measured_key, threshold_key in measured_thresholds:
-        measured = require_int(epoch, measured_key, "epoch", errors)
-        threshold = require_int(rotate_at, threshold_key, "epoch.rotate_at", errors)
+    computed_reasons: list[str] = []
+    for key in integer_thresholds:
+        measured = require_int(epoch, key, "epoch", errors)
+        threshold = require_int(rotate_at, key, "epoch.rotate_at", errors)
         if threshold > 0 and measured >= threshold:
-            rotation_due = True
-    if rotation_due:
+            computed_reasons.append(key)
+
+    elapsed_hours = require_number(epoch, "elapsed_hours", "epoch", errors)
+    max_elapsed_hours = require_number(
+        rotate_at, "elapsed_hours", "epoch.rotate_at", errors
+    )
+    if max_elapsed_hours > 0 and elapsed_hours >= max_elapsed_hours:
+        computed_reasons.append("elapsed_hours")
+
+    rotation_due_value = epoch.get("rotation_due")
+    if not isinstance(rotation_due_value, bool):
+        errors.append("epoch.rotation_due must be a boolean")
+    elif rotation_due_value != bool(computed_reasons):
+        errors.append("epoch.rotation_due must match the measured rotation thresholds")
+
+    rotation_reasons = epoch.get("rotation_reasons")
+    if not isinstance(rotation_reasons, list) or not all(
+        isinstance(reason, str) for reason in rotation_reasons
+    ):
+        errors.append("epoch.rotation_reasons must be a list of strings")
+    elif set(rotation_reasons) != set(computed_reasons):
+        errors.append("epoch.rotation_reasons must match the measured thresholds")
+
+    if computed_reasons:
         if epoch.get("rotation_status") != "draining":
             errors.append("reached rotation threshold requires epoch.rotation_status=draining")
         if lifecycle != "draining":
