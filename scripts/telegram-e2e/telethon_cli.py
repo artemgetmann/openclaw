@@ -1286,22 +1286,79 @@ async def run_topic_resolve(args: argparse.Namespace) -> int:
     try:
       # Telegram applies q server-side. The exact normalized comparison below
       # prevents a fuzzy result from silently selecting the wrong topic.
-      result = await client(
-        functions.messages.GetForumTopicsRequest(
-          peer = resolve_chat(args.chat),
-          offset_date = None,
-          offset_id = 0,
-          offset_topic = 0,
-          limit = 100,
-          q = title,
+      # A short server page is not an end-of-results signal: Telegram may return
+      # fewer topics than requested while ForumTopics.count still advertises
+      # more. Enumerate the complete search result before declaring one exact
+      # title unique, using the last topic's top message as the next cursor.
+      chat = resolve_chat(args.chat)
+      offset_date = None
+      offset_id = 0
+      offset_topic = 0
+      seen_topic_ids: set[int] = set()
+      matches = []
+      while True:
+        result = await client(
+          functions.messages.GetForumTopicsRequest(
+            peer = chat,
+            offset_date = offset_date,
+            offset_id = offset_id,
+            offset_topic = offset_topic,
+            limit = 100,
+            q = title,
+          )
         )
-      )
-      matches = [
-        topic
-        for topic in getattr(result, "topics", []) or []
-        if getattr(topic, "title", None) is not None
-        and str(getattr(topic, "title", "")).strip().casefold() == title.casefold()
-      ]
+        topics = list(getattr(result, "topics", []) or [])
+        expected_count = max(0, int(getattr(result, "count", 0) or 0))
+        new_topics = []
+        for topic in topics:
+          topic_id = int(getattr(topic, "id", 0) or 0)
+          if topic_id <= 0 or topic_id in seen_topic_ids:
+            continue
+          seen_topic_ids.add(topic_id)
+          new_topics.append(topic)
+          if (
+            getattr(topic, "title", None) is not None
+            and str(getattr(topic, "title", "")).strip().casefold() == title.casefold()
+          ):
+            matches.append(topic)
+        if len(matches) > 1:
+          break
+        if len(seen_topic_ids) >= expected_count:
+          break
+        if not new_topics:
+          return fail(
+            "E_TOPIC_RESOLUTION_INCOMPLETE",
+            "Telegram did not return enough forum topics to prove the exact title is unique.",
+            details = {"expected_count": expected_count, "received_count": len(seen_topic_ids)},
+          )
+
+        # Telegram defines the cursor from the last returned topic, even if a
+        # page repeats an already-seen entry.
+        last_topic = topics[-1]
+        next_offset_topic = int(getattr(last_topic, "id", 0) or 0)
+        next_offset_id = int(getattr(last_topic, "top_message", 0) or 0)
+        next_offset_message = next(
+          (
+            message
+            for message in getattr(result, "messages", []) or []
+            if int(getattr(message, "id", 0) or 0) == next_offset_id
+          ),
+          None,
+        )
+        next_offset_date = getattr(next_offset_message, "date", None)
+        next_cursor = (next_offset_date, next_offset_id, next_offset_topic)
+        if (
+          next_offset_topic <= 0
+          or next_offset_id <= 0
+          or next_offset_date is None
+          or next_cursor == (offset_date, offset_id, offset_topic)
+        ):
+          return fail(
+            "E_TOPIC_RESOLUTION_INCOMPLETE",
+            "Telegram returned an incomplete forum-topic pagination cursor.",
+            details = {"expected_count": expected_count, "received_count": len(seen_topic_ids)},
+          )
+        offset_date, offset_id, offset_topic = next_cursor
       if not matches:
         return fail(
           "E_TOPIC_NOT_FOUND",

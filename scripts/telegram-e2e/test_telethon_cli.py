@@ -154,6 +154,7 @@ class FakeTopicReadClient:
     *,
     replies: list[SimpleNamespace],
     root: SimpleNamespace | None,
+    topic_pages: list[SimpleNamespace] | None = None,
     topics: list[SimpleNamespace],
   ) -> None:
     self.disconnected = False
@@ -161,6 +162,8 @@ class FakeTopicReadClient:
     self.replies = replies
     self.requests: list[object] = []
     self.root = root
+    self.topic_page_index = 0
+    self.topic_pages = topic_pages or []
     self.topics = topics
 
   async def __call__(self, request):
@@ -170,7 +173,13 @@ class FakeTopicReadClient:
     if isinstance(request, FakeGetRepliesRequest):
       return SimpleNamespace(messages = self.replies)
     if isinstance(request, FakeGetForumTopicsRequest):
-      return SimpleNamespace(topics = self.topics)
+      if not self.topic_pages:
+        return SimpleNamespace(count = len(self.topics), messages = [], topics = self.topics)
+      if self.topic_page_index >= len(self.topic_pages):
+        raise AssertionError("unexpected extra forum-topic page request")
+      result = self.topic_pages[self.topic_page_index]
+      self.topic_page_index += 1
+      return result
     raise AssertionError(f"unexpected request {type(request).__name__}")
 
   async def disconnect(self) -> None:
@@ -1108,12 +1117,42 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([type(request) for request in fake_client.requests], [FakeGetForumTopicsByIDRequest])
     self.assertEqual(fake_client.get_messages_calls, [])
 
-  async def test_run_topic_resolve_requires_one_exact_title_match(self) -> None:
-    topics = [
-      SimpleNamespace(closed = False, hidden = False, id = 777, title = "Gmail Keychain Auth RCA"),
-      SimpleNamespace(closed = False, hidden = False, id = 778, title = "Gmail Keychain follow-up"),
+  async def test_run_topic_resolve_finds_one_exact_title_across_short_pages(self) -> None:
+    first_page_date = datetime(2026, 7, 27, 10, 0, tzinfo = timezone.utc)
+    topic_pages = [
+      SimpleNamespace(
+        count = 2,
+        messages = [SimpleNamespace(date = first_page_date, id = 901)],
+        topics = [
+          SimpleNamespace(
+            closed = False,
+            hidden = False,
+            id = 777,
+            title = "Gmail Keychain follow-up",
+            top_message = 901,
+          )
+        ],
+      ),
+      SimpleNamespace(
+        count = 2,
+        messages = [SimpleNamespace(date = first_page_date - timedelta(minutes = 1), id = 900)],
+        topics = [
+          SimpleNamespace(
+            closed = False,
+            hidden = False,
+            id = 778,
+            title = "Gmail Keychain Auth RCA",
+            top_message = 900,
+          )
+        ],
+      ),
     ]
-    fake_client = FakeTopicReadClient(replies = [], root = None, topics = topics)
+    fake_client = FakeTopicReadClient(
+      replies = [],
+      root = None,
+      topic_pages = topic_pages,
+      topics = [],
+    )
     emitted: dict[str, object] = {}
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -1138,10 +1177,143 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
         )
 
     self.assertEqual(exit_code, 0)
-    self.assertEqual(type(fake_client.requests[0]), FakeGetForumTopicsRequest)
+    self.assertEqual(
+      [type(request) for request in fake_client.requests],
+      [FakeGetForumTopicsRequest, FakeGetForumTopicsRequest],
+    )
     self.assertEqual(fake_client.requests[0].q, "gmail keychain auth rca")
-    self.assertEqual(emitted["topic"]["topic_anchor"], 777)
+    self.assertEqual(fake_client.requests[1].offset_date, first_page_date)
+    self.assertEqual(fake_client.requests[1].offset_id, 901)
+    self.assertEqual(fake_client.requests[1].offset_topic, 777)
+    self.assertEqual(emitted["topic"]["topic_anchor"], 778)
     self.assertEqual(emitted["topic"]["topic_title"], "Gmail Keychain Auth RCA")
+
+  async def test_run_topic_resolve_rejects_duplicate_exact_titles_across_pages(self) -> None:
+    first_page_date = datetime(2026, 7, 27, 10, 0, tzinfo = timezone.utc)
+    topic_pages = [
+      SimpleNamespace(
+        count = 2,
+        messages = [SimpleNamespace(date = first_page_date, id = 901)],
+        topics = [
+          SimpleNamespace(
+            closed = False,
+            hidden = False,
+            id = 777,
+            title = "Gmail Keychain Auth RCA",
+            top_message = 901,
+          )
+        ],
+      ),
+      SimpleNamespace(
+        count = 2,
+        messages = [SimpleNamespace(date = first_page_date - timedelta(minutes = 1), id = 900)],
+        topics = [
+          SimpleNamespace(
+            closed = False,
+            hidden = False,
+            id = 778,
+            title = "Gmail Keychain Auth RCA",
+            top_message = 900,
+          )
+        ],
+      ),
+    ]
+    fake_client = FakeTopicReadClient(
+      replies = [],
+      root = None,
+      topic_pages = topic_pages,
+      topics = [],
+    )
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_topic_resolve(
+          argparse.Namespace(
+            chat = "-1003783709877",
+            session = str(session_path),
+            title = "Gmail Keychain Auth RCA",
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(emitted["error"]["code"], "E_TOPIC_AMBIGUOUS")
+    self.assertEqual(emitted["error"]["details"]["topic_anchors"], [777, 778])
+    self.assertEqual(len(fake_client.requests), 2)
+
+  async def test_run_topic_resolve_reports_missing_title_after_all_pages(self) -> None:
+    first_page_date = datetime(2026, 7, 27, 10, 0, tzinfo = timezone.utc)
+    topic_pages = [
+      SimpleNamespace(
+        count = 2,
+        messages = [SimpleNamespace(date = first_page_date, id = 901)],
+        topics = [
+          SimpleNamespace(
+            closed = False,
+            hidden = False,
+            id = 777,
+            title = "Gmail Keychain follow-up",
+            top_message = 901,
+          )
+        ],
+      ),
+      SimpleNamespace(
+        count = 2,
+        messages = [SimpleNamespace(date = first_page_date - timedelta(minutes = 1), id = 900)],
+        topics = [
+          SimpleNamespace(
+            closed = False,
+            hidden = False,
+            id = 778,
+            title = "Unrelated RCA",
+            top_message = 900,
+          )
+        ],
+      ),
+    ]
+    fake_client = FakeTopicReadClient(
+      replies = [],
+      root = None,
+      topic_pages = topic_pages,
+      topics = [],
+    )
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload, **_: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_topic_resolve(
+          argparse.Namespace(
+            chat = "-1003783709877",
+            session = str(session_path),
+            title = "Gmail Keychain Auth RCA",
+          )
+        )
+
+    self.assertEqual(exit_code, 1)
+    self.assertEqual(emitted["error"]["code"], "E_TOPIC_NOT_FOUND")
+    self.assertEqual(len(fake_client.requests), 2)
 
   async def test_run_mark_read_acknowledges_current_history(self) -> None:
     fake_client = FakeReadStateClient()
