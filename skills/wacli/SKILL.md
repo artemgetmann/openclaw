@@ -66,6 +66,17 @@ Automation Rule
   durable baseline state in one command.
 - For one-off/manual "did they reply?" checks where monitor state is not needed, use:
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
+- If the user explicitly says a newer inbound exists but that cheap local read
+  still returns an older message, retry that exact target once with:
+  `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --refresh --json`
+  Forced refresh serializes with safe sends, pauses only the command-matched
+  recorded sync owner, runs one bounded catch-up, rereads the same store, and
+  restores the owner before returning. Treat any refresh or restoration error
+  as an unproven read and report it instead of using the stale result.
+- Do not add `--refresh` to routine monitors, cron jobs, or default reads.
+  Connected health proves a live owner, not that local history has caught up;
+  forced refresh is the explicit recovery path after a user asserts the local
+  snapshot is stale.
 - When authoring a cron monitor, pin the exact `wacli-monitor-check.sh` command
   into the job payload.
   Do not leave the waking run to rediscover the monitor procedure from scratch.
@@ -228,6 +239,10 @@ Find chats + messages
   names/contacts/aliases, and returns the newest inbound `from_me=0` across all
   candidate chats, plus `recentConversation` and `continuity` fields for the
   active chat.
+  Add `--refresh` only for the explicit stale-snapshot recovery case described
+  above. A successful JSON result then includes
+  `refresh.freshnessProven=true`; failure to prove bounded catch-up or owner
+  restoration exits loudly without returning a result.
 - Monitor job helper (stateful baseline + reconciliation in one command):
   `skills/wacli/scripts/wacli-monitor-check.sh --target <phone-or-jid> --json`
   This stores baseline state under `~/.openclaw/wacli-monitor-state/` by default
