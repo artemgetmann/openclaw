@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
 CHAT_TARGET="${OPENCLAW_MAIN_GATEWAY_SMOKE_CHAT:-}"
 THREAD_ANCHOR="${OPENCLAW_MAIN_GATEWAY_SMOKE_THREAD_ANCHOR:-}"
@@ -228,6 +229,19 @@ wait_for_restart_health() {
 
 main() {
   parse_args "$@"
+
+  if (( DRY_RUN != 1 )); then
+    # Keep the live send, restart transition, and recovery proof inside one
+    # machine-wide operational reservation. Acquire before live status is read
+    # so the proof snapshot cannot race another campaign. Dry-run stays free.
+    # shellcheck source=scripts/lib/heavy-local-slot.sh
+    source "${REPO_ROOT}/scripts/lib/heavy-local-slot.sh"
+    openclaw_heavy_local_slot_require_or_reexec \
+      "smoke-main-gateway-restart" \
+      "${REPO_ROOT}" \
+      "${REPO_ROOT}/scripts/smoke-main-gateway-restart.sh" \
+      "$@"
+  fi
 
   local pre_status=""
   pre_status="$(status_json)"

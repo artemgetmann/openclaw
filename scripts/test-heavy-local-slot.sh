@@ -1563,16 +1563,26 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
 
   for script in \
     scripts/jarvis-release-worktree.sh \
+    scripts/bootstrap-open-computer-use-runtime.sh \
+    scripts/build-and-run-mac.sh \
+    scripts/bundle-a2ui.sh \
     scripts/rebuild-relaunch-consumer-mac-app.sh \
+    scripts/relaunch-consumer-mac-ui-smoke.sh \
     scripts/package-consumer-mac-app.sh \
     scripts/package-mac-app.sh \
     scripts/package-mac-dist.sh \
+    scripts/open-consumer-mac-app.sh \
     scripts/deploy-shared-main-runtime.sh \
     scripts/gateway-recover-main.sh \
     scripts/restart-mac.sh \
     scripts/ship-main-gateway-fix.sh \
     scripts/build-shared-runtime.sh \
     scripts/package-jarvis-consumer-rc.sh \
+    scripts/jarvis-sparkle-update-e2e.sh \
+    scripts/prove-jarvis-telegram-runtime.sh \
+    scripts/prove-main-telegram-runtime.sh \
+    scripts/smoke-main-gateway-restart.sh \
+    scripts/telegram-live-runtime.sh \
     scripts/new-worktree.sh \
     scripts/bootstrap-worktree-runtime.sh \
     scripts/prewarm-worktree.sh; do
@@ -1609,6 +1619,108 @@ test_fleet_and_release_lock_coexistence_and_wiring() {
   assert_guard_precedes_mutation \
     scripts/prewarm-worktree.sh \
     '^openclaw_run_repo_pnpm "\$ROOT" install --frozen-lockfile$'
+  assert_guard_precedes_mutation \
+    scripts/bootstrap-open-computer-use-runtime.sh \
+    '^[[:space:]]*clone_or_update_checkout$'
+  assert_guard_precedes_mutation \
+    scripts/build-and-run-mac.sh \
+    '^swift build '
+  assert_guard_precedes_mutation \
+    scripts/bundle-a2ui.sh \
+    '^pnpm -s exec tsc '
+  assert_guard_precedes_mutation \
+    scripts/relaunch-consumer-mac-ui-smoke.sh \
+    '^[[:space:]]*cleanup_ui_smoke_artifacts$'
+  assert_guard_precedes_mutation \
+    scripts/open-consumer-mac-app.sh \
+    '^[[:space:]]*consumer_mac_test_begin_launch '
+  assert_guard_precedes_mutation \
+    scripts/prove-main-telegram-runtime.sh \
+    '^[[:space:]]*bot_json="\$\(resolve_active_bot\)"$'
+  assert_guard_precedes_mutation \
+    scripts/prove-main-telegram-runtime.sh \
+    '^[[:space:]]*run_json telegram-user precheck '
+  assert_guard_precedes_mutation \
+    scripts/smoke-main-gateway-restart.sh \
+    '^[[:space:]]*pre_status="\$\(status_json\)"$'
+  assert_guard_precedes_mutation \
+    scripts/smoke-main-gateway-restart.sh \
+    '^[[:space:]]*confirm_json="\$\(send_user_message '
+  assert_guard_precedes_mutation \
+    scripts/prove-jarvis-telegram-runtime.sh \
+    '^exec "\$JARVIS_NODE" '
+  assert_guard_precedes_mutation \
+    scripts/jarvis-sparkle-update-e2e.sh \
+    '^[[:space:]]*run_preflight$'
+  assert_guard_precedes_mutation \
+    scripts/jarvis-sparkle-update-e2e.sh \
+    '^[[:space:]]*run_apply$'
+  assert_guard_precedes_mutation \
+    scripts/telegram-live-runtime.sh \
+    '^[[:space:]]*ensure_command$'
+
+  # Preview/preflight modes must remain usable while another campaign owns the
+  # slot. Each guard is therefore behind an explicit live/apply condition, even
+  # though it appears before the live preflight snapshot.
+  local live_condition_line=0
+  guard_line="$(
+    grep -n 'openclaw_heavy_local_slot_require_or_reexec' \
+      "$ROOT_DIR/scripts/prove-main-telegram-runtime.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  live_condition_line="$(
+    grep -n 'if \[\[ "${DRY_RUN}" != "1" \]\]; then' \
+      "$ROOT_DIR/scripts/prove-main-telegram-runtime.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  [[ "$live_condition_line" -lt "$guard_line" ]] ||
+    fail "prove-main-telegram-runtime does not condition its live guard"
+
+  guard_line="$(
+    grep -n 'openclaw_heavy_local_slot_require_or_reexec' \
+      "$ROOT_DIR/scripts/smoke-main-gateway-restart.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  live_condition_line="$(
+    grep -n 'if (( DRY_RUN != 1 )); then' \
+      "$ROOT_DIR/scripts/smoke-main-gateway-restart.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  [[ "$live_condition_line" -lt "$guard_line" ]] ||
+    fail "smoke-main-gateway-restart does not condition its live guard"
+
+  guard_line="$(
+    grep -n 'openclaw_heavy_local_slot_require_or_reexec' \
+      "$ROOT_DIR/scripts/prove-jarvis-telegram-runtime.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  live_condition_line="$(
+    grep -n '"mode":"dry-run"' "$ROOT_DIR/scripts/prove-jarvis-telegram-runtime.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  [[ "$live_condition_line" -lt "$guard_line" ]] ||
+    fail "prove-jarvis-telegram-runtime guards its literal dry-run"
+
+  guard_line="$(
+    grep -n 'openclaw_heavy_local_slot_require_or_reexec' \
+      "$ROOT_DIR/scripts/jarvis-sparkle-update-e2e.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  live_condition_line="$(
+    grep -n 'if \[\[ "\$MODE" == "apply" \]\]; then' \
+      "$ROOT_DIR/scripts/jarvis-sparkle-update-e2e.sh" |
+      head -n 1 |
+      cut -d: -f1
+  )"
+  [[ "$live_condition_line" -lt "$guard_line" ]] ||
+    fail "jarvis-sparkle-update-e2e does not condition its apply guard"
   pass "fleet lease precedes release locks and canonical lane mutations"
 }
 
@@ -1618,6 +1730,20 @@ run_suite_test() {
   SUITE_PHASE="$test_name"
   "$test_name"
 }
+
+# The full suite deliberately SIGKILLs disposable wrapper owners. When this
+# harness itself runs below the production wrapper, that signal fixture can end
+# the outer guarded session before the final static wiring audit. Keep a focused
+# mode so callers can prove entrypoint coverage and lock order independently
+# without weakening or skipping the full fail-closed tests.
+if [[ "${1:-}" == "--wiring-only" ]]; then
+  SUITE_PHASE="create_instrumented_runtime"
+  create_instrumented_runtime
+  run_suite_test test_fleet_and_release_lock_coexistence_and_wiring
+  SUITE_PHASE="complete"
+  echo "Heavy-local slot wiring tests passed."
+  exit 0
+fi
 
 SUITE_PHASE="create_instrumented_runtime"
 create_instrumented_runtime

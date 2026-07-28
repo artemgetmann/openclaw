@@ -112,6 +112,15 @@ OPENCLAW_CONFIG_PATH="$HOME/Library/Application Support/Jarvis/.jarvis/openclaw.
 Keep these lanes separate. They answer different questions, mutate different
 state, and produce different proof:
 
+All package, release, deploy, restart, install, tester-runtime, GUI-runtime, and
+live acceptance campaigns must hold the machine-wide heavy-local slot for their
+full duration. Canonical entrypoints self-acquire it, including their live-only
+paths; read-only help, dry-run, and preflight paths stay lock-free. Public
+Jarvis release work acquires the canonical release lock after the fleet slot.
+This serializes operational state without a coordinator service. It does not
+grant permission for the live action: task authority and the runtime lane below
+still decide whether it may run.
+
 ### Canonical main-Jarvis hotfix wrapper
 
 When Artem asks to “Ship this PR to my main Jarvis” or equivalent, use the
@@ -261,6 +270,10 @@ smoke ...` or `pnpm openclaw:local telegram scenario ...` command. Capture the
 unique prompt token, bot username, token fingerprint, message IDs, and the
 relevant send path lines, including `sendRichMessage ok` when rich Telegram
 rendering is under test.
+
+The live proof entrypoints self-reserve the operational slot. Do not wrap or
+reimplement their send/restart sequence manually to run around contention. Exit
+`75` means wait and retry the canonical entrypoint later.
 
 Consumer model-choice changes are the exception: after the changed runtime is
 deployed, release acceptance requires opening Telegram `/model` and recording

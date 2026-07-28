@@ -16,6 +16,54 @@
   actionable review handling, required CI, and merge. Deployment, restart, and
   release still require explicit permission.
 
+## “Ship end-to-end” ownership contract
+
+When the owner says `ship this end-to-end`, the feature-owning agent keeps
+responsibility for one scoped change from source through merge. It does not
+hand routine coordination back to the founder and it does not create a second
+Control Tower or permanent merge agent.
+
+The feature owner must continue through:
+
+1. implementation in its isolated worktree;
+2. the smallest focused local proof that establishes the changed behavior;
+3. an early draft PR, followed by exact-head review and actionable finding
+   fixes;
+4. ready state only after the owned proof and relevant CI are green;
+5. refresh or rebase when `main` advances, with affected proof repeated;
+6. merge when the exact reviewed head is current and required CI is green; and
+7. proportionate post-merge repository verification, with merged-code truth
+   reported separately from any package, installed-runtime, provider, GUI, or
+   end-user proof.
+
+Routine review, ordinary `main` drift, a safe rebase, pending CI, or a PR being
+draft are continuation states—not reasons to return the task to the founder.
+The feature owner waits, diagnoses, updates, and continues. Independent review
+may be delegated as a bounded read-only check, but ownership and the merge
+decision stay with the feature agent.
+
+`Ship end-to-end` authorizes the normal source/PR/merge lifecycle above. It does
+not by itself authorize genuinely new scope, destructive cleanup, credentials,
+irreversible or external actions, security-owned changes, or task-specific
+protected live actions. Package, release, deploy, restart, install, shared
+runtime mutation, and live acceptance require explicit authority in the task
+or a later approval. There is no blanket rule requiring user approval for every
+normal merge.
+
+Worktrees isolate branch and filesystem state; they do not prevent two branches
+from changing the same contract incompatibly. Before starting or resuming work
+on a high-churn shared surface, refresh `origin/main` and inspect overlapping
+open-PR paths plus active same-repo lanes when that inventory exists. Recheck
+`main` before every material PR update. If another change landed, rebase and
+preserve both intended behaviors instead of blindly choosing one conflict
+side, then rerun the focused proof for both affected contracts.
+
+If a safe merge helper reports `BEHIND`, refresh and continue. If it reports a
+real conflict, resolve only in-scope conflicts and repeat affected proof. Stop
+only when resolution changes intended behavior or ownership, another live
+owner overlaps the same source/state, a protected action lacks authority, or a
+claimed guarantee cannot be proven mechanically.
+
 ## Two-clone default
 
 - Default model:
@@ -94,8 +142,9 @@
 6. Open or update a draft PR early.
 7. Validate in the temp worktree.
 8. Mark the PR ready when validation is complete.
-9. Give a next-step handoff before stopping, especially if the PR is still
-   draft, waiting for review, waiting for CI, or not deployed to runtime yet.
+9. Keep ownership while the PR is draft, waiting for review, waiting for CI, or
+   refreshing after ordinary base drift. Give a next-step handoff only at a
+   genuine stop boundary or final closeout.
 10. Merge if the task and [the autonomous PR merge policy](/ci) allow it;
     otherwise stop and report the blocker.
 11. If the merged change needs live runtime behavior, choose the lane explicitly:

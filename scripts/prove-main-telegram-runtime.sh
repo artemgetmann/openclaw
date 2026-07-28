@@ -221,6 +221,19 @@ main() {
     require_sacred_main_checkout
   fi
 
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    # Live Telegram acceptance is a shared-runtime campaign even when its local
+    # CPU cost is modest. Reserve before resolving live bot/runtime state so
+    # proof cannot race a restart or release. Dry-run stays lock-free.
+    # shellcheck source=scripts/lib/heavy-local-slot.sh
+    source "${MAIN_REPO}/scripts/lib/heavy-local-slot.sh"
+    openclaw_heavy_local_slot_require_or_reexec \
+      "prove-main-telegram-runtime" \
+      "${MAIN_REPO}" \
+      "${MAIN_REPO}/scripts/prove-main-telegram-runtime.sh" \
+      "$@"
+  fi
+
   NONCE="${NONCE:-JARVIS_HEALTH_OK_$(date +%H%M%S)}"
   DEPLOY_SINCE="${DEPLOY_SINCE:-$(date '+%Y-%m-%dT%H:%M:%S')}"
 

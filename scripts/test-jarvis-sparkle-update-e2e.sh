@@ -316,6 +316,9 @@ EOF
 harness_env() {
   local fixture="$1"
   shift
+  # The production heavy-work wrapper deliberately lowers scheduling priority.
+  # Keep fixture deadlines wide enough that host contention does not masquerade
+  # as a Sparkle transition failure.
   OPENCLAW_SPARKLE_E2E_TEST_MODE=1 \
   OPENCLAW_SPARKLE_E2E_TEST_ROOT="$fixture" \
   OPENCLAW_CODESIGN_BIN="$fixture/bin/codesign" \
@@ -337,7 +340,7 @@ harness_env() {
       --scratch-root "$fixture/runs" \
       --min-free-gb "${JARVIS_TEST_MIN_FREE_GB:-0}" \
       --download-grace 1 \
-      --timeout 15 \
+      --timeout "${JARVIS_TEST_TIMEOUT_SECONDS:-30}" \
       "$@"
 }
 

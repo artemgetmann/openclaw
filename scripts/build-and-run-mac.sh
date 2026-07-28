@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../apps/macos"
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+ORIGINAL_ARGS=("$@")
+
+# A direct invocation owns both the Swift build and the app replacement. When
+# called below another guarded campaign, the verified ancestor lease is reused.
+openclaw_heavy_local_slot_require_or_reexec \
+  "build-and-run-mac" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/build-and-run-mac.sh" \
+  "${ORIGINAL_ARGS[@]}"
+
+cd "$ROOT_DIR/apps/macos"
 
 BUILD_PATH=".build-local"
 PRODUCT="OpenClaw"

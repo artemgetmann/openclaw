@@ -20,6 +20,11 @@ current branch rules and repository helpers; do not bypass required checks,
 merge a draft, use an admin override, or treat queued or pending checks as
 passed.
 
+Routine review, pending CI, and ordinary base drift are continuation states.
+The feature owner waits or diagnoses, refreshes/rebases when needed, repeats
+affected proof, and continues on the same task. Merge only the exact reviewed
+head; if a new commit is required, review and CI must apply to that new head.
+
 Stop before merge when any of these are true:
 
 - Intended behavior or the root cause is still uncertain.

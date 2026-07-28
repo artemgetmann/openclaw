@@ -7,6 +7,7 @@ set -euo pipefail
 MODE=""
 EXPECTED_COMMIT=""
 RUNTIME_SOURCE="jarvis-managed-bundle"
+ORIGINAL_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run|--execute)
@@ -71,6 +72,17 @@ JARVIS_STATE_DIR="${JARVIS_HOME}/.jarvis"
 JARVIS_NODE="${JARVIS_STATE_DIR}/tools/node/bin/node"
 JARVIS_ENTRYPOINT="${JARVIS_STATE_DIR}/lib/openclaw-bundled/dist/index.js"
 ROOT_DIR="${BASH_SOURCE[0]%/*}/.."
+
+# The execute path sends externally and mutates a disposable topic/session.
+# Reserve the same machine slot as package and runtime entrypoints for the
+# complete canary. The literal dry-run above remains lock- and filesystem-free.
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+openclaw_heavy_local_slot_require_or_reexec \
+  "prove-jarvis-telegram-runtime" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/prove-jarvis-telegram-runtime.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 [[ -x "$JARVIS_NODE" ]] || {
   printf '{"schema":"openclaw.jarvis-telegram-runtime-proof.v2","result":"failed","reason":"installed Jarvis Node is unavailable","runtimeSource":{"selected":"%s","observed":null,"autoFallback":false},"cleanup":{"topic":"not-created","session":"not-inspected","lock":"not-acquired"},"residuals":[]}\n' "$RUNTIME_SOURCE"
