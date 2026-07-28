@@ -1400,20 +1400,97 @@ async def run_read(args: argparse.Namespace) -> int:
           )
         # GetReplies is Telegram's topic-scoped history RPC. Unlike a chat-wide
         # scan plus local matching, it cannot mix sibling forum topics.
-        result = await client(
-          functions.messages.GetRepliesRequest(
-            peer = chat,
-            msg_id = topic_anchor,
-            offset_id = 0,
-            offset_date = None,
-            add_offset = 0,
-            limit = compute_message_scan_cap(contains = contains, limit = limit),
-            max_id = int(args.before_id or 0),
-            min_id = int(args.after_id or 0),
-            hash = 0,
+        scan_cap = compute_message_scan_cap(contains = contains, limit = limit)
+        replies_by_id: dict[int, object] = {}
+        offset_id = 0
+        offset_date = None
+        while len(replies_by_id) < scan_cap:
+          # Telegram may clamp or return a short replies page even when more
+          # messages exist. Keep the same server-side topic and id bounds on
+          # every request, and advance with the oldest message as the cursor.
+          result = await client(
+            functions.messages.GetRepliesRequest(
+              peer = chat,
+              msg_id = topic_anchor,
+              offset_id = offset_id,
+              offset_date = offset_date,
+              add_offset = 0,
+              limit = scan_cap - len(replies_by_id),
+              max_id = int(args.before_id or 0),
+              min_id = int(args.after_id or 0),
+              hash = 0,
+            )
           )
-        )
-        replies = list(getattr(result, "messages", []) or [])
+          page = list(getattr(result, "messages", []) or [])
+          if not page:
+            break
+
+          # Every object in a backend page must be provably part of this
+          # bounded query before it can affect the cursor or scan cap. Dropping
+          # one malformed or out-of-bound object would silently truncate the
+          # caller's requested topic window.
+          page_with_ids: list[tuple[int, object]] = []
+          for message in page:
+            raw_message_id = getattr(message, "id", None)
+            if (
+              not isinstance(raw_message_id, int)
+              or isinstance(raw_message_id, bool)
+              or raw_message_id <= 0
+            ):
+              return fail(
+                "E_TOPIC_READ_INCOMPLETE",
+                "Telegram returned a topic replies page with an invalid message id.",
+                details = {"received_count": len(replies_by_id), "scan_cap": scan_cap},
+              )
+            message_id = raw_message_id
+            if args.after_id and message_id <= int(args.after_id):
+              return fail(
+                "E_TOPIC_READ_INCOMPLETE",
+                "Telegram returned a topic reply outside the requested lower bound.",
+                details = {
+                  "after_id": int(args.after_id),
+                  "message_id": message_id,
+                  "received_count": len(replies_by_id),
+                },
+              )
+            if args.before_id and message_id >= int(args.before_id):
+              return fail(
+                "E_TOPIC_READ_INCOMPLETE",
+                "Telegram returned a topic reply outside the requested upper bound.",
+                details = {
+                  "before_id": int(args.before_id),
+                  "message_id": message_id,
+                  "received_count": len(replies_by_id),
+                },
+              )
+            page_with_ids.append((message_id, message))
+
+          # A non-empty page without a strictly older cursor cannot safely
+          # continue. Fail closed instead of returning partial topic history or
+          # looping on Telegram's response.
+          next_offset_id, oldest_message = min(page_with_ids, key = lambda item: item[0])
+          if offset_id > 0 and next_offset_id >= offset_id:
+            return fail(
+              "E_TOPIC_READ_INCOMPLETE",
+              "Telegram did not advance the topic replies pagination cursor.",
+              details = {
+                "offset_id": offset_id,
+                "received_count": len(replies_by_id),
+                "scan_cap": scan_cap,
+              },
+            )
+          # Keep the newest replies when an over-returning or future server
+          # response exceeds the requested remainder; the public scan cap is
+          # exact.
+          sorted_page = sorted(page_with_ids, key = lambda item: item[0], reverse = True)
+          for message_id, message in sorted_page:
+            if message_id not in replies_by_id and len(replies_by_id) >= scan_cap:
+              break
+            replies_by_id[message_id] = message
+          offset_id = next_offset_id
+          offset_date = getattr(oldest_message, "date", None)
+
+        replies = list(replies_by_id.values())
         # GetReplies owns the strict topic scope, but Telegram does not promise
         # that every response page repeats the topic's creation/root message.
         # Fetch that one exact id separately so root-only reads stay complete.
