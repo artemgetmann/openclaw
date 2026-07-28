@@ -42,17 +42,67 @@ struct LaunchAgentManagerTests {
         #expect(!LaunchAgentManager.shouldPersistLoginItem(
             requestedEnabled: false,
             bundlePath: "/Applications/Jarvis.app"))
+        #expect(LaunchAgentManager.registrationUpdatePlan(
+            requestedEnabled: true,
+            runningBundlePath: "/Volumes/Jarvis/Jarvis.app",
+            persistedBundlePath: nil,
+            kind: .missing,
+            legacyJobLoaded: false) == .none)
     }
 
-    @Test func `mounted app preference removes loaded legacy GUI job`() {
-        let effectiveEnabled = LaunchAgentManager.shouldPersistLoginItem(
-            requestedEnabled: true,
-            bundlePath: "/Volumes/Jarvis/Jarvis.app")
+    @Test func `mounted app preserves installed registration and pending migration`() throws {
+        let runningBundlePath = "/Volumes/Jarvis/Jarvis.app"
+        let installedBundlePath = "/Applications/Jarvis.app"
+        let plist = LaunchAgentManager.renderPlist(
+            bundlePath: installedBundlePath,
+            environment: [:])
+        let data = try #require(plist.data(using: .utf8))
+        let kind = LaunchAgentManager.registrationKind(
+            bundlePath: runningBundlePath,
+            plistData: data)
+        let persistedBundlePath = LaunchAgentManager.registrationTargetBundlePath(plistData: data)
 
+        // The installed one-shot job is not "current" relative to the mounted
+        // process, but that mismatch must never turn a DMG run into its owner.
+        #expect(kind == .legacy)
+        #expect(persistedBundlePath == installedBundlePath)
         #expect(LaunchAgentManager.registrationUpdatePlan(
-            enabled: effectiveEnabled,
-            kind: .legacy,
-            legacyJobLoaded: true) == .unloadLegacyJobAndRemove)
+            requestedEnabled: true,
+            runningBundlePath: runningBundlePath,
+            persistedBundlePath: persistedBundlePath,
+            kind: kind,
+            legacyJobLoaded: true,
+            migrationPending: true) == .none)
+    }
+
+    @Test func `mounted app cleans normalized mounted legacy registration`() throws {
+        let runningBundlePath = "/Volumes/Jarvis/Jarvis.app"
+        let legacy: [String: Any] = [
+            "Label": launchdLabel,
+            "ProgramArguments": [
+                "/Volumes/Jarvis/../Jarvis/Jarvis.app/Contents/MacOS/OpenClaw",
+            ],
+            "RunAtLoad": true,
+            "KeepAlive": true,
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: legacy,
+            format: .xml,
+            options: 0)
+        let kind = LaunchAgentManager.registrationKind(
+            bundlePath: runningBundlePath,
+            plistData: data)
+        let persistedBundlePath = LaunchAgentManager.registrationTargetBundlePath(plistData: data)
+
+        #expect(kind == .legacy)
+        #expect(persistedBundlePath == runningBundlePath)
+        #expect(LaunchAgentManager.registrationUpdatePlan(
+            requestedEnabled: true,
+            runningBundlePath: runningBundlePath,
+            persistedBundlePath: persistedBundlePath,
+            kind: kind,
+            legacyJobLoaded: true,
+            migrationPending: true) == .unloadLegacyJobAndRemove)
     }
 
     @Test func `loaded direct executable plist is replaced as legacy`() throws {
