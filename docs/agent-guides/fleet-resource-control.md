@@ -23,6 +23,36 @@ Multiple lanes may reason, inspect files, make source edits, or wait on remote
 CI in parallel while the host remains healthy. The expensive proof phase is the
 serialized resource, not the conversation count.
 
+## Failure taxonomy
+
+The machine-wide guard exists because these failures were observed across
+parallel feature lanes, not because parallel source ownership is inherently
+unsafe:
+
+- CPU: overlapping builds, broad tests, Swift/Xcode work, browsers, and model
+  tooling starved the interactive host and Jarvis event loop.
+- RAM: multiple worker trees and specialist processes reduced headroom until
+  the workstation became unreliable even when no single command looked fatal.
+- Disk: hundreds of worktrees plus repeated dependencies, build products,
+  packages, archives, and simulator artifacts pushed the Data volume to 96%
+  used with only 44 GiB free in the 2026-07-28 incident snapshot. Disk retention
+  was still unmerged, so that snapshot was evidence—not an active cleanup
+  guarantee.
+- Worktree multiplication: creating a lane was cheap conversationally but often
+  cloned another dependency/build footprint; old lanes also retained stale
+  guard code.
+- Raw-command bypass: direct `pnpm`, `swift`, `xcodebuild`, manual
+  `launchctl`, or noncanonical scripts can avoid repository entrypoint guards.
+- Merge/rebase churn: multiple independent PRs advancing `main` created routine
+  `BEHIND` states, stacked dependencies, and repeated proof. A central merge
+  agent did not remove that Git truth; feature owners must refresh and continue.
+- Package/release overlap: app bundles, release receipts, notarization, appcast,
+  and install state are shared machine resources even when source worktrees are
+  isolated.
+- Runtime/live collisions: concurrent deploy, restart, tester-runtime, GUI, or
+  Telegram acceptance campaigns can invalidate provenance, message evidence,
+  session cleanup, and the result another lane is trying to prove.
+
 ## Required wrapper
 
 Run every heavy command through the shared slot:
@@ -96,13 +126,29 @@ outside the expensive slot where their entrypoint contract guarantees that
 they do not build, package, deploy, restart, or publish. Executed release lanes
 always acquire locks in this order:
 
-1. machine-wide heavy-local slot;
+1. machine-wide heavy-local slot (the operational reservation);
 2. canonical Jarvis release lock.
 
 Canonical self-guarding includes the shared runtime build/deploy/restart lanes,
 main-gateway shipping, worktree creation/bootstrap/prewarm, and the existing
-package/release entrypoints. A nested canonical call reuses the outer lease only
+package/release entrypoints. It also includes direct macOS build/run, consumer
+app launch and UI smoke, Open Computer Use bootstrap, tester Telegram runtime
+management, Sparkle apply, shared restart smoke, and Jarvis/shared-main live
+Telegram acceptance. A nested canonical call reuses the outer lease only
 through the verified ancestry contract above.
+
+This one lease is also the deterministic operational reservation for package,
+release, deploy, restart, and live-runtime campaigns. Public Jarvis release
+work then acquires the narrower canonical release lock second. Keeping one
+machine-wide first lock avoids deadlock and prevents a lightweight live
+acceptance script from racing a heavier package or restart.
+
+Mechanical coverage is intentionally bounded to canonical repository
+entrypoints. Shell builtins cannot intercept an arbitrary direct `pnpm test`,
+`pnpm build`, `swift test`, `xcodebuild`, `launchctl`, manually executed Node
+runtime, or third-party tool. Run those commands through
+`scripts/with-heavy-local-slot.sh`; do not claim the repository makes arbitrary
+shell execution impossible. Old clones remain unprotected until refreshed.
 
 ## Proof boundaries and rollout limits
 

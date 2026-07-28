@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "${REPO_ROOT}/scripts/lib/heavy-local-slot.sh"
+ORIGINAL_ARGS=("$@")
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
 SCENARIO_RESERVATION_MODULE="${SCRIPT_DIR}/lib/telegram-tester-scenario-reservations.mjs"
 BASELINE_HELPER_MODULE="${SCRIPT_DIR}/lib/worktree-tester-baseline.mjs"
@@ -1952,6 +1955,28 @@ USAGE
 
 main() {
   local cmd="${1:-ensure}"
+
+  # Help is read-only. Every executable mode can claim, boot, stop, recover, or
+  # stage state for a live tester campaign, so keep it inside one shared slot.
+  case "$cmd" in
+    -h|--help|help)
+      usage
+      return 0
+      ;;
+    ensure|handoff-main|release|stage-upload)
+      ;;
+    *)
+      echo "Unknown command: $cmd" >&2
+      usage >&2
+      return 1
+      ;;
+  esac
+  openclaw_heavy_local_slot_require_or_reexec \
+    "telegram-live-runtime:${cmd}" \
+    "$REPO_ROOT" \
+    "$REPO_ROOT/scripts/telegram-live-runtime.sh" \
+    "${ORIGINAL_ARGS[@]}"
+
   case "$cmd" in
     ensure)
       ensure_command
@@ -1965,14 +1990,6 @@ main() {
     stage-upload)
       shift
       stage_upload_command "$@"
-      ;;
-    -h|--help|help)
-      usage
-      ;;
-    *)
-      echo "Unknown command: $cmd" >&2
-      usage >&2
-      exit 1
       ;;
   esac
 }

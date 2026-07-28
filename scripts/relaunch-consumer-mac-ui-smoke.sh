@@ -2,11 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/consumer-mac-test-lifecycle.sh"
 source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
+ORIGINAL_ARGS=("$@")
 
 plist_value() {
   # Keep the UI-smoke verifier on the shared LaunchAgent parsing helper. This
@@ -754,6 +757,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Cleanup, Swift builds, app launches, and isolated runtime replacement all
+# belong to one operational campaign. Keep the reservation for the full script,
+# including `--no-build` launches, because live acceptance can still collide.
+openclaw_heavy_local_slot_require_or_reexec \
+  "relaunch-consumer-mac-ui-smoke:${INSTANCE_ID:-auto}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/relaunch-consumer-mac-ui-smoke.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 if [[ "$CLEAN_ONLY" == "1" ]]; then
   cleanup_ui_smoke_artifacts

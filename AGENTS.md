@@ -31,6 +31,8 @@
 - Before changing bundled skills, repo-local `.agents/skills`, or mirrored skills, read `docs/agent-guides/skill-updates.md` and patch the owning source instead of downstream mirrors.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - Before any local command that can run longer than 30 seconds, start workers, build/package an app, run a broad test/review suite, or perform browser/GUI E2E, read `docs/agent-guides/fleet-resource-control.md` and run it through `scripts/with-heavy-local-slot.sh`. Never run more than one heavy local command across worktrees; prefer remote CI for full suites.
+- When the user says `ship this end-to-end`, follow the feature-owner contract in `docs/agent-guides/workflow.md`: keep ownership through focused proof, exact-head review, CI, refresh/rebase, merge, and proportionate post-merge repository verification. Routine review and ordinary base drift are not stop boundaries, and normal merges do not require blanket user approval. Package, deploy, restart, install, shared-runtime mutation, credentials, destructive cleanup, and live/external actions retain their explicit authority boundaries.
+- The Control Tower skill is an emergency-only incident playbook. Never self-elect or create a Tower/dashboard from ordinary implementation, parallel work, repo reading, open PRs, worktree count, or resource pressure. Use `.agents/skills/codex-control-tower-emergency/SKILL.md` only when the user explicitly invokes `Control Tower` or an authorized incident owner declares a fleet incident.
 - When the user says “Ship this PR to my main Jarvis” or equivalent, read `docs/agent-guides/runtime-ops.md` and invoke `bash scripts/ship-jarvis-hotfix.sh --pr <number>` from the sacred main clone; do not assemble the deployment manually or route it through a personal/global skill.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
 - For a sendable Jarvis DMG or app update, follow the canonical release lane in `apps/macos/README.md`; keep this file as a pointer, not the release playbook.
@@ -94,5 +96,6 @@
 
 ## Repo-local skills
 
+- `.agents/skills/codex-control-tower-emergency/SKILL.md`
 - `.agents/skills/telegram-live-e2e/SKILL.md`
 - `.agents/skills/parallels-discord-roundtrip/SKILL.md`

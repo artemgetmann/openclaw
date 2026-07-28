@@ -10,6 +10,7 @@ PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORIGINAL_ARGS=("$@")
 CANONICAL_FEED_URL="https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml"
 GATEWAY_LABEL="ai.jarvis.gateway"
 PREFERENCES_DOMAIN="ai.jarvis.mac"
@@ -909,6 +910,20 @@ run_apply() {
 main() {
   parse_args "$@"
   configure_test_root
+
+  if [[ "$MODE" == "apply" ]]; then
+    # Inspection stays lock-free. The apply campaign owns one reservation
+    # before its live preflight snapshot and keeps it across app replacement,
+    # reseed, restart, rollback handling, and optional Telegram proof.
+    # shellcheck source=scripts/lib/heavy-local-slot.sh
+    source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
+    openclaw_heavy_local_slot_require_or_reexec \
+      "jarvis-sparkle-update-e2e" \
+      "$ROOT_DIR" \
+      "$ROOT_DIR/scripts/jarvis-sparkle-update-e2e.sh" \
+      "${ORIGINAL_ARGS[@]}"
+  fi
+
   run_preflight
   [[ "$MODE" == "apply" ]] || return 0
   run_apply

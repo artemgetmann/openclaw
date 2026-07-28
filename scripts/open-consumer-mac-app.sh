@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/heavy-local-slot.sh
+source "$ROOT_DIR/scripts/lib/heavy-local-slot.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/consumer-mac-test-lifecycle.sh"
 source "$ROOT_DIR/scripts/lib/worktree-guards.sh"
@@ -15,6 +17,7 @@ PARALLEL=0
 REFRESH_GATEWAY="${OPENCLAW_CONSUMER_REFRESH_GATEWAY:-0}"
 LAUNCH_RECEIPT="${OPENCLAW_APP_LAUNCH_RECEIPT:-}"
 LAUNCH_RECEIPT_PENDING=""
+ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -186,6 +189,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Launch and optional gateway refresh are one runtime campaign. The machine
+# reservation prevents a direct app launch from overlapping packaging, another
+# runtime restart, or live acceptance; guarded parents reuse the same lease.
+openclaw_heavy_local_slot_require_or_reexec \
+  "open-consumer-mac-app:${INSTANCE_ID:-auto}" \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts/open-consumer-mac-app.sh" \
+  "${ORIGINAL_ARGS[@]}"
 
 if [[ -z "$INSTANCE_ID" ]]; then
   # Match packaging defaults so a linked worktree opens its own isolated
