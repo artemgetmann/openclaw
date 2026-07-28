@@ -162,6 +162,37 @@ describe("loadGatewayPlugins", () => {
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("forwards trusted input provenance for internal plugin continuations", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("provenance"));
+
+    await runtime.run({
+      sessionKey: "agent:main:telegram:direct:owner",
+      message: "Codex completed.",
+      deliver: true,
+      idempotencyKey: "codex:thread-1:turn-1:completed",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "codex:thread:thread-1",
+        sourceChannel: "codex",
+        sourceTool: "codex_threads",
+      },
+    });
+
+    expect(handleGatewayRequest.mock.calls.at(-1)?.[0]?.req).toMatchObject({
+      method: "agent",
+      params: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "codex:thread:thread-1",
+          sourceChannel: "codex",
+          sourceTool: "codex_threads",
+        },
+      },
+    });
+  });
+
   test("shares fallback context across module reloads for existing runtimes", async () => {
     const first = await importServerPluginsModule();
     const runtime = createSubagentRuntime(first);

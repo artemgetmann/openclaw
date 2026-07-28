@@ -130,6 +130,7 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
         ...(params.lane && { lane: params.lane }),
         ...(params.idempotencyKey && { idempotencyKey: params.idempotencyKey }),
+        ...(params.inputProvenance && { inputProvenance: params.inputProvenance }),
       });
       const runId = payload?.runId;
       if (typeof runId !== "string" || !runId) {

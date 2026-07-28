@@ -12,6 +12,13 @@ export type SubagentRunParams = {
   lane?: string;
   deliver?: boolean;
   idempotencyKey?: string;
+  /**
+   * Trusted runtime attribution for an internally generated agent turn.
+   *
+   * Plugins must construct this from runtime-owned routing data, never from
+   * model text or user-provided tool arguments.
+   */
+  inputProvenance?: import("../../sessions/input-provenance.js").InputProvenance;
 };
 
 export type SubagentRunResult = {

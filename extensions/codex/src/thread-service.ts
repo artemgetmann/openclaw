@@ -22,6 +22,12 @@ export type CodexThreadRunResult = {
   progress: string[];
 };
 
+export type CodexThreadStarted = {
+  threadId: string;
+  turnId: string;
+  completion: Promise<CodexThreadRunResult>;
+};
+
 export type CodexFleetSnapshot = {
   mode: "native-codex-fleet";
   counts: {
@@ -250,6 +256,24 @@ export class CodexThreadService {
     text: string,
     cwd = this.options.defaultWorkspaceDir,
   ): Promise<CodexThreadRunResult> {
+    return await (
+      await this.startMessage(threadId, text, cwd)
+    ).completion;
+  }
+
+  /**
+   * Start one native turn and return as soon as App Server accepts it.
+   *
+   * The separate completion promise lets Jarvis release its current agent run,
+   * remain responsive to new owner messages, and project the eventual Codex
+   * result back through a session-scoped wake. Synchronous callers keep using
+   * message(), which deliberately preserves the older wait-for-final contract.
+   */
+  async startMessage(
+    threadId: string,
+    text: string,
+    cwd = this.options.defaultWorkspaceDir,
+  ): Promise<CodexThreadStarted> {
     const normalizedThreadId = requireId(threadId);
     const prompt = text.trim();
     if (!prompt) {
@@ -259,6 +283,7 @@ export class CodexThreadService {
       throw new Error(`Codex thread ${normalizedThreadId} already has an active continuation`);
     }
     this.activeThreadIds.add(normalizedThreadId);
+    let stopNotifications: (() => void) | undefined;
     try {
       const client = await this.client();
       // A just-created empty thread is already loaded but has no rollout yet,
@@ -269,30 +294,40 @@ export class CodexThreadService {
         assertThreadNotActive(resumed, normalizedThreadId);
       }
       const collector = createTurnCollector(normalizedThreadId);
-      const stopNotifications = client.onNotification(collector.handleNotification);
-      try {
-        const response = await client.request<JsonObject>("turn/start", {
-          threadId: normalizedThreadId,
-          input: [{ type: "text", text: prompt, text_elements: [] }],
-          // A delegate can target the current project explicitly. Existing
-          // binding/message callers retain the configured default workspace.
-          cwd,
-          approvalPolicy: "never",
-          approvalsReviewer: "user",
-          sandboxPolicy: { type: "readOnly", networkAccess: false },
-          personality: "none",
-        });
-        const turnId = readNestedString(response, ["turn", "id"]);
-        if (!turnId) {
-          throw new Error("Codex App Server turn/start response did not include a turn id");
-        }
-        collector.setTurnId(turnId);
-        return await collector.wait(this.options.turnTimeoutMs);
-      } finally {
-        stopNotifications();
+      stopNotifications = client.onNotification(collector.handleNotification);
+      const response = await client.request<JsonObject>("turn/start", {
+        threadId: normalizedThreadId,
+        input: [{ type: "text", text: prompt, text_elements: [] }],
+        // A delegate can target the current project explicitly. Existing
+        // binding/message callers retain the configured default workspace.
+        cwd,
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandboxPolicy: { type: "readOnly", networkAccess: false },
+        personality: "none",
+      });
+      const turnId = readNestedString(response, ["turn", "id"]);
+      if (!turnId) {
+        throw new Error("Codex App Server turn/start response did not include a turn id");
       }
-    } finally {
+      collector.setTurnId(turnId);
+
+      // Own cleanup on the detached completion promise. This keeps the
+      // one-active-turn fence held until the native turn actually terminates,
+      // even though the caller is no longer awaiting that work inline.
+      const completion = collector.wait(this.options.turnTimeoutMs).finally(() => {
+        stopNotifications?.();
+        this.activeThreadIds.delete(normalizedThreadId);
+      });
+      return {
+        threadId: normalizedThreadId,
+        turnId,
+        completion,
+      };
+    } catch (error) {
+      stopNotifications?.();
       this.activeThreadIds.delete(normalizedThreadId);
+      throw error;
     }
   }
 

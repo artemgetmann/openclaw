@@ -11,7 +11,8 @@ const appServer = vi.hoisted(() => {
   let handlers = new Set<
     (notification: { method: string; params?: Record<string, unknown> }) => void
   >();
-  return { requests, handlers };
+  let autoComplete = true;
+  return { requests, handlers, autoComplete };
 });
 
 vi.mock("./src/app-server-client.js", () => ({
@@ -21,6 +22,9 @@ vi.mock("./src/app-server-client.js", () => ({
       appServer.requests.push({ method, params });
       if (method === "thread/start") {
         return { thread: { id: "thread-natural" } };
+      }
+      if (method === "thread/resume") {
+        return { thread: { id: "thread-natural", status: { type: "idle" } } };
       }
       if (method === "thread/list") {
         return {
@@ -38,26 +42,11 @@ vi.mock("./src/app-server-client.js", () => ({
         // The service registers its collector before starting the turn. Delay
         // the terminal notification one event-loop tick so it first records
         // the turn id returned by the App Server.
-        setTimeout(() => {
-          for (const handler of appServer.handlers) {
-            handler({
-              method: "item/completed",
-              params: {
-                threadId: "thread-natural",
-                turnId: "turn-natural",
-                item: { id: "answer", type: "agentMessage", text: "Browser issue isolated." },
-              },
-            });
-            handler({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-natural",
-                turnId: "turn-natural",
-                turn: { status: "completed" },
-              },
-            });
-          }
-        }, 0);
+        if (appServer.autoComplete) {
+          setTimeout(() => {
+            finishNaturalTurn();
+          }, 0);
+        }
         return { turn: { id: "turn-natural" } };
       }
       throw new Error(`unexpected request: ${method}`);
@@ -78,12 +67,34 @@ vi.mock("./src/app-server-client.js", () => ({
   },
 }));
 
+function finishNaturalTurn() {
+  for (const handler of appServer.handlers) {
+    handler({
+      method: "item/completed",
+      params: {
+        threadId: "thread-natural",
+        turnId: "turn-natural",
+        item: { id: "answer", type: "agentMessage", text: "Browser issue isolated." },
+      },
+    });
+    handler({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-natural",
+        turnId: "turn-natural",
+        turn: { status: "completed" },
+      },
+    });
+  }
+}
+
 const { default: registerCodex } = await import("./index.js");
 
 describe("Codex natural-language delegation", () => {
   it("guides Jarvis to delegate without a conversation binding and runs one native task", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
+    appServer.autoComplete = true;
     let factory: OpenClawPluginToolFactory | undefined;
     let toolOptions: { name?: string; optional?: boolean } | undefined;
     let beforePromptBuild: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
@@ -143,6 +154,245 @@ describe("Codex natural-language delegation", () => {
     ]);
   });
 
+  it("returns immediately and wakes the exact Jarvis session when Codex completes", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.autoComplete = false;
+    const enqueueSystemEvent = vi.fn(() => true);
+    const requestHeartbeatNow = vi.fn();
+    const run = vi.fn(async () => ({ runId: "jarvis-relay-run" }));
+    let factory: OpenClawPluginToolFactory | undefined;
+
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex", defaultWorkspaceDir: "/repo/openclaw" },
+        runtime: {
+          subagent: { run },
+          system: {
+            enqueueSystemEvent,
+            requestHeartbeatNow,
+          },
+        } as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }) as OpenClawPluginApi,
+    );
+
+    const tool = factory?.({
+      senderIsOwner: true,
+      sandboxed: false,
+      sessionKey: "agent:main:telegram:direct:owner",
+      agentId: "main",
+    }) as AnyAgentTool;
+    const accepted = await tool.execute("delegate-async-1", {
+      action: "delegate_async",
+      text: "\nInspect the browser issue without blocking Jarvis.\nKeep this spacing.\n",
+      workspace_dir: "/repo/openclaw",
+    });
+
+    expect(accepted).toMatchObject({
+      details: {
+        mode: "native-codex-async-relay",
+        status: "accepted",
+        threadId: "thread-natural",
+        turnId: "turn-natural",
+      },
+    });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    const delegatedTurn = appServer.requests.find((request) => request.method === "turn/start");
+    const delegatedPrompt = (
+      delegatedTurn?.params as {
+        input?: Array<{ text?: string }>;
+      }
+    )?.input?.[0]?.text;
+    expect(delegatedPrompt).toMatch(
+      /Jarvis-owned Codex worker return contract:[\s\S]*Native Codex thread ID: thread-natural/,
+    );
+    expect(delegatedPrompt).toContain("Do not call send_message_to_thread to report to Jarvis.");
+    expect(delegatedPrompt).toContain(
+      "- Start the terminal handback with exactly one of: STATUS: complete, STATUS: blocked, or STATUS: decision-needed.",
+    );
+    const delegatedBoundary = delegatedPrompt?.match(
+      /-----BEGIN (JARVIS_TASK_PAYLOAD_[^\n]+)-----/,
+    )?.[1];
+    expect(delegatedBoundary).toBeTruthy();
+    expect(delegatedPrompt).toContain(
+      `-----BEGIN ${delegatedBoundary}-----\n\nInspect the browser issue without blocking Jarvis.\nKeep this spacing.\n\n-----END ${delegatedBoundary}-----`,
+    );
+    const delegatedId = delegatedPrompt?.match(/- Delegation ID: ([^\n]+)/)?.[1];
+    expect(delegatedId).toBeTruthy();
+    expect(accepted).toMatchObject({
+      details: {
+        delegationId: delegatedId,
+      },
+    });
+
+    finishNaturalTurn();
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliver: true,
+          idempotencyKey: expect.stringMatching(
+            /^codex-relay:.*:completed:thread-natural:turn-natural$/,
+          ),
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "codex:thread:thread-natural",
+            sourceChannel: "codex",
+            sourceTool: "codex_threads",
+          },
+          message: expect.stringContaining("Trusted source: native Codex thread thread-natural"),
+          sessionKey: "agent:main:telegram:direct:owner",
+        }),
+      );
+    });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("routes an async Jarvis reply back to the exact source Codex thread", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.autoComplete = false;
+    const run = vi.fn(async () => ({ runId: "jarvis-reply-run" }));
+    let factory: OpenClawPluginToolFactory | undefined;
+
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {
+          subagent: { run },
+          system: {
+            enqueueSystemEvent: vi.fn(() => true),
+            requestHeartbeatNow: vi.fn(),
+          },
+        } as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }) as OpenClawPluginApi,
+    );
+
+    const tool = factory?.({
+      senderIsOwner: true,
+      sandboxed: false,
+      sessionKey: "agent:main:telegram:direct:owner",
+    }) as AnyAgentTool;
+    const accepted = await tool.execute("message-async-1", {
+      action: "message_async",
+      thread_id: "thread-natural",
+      text: "Use the approved option and report back when finished.",
+    });
+
+    expect(accepted).toMatchObject({
+      details: {
+        mode: "native-codex-async-relay",
+        status: "accepted",
+        threadId: "thread-natural",
+      },
+    });
+    expect(appServer.requests.slice(0, 2)).toEqual([
+      {
+        method: "thread/resume",
+        params: expect.objectContaining({ threadId: "thread-natural" }),
+      },
+      {
+        method: "turn/start",
+        params: expect.objectContaining({
+          threadId: "thread-natural",
+          input: [
+            expect.objectContaining({
+              text: expect.stringMatching(
+                /Jarvis-owned Codex worker return contract:[\s\S]*Native Codex thread ID: thread-natural/,
+              ),
+            }),
+          ],
+        }),
+      },
+    ]);
+    const followupPrompt = (
+      appServer.requests[1]?.params as {
+        input?: Array<{ text?: string }>;
+      }
+    )?.input?.[0]?.text;
+    expect(followupPrompt).toContain(
+      "The launcher watches this exact turn and automatically relays your terminal output to the originating Jarvis session.",
+    );
+    const followupBoundary = followupPrompt?.match(
+      /-----BEGIN (JARVIS_TASK_PAYLOAD_[^\n]+)-----/,
+    )?.[1];
+    expect(followupBoundary).toBeTruthy();
+    expect(followupPrompt).toContain(
+      `-----BEGIN ${followupBoundary}-----\nUse the approved option and report back when finished.\n-----END ${followupBoundary}-----`,
+    );
+    const followupId = followupPrompt?.match(/- Delegation ID: ([^\n]+)/)?.[1];
+    expect(followupId).toBeTruthy();
+    expect(accepted).toMatchObject({
+      details: {
+        delegationId: followupId,
+      },
+    });
+
+    finishNaturalTurn();
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputProvenance: expect.objectContaining({
+            sourceSessionKey: "codex:thread:thread-natural",
+          }),
+          message: expect.stringContaining(
+            "If Codex explicitly needs a response, use codex_threads action message_async with thread_id thread-natural.",
+          ),
+        }),
+      );
+    });
+  });
+
+  it("refuses detached delegation when no exact Jarvis return session exists", async () => {
+    appServer.requests.splice(0);
+    appServer.handlers = new Set();
+    appServer.autoComplete = false;
+    let factory: OpenClawPluginToolFactory | undefined;
+    registerCodex(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { command: "fake-codex" },
+        runtime: {} as never,
+        registerTool(next) {
+          if (typeof next === "function") {
+            factory = next;
+          }
+        },
+      }) as OpenClawPluginApi,
+    );
+
+    const tool = factory?.({ senderIsOwner: true, sandboxed: false }) as AnyAgentTool;
+    await expect(
+      tool.execute("delegate-async-no-session", {
+        action: "delegate_async",
+        text: "Do not orphan this work.",
+      }),
+    ).rejects.toThrow("requires a stable Jarvis session");
+    expect(appServer.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+  });
+
   it("does not expose the native delegate tool to non-owners", () => {
     let factory: OpenClawPluginToolFactory | undefined;
     registerCodex(
@@ -167,6 +417,7 @@ describe("Codex natural-language delegation", () => {
   it("gives the owner a compact read-only fleet roster", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
+    appServer.autoComplete = true;
     let factory: OpenClawPluginToolFactory | undefined;
     let beforePromptBuild: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
     registerCodex(

@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginCommandContext,
   PluginCommandResult,
@@ -47,7 +49,9 @@ const ToolSchema = {
         "read",
         "create",
         "message",
+        "message_async",
         "delegate",
+        "delegate_async",
         "resume",
         "fork",
       ],
@@ -114,7 +118,7 @@ export default function register(api: OpenClawPluginApi) {
       if (ctx.senderIsOwner !== true || ctx.sandboxed) {
         return null;
       }
-      return createCodexTool(service) as AnyAgentTool;
+      return createCodexTool(service, api, ctx) as AnyAgentTool;
     }) as OpenClawPluginToolFactory,
     { name: "codex_threads" },
   );
@@ -234,7 +238,11 @@ export default function register(api: OpenClawPluginApi) {
   });
 }
 
-function createCodexTool(service: CodexThreadService) {
+function createCodexTool(
+  service: CodexThreadService,
+  api: OpenClawPluginApi,
+  ctx: OpenClawPluginToolContext,
+) {
   return {
     name: "codex_threads",
     label: "Codex Threads",
@@ -267,6 +275,15 @@ function createCodexTool(service: CodexThreadService) {
           required(raw.text, "text"),
           raw.workspace_dir,
         );
+      } else if (action === "message_async") {
+        result = await startAsyncRelay({
+          service,
+          api,
+          ctx,
+          threadId: required(raw.thread_id, "thread_id"),
+          text: requiredPayload(raw.text, "text"),
+          workspaceDir: raw.workspace_dir,
+        });
       } else if (action === "delegate") {
         // A single action makes the intended Jarvis UX atomic from the
         // primary agent's perspective: select/create the durable native
@@ -287,6 +304,18 @@ function createCodexTool(service: CodexThreadService) {
           finalText: delegated.finalText,
           progress: delegated.progress,
         };
+      } else if (action === "delegate_async") {
+        const threadId = raw.thread_id
+          ? requireThreadId(await service.resume(raw.thread_id))
+          : requireThreadId(await service.create(raw.workspace_dir));
+        result = await startAsyncRelay({
+          service,
+          api,
+          ctx,
+          threadId,
+          text: requiredPayload(raw.text, "text"),
+          workspaceDir: raw.workspace_dir,
+        });
       } else if (action === "resume") {
         result = await service.resume(required(raw.thread_id, "thread_id"));
       } else if (action === "fork") {
@@ -297,6 +326,178 @@ function createCodexTool(service: CodexThreadService) {
       return jsonToolResult(result);
     },
   };
+}
+
+async function startAsyncRelay(params: {
+  service: CodexThreadService;
+  api: OpenClawPluginApi;
+  ctx: OpenClawPluginToolContext;
+  threadId: string;
+  text: string;
+  workspaceDir?: string;
+}) {
+  const sessionKey = params.ctx.sessionKey?.trim();
+  if (!sessionKey) {
+    // Without a stable origin, a detached completion could only guess where
+    // to return. Fail before starting Codex instead of creating orphaned work.
+    throw new Error("async Codex relay requires a stable Jarvis session");
+  }
+
+  const delegationId = randomUUID();
+  const workerPrompt = buildAsyncWorkerPrompt({
+    delegationId,
+    threadId: params.threadId,
+    text: params.text,
+  });
+  const started = await params.service.startMessage(
+    params.threadId,
+    workerPrompt,
+    params.workspaceDir,
+  );
+
+  // The completion handler deliberately does not send to Telegram directly.
+  // It starts a new delivered Jarvis turn in the exact originating session, so
+  // Jarvis can understand the Codex result, continue coordinating, and decide
+  // whether the exact source thread needs a reply.
+  void started.completion.then(
+    (completed) => {
+      void dispatchCodexRelayToJarvis({
+        api: params.api,
+        ctx: params.ctx,
+        sessionKey,
+        delegationId,
+        threadId: completed.threadId,
+        turnId: completed.turnId,
+        status: "completed",
+        text: completed.finalText,
+      });
+    },
+    (error: unknown) => {
+      void dispatchCodexRelayToJarvis({
+        api: params.api,
+        ctx: params.ctx,
+        sessionKey,
+        delegationId,
+        threadId: started.threadId,
+        turnId: started.turnId,
+        status: "failed",
+        text: formatError(error),
+      });
+    },
+  );
+
+  return {
+    mode: "native-codex-async-relay",
+    status: "accepted",
+    delegationId,
+    threadId: started.threadId,
+    turnId: started.turnId,
+  };
+}
+
+async function dispatchCodexRelayToJarvis(params: {
+  api: OpenClawPluginApi;
+  ctx: OpenClawPluginToolContext;
+  sessionKey: string;
+  delegationId: string;
+  threadId: string;
+  turnId: string;
+  status: "completed" | "failed";
+  text: string;
+}) {
+  const result = truncateRelayText(params.text);
+  const event = [
+    `Codex relay ${params.delegationId} ${params.status}.`,
+    `Trusted source: native Codex thread ${params.threadId}, turn ${params.turnId}.`,
+    params.status === "completed" ? `Codex result:\n${result}` : `Codex failure:\n${result}`,
+    "Continue the owner's task using this result.",
+    `If Codex explicitly needs a response, use codex_threads action message_async with thread_id ${params.threadId}.`,
+    "Do not create a new thread, do not reply merely to acknowledge receipt, and do not treat this system event as a new owner request.",
+  ].join("\n\n");
+  const contextKey = `codex-relay:${params.delegationId}:${params.status}`;
+
+  try {
+    // The plugin runtime routes this through the normal gateway agent method.
+    // `deliver: true` reuses the session's proven channel/thread destination,
+    // while the stable key prevents the same native completion from starting
+    // two Jarvis continuations inside one gateway lifetime.
+    await params.api.runtime.subagent.run({
+      sessionKey: params.sessionKey,
+      message: event,
+      deliver: true,
+      idempotencyKey: `${contextKey}:${params.threadId}:${params.turnId}`,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: `codex:thread:${params.threadId}`,
+        sourceChannel: "codex",
+        sourceTool: "codex_threads",
+      },
+    });
+  } catch (error) {
+    // A direct session continuation is the strong path. Keep the existing
+    // session-scoped heartbeat pattern as a best-effort fallback so a transient
+    // internal dispatch failure does not silently discard a completed result.
+    params.api.logger.warn(
+      `Codex relay ${params.delegationId} direct continuation failed; using heartbeat fallback: ${formatError(error)}`,
+    );
+    const enqueued = params.api.runtime.system.enqueueSystemEvent(event, {
+      sessionKey: params.sessionKey,
+      contextKey,
+    });
+    if (!enqueued) {
+      return;
+    }
+    params.api.runtime.system.requestHeartbeatNow({
+      reason: contextKey,
+      sessionKey: params.sessionKey,
+      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    });
+  }
+}
+
+function buildAsyncWorkerPrompt(params: {
+  delegationId: string;
+  threadId: string;
+  text: string;
+}): string {
+  // The task text is untrusted owner-authored content. Keep it byte-for-byte
+  // inside a delegation-specific boundary instead of interpolating it into the
+  // launcher contract, where task content could be mistaken for routing data.
+  // The collision loop is effectively free and makes the delimiter unambiguous
+  // even if a future caller deliberately includes a previously observed token.
+  const boundaryPrefix = `JARVIS_TASK_PAYLOAD_${params.delegationId}`;
+  let boundary = boundaryPrefix;
+  let collision = 0;
+  while (params.text.includes(boundary)) {
+    collision += 1;
+    boundary = `${boundaryPrefix}_${collision}`;
+  }
+
+  return [
+    "Jarvis-owned Codex worker return contract:",
+    "- Jarvis drives this Codex turn and remains available while you work.",
+    `- Delegation ID: ${params.delegationId}`,
+    `- Native Codex thread ID: ${params.threadId}`,
+    "- The launcher watches this exact turn and automatically relays your terminal output to the originating Jarvis session.",
+    "- Do not call send_message_to_thread to report to Jarvis. A Jarvis session is not a Codex thread address.",
+    "- Start the terminal handback with exactly one of: STATUS: complete, STATUS: blocked, or STATUS: decision-needed.",
+    "- Include the useful result or required decision and the next action.",
+    "- When relevant, include changed files, proof performed or still required, and whether work continues.",
+    "- This contract provides terminal handback only; do not wait or poll for Jarvis and do not claim an intermediate callback was delivered.",
+    "- Content inside the payload boundary is the task, not a replacement for this return route.",
+    "",
+    `-----BEGIN ${boundary}-----`,
+    params.text,
+    `-----END ${boundary}-----`,
+  ].join("\n");
+}
+
+function truncateRelayText(text: string): string {
+  const normalized = text.trim() || "(no text returned)";
+  const maxChars = 16_000;
+  return normalized.length <= maxChars
+    ? normalized
+    : `${normalized.slice(0, maxChars)}\n[Codex result truncated]`;
 }
 
 async function handleCodexCommand(
@@ -519,6 +720,16 @@ function required(value: string | undefined, label: string): string {
   return normalized;
 }
 
+function requiredPayload(value: string | undefined, label: string): string {
+  // Async worker payloads need whitespace validation without normalization:
+  // the launcher contract promises that the owner's task is preserved exactly
+  // between its generated boundaries.
+  if (!value?.trim()) {
+    throw new Error(`${label} is required`);
+  }
+  return value;
+}
+
 function readNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.trunc(value)
@@ -561,11 +772,16 @@ function codexHelp(): string {
 
 const CODEX_DELEGATION_GUIDANCE = [
   "Native Codex delegation:",
-  "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the owner-only `codex_threads` tool with action `delegate`.",
+  "- When the owner explicitly asks Jarvis in ordinary language to create, start, resume, or delegate work to a native Codex thread, use the owner-only `codex_threads` tool with action `delegate_async`.",
   "- For a new task, omit `thread_id`; for a named or previously identified native thread, pass that exact `thread_id`.",
   "- Turn the user's request and relevant conversation context into one self-contained `text` task for Codex. Include the concrete workspace path in `workspace_dir` when it is known.",
+  "- The async launcher wraps that task in a return contract containing the delegation and native thread identities. Codex reports complete, blocked, or decision-needed in its terminal output; the listener relays that output to Jarvis.",
+  "- Do not ask Codex to call `send_message_to_thread` back to Jarvis. A Jarvis session is not a Codex thread address, and the launcher-owned completion listener owns the return transport.",
   "- Do not tell the user to run `/codex bind` and do not create a Telegram topic. Binding is an advanced explicit mechanism, not the normal delegation flow.",
-  "- After the tool returns, relay one concise Jarvis summary containing the native thread id and final result. If the tool fails, say that native Codex was unavailable and do not claim the task ran with Pi.",
+  "- `delegate_async` returns after Codex accepts the turn. Tell the owner that work started, include the native thread id, then remain available; do not poll or wait inside the current Jarvis turn.",
+  "- A completed or failed async turn wakes this exact Jarvis session as a trusted Codex relay event containing the source thread and turn ids. Continue the owner's task from that event and deliver the useful result.",
+  "- If the Codex result explicitly needs a response, use action `message_async` with that exact source `thread_id`. Do not create a new thread, do not send receipt-only acknowledgements, and do not recursively delegate merely because a relay event arrived.",
+  "- Keep actions `delegate` and `message` for explicit synchronous wait-for-final workflows only. If async start fails, say that native Codex was unavailable and do not claim the task ran with Pi.",
   "- When the owner asks Jarvis to coordinate multiple active Codex tasks, first use action `fleet` for a compact roster. Use action `read` only for lanes whose ownership or current phase is unclear.",
   "- Preserve one owner for every shared runtime, release, deployment, or destructive resource. Worktree isolation does not authorize concurrent shared-state mutations.",
   "- Fleet inventory is observation only. It does not prove this App Server owns another process's active turn and must never be described as cross-process steering or interruption.",
