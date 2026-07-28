@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRestartSentinel } from "../../../infra/restart-sentinel.js";
 import { captureEnv } from "../../../test-utils/env.js";
-import { resolveSessionRunActive } from "../get-reply-run.js";
+import { isRestartContinuationQueueHead, resolveSessionRunActive } from "../get-reply-run.js";
 import { resolveActiveRunQueueAction } from "../queue-policy.js";
 import { clearFollowupDrainCallback, scheduleFollowupDrain } from "./drain.js";
 import {
@@ -12,7 +12,11 @@ import {
   persistDurableFollowup,
   scheduleDurableFollowupRetries,
 } from "./durable-store.js";
-import { enqueueFollowupRunDurable, restoreDurableFollowupRuns } from "./enqueue.js";
+import {
+  enqueueFollowupRun,
+  enqueueFollowupRunDurable,
+  restoreDurableFollowupRuns,
+} from "./enqueue.js";
 import { clearFollowupQueue, FOLLOWUP_QUEUES, hasFollowupQueueOwnership } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
@@ -118,6 +122,102 @@ describe("startup durable queue ownership", () => {
         embeddedRunActive: false,
         queueOwned: false,
         finalizationOwned: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("lets only a tagged restart continuation bypass its own queue ownership", () => {
+    enqueueFollowupRun(
+      queueKey,
+      {
+        ...createRun("restart carrier", "telegram:restart"),
+        durableId: "durable-restart-head",
+        deliveryPayloads: [],
+      },
+      settings,
+      "none",
+    );
+    const queueOwned = hasFollowupQueueOwnership(queueKey);
+    const ownsQueueHead = isRestartContinuationQueueHead({
+      queueKey,
+      durableId: "durable-restart-head",
+    });
+    expect(ownsQueueHead).toBe(true);
+    expect(
+      resolveSessionRunActive({
+        embeddedRunActive: false,
+        queueOwned,
+        finalizationOwned: false,
+        ignoreQueueOwnership: ownsQueueHead,
+      }),
+    ).toBe(false);
+    expect(
+      resolveSessionRunActive({
+        embeddedRunActive: true,
+        queueOwned: true,
+        finalizationOwned: false,
+        ignoreQueueOwnership: true,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSessionRunActive({
+        embeddedRunActive: false,
+        queueOwned: true,
+        finalizationOwned: true,
+        ignoreQueueOwnership: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let a restart sentinel bypass a durable FIFO head", () => {
+    enqueueFollowupRun(
+      queueKey,
+      {
+        ...createRun("restored durable head", "telegram:head"),
+        durableId: "durable-head",
+      },
+      settings,
+      "none",
+    );
+    const queueOwned = hasFollowupQueueOwnership(queueKey);
+    const ownsQueueHead = isRestartContinuationQueueHead({
+      queueKey,
+      // Restart sentinels intentionally carry no direct-turn durable ID.
+      durableId: undefined,
+    });
+
+    expect(ownsQueueHead).toBe(false);
+    expect(
+      resolveSessionRunActive({
+        embeddedRunActive: false,
+        queueOwned,
+        ignoreQueueOwnership: ownsQueueHead,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let a mismatched direct-turn carrier bypass the durable FIFO head", () => {
+    enqueueFollowupRun(
+      queueKey,
+      {
+        ...createRun("older durable head", "telegram:head"),
+        durableId: "durable-head",
+      },
+      settings,
+      "none",
+    );
+    const queueOwned = hasFollowupQueueOwnership(queueKey);
+    const ownsQueueHead = isRestartContinuationQueueHead({
+      queueKey,
+      durableId: "different-direct-turn-carrier",
+    });
+
+    expect(ownsQueueHead).toBe(false);
+    expect(
+      resolveSessionRunActive({
+        embeddedRunActive: false,
+        queueOwned,
+        ignoreQueueOwnership: ownsQueueHead,
       }),
     ).toBe(true);
   });

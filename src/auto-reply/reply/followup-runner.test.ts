@@ -36,9 +36,14 @@ import {
   ackDurableFollowup,
   hydrateDurableFollowup,
   loadDurableFollowups,
+  markDurableFollowupRestartContinuationDelivering,
+  markDurableFollowupRestartContinuationFailed,
+  markDurableFollowupRestartReceiptDelivered,
   markDurableFollowupRestartReceiptDelivering,
   persistDurableFollowup,
   persistDurableFollowupDelivery,
+  RESTART_CONTINUATION_UNSTARTED_ERROR,
+  terminalizeDurableFollowupRestartContinuationIfStale,
 } from "./queue/durable-store.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -791,6 +796,7 @@ describe("createFollowupRunner durable delivery recovery", () => {
     expect(record?.delivery?.payloads).toEqual([
       expect.objectContaining({ text: expect.stringContaining("Jarvis restarted") }),
     ]);
+    expect(record?.restartRecovery?.ownerExecution).toBe("started");
     expect(typing.markRunComplete).toHaveBeenCalled();
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
@@ -990,6 +996,101 @@ describe("createFollowupRunner durable delivery recovery", () => {
     expect(drainSystemEventEntries(queued.run.sessionKey ?? "")).toEqual([]);
   });
 
+  it("drains later voice and text in FIFO order after terminalizing only the stale carrier", async () => {
+    const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
+    const queueKey = `stale-restart-head-${Date.now()}`;
+    const carrierRun = createQueuedRun({
+      messageId: "telegram:restart-carrier",
+      prompt: "ambiguous original turn",
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const voiceRun = createQueuedRun({
+      messageId: "telegram:voice",
+      prompt: "[Audio] later voice",
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const textRun = createQueuedRun({
+      messageId: "telegram:text",
+      prompt: "later text",
+      originatingChannel: "telegram",
+      originatingTo: "123",
+    });
+    const carrier = await persistDurableFollowup({
+      queueKey,
+      run: carrierRun,
+      settings,
+      deliveryPayloads: [RESTART_INTERRUPTED_TURN_PAYLOAD],
+      restartOwnerExecution: "not-started",
+    });
+    const voice = await persistDurableFollowup({ queueKey, run: voiceRun, settings });
+    const text = await persistDurableFollowup({ queueKey, run: textRun, settings });
+    for (const [record, createdAt] of [
+      [carrier, 1],
+      [voice, 2],
+      [text, 3],
+    ] as const) {
+      const filePath = path.join(stateDir, "followup-queue", `${record.id}.json`);
+      const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+      raw.createdAt = createdAt;
+      await fs.writeFile(filePath, JSON.stringify(raw));
+    }
+    const carrierPath = path.join(stateDir, "followup-queue", `${carrier.id}.json`);
+    const persisted = JSON.parse(await fs.readFile(carrierPath, "utf8"));
+    persisted.activeOwnerPid = 98_765;
+    await fs.writeFile(carrierPath, JSON.stringify(persisted));
+    await markDurableFollowupRestartReceiptDelivered(carrier.id);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await markDurableFollowupRestartContinuationDelivering(carrier.id);
+      await markDurableFollowupRestartContinuationFailed({
+        id: carrier.id,
+        sessionKey: carrierRun.run.sessionKey!,
+        error: RESTART_CONTINUATION_UNSTARTED_ERROR,
+      });
+    }
+    await expect(
+      terminalizeDurableFollowupRestartContinuationIfStale({
+        id: carrier.id,
+        sessionKey: carrierRun.run.sessionKey!,
+        currentPid: 12_345,
+        isProcessAlive: () => false,
+      }),
+    ).resolves.toBe(true);
+
+    const [terminalCarrier, restoredVoice, restoredText] = await loadDurableFollowups();
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "anthropic/claude-opus-4-5",
+      failureMode: "throw-durable",
+    });
+    runEmbeddedPiAgentMock.mockImplementation(async (params: { prompt: string }) => ({
+      payloads: [{ text: `handled:${params.prompt}` }],
+      meta: {},
+    }));
+    enqueueFollowupRun(queueKey, hydrateDurableFollowup(terminalCarrier, {}), settings, "none");
+    enqueueFollowupRun(queueKey, hydrateDurableFollowup(restoredVoice, {}), settings, "none");
+    enqueueFollowupRun(queueKey, hydrateDurableFollowup(restoredText, {}), settings, "none");
+
+    scheduleFollowupDrain(queueKey, runner);
+    await vi.waitFor(() => expect(getExistingFollowupQueue(queueKey)).toBeUndefined(), {
+      timeout: 5_000,
+    });
+
+    expect(
+      runEmbeddedPiAgentMock.mock.calls.map(([params]) => (params as { prompt: string }).prompt),
+    ).toEqual(["[Audio] later voice", "later text"]);
+    expect(routeReplyMock.mock.calls.map(([params]) => params.payload.text)).toEqual([
+      "handled:[Audio] later voice",
+      "handled:later text",
+    ]);
+    // The already delivered restart receipt was converted to an empty stage:
+    // it is neither resent nor allowed to consume either later durable record.
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    await expect(loadDurableFollowups()).resolves.toEqual([]);
+  });
+
   it("awaits explicit provider routing for a durable same-channel followup", async () => {
     const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
     const queued = createQueuedRun({
@@ -1141,12 +1242,22 @@ describe("createFollowupRunner durable delivery recovery", () => {
   ])("rejects an aborted $label durable result before staging or sending", async ({ payloads }) => {
     const settings = { mode: "followup" as const, debounceMs: 0, cap: 20 };
     const queued = createQueuedRun({
+      messageId: "telegram:assembled-first",
       originatingChannel: "telegram",
       originatingTo: "123",
     });
     const input = await persistDurableFollowup({
       queueKey: `aborted-${payloads.length ? "partial" : "empty"}`,
       run: queued,
+      settings,
+    });
+    const secondInput = await persistDurableFollowup({
+      queueKey: input.queueKey,
+      run: {
+        ...queued,
+        prompt: "second assembled input",
+        messageId: "telegram:assembled-second",
+      },
       settings,
     });
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -1160,15 +1271,35 @@ describe("createFollowupRunner durable delivery recovery", () => {
       failureMode: "throw-durable",
     });
 
-    await expect(runner({ ...queued, durableId: input.id })).rejects.toThrow(
+    await expect(runner({ ...queued, durableIds: [input.id, secondInput.id] })).rejects.toThrow(
       "Durable followup agent run aborted",
     );
     expect(routeReplyMock).not.toHaveBeenCalled();
     const [record] = await loadDurableFollowups();
     expect(record?.id).toBe(input.id);
+    expect(record?.delivery?.sourceDurableIds).toEqual([input.id, secondInput.id]);
+    expect(record?.delivery?.processedMessageKeys).toHaveLength(2);
+    expect(record?.restartRecovery?.ownerExecution).toBe("started");
     expect(record?.delivery?.payloads).toEqual([
       expect.objectContaining({ text: expect.stringContaining("Jarvis restarted") }),
     ]);
+
+    // Retry the consolidated carrier exactly as a gateway restart would. The
+    // partially executed batch stays delivery-only: neither its assembled
+    // prompt nor persisted tool-result history is replayed through a second
+    // model invocation. The tagged continuation will resume in the transcript.
+    await expect(runner(hydrateDurableFollowup(record, {}))).rejects.toThrow(
+      "awaiting terminal delivery",
+    );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const [recovering] = await loadDurableFollowups();
+    expect(recovering?.delivery?.sourceDurableIds).toEqual([input.id, secondInput.id]);
+    expect(recovering?.restartRecovery).toEqual(
+      expect.objectContaining({ receipt: "delivered", continuation: "delivering" }),
+    );
+    releaseDirectTurnRestartContinuation(input.id);
+    drainSystemEventEntries(queued.run.sessionKey ?? "");
   });
 
   it("restores model-complete output and retries delivery without rerunning the agent", async () => {

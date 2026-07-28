@@ -33,7 +33,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { AgentRunDeferralReason, GetReplyOptions, ReplyPayload } from "../types.js";
 import { evaluateReplyHardReservePrecheck } from "./agent-runner-cli-preflight.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -186,6 +186,7 @@ type RunReplyAgentParams = {
   shouldSteer: boolean;
   shouldFollowup: boolean;
   isActive: boolean;
+  activeRunDeferralReason?: AgentRunDeferralReason;
   isStreaming: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -243,6 +244,7 @@ async function runReplyAgentWithFinalizationOwnership(
     shouldSteer,
     shouldFollowup,
     isActive,
+    activeRunDeferralReason,
     isStreaming,
     opts,
     typing,
@@ -443,6 +445,12 @@ async function runReplyAgentWithFinalizationOwnership(
   });
 
   if (activeRunQueueAction === "drop") {
+    // The caller needs the exact live blocker. In particular, restart recovery
+    // must never infer that a stale transcript or its own queue carrier is a
+    // genuinely active model/tool turn.
+    if (activeRunDeferralReason) {
+      runOpts?.onAgentRunDeferred?.(activeRunDeferralReason);
+    }
     typing.cleanup();
     return undefined;
   }

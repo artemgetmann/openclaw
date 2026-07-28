@@ -29,6 +29,7 @@ import {
   loadDurableFollowupDeliveryCarrier,
   loadDurableFollowupRestartRecovery,
   loadDurableFollowupDelivery,
+  markDurableFollowupRestartOwnerExecutionStarted,
   markDurableFollowupRestartReceiptDelivering,
   markDurableFollowupRestartReceiptDelivered,
   persistDurableFollowupDelivery,
@@ -131,7 +132,16 @@ export function createFollowupRunner(params: {
   const shouldThrowProcessingFailure = (queued: FollowupRun): boolean =>
     failureMode === "throw-durable" && resolveDurableIds(queued).length > 0;
   const persistDeliveryStage = async (queued: FollowupRun, payloads: ReplyPayload[]) => {
-    const deliveryRecord = await persistDurableFollowupDelivery({ run: queued, payloads });
+    const deliveryRecord = await persistDurableFollowupDelivery({
+      run: queued,
+      payloads,
+      // This runner stages the restart blocker immediately before its own
+      // model lane. Direct-turn carriers use `unknown` because their execution
+      // boundary is owned by the separate reply-agent path.
+      restartOwnerExecution: payloads.some((payload) => payload.restartRecovery === true)
+        ? "not-started"
+        : undefined,
+    });
     if (!deliveryRecord?.delivery) {
       return;
     }
@@ -371,6 +381,17 @@ export function createFollowupRunner(params: {
         activeSessionEntry?.systemPromptReport,
       );
       try {
+        if (queued.durableId && queued.run.sessionKey) {
+          const markedStarted = await markDurableFollowupRestartOwnerExecutionStarted({
+            id: queued.durableId,
+            sessionKey: queued.run.sessionKey,
+          });
+          if (!markedStarted) {
+            throw new Error(
+              `Durable followup model entry lost restart carrier ${queued.durableId}`,
+            );
+          }
+        }
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
           provider: queued.run.provider,

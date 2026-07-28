@@ -23,6 +23,11 @@ export type TypingPolicy =
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type AgentRunDeferralReason =
+  | "embedded-run-active"
+  | "followup-finalization-active"
+  | "followup-queue-owned";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -32,6 +37,13 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
+  /**
+   * Reports the concrete live owner that prevented a heartbeat agent run.
+   *
+   * Restart recovery uses this evidence to distinguish a real concurrent turn
+   * from a stale queue marker before considering bounded terminal recovery.
+   */
+  onAgentRunDeferred?: (reason: AgentRunDeferralReason) => void;
   /** Notifies when the active agent produces real activity that should renew UI-side run leases. */
   onAgentActivity?: () => void;
   onReplyStart?: () => Promise<void> | void;
@@ -39,6 +51,14 @@ export type GetReplyOptions = {
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
+  /**
+   * Identifies the direct-turn carrier whose transcript this heartbeat resumes.
+   *
+   * Queue ownership may be ignored only after the reply path proves this ID is
+   * the current durable FIFO head. Sentinel wakes and mismatched IDs retain
+   * ordinary queue ordering.
+   */
+  restartContinuationDurableId?: string;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */

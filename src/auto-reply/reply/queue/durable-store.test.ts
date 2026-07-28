@@ -35,9 +35,12 @@ import {
   markDurableFollowupRestartContinuationConsumed,
   markDurableFollowupRestartContinuationDelivering,
   markDurableFollowupRestartContinuationFailed,
+  markDurableFollowupRestartOwnerExecutionStarted,
   markDurableFollowupRestartReceiptDelivered,
   persistDurableFollowup,
   persistDurableFollowupDelivery,
+  RESTART_CONTINUATION_UNSTARTED_ERROR,
+  terminalizeDurableFollowupRestartContinuationIfStale,
 } from "./durable-store.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
@@ -162,6 +165,7 @@ describe("durable followup queue", () => {
       run,
       settings,
       deliveryPayloads: [{ text: "Restart receipt", restartRecovery: true }],
+      restartOwnerExecution: "not-started",
     });
 
     await expect(markDurableFollowupRestartReceiptDelivered(record.id)).resolves.toBe(true);
@@ -194,6 +198,155 @@ describe("durable followup queue", () => {
     expect(completed?.restartRecovery).toEqual(
       expect.objectContaining({ receipt: "delivered", continuation: "delivered" }),
     );
+  });
+
+  it("terminalizes only a repeatedly unstarted carrier whose prior owner is dead", async () => {
+    const run = createRun("never replay this interrupted request");
+    const carrier = await persistDurableFollowup({
+      queueKey: "bounded-unstarted-recovery",
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Restart receipt", restartRecovery: true }],
+      restartOwnerExecution: "not-started",
+    });
+    const laterVoice = await persistDurableFollowup({
+      queueKey: carrier.queueKey,
+      run: { ...createRun("[Audio] saved voice"), messageId: "telegram:102" },
+      settings,
+    });
+    const laterText = await persistDurableFollowup({
+      queueKey: carrier.queueKey,
+      run: { ...createRun("saved text"), messageId: "telegram:103" },
+      settings,
+    });
+    // Persisted FIFO restore sorts by creation time. Make the process boundary
+    // explicit instead of relying on millisecond clock movement in the test.
+    for (const [record, createdAt] of [
+      [carrier, 1],
+      [laterVoice, 2],
+      [laterText, 3],
+    ] as const) {
+      const filePath = path.join(stateDir, "followup-queue", `${record.id}.json`);
+      const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+      raw.createdAt = createdAt;
+      await fs.writeFile(filePath, JSON.stringify(raw));
+    }
+    const carrierPath = path.join(stateDir, "followup-queue", `${carrier.id}.json`);
+    const persisted = JSON.parse(await fs.readFile(carrierPath, "utf8"));
+    persisted.activeOwnerPid = 98_765;
+    await fs.writeFile(carrierPath, JSON.stringify(persisted));
+    await markDurableFollowupRestartReceiptDelivered(carrier.id);
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await markDurableFollowupRestartContinuationDelivering(carrier.id);
+      await markDurableFollowupRestartContinuationFailed({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        error: RESTART_CONTINUATION_UNSTARTED_ERROR,
+      });
+      await expect(
+        terminalizeDurableFollowupRestartContinuationIfStale({
+          id: carrier.id,
+          sessionKey: run.run.sessionKey!,
+          currentPid: 12_345,
+          isProcessAlive: () => false,
+        }),
+      ).resolves.toBe(false);
+    }
+
+    await markDurableFollowupRestartContinuationDelivering(carrier.id);
+    await markDurableFollowupRestartContinuationFailed({
+      id: carrier.id,
+      sessionKey: run.run.sessionKey!,
+      error: RESTART_CONTINUATION_UNSTARTED_ERROR,
+    });
+    await expect(
+      terminalizeDurableFollowupRestartContinuationIfStale({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        currentPid: 12_345,
+        isProcessAlive: () => true,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      terminalizeDurableFollowupRestartContinuationIfStale({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        currentPid: 12_345,
+        isProcessAlive: () => false,
+      }),
+    ).resolves.toBe(true);
+
+    const restored = await loadDurableFollowups();
+    expect(restored.map((record) => record.id)).toEqual([carrier.id, laterVoice.id, laterText.id]);
+    expect(restored[0]?.delivery).toEqual(
+      expect.objectContaining({
+        sourceDurableIds: [carrier.id],
+        payloads: [],
+      }),
+    );
+    expect(restored[0]?.restartRecovery).toEqual(
+      expect.objectContaining({
+        receipt: "delivered",
+        continuation: "delivered",
+        unstartedAttempts: 3,
+        terminalReason: "unstarted-owner-dead",
+      }),
+    );
+    expect(restored.slice(1).map((record) => record.run.prompt)).toEqual([
+      "[Audio] saved voice",
+      "saved text",
+    ]);
+  });
+
+  it("does not terminalize an unstarted carrier owned by this or another live process", async () => {
+    const run = createRun("still-active interrupted request");
+    const carrier = await persistDurableFollowup({
+      queueKey: "active-unstarted-recovery",
+      run,
+      settings,
+      deliveryPayloads: [{ text: "Restart receipt", restartRecovery: true }],
+    });
+    await markDurableFollowupRestartReceiptDelivered(carrier.id);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await markDurableFollowupRestartContinuationDelivering(carrier.id);
+      await markDurableFollowupRestartContinuationFailed({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        error: RESTART_CONTINUATION_UNSTARTED_ERROR,
+      });
+    }
+
+    await expect(
+      terminalizeDurableFollowupRestartContinuationIfStale({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        currentPid: process.pid,
+        isProcessAlive: () => false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      terminalizeDurableFollowupRestartContinuationIfStale({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        currentPid: process.pid + 1,
+        isProcessAlive: () => true,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      markDurableFollowupRestartOwnerExecutionStarted({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      terminalizeDurableFollowupRestartContinuationIfStale({
+        id: carrier.id,
+        sessionKey: run.run.sessionKey!,
+        currentPid: process.pid + 1,
+        isProcessAlive: () => false,
+      }),
+    ).resolves.toBe(false);
   });
 
   it("does not let a malformed legacy delivery identity block inbound dedupe", async () => {

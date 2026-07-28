@@ -123,6 +123,7 @@ function createMinimalRun(params?: {
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
+  activeRunDeferralReason?: "embedded-run-active" | "followup-finalization-active";
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
@@ -179,6 +180,7 @@ function createMinimalRun(params?: {
         shouldSteer: false,
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
+        activeRunDeferralReason: params?.activeRunDeferralReason,
         isStreaming: false,
         opts,
         typing,
@@ -359,9 +361,11 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("drops heartbeat runs when another run is active", async () => {
+    const onAgentRunDeferred = vi.fn();
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true },
+      opts: { isHeartbeat: true, onAgentRunDeferred },
       isActive: true,
+      activeRunDeferralReason: "embedded-run-active",
       shouldFollowup: true,
       resolvedQueueMode: "collect",
     });
@@ -373,6 +377,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(onAgentRunDeferred).toHaveBeenCalledWith("embedded-run-active");
   });
 
   it("does not create a durable task for early dropped runs", async () => {

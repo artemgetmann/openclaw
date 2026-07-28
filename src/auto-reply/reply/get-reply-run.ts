@@ -51,6 +51,7 @@ import {
   isDurableFollowupMessagePending,
   isDurableFollowupMessageProcessed,
 } from "./queue/durable-store.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
@@ -66,8 +67,27 @@ export function resolveSessionRunActive(params: {
   embeddedRunActive: boolean;
   queueOwned: boolean;
   finalizationOwned?: boolean;
+  ignoreQueueOwnership?: boolean;
 }): boolean {
-  return params.embeddedRunActive || params.queueOwned || params.finalizationOwned === true;
+  return (
+    params.embeddedRunActive ||
+    (params.queueOwned && params.ignoreQueueOwnership !== true) ||
+    params.finalizationOwned === true
+  );
+}
+
+export function isRestartContinuationQueueHead(params: {
+  queueKey: string;
+  durableId?: string;
+}): boolean {
+  const durableId = params.durableId?.trim();
+  if (!durableId) {
+    return false;
+  }
+  // The direct-turn event names the durable carrier. Matching that opaque ID
+  // against the live FIFO head is the authority to ignore only its own queue
+  // marker; sentinel wakes and stale/mismatched events cannot leapfrog it.
+  return getExistingFollowupQueue(params.queueKey)?.items[0]?.durableId?.trim() === durableId;
 }
 
 function buildResetSessionNoticeText(params: {
@@ -539,14 +559,30 @@ export async function runPreparedReply(
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const queueOwned = hasFollowupQueueOwnership(queueKey);
+  const embeddedRunActive = isEmbeddedPiRunActive(sessionIdFinal);
+  const finalizationOwned = hasFollowupFinalizationOwnership(queueKey);
+  const restartContinuationOwnsQueueHead = isRestartContinuationQueueHead({
+    queueKey,
+    durableId: opts?.restartContinuationDurableId,
+  });
   // A restored durable queue owns this session before its provider/model turn
   // completes. Treat that ownership like an active run so newer inbound work
-  // is persisted behind it instead of starting concurrently.
+  // is persisted behind it instead of starting concurrently. The one exception
+  // is the tagged restart continuation for that same queue head: treating the
+  // carrier as competing work would make it block itself forever.
   const isActive = resolveSessionRunActive({
-    embeddedRunActive: isEmbeddedPiRunActive(sessionIdFinal),
+    embeddedRunActive,
     queueOwned,
-    finalizationOwned: hasFollowupFinalizationOwnership(queueKey),
+    finalizationOwned,
+    ignoreQueueOwnership: restartContinuationOwnsQueueHead,
   });
+  const activeRunDeferralReason = embeddedRunActive
+    ? ("embedded-run-active" as const)
+    : finalizationOwned
+      ? ("followup-finalization-active" as const)
+      : queueOwned
+        ? ("followup-queue-owned" as const)
+        : undefined;
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
@@ -643,6 +679,7 @@ export async function runPreparedReply(
     shouldSteer,
     shouldFollowup,
     isActive,
+    activeRunDeferralReason,
     isStreaming,
     opts,
     typing,
