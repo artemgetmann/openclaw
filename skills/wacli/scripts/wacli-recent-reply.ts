@@ -181,8 +181,10 @@ async function acquireStoreLock(storeDir: string): Promise<StoreLock> {
   const lockDir = path.join(storeDir, ".openclaw-send-safe.lock");
   const deadline = Date.now() + 180_000;
   while (Date.now() <= deadline) {
+    let createdLockDir = false;
     try {
       await fs.mkdir(lockDir);
+      createdLockDir = true;
       await fs.writeFile(
         path.join(lockDir, "owner.json"),
         `${JSON.stringify({
@@ -199,6 +201,11 @@ async function acquireStoreLock(storeDir: string): Promise<StoreLock> {
         },
       };
     } catch (error) {
+      // A metadata write failure after mkdir must not strand an ownerless lock
+      // that every later safe send or refresh would correctly refuse to clear.
+      if (createdLockDir) {
+        await fs.rm(lockDir, { recursive: true, force: true });
+      }
       const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
       if (code !== "EEXIST") {
         throw error;
