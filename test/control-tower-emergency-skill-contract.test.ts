@@ -54,17 +54,21 @@ function dashboardFixture(): Record<string, unknown> {
   };
 }
 
-function validateFixture(document: Record<string, unknown>) {
+function validateText(contents: string) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tower-dashboard-contract-"));
-  const dashboardPath = path.join(tempRoot, "dashboard.json");
+  const dashboardPath = path.join(tempRoot, "dashboard.yaml");
   try {
-    fs.writeFileSync(dashboardPath, JSON.stringify(document), "utf8");
+    fs.writeFileSync(dashboardPath, contents, "utf8");
     return spawnSync("python3", ["-B", validatorPath, dashboardPath], {
       encoding: "utf8",
     });
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+}
+
+function validateFixture(document: Record<string, unknown>) {
+  return validateText(JSON.stringify(document));
 }
 
 describe("emergency Control Tower skill contract", () => {
@@ -99,8 +103,28 @@ describe("emergency Control Tower skill contract", () => {
     expect(skill).toContain("Archive the predecessor only after takeover verification");
 
     for (const helper of ["measure_epoch.py", "record_event.py", "validate_dashboard.py"]) {
-      expect(fs.existsSync(path.join(skillRoot, "scripts", helper))).toBe(true);
+      const helperPath = path.join(skillRoot, "scripts", helper);
+      expect(fs.existsSync(helperPath)).toBe(true);
+      expect(fs.statSync(helperPath).mode & 0o111).not.toBe(0);
     }
+  });
+
+  it.runIf(pythonHasYaml)("accepts YAML timestamps and rejects duplicate keys", () => {
+    const baseline = dashboardFixture();
+    const startedAt = (baseline.epoch as Record<string, unknown>).started_at as string;
+    const yamlTimestamp = JSON.stringify(baseline, null, 2).replace(
+      JSON.stringify(startedAt),
+      startedAt,
+    );
+    expect(validateText(yamlTimestamp).status).toBe(0);
+
+    const duplicateWakeMode = JSON.stringify(baseline).replace(
+      '"wake_mode":"manual-pull"',
+      '"wake_mode":"manual-pull","wake_mode":"finite-goal"',
+    );
+    const duplicateResult = validateText(duplicateWakeMode);
+    expect(duplicateResult.status).toBe(2);
+    expect(duplicateResult.stderr).toContain("found duplicate key (wake_mode)");
   });
 
   it.runIf(pythonHasYaml)("fails closed for stale time receipts and disabled thresholds", () => {

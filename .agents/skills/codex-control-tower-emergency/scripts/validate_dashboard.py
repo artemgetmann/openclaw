@@ -20,6 +20,44 @@ GOAL_STATES = {"absent", "active", "complete", "blocked"}
 ELAPSED_RECEIPT_TOLERANCE_HOURS = 0.01
 
 
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects contradictory duplicate mapping keys."""
+
+
+def construct_unique_mapping(
+    loader: UniqueKeySafeLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    """Construct one mapping only after proving every key is unique."""
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key ({key})",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    construct_unique_mapping,
+)
+
+
 def require_mapping(value: Any, label: str, errors: list[str]) -> dict[str, Any]:
     """Return a mapping while recording one useful structural error."""
     if isinstance(value, dict):
@@ -50,12 +88,15 @@ def require_number(
 
 def parse_utc(value: Any, label: str, errors: list[str]) -> dt.datetime | None:
     """Parse one ISO-8601 timestamp and normalize it to UTC."""
-    if not isinstance(value, str):
-        errors.append(f"{label} must be an ISO-8601 timestamp")
-        return None
-    try:
-        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+    if isinstance(value, dt.datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            errors.append(f"{label} must be an ISO-8601 timestamp")
+            return None
+    else:
         errors.append(f"{label} must be an ISO-8601 timestamp")
         return None
     if parsed.tzinfo is None:
@@ -329,7 +370,10 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        document = yaml.safe_load(args.dashboard.read_text(encoding="utf-8"))
+        document = yaml.load(
+            args.dashboard.read_text(encoding="utf-8"),
+            Loader=UniqueKeySafeLoader,
+        )
     except (OSError, yaml.YAMLError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2
