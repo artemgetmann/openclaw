@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   decideWacliMonitorBootstrapAction,
   resolvePreferredMonitorChatJid,
@@ -11,9 +13,35 @@ type Args = {
   dbPath: string;
   json: boolean;
   lastProcessedMsgId: string | null;
+  refresh?: boolean;
   stateFile: string | null;
   target: string | null;
 };
+
+type RefreshResult = {
+  attempted: boolean;
+  freshnessProven: boolean;
+  ownerRestored: boolean;
+  ownerWasRunning: boolean;
+  succeeded: boolean;
+};
+
+type LiveOwnerStatus = {
+  connected?: boolean;
+  lockHeldByOwner?: boolean;
+  lockPid?: number;
+  ownerCommandMatches?: boolean;
+  ownerPid?: number;
+  ownerRunning?: boolean;
+  stoppedPid?: number;
+  stopReason?: string;
+};
+
+type StoreLock = {
+  release: () => Promise<void>;
+};
+
+const execFileAsync = promisify(execFile);
 
 type MonitorState = {
   lastProcessedMsgId?: string;
@@ -23,11 +51,21 @@ type MonitorState = {
 
 type RecentReplyCliResult = Awaited<ReturnType<typeof buildRecentReplyCliResult>>;
 
+export type RefreshDeps = {
+  acquireStoreLock: (storeDir: string) => Promise<StoreLock>;
+  ensureOwner: (storeDir: string) => Promise<LiveOwnerStatus>;
+  readResult: (args: Args) => Promise<RecentReplyCliResult>;
+  runBoundedSync: (storeDir: string) => Promise<void>;
+  statusOwner: (storeDir: string) => Promise<LiveOwnerStatus>;
+  stopOwner: (storeDir: string) => Promise<LiveOwnerStatus>;
+};
+
 function printUsage(): never {
-  console.error(`Usage: wacli-recent-reply.ts --target <phone|jid> [--db <path>] [--json] [--state-file <path>] [--last-processed-msg-id <id>]
+  console.error(`Usage: wacli-recent-reply.ts --target <phone|jid> [--db <path>] [--json] [--refresh] [--state-file <path>] [--last-processed-msg-id <id>]
 
 Examples:
   node --import tsx skills/wacli/scripts/wacli-recent-reply.ts --target 6281238581815@s.whatsapp.net --json
+  node --import tsx skills/wacli/scripts/wacli-recent-reply.ts --target 6281238581815@s.whatsapp.net --refresh --json
   node --import tsx skills/wacli/scripts/wacli-recent-reply.ts --target +6281238581815 --last-processed-msg-id inbound-17 --json
   node --import tsx skills/wacli/scripts/wacli-recent-reply.ts --target +6281238581815 --state-file /tmp/wacli-monitor-state.json --json
   node --import tsx skills/wacli/scripts/wacli-recent-reply.ts --target +6281238581815
@@ -35,11 +73,12 @@ Examples:
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): Args {
+export function parseArgs(argv: string[]): Args {
   const args: Args = {
     dbPath: path.join(process.env.HOME ?? "~", ".wacli", "wacli.db"),
     json: false,
     lastProcessedMsgId: null,
+    refresh: false,
     stateFile: null,
     target: null,
   };
@@ -70,6 +109,10 @@ function parseArgs(argv: string[]): Args {
       args.json = true;
       continue;
     }
+    if (arg === "--refresh") {
+      args.refresh = true;
+      continue;
+    }
     printUsage();
   }
 
@@ -78,6 +121,237 @@ function parseArgs(argv: string[]): Args {
   }
 
   return args;
+}
+
+async function runJsonCommand(
+  command: string,
+  args: string[],
+  timeout: number,
+): Promise<Record<string, unknown>> {
+  const { stdout } = await execFileAsync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+    timeout,
+  });
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+function liveScriptPath(): string {
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(scriptDir, "wacli-live.sh");
+}
+
+async function runLiveCommand(
+  action: "ensure" | "status" | "stop",
+  storeDir: string,
+): Promise<LiveOwnerStatus> {
+  const timeoutMs = action === "status" ? 10_000 : action === "stop" ? 15_000 : 25_000;
+  return (await runJsonCommand(
+    liveScriptPath(),
+    [action, "--store", storeDir, "--json"],
+    timeoutMs,
+  )) as LiveOwnerStatus;
+}
+
+function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM still proves that a live process owns the PID.
+    const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
+    return code === "EPERM";
+  }
+}
+
+async function readStoreLockOwner(lockDir: string): Promise<{ pid?: number } | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(lockDir, "owner.json"), "utf8");
+    return JSON.parse(raw) as { pid?: number };
+  } catch {
+    return undefined;
+  }
+}
+
+async function acquireStoreLock(storeDir: string): Promise<StoreLock> {
+  await fs.mkdir(storeDir, { recursive: true, mode: 0o700 });
+
+  // Share the safe-send lock because send and forced catch-up both pause the
+  // same live owner. Two independent locks would permit cross-operation races.
+  const lockDir = path.join(storeDir, ".openclaw-send-safe.lock");
+  const deadline = Date.now() + 180_000;
+  while (Date.now() <= deadline) {
+    try {
+      await fs.mkdir(lockDir);
+      await fs.writeFile(
+        path.join(lockDir, "owner.json"),
+        `${JSON.stringify({
+          pid: process.pid,
+          acquiredAt: new Date().toISOString(),
+          operation: "forced-refresh",
+          storeDir,
+        })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      return {
+        release: async () => {
+          await fs.rm(lockDir, { recursive: true, force: true });
+        },
+      };
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
+      if (code !== "EEXIST") {
+        throw error;
+      }
+    }
+
+    // Recover only a lock whose recorded process is definitely gone. Missing
+    // or unreadable identity fails closed instead of deleting an active lock.
+    const owner = await readStoreLockOwner(lockDir);
+    if (typeof owner?.pid === "number" && !isPidRunning(owner.pid)) {
+      await fs.rm(lockDir, { recursive: true, force: true });
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  const owner = await readStoreLockOwner(lockDir);
+  const ownerHint =
+    typeof owner?.pid === "number" ? ` Recorded lock owner PID: ${String(owner.pid)}.` : "";
+  throw new Error(`Timed out waiting for the wacli store operation lock.${ownerHint}`);
+}
+
+function stopProvesExactOwnerPaused(status: LiveOwnerStatus, expectedPid: number): boolean {
+  return Boolean(
+    status.stoppedPid === expectedPid &&
+    (status.stopReason === "stopped" || status.stopReason === "forced_stop") &&
+    status.ownerRunning !== true &&
+    status.lockHeldByOwner !== true &&
+    status.lockPid !== expectedPid,
+  );
+}
+
+function restorationIsProven(status: LiveOwnerStatus): boolean {
+  // "Connected" is a lifecycle hint, not ownership proof. Require the newly
+  // ensured process to match the exact owner command and hold this store lock.
+  return Boolean(status.ownerRunning && status.ownerCommandMatches && status.lockHeldByOwner);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function composeRefreshErrors(primary: unknown, restoration: unknown): Error {
+  return new AggregateError(
+    [primary, restoration],
+    `Forced WhatsApp catch-up failed: ${errorMessage(primary)} Restoration also failed: ${errorMessage(restoration)}`,
+  );
+}
+
+const defaultRefreshDeps: RefreshDeps = {
+  acquireStoreLock,
+  ensureOwner: async (storeDir) => await runLiveCommand("ensure", storeDir),
+  readResult: async (args) => await buildRecentReplyCliResult(args),
+  runBoundedSync: async (storeDir) => {
+    await execFileAsync(
+      "wacli",
+      ["--store", storeDir, "sync", "--once", "--idle-exit", "5s", "--json"],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: 45_000,
+      },
+    );
+  },
+  statusOwner: async (storeDir) => await runLiveCommand("status", storeDir),
+  stopOwner: async (storeDir) => await runLiveCommand("stop", storeDir),
+};
+
+export async function forceRefreshAndRead(
+  args: Args,
+  deps: RefreshDeps = defaultRefreshDeps,
+): Promise<{ refresh: RefreshResult; result: RecentReplyCliResult }> {
+  const storeDir = path.dirname(path.resolve(args.dbPath));
+  const lock = await deps.acquireStoreLock(storeDir);
+  try {
+    const ownerBefore = await deps.statusOwner(storeDir);
+    const ownerWasRunning = ownerBefore.ownerRunning === true;
+    if (ownerWasRunning && ownerBefore.ownerCommandMatches !== true) {
+      throw new Error(
+        "Refusing forced WhatsApp catch-up because the recorded live owner command does not match",
+      );
+    }
+
+    const expectedOwnerPid = ownerWasRunning ? ownerBefore.ownerPid : undefined;
+    if (ownerWasRunning && typeof expectedOwnerPid !== "number") {
+      throw new Error(
+        "Refusing forced WhatsApp catch-up because the running owner PID is unavailable",
+      );
+    }
+
+    let primaryError: unknown;
+    let restorationError: unknown;
+    let result: RecentReplyCliResult | undefined;
+    let freshnessProven = false;
+
+    try {
+      if (expectedOwnerPid !== undefined) {
+        const stopped = await deps.stopOwner(storeDir);
+        if (!stopProvesExactOwnerPaused(stopped, expectedOwnerPid)) {
+          throw new Error(
+            "Refusing forced WhatsApp catch-up because the recorded owner changed while it was being paused",
+          );
+        }
+      }
+
+      // A clean bounded sync exit is the freshness boundary: only after it
+      // finishes do we reread the caller's exact database path.
+      await deps.runBoundedSync(storeDir);
+      freshnessProven = true;
+      result = await deps.readResult(args);
+    } catch (error) {
+      primaryError = error;
+    } finally {
+      if (expectedOwnerPid !== undefined) {
+        try {
+          const restored = await deps.ensureOwner(storeDir);
+          if (!restorationIsProven(restored)) {
+            throw new Error(
+              "The recorded live owner could not be proven restored with its command and store lock",
+            );
+          }
+        } catch (error) {
+          restorationError = error;
+        }
+      }
+    }
+
+    if (primaryError && restorationError) {
+      throw composeRefreshErrors(primaryError, restorationError);
+    }
+    if (restorationError) {
+      throw restorationError;
+    }
+    if (primaryError) {
+      throw primaryError;
+    }
+    if (!freshnessProven || !result) {
+      throw new Error("Forced WhatsApp catch-up completed without freshness and reread proof");
+    }
+
+    return {
+      refresh: {
+        attempted: true,
+        freshnessProven: true,
+        ownerRestored: ownerWasRunning,
+        ownerWasRunning,
+        succeeded: true,
+      },
+      result,
+    };
+  } finally {
+    await lock.release();
+  }
 }
 
 async function readMonitorState(stateFile: string): Promise<MonitorState | null> {
@@ -210,13 +484,16 @@ function printHumanResult(result: RecentReplyCliResult): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const result = await buildRecentReplyCliResult(args);
+  const refreshed = args.refresh ? await forceRefreshAndRead(args) : undefined;
+  const result = refreshed?.result ?? (await buildRecentReplyCliResult(args));
+  const refresh = refreshed?.refresh;
 
   if (args.json) {
     console.log(
       JSON.stringify(
         {
           ...result,
+          ...(refresh ? { refresh } : {}),
           ...(args.stateFile ? { monitorStatus: result.monitorStatus, status: result.status } : {}),
         },
         null,
