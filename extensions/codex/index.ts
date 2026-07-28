@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -14,7 +15,20 @@ import {
   JARVIS_CALLBACK_DYNAMIC_TOOL,
   type CodexCallbackEnvelope,
 } from "./src/callback-router.js";
-import { CodexThreadService, requireThreadId } from "./src/thread-service.js";
+import {
+  CodexDelegationRegistry,
+  type CodexRelayJarvisRunPurpose,
+  type CodexRelayRecord,
+} from "./src/delegation-registry.js";
+import {
+  reconcileCodexRelays,
+  type CodexRelayDispatchOutcome,
+} from "./src/relay-reconciliation.js";
+import {
+  CodexThreadService,
+  CodexTurnTerminalError,
+  requireThreadId,
+} from "./src/thread-service.js";
 import {
   CodexWorkspaceManager,
   type CodexTaskMode,
@@ -49,6 +63,7 @@ type ToolParams = {
 
 const APPROVAL_NAMESPACE = "codexpilot";
 const BINDING_KIND = "codex-app-server-pilot";
+const JARVIS_RELAY_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Keep this bundled extension dependency-free. The plugin API accepts standard
 // JSON Schema, so pulling TypeBox into a new workspace package would add no
@@ -99,9 +114,48 @@ const ToolSchema = {
 export default function register(api: OpenClawPluginApi) {
   const config = readPilotConfig(api);
   let clientPromise: Promise<CodexRpcClient> | undefined;
+  let registry: CodexDelegationRegistry | undefined;
+  const getRegistry = () => {
+    registry ??= new CodexDelegationRegistry(
+      path.join(api.runtime.state.resolveStateDir(), "codex", "async-relays.json"),
+    );
+    return registry;
+  };
   const callbacks = new CodexCallbackRouter({
     dispatch: async (callback) => {
-      await dispatchCodexCallbackToJarvis({ api, callback });
+      if (callback.status !== "complete") {
+        const outcome = await dispatchCodexCallbackToJarvis({
+          api,
+          registry: getRegistry(),
+          callback,
+        });
+        if (outcome !== "completed") {
+          throw new Error(
+            `Codex callback ${callback.callbackId} was queued without durable Jarvis completion evidence`,
+          );
+        }
+        return;
+      }
+      // A complete proactive callback suppresses the terminal fallback. Claim
+      // and persist that delivery too, or a restart between callback delivery
+      // and turn/completed could relay the same result a second time.
+      const claimed = await getRegistry().claimCallbackDelivery(callback.delegationId);
+      if (!claimed) {
+        throw new Error(
+          `Codex completion callback ${callback.callbackId} delivery is already finalized or ambiguous`,
+        );
+      }
+      const outcome = await dispatchCodexCallbackToJarvis({
+        api,
+        registry: getRegistry(),
+        callback,
+      });
+      if (outcome !== "completed") {
+        throw new Error(
+          `Codex completion callback ${callback.callbackId} was queued without durable Jarvis completion evidence`,
+        );
+      }
+      await getRegistry().markDelivered(callback.delegationId);
     },
   });
 
@@ -152,7 +206,7 @@ export default function register(api: OpenClawPluginApi) {
       if (ctx.senderIsOwner !== true || ctx.sandboxed) {
         return null;
       }
-      return createCodexTool(service, callbacks, api, ctx) as AnyAgentTool;
+      return createCodexTool(service, callbacks, getRegistry, api, ctx) as AnyAgentTool;
     }) as OpenClawPluginToolFactory,
     { name: "codex_threads" },
   );
@@ -263,7 +317,57 @@ export default function register(api: OpenClawPluginApi) {
 
   api.registerService({
     id: "codex-pilot-app-server",
-    start: async () => undefined,
+    start: async () => {
+      try {
+        const result = await reconcileCodexRelays({
+          registry: getRegistry(),
+          inspectTurn: async (threadId, turnId) =>
+            await service.inspectPersistedTurn(threadId, turnId),
+          dispatchTerminal: async (record, finalText) => {
+            return await dispatchCodexRelayToJarvis({
+              api,
+              registry: getRegistry(),
+              record,
+              status: "completed",
+              text: finalText,
+            });
+          },
+          dispatchDecisionNeeded: async (record, reason) => {
+            return await dispatchCodexDecisionNeededToJarvis({
+              api,
+              registry: getRegistry(),
+              record,
+              reason,
+            });
+          },
+          onMalformedEntry: (issue) => {
+            api.logger.error(
+              `Codex relay registry entry ${issue.index} is malformed and was not reconciled: ${issue.reason}`,
+            );
+          },
+          onRecordError: (record, error) => {
+            api.logger.error(
+              `Codex relay ${record.delegationId} reconciliation failed closed and later records will continue: ${formatError(error)}`,
+            );
+          },
+        });
+        if (
+          result.inspected ||
+          result.delivered ||
+          result.decisionNeeded ||
+          result.malformed ||
+          result.failed
+        ) {
+          api.logger.info(
+            `Codex relay reconciliation: inspected=${result.inspected} delivered=${result.delivered} decision-needed=${result.decisionNeeded} malformed=${result.malformed} failed=${result.failed}`,
+          );
+        }
+      } catch (error) {
+        // A corrupt store or unavailable App Server must not prevent Gateway
+        // startup. The registry remains untouched and no completion is inferred.
+        api.logger.error(`Codex relay reconciliation failed closed: ${formatError(error)}`);
+      }
+    },
     stop: async () => {
       const client = await clientPromise?.catch(() => undefined);
       await client?.close();
@@ -275,6 +379,7 @@ export default function register(api: OpenClawPluginApi) {
 function createCodexTool(
   service: CodexThreadService,
   callbacks: CodexCallbackRouter,
+  getRegistry: () => CodexDelegationRegistry,
   api: OpenClawPluginApi,
   ctx: OpenClawPluginToolContext,
 ) {
@@ -328,6 +433,7 @@ function createCodexTool(
           result = await startAsyncRelay({
             service,
             callbacks,
+            getRegistry,
             api,
             ctx,
             threadId,
@@ -357,6 +463,7 @@ function createCodexTool(
         result = await startAsyncRelay({
           service,
           callbacks,
+          getRegistry,
           api,
           ctx,
           threadId,
@@ -378,6 +485,7 @@ function createCodexTool(
 async function startAsyncRelay(params: {
   service: CodexThreadService;
   callbacks: CodexCallbackRouter;
+  getRegistry: () => CodexDelegationRegistry;
   api: OpenClawPluginApi;
   ctx: OpenClawPluginToolContext;
   threadId: string;
@@ -387,6 +495,14 @@ async function startAsyncRelay(params: {
   const sessionKey = requireAsyncSession(params.ctx);
 
   const delegationId = randomUUID();
+  const registry = params.getRegistry();
+  await registry.createStarting({
+    delegationId,
+    sessionKey,
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    threadId: params.threadId,
+    deliveryKey: `codex-relay:${delegationId}`,
+  });
   const workerPrompt = buildAsyncWorkerPrompt({
     delegationId,
     threadId: params.threadId,
@@ -398,6 +514,22 @@ async function startAsyncRelay(params: {
     workerPrompt,
     params.execution,
   );
+  // This durable transition is the acceptance boundary. Never tell Jarvis the
+  // relay was accepted until its exact native thread and turn can survive a
+  // process restart.
+  try {
+    await registry.markAccepted(delegationId, started.turnId);
+  } catch (error) {
+    // The App Server may have accepted work even if the durable acceptance
+    // write fails. Do not return "accepted" and do not replay it; retain the
+    // starting record for a precise restart ambiguity report.
+    void started.completion.catch((completionError: unknown) => {
+      params.api.logger.error(
+        `Untracked Codex relay ${delegationId} terminated after acceptance persistence failed: ${formatError(completionError)}`,
+      );
+    });
+    throw error;
+  }
   params.callbacks.register({
     delegationId,
     threadId: started.threadId,
@@ -410,45 +542,84 @@ async function startAsyncRelay(params: {
   // It starts a new delivered Jarvis turn in the exact originating session, so
   // Jarvis can understand the Codex result, continue coordinating, and decide
   // whether the exact source thread needs a reply.
-  void started.completion.then(
-    async (completed) => {
-      const callbackState = await params.callbacks.finish({
-        delegationId,
-        threadId: completed.threadId,
-        turnId: completed.turnId,
-      });
-      if (callbackState.completeDelivered) {
-        return;
-      }
-      await dispatchCodexRelayToJarvis({
-        api: params.api,
-        ctx: params.ctx,
-        sessionKey,
-        delegationId,
-        threadId: completed.threadId,
-        turnId: completed.turnId,
-        status: "completed",
-        text: completed.finalText,
-      });
-    },
-    async (error: unknown) => {
-      await params.callbacks.finish({
-        delegationId,
-        threadId: started.threadId,
-        turnId: started.turnId,
-      });
-      await dispatchCodexRelayToJarvis({
-        api: params.api,
-        ctx: params.ctx,
-        sessionKey,
-        delegationId,
-        threadId: started.threadId,
-        turnId: started.turnId,
-        status: "failed",
-        text: formatError(error),
-      });
-    },
-  );
+  void started.completion
+    .then(
+      async (completed) => {
+        const callbackState = await params.callbacks.finish({
+          delegationId,
+          threadId: completed.threadId,
+          turnId: completed.turnId,
+        });
+        const durableState = await registry.get(delegationId);
+        if (!durableState) {
+          throw new Error(`Codex relay ${delegationId} disappeared before terminal handback`);
+        }
+        if (callbackState.completeDelivered) {
+          if (durableState.lifecycle !== "delivered" || durableState.deliveryKind !== "callback") {
+            throw new Error(
+              `Codex relay ${delegationId} callback completion was not durably delivered`,
+            );
+          }
+          return;
+        }
+        if (
+          durableState.lifecycle === "delivery-started" &&
+          durableState.deliveryKind === "callback"
+        ) {
+          await claimAndDispatchCodexDecisionNeededToJarvis({
+            api: params.api,
+            registry,
+            record: durableState,
+            reason:
+              "A completion callback delivery attempt became ambiguous before the native turn ended. The terminal result was not replayed.",
+          });
+          return;
+        }
+        await registry.markTerminal(delegationId, "completed");
+        const claimed = await registry.claimTerminalDelivery(delegationId);
+        if (!claimed) {
+          return;
+        }
+        const outcome = await dispatchCodexRelayToJarvis({
+          api: params.api,
+          registry,
+          record: claimed,
+          status: "completed",
+          text: completed.finalText,
+        });
+        if (outcome === "completed") {
+          await registry.markDelivered(delegationId);
+        }
+      },
+      async (error: unknown) => {
+        await params.callbacks.finish({
+          delegationId,
+          threadId: started.threadId,
+          turnId: started.turnId,
+        });
+        if (error instanceof CodexTurnTerminalError) {
+          await registry.markTerminal(delegationId, error.terminalStatus);
+        }
+        const record = await registry.get(delegationId);
+        if (!record) {
+          throw new Error(`Codex relay ${delegationId} disappeared before failure handback`);
+        }
+        await claimAndDispatchCodexDecisionNeededToJarvis({
+          api: params.api,
+          registry,
+          record,
+          reason:
+            error instanceof CodexTurnTerminalError
+              ? `The exact native turn is ${error.terminalStatus} (${formatError(error)}). It was not retried automatically.`
+              : `The process-local terminal listener stopped with an ambiguous error (${formatError(error)}). Native completion was not inferred and the task was not retried.`,
+        });
+      },
+    )
+    .catch((error: unknown) => {
+      params.api.logger.error(
+        `Codex relay ${delegationId} terminal handback failed closed: ${formatError(error)}`,
+      );
+    });
 
   return {
     mode: "native-codex-async-relay",
@@ -461,8 +632,9 @@ async function startAsyncRelay(params: {
 
 async function dispatchCodexCallbackToJarvis(params: {
   api: OpenClawPluginApi;
+  registry: CodexDelegationRegistry;
   callback: CodexCallbackEnvelope;
-}) {
+}): Promise<CodexRelayDispatchOutcome> {
   const callback = params.callback;
   const structuredDetails = [
     callback.changedFiles?.length
@@ -496,96 +668,186 @@ async function dispatchCodexCallbackToJarvis(params: {
   ].join("\n\n");
   const contextKey = `codex-callback:${callback.delegationId}:${callback.callbackId}:${callback.sequence}`;
 
-  try {
-    await params.api.runtime.subagent.run({
+  return await dispatchJarvisEvent({
+    api: params.api,
+    registry: params.registry,
+    record: {
+      delegationId: callback.delegationId,
       sessionKey: callback.sessionKey,
-      message: event,
+      ...(callback.agentId ? { agentId: callback.agentId } : {}),
+    },
+    purpose: "callback",
+    event,
+    contextKey,
+    idempotencyKey: `${contextKey}:${callback.threadId}:${callback.turnId}`,
+    sourceSessionKey: `codex:thread:${callback.threadId}:turn:${callback.turnId}`,
+    sourceTool: JARVIS_CALLBACK_DYNAMIC_TOOL.name,
+    fallbackLabel: `Codex callback ${callback.callbackId}`,
+  });
+}
+
+async function dispatchCodexRelayToJarvis(params: {
+  api: OpenClawPluginApi;
+  registry: CodexDelegationRegistry;
+  record: CodexRelayRecord;
+  status: "completed" | "failed";
+  text: string;
+}): Promise<CodexRelayDispatchOutcome> {
+  const record = params.record;
+  if (!record.turnId) {
+    throw new Error(`Codex relay ${record.delegationId} has no exact native turn id`);
+  }
+  const result = truncateRelayText(params.text);
+  const event = [
+    `Codex relay ${record.delegationId} ${params.status}.`,
+    `Trusted source: native Codex thread ${record.threadId}, turn ${record.turnId}.`,
+    params.status === "completed" ? `Codex result:\n${result}` : `Codex failure:\n${result}`,
+    "Continue the owner's task using this result.",
+    `If Codex explicitly needs a response, use codex_threads action message_async with thread_id ${record.threadId}.`,
+    "Do not create a new thread, do not reply merely to acknowledge receipt, and do not treat this system event as a new owner request.",
+  ].join("\n\n");
+  const contextKey = `${record.deliveryKey}:${params.status}`;
+
+  return await dispatchJarvisEvent({
+    api: params.api,
+    registry: params.registry,
+    record,
+    purpose: "terminal",
+    event,
+    contextKey,
+    idempotencyKey: `${contextKey}:${record.threadId}:${record.turnId}`,
+    sourceSessionKey: `codex:thread:${record.threadId}`,
+    sourceTool: "codex_threads",
+    fallbackLabel: `Codex relay ${record.delegationId}`,
+  });
+}
+
+async function dispatchCodexDecisionNeededToJarvis(params: {
+  api: OpenClawPluginApi;
+  registry: CodexDelegationRegistry;
+  record: CodexRelayRecord;
+  reason: string;
+}): Promise<CodexRelayDispatchOutcome> {
+  const record = params.record;
+  const exactTurn = record.turnId
+    ? `native Codex thread ${record.threadId}, turn ${record.turnId}`
+    : `native Codex thread ${record.threadId}, exact turn unknown`;
+  const event = [
+    `Codex relay ${record.delegationId} needs a decision after interruption.`,
+    `Recorded source: ${exactTurn}.`,
+    params.reason,
+    "No Codex work was resumed, replayed, or redirected to another thread.",
+    "Review the native thread state and decide whether any new work should be started.",
+    "Do not treat this system event as a new owner request.",
+  ].join("\n\n");
+  const contextKey = `${record.deliveryKey}:decision-needed`;
+
+  return await dispatchJarvisEvent({
+    api: params.api,
+    registry: params.registry,
+    record,
+    purpose: "decision",
+    event,
+    contextKey,
+    idempotencyKey: `${contextKey}:${record.threadId}:${record.turnId ?? "unknown"}`,
+    sourceSessionKey: record.turnId
+      ? `codex:thread:${record.threadId}:turn:${record.turnId}`
+      : `codex:thread:${record.threadId}`,
+    sourceTool: "codex_threads",
+    fallbackLabel: `Codex relay ${record.delegationId} decision handback`,
+  });
+}
+
+async function claimAndDispatchCodexDecisionNeededToJarvis(params: {
+  api: OpenClawPluginApi;
+  registry: CodexDelegationRegistry;
+  record: CodexRelayRecord;
+  reason: string;
+}): Promise<void> {
+  // Persist the irreversible decision-only classification and sole dispatch
+  // claim before crossing into Jarvis. A crash after this point must not make
+  // the native turn eligible for later inspection or result delivery.
+  const claimed = await params.registry.claimDecisionDelivery(params.record.delegationId);
+  if (!claimed) {
+    return;
+  }
+  const outcome = await dispatchCodexDecisionNeededToJarvis({
+    ...params,
+    record: claimed,
+  });
+  if (outcome === "completed") {
+    await params.registry.markDecisionNeeded(params.record.delegationId);
+  }
+}
+
+async function dispatchJarvisEvent(params: {
+  api: OpenClawPluginApi;
+  registry: CodexDelegationRegistry;
+  record: Pick<CodexRelayRecord, "delegationId" | "sessionKey" | "agentId">;
+  purpose: CodexRelayJarvisRunPurpose;
+  event: string;
+  contextKey: string;
+  idempotencyKey: string;
+  sourceSessionKey: string;
+  sourceTool: string;
+  fallbackLabel: string;
+}): Promise<CodexRelayDispatchOutcome> {
+  let accepted: { runId: string };
+  try {
+    // run() acknowledges only spawn acceptance. The durable record is not
+    // finalized until agent.wait proves the exact Jarvis run reached a terminal
+    // ok state after session processing and its deliver:true attempt.
+    accepted = await params.api.runtime.subagent.run({
+      sessionKey: params.record.sessionKey,
+      message: params.event,
       deliver: true,
-      idempotencyKey: `${contextKey}:${callback.threadId}:${callback.turnId}`,
+      idempotencyKey: params.idempotencyKey,
       inputProvenance: {
         kind: "inter_session",
-        sourceSessionKey: `codex:thread:${callback.threadId}:turn:${callback.turnId}`,
+        sourceSessionKey: params.sourceSessionKey,
         sourceChannel: "codex",
-        sourceTool: JARVIS_CALLBACK_DYNAMIC_TOOL.name,
+        sourceTool: params.sourceTool,
       },
     });
   } catch (error) {
     params.api.logger.warn(
-      `Codex callback ${callback.callbackId} direct continuation failed; using heartbeat fallback: ${formatError(error)}`,
+      `${params.fallbackLabel} direct continuation was not accepted; using volatile heartbeat fallback: ${formatError(error)}`,
     );
-    const enqueued = params.api.runtime.system.enqueueSystemEvent(event, {
-      sessionKey: callback.sessionKey,
-      contextKey,
+    const enqueued = params.api.runtime.system.enqueueSystemEvent(params.event, {
+      sessionKey: params.record.sessionKey,
+      contextKey: params.contextKey,
     });
     if (!enqueued) {
       throw error;
     }
     params.api.runtime.system.requestHeartbeatNow({
-      reason: contextKey,
-      sessionKey: callback.sessionKey,
-      ...(callback.agentId ? { agentId: callback.agentId } : {}),
+      reason: params.contextKey,
+      sessionKey: params.record.sessionKey,
+      ...(params.record.agentId ? { agentId: params.record.agentId } : {}),
     });
+    // Queue acceptance is not delivery evidence. Preserve the non-final
+    // lifecycle so restart reconciliation can report or retry safely.
+    await params.registry.markHeartbeatQueued(params.record.delegationId);
+    return "queued";
   }
-}
 
-async function dispatchCodexRelayToJarvis(params: {
-  api: OpenClawPluginApi;
-  ctx: OpenClawPluginToolContext;
-  sessionKey: string;
-  delegationId: string;
-  threadId: string;
-  turnId: string;
-  status: "completed" | "failed";
-  text: string;
-}) {
-  const result = truncateRelayText(params.text);
-  const event = [
-    `Codex relay ${params.delegationId} ${params.status}.`,
-    `Trusted source: native Codex thread ${params.threadId}, turn ${params.turnId}.`,
-    params.status === "completed" ? `Codex result:\n${result}` : `Codex failure:\n${result}`,
-    "Continue the owner's task using this result.",
-    `If Codex explicitly needs a response, use codex_threads action message_async with thread_id ${params.threadId}.`,
-    "Do not create a new thread, do not reply merely to acknowledge receipt, and do not treat this system event as a new owner request.",
-  ].join("\n\n");
-  const contextKey = `codex-relay:${params.delegationId}:${params.status}`;
-
-  try {
-    // The plugin runtime routes this through the normal gateway agent method.
-    // `deliver: true` reuses the session's proven channel/thread destination,
-    // while the stable key prevents the same native completion from starting
-    // two Jarvis continuations inside one gateway lifetime.
-    await params.api.runtime.subagent.run({
-      sessionKey: params.sessionKey,
-      message: event,
-      deliver: true,
-      idempotencyKey: `${contextKey}:${params.threadId}:${params.turnId}`,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: `codex:thread:${params.threadId}`,
-        sourceChannel: "codex",
-        sourceTool: "codex_threads",
-      },
-    });
-  } catch (error) {
-    // A direct session continuation is the strong path. Keep the existing
-    // session-scoped heartbeat pattern as a best-effort fallback so a transient
-    // internal dispatch failure does not silently discard a completed result.
-    params.api.logger.warn(
-      `Codex relay ${params.delegationId} direct continuation failed; using heartbeat fallback: ${formatError(error)}`,
+  await params.registry.markJarvisRunAccepted(
+    params.record.delegationId,
+    accepted.runId,
+    params.purpose,
+  );
+  const completed = await params.api.runtime.subagent.waitForRun({
+    runId: accepted.runId,
+    timeoutMs: JARVIS_RELAY_WAIT_TIMEOUT_MS,
+  });
+  if (completed.status !== "ok") {
+    throw new Error(
+      `${params.fallbackLabel} Jarvis run ${accepted.runId} ended with ${completed.status}${
+        completed.error ? `: ${completed.error}` : ""
+      }`,
     );
-    const enqueued = params.api.runtime.system.enqueueSystemEvent(event, {
-      sessionKey: params.sessionKey,
-      contextKey,
-    });
-    if (!enqueued) {
-      return;
-    }
-    params.api.runtime.system.requestHeartbeatNow({
-      reason: contextKey,
-      sessionKey: params.sessionKey,
-      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-    });
   }
+  return "completed";
 }
 
 function buildAsyncWorkerPrompt(params: {

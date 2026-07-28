@@ -48,6 +48,58 @@ export type CodexDelegateResult = CodexThreadRunResult & {
   execution: PreparedCodexWorkspace;
 };
 
+export class CodexTurnTerminalError extends Error {
+  constructor(
+    readonly terminalStatus: "failed" | "interrupted",
+    message: string,
+  ) {
+    super(message);
+    this.name = "CodexTurnTerminalError";
+  }
+}
+
+export type CodexPersistedTurnInspection =
+  | {
+      kind: "completed";
+      threadId: string;
+      turnId: string;
+      finalText: string;
+    }
+  | {
+      kind: "failed";
+      threadId: string;
+      turnId: string;
+      error?: string;
+    }
+  | {
+      kind: "interrupted";
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      kind: "nonterminal";
+      threadId: string;
+      turnId: string;
+      status: string;
+    }
+  | {
+      kind: "missing";
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      kind: "mismatch";
+      expectedThreadId: string;
+      actualThreadId?: string;
+      turnId: string;
+    }
+  | {
+      kind: "invalid";
+      threadId: string;
+      turnId: string;
+      reason: string;
+    };
+
 export type CodexFleetSnapshot = {
   mode: "native-codex-fleet";
   counts: {
@@ -256,6 +308,105 @@ export class CodexThreadService {
       await workspaceManager.discard?.(execution).catch(() => undefined);
       throw error;
     }
+  }
+
+  /**
+   * Inspect one exact persisted turn without loading, resuming, or observing it.
+   *
+   * Reconciliation must not attach a fresh listener to work accepted by a dead
+   * Gateway: an "active" status does not prove that the new process owns that
+   * execution. thread/read(includeTurns) is the deliberately read-only seam.
+   */
+  async inspectPersistedTurn(
+    threadId: string,
+    turnId: string,
+  ): Promise<CodexPersistedTurnInspection> {
+    const expectedThreadId = requireId(threadId);
+    const expectedTurnId = requireId(turnId);
+    const response = asRecord(
+      await (
+        await this.client()
+      ).request("thread/read", {
+        threadId: expectedThreadId,
+        includeTurns: true,
+      }),
+    );
+    const thread = asRecord(response.thread);
+    const actualThreadId = readString(thread.id);
+    if (actualThreadId !== expectedThreadId) {
+      return {
+        kind: "mismatch",
+        expectedThreadId,
+        ...(actualThreadId ? { actualThreadId } : {}),
+        turnId: expectedTurnId,
+      };
+    }
+    const turn = asRecords(thread.turns).find((candidate) => candidate.id === expectedTurnId);
+    if (!turn) {
+      return {
+        kind: "missing",
+        threadId: expectedThreadId,
+        turnId: expectedTurnId,
+      };
+    }
+    const actualTurnId = readString(turn.id);
+    if (actualTurnId !== expectedTurnId) {
+      return {
+        kind: "invalid",
+        threadId: expectedThreadId,
+        turnId: expectedTurnId,
+        reason: "persisted turn identity did not match the requested turn",
+      };
+    }
+    const status = readString(turn.status);
+    if (!status) {
+      return {
+        kind: "invalid",
+        threadId: expectedThreadId,
+        turnId: expectedTurnId,
+        reason: "persisted turn did not include a status",
+      };
+    }
+    if (status === "completed") {
+      const finalText = readPersistedFinalText(turn);
+      if (!finalText) {
+        return {
+          kind: "invalid",
+          threadId: expectedThreadId,
+          turnId: expectedTurnId,
+          reason: "completed persisted turn did not include a final agent message",
+        };
+      }
+      return {
+        kind: "completed",
+        threadId: expectedThreadId,
+        turnId: expectedTurnId,
+        finalText,
+      };
+    }
+    if (status === "failed") {
+      return {
+        kind: "failed",
+        threadId: expectedThreadId,
+        turnId: expectedTurnId,
+        ...(readNestedString(turn, ["error", "message"])
+          ? { error: readNestedString(turn, ["error", "message"]) }
+          : {}),
+      };
+    }
+    if (status === "interrupted") {
+      return {
+        kind: "interrupted",
+        threadId: expectedThreadId,
+        turnId: expectedTurnId,
+      };
+    }
+    return {
+      kind: "nonterminal",
+      threadId: expectedThreadId,
+      turnId: expectedTurnId,
+      status,
+    };
   }
 
   async create(cwd = this.options.defaultWorkspaceDir): Promise<JsonObject> {
@@ -624,8 +775,21 @@ function createTurnCollector(threadId: string) {
     const turn = asRecord(params.turn);
     const status = readString(turn.status);
     if (status === "failed") {
-      failure = new Error(
+      failure = new CodexTurnTerminalError(
+        "failed",
         readNestedString(turn, ["error", "message"]) ?? "Codex App Server turn failed",
+      );
+      settle();
+      return;
+    }
+    if (status === "interrupted") {
+      failure = new CodexTurnTerminalError("interrupted", "Codex App Server turn was interrupted");
+      settle();
+      return;
+    }
+    if (status !== "completed") {
+      failure = new Error(
+        `Codex App Server turn completed with ambiguous status ${status ?? "unknown"}`,
       );
       settle();
       return;
@@ -702,6 +866,17 @@ function readAccountType(account: JsonObject): string | undefined {
     readNestedString(account, ["account", "type"]) ??
     readNestedString(account, ["account", "planType"])
   );
+}
+
+function readPersistedFinalText(turn: JsonObject): string | undefined {
+  const messages = asRecords(turn.items).filter(
+    (item) => readString(item.type) === "agentMessage" && readString(item.text),
+  );
+  // Newer App Server versions label the authoritative terminal response. The
+  // last agent message is the compatible fallback for older persisted turns.
+  const final =
+    messages.findLast((item) => readString(item.phase) === "final_answer") ?? messages.at(-1);
+  return readString(final?.text)?.trim();
 }
 
 function requireId(value: string): string {
