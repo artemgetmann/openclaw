@@ -6,6 +6,8 @@ LAUNCHCTL_BIN="${OPENCLAW_LAUNCHCTL_BIN:-/bin/launchctl}"
 FIND_BIN="${OPENCLAW_FIND_BIN:-/usr/bin/find}"
 PS_BIN="${OPENCLAW_PS_BIN:-/bin/ps}"
 LSOF_BIN="${OPENCLAW_LSOF_BIN:-/usr/sbin/lsof}"
+STAT_BIN="${OPENCLAW_STAT_BIN:-/usr/bin/stat}"
+WORKTREE_GRACE_DAYS="${OPENCLAW_WORKTREE_GC_GRACE_DAYS:-7}"
 LAUNCH_AGENTS_DIR="${OPENCLAW_WORKTREE_GC_LAUNCH_AGENTS_DIR:-${HOME}/Library/LaunchAgents}"
 LAUNCH_AGENT_QUARANTINE_DIR="${OPENCLAW_WORKTREE_GC_QUARANTINE_DIR:-${LAUNCH_AGENTS_DIR}/openclaw-worktree-gc-disabled-$(date +%Y%m%d-%H%M%S)-$$}"
 
@@ -579,50 +581,99 @@ mask_token() {
   printf '%s...%s' "${token:0:4}" "${token:len-4:4}"
 }
 
-# Return the first protected repo-local state path. These are intentionally
-# top-level, explicit names: they cover ignored credentials, bot claims,
-# browser/session state, and agent memory without mistaking tracked source
-# directories such as src/browser or src/sessions for local runtime state.
-protected_local_state_path() {
+# Print the first ignored path. Any ignored state can be credentials, personal
+# data, or configuration unknown to this tool, so whole-worktree auto-removal
+# fails closed rather than attempting to classify individual paths. NUL records
+# preserve spaces and newlines. Inventory failure is reported through a distinct
+# status so callers cannot confuse indeterminate evidence with clean.
+first_protected_ignored_path() {
   local worktree_path="$1"
+  local inventory_path=""
+  local record=""
   local relative_path=""
-  local -a protected_paths=(
-    ".env"
-    ".env.local"
-    ".env.bots"
-    ".dev-launch.env"
-    ".telegram-lane.env"
-    ".local"
-    ".openclaw"
-    ".dev-state"
-    ".serena"
-    "local"
-    "memory"
-    ".claude"
-    "IDENTITY.md"
-    "USER.md"
-    "skills-lock.json"
-    "scripts/telegram-e2e/.env.local"
-    "scripts/telegram-e2e/tmp"
-    "scripts/telegram-e2e/userbot.session"
-  )
 
-  for relative_path in "${protected_paths[@]}"; do
-    if [[ -e "${worktree_path}/${relative_path}" || -L "${worktree_path}/${relative_path}" ]]; then
-      printf '%s' "${worktree_path}/${relative_path}"
-      return 0
-    fi
-  done
+  if ! inventory_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-worktree-gc-ignored.XXXXXX")"; then
+    return 2
+  fi
+  if ! git -C "$worktree_path" status \
+    --porcelain=v2 \
+    --ignored=matching \
+    --untracked-files=all \
+    -z > "$inventory_path"; then
+    rm -f "$inventory_path" || true
+    return 2
+  fi
 
-  # The repository intentionally tracks .agent/workflows while ignoring local
-  # .agent JSON state. Protect only the ignored state files so tracked workflow
-  # source does not make every worktree permanently ineligible.
-  for protected_path in "$worktree_path"/.agent/*.json; do
-    if [[ -e "$protected_path" || -L "$protected_path" ]]; then
-      printf '%s' "$protected_path"
-      return 0
-    fi
-  done
+  while IFS= read -r -d '' record; do
+    [[ "$record" == "! "* ]] || continue
+    relative_path="${record#"! "}"
+    rm -f "$inventory_path" || true
+    printf '%s' "$relative_path"
+    return 0
+  done < "$inventory_path"
+
+  if ! rm -f "$inventory_path"; then
+    return 2
+  fi
+  return 1
+}
+
+worktree_is_blessed_release_lane() {
+  local worktree_path="$1"
+  local branch_ref="$2"
+  [[ "$branch_ref" == "refs/heads/codex/jarvis-release-current" || \
+    "$(basename "$worktree_path")" == "jarvis-release-current" ]]
+}
+
+# A detached commit is disposable only when it is positively reachable from
+# the selected base or at least one named remote-tracking ref. Merely asking to
+# include detached lanes is not recoverability evidence.
+detached_head_is_recoverable() {
+  local head="$1"
+  local remote_refs=""
+  [[ -n "$head" ]] || return 1
+
+  git merge-base --is-ancestor "$head" "$BASE_BRANCH" >/dev/null 2>&1 && return 0
+  if remote_refs="$(git for-each-ref --format='%(refname)' --contains "$head" refs/remotes 2>/dev/null)"; then
+    [[ -n "$remote_refs" ]]
+    return
+  fi
+  return 1
+}
+
+# Protect newly created lanes even if their checked-out commit is old. The
+# linked worktree's .git file is created with the lane and gives a stable,
+# filesystem-local grace anchor without scanning generated trees.
+worktree_grace_block_reason() {
+  local worktree_path="$1"
+  local created_epoch=""
+  local now_epoch=""
+  local minimum_age_seconds=$((WORKTREE_GRACE_DAYS * 86400))
+
+  [[ "$WORKTREE_GRACE_DAYS" -gt 0 ]] || return 1
+  if ! command -v "$STAT_BIN" >/dev/null 2>&1; then
+    printf 'worktree age inspection unavailable: %s' "$STAT_BIN"
+    return 0
+  fi
+  # GNU stat accepts -f but prints filesystem metadata, so only accept a
+  # numeric BSD result before falling back to GNU's explicit epoch format.
+  created_epoch="$("$STAT_BIN" -f '%m' "${worktree_path}/.git" 2>/dev/null || true)"
+  if [[ ! "$created_epoch" =~ ^[0-9]+$ ]]; then
+    created_epoch="$("$STAT_BIN" -c '%Y' "${worktree_path}/.git" 2>/dev/null || true)"
+  fi
+  if [[ ! "$created_epoch" =~ ^[0-9]+$ ]]; then
+    printf 'worktree age inspection failed'
+    return 0
+  fi
+  now_epoch="$(date +%s)"
+  if [[ ! "$now_epoch" =~ ^[0-9]+$ || "$now_epoch" -lt "$created_epoch" ]]; then
+    printf 'worktree age inspection indeterminate'
+    return 0
+  fi
+  if [[ $((now_epoch - created_epoch)) -lt "$minimum_age_seconds" ]]; then
+    printf 'worktree is inside %s-day grace period' "$WORKTREE_GRACE_DAYS"
+    return 0
+  fi
   return 1
 }
 
@@ -633,7 +684,8 @@ worktree_removal_block_reason() {
   local worktree_path="$1"
   local command_output=""
   local command_status=0
-  local protected_path=""
+  local ignored_path=""
+  local ignored_status=0
 
   if ! command -v "$PS_BIN" >/dev/null 2>&1; then
     printf 'process inspection unavailable: %s' "$PS_BIN"
@@ -657,11 +709,15 @@ worktree_removal_block_reason() {
     return 1
   fi
 
-  # Check known auth/control paths before the generic dirty-state gate so the
-  # report names the highest-risk reason without ever printing secret content.
-  if protected_path="$(protected_local_state_path "$worktree_path")"; then
-    printf 'protected local state: %s' "$protected_path"
+  if ignored_path="$(first_protected_ignored_path "$worktree_path")"; then
+    printf 'ignored local state: %s' "${worktree_path}/${ignored_path}"
     return 0
+  else
+    ignored_status=$?
+    if [[ "$ignored_status" == "2" ]]; then
+      printf 'ignored-file inspection failed'
+      return 0
+    fi
   fi
 
   if command_output="$(git -C "$worktree_path" status --porcelain=v2 --untracked-files=all 2>&1)"; then
@@ -673,6 +729,11 @@ worktree_removal_block_reason() {
   fi
   if [[ -n "$command_output" ]]; then
     printf 'tracked or untracked worktree changes'
+    return 0
+  fi
+
+  if command_output="$(worktree_grace_block_reason "$worktree_path")"; then
+    printf '%s' "$command_output"
     return 0
   fi
 
@@ -734,6 +795,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ ! "$WORKTREE_GRACE_DAYS" =~ ^[0-9]+$ ]]; then
+  echo "Error: OPENCLAW_WORKTREE_GC_GRACE_DAYS must be a non-negative integer." >&2
+  exit 1
+fi
+
 if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "Error: run this script from inside a git worktree." >&2
   exit 1
@@ -748,6 +814,7 @@ if [[ -z "$worktree_output" ]]; then
 fi
 
 declare -a block_paths=()
+declare -a block_heads=()
 declare -a block_branches=()
 declare -a block_detached=()
 declare -a block_prunable=()
@@ -764,6 +831,7 @@ finalize_block() {
     return
   fi
   block_paths+=("$current_path")
+  block_heads+=("${current_head:-}")
   block_branches+=("${current_branch:-}")
   block_detached+=("${current_detached:-0}")
   block_prunable+=("${current_prunable:-0}")
@@ -771,6 +839,7 @@ finalize_block() {
 }
 
 current_path=""
+current_head=""
 current_branch=""
 current_detached=0
 current_prunable=0
@@ -780,6 +849,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   if [[ -z "$line" ]]; then
     finalize_block
     current_path=""
+    current_head=""
     current_branch=""
     current_detached=0
     current_prunable=0
@@ -790,6 +860,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   case "$line" in
     worktree\ *)
       current_path="${line#worktree }"
+      ;;
+    HEAD\ *)
+      current_head="${line#HEAD }"
       ;;
     branch\ *)
       current_branch="${line#branch }"
@@ -829,6 +902,7 @@ removed_count=0
 
 for ((i = 1; i < ${#block_paths[@]}; i++)); do
   worktree_path="${block_paths[$i]}"
+  head="${block_heads[$i]}"
   branch_ref="${block_branches[$i]}"
   is_detached="${block_detached[$i]}"
   is_prunable="${block_prunable[$i]}"
@@ -854,12 +928,17 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
 
   class="active"
   should_remove=0
+  classification_reason=""
 
   # A lock is an explicit owner request to preserve this registration. It wins
   # over prunable/merged state, including temporarily unavailable worktrees;
   # never retire services or prune metadata behind that lock.
   if [[ "$is_locked" == "1" ]]; then
     class="locked"
+    active_count=$((active_count + 1))
+  elif worktree_is_blessed_release_lane "$normalized_path" "$branch_ref"; then
+    class="protected"
+    classification_reason="blessed persistent release lane"
     active_count=$((active_count + 1))
   elif [[ "$is_prunable" == "1" ]]; then
     class="prunable"
@@ -869,7 +948,12 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
     class="detached"
     detached_count=$((detached_count + 1))
     if [[ "$INCLUDE_DETACHED" == "1" ]]; then
-      should_remove=1
+      if detached_head_is_recoverable "$head"; then
+        should_remove=1
+      else
+        class="protected"
+        classification_reason="detached HEAD is not recoverable from base or named remote ref"
+      fi
     fi
   elif [[ -n "$branch_ref" ]]; then
     if git merge-base --is-ancestor "$branch_ref" "$BASE_BRANCH" >/dev/null 2>&1; then
@@ -907,7 +991,7 @@ for ((i = 1; i < ${#block_paths[@]}; i++)); do
       remove_prunable+=("$is_prunable")
     fi
   else
-    display_reasons+=("")
+    display_reasons+=("$classification_reason")
   fi
 done
 
@@ -923,8 +1007,6 @@ done
 if [[ "$AUTO" == "1" ]]; then
   cleanup_failed_count=0
   remove_failed_count=0
-  prunable_retired_count=0
-  prunable_retirement_failed_count=0
   for ((remove_index = 0; remove_index < ${#remove_paths[@]}; remove_index++)); do
     path="${remove_paths[$remove_index]}"
     path_is_prunable="${remove_prunable[$remove_index]}"
@@ -945,17 +1027,15 @@ if [[ "$AUTO" == "1" ]]; then
     if ! retire_worktree_consumer_launchagents "$path"; then
       rollback_retired_launchagents "$path" || true
       cleanup_failed_count=$((cleanup_failed_count + 1))
-      if [[ "$path_is_prunable" == "1" ]]; then
-        prunable_retirement_failed_count=$((prunable_retirement_failed_count + 1))
-      fi
       continue
     fi
 
     # A prunable registration points at a missing worktree. There is no tester
-    # runtime to release and no directory for `git worktree remove`; defer its
-    # metadata cleanup until every prunable LaunchAgent retirement is safe.
+    # runtime to release and no directory for exact native removal. Never use
+    # global `git worktree prune`: it can erase another skipped lane's ownership
+    # evidence. Report the exact retained registration for operator repair.
     if [[ "$path_is_prunable" == "1" ]]; then
-      prunable_retired_count=$((prunable_retired_count + 1))
+      echo "Retained prunable Git registration after safe LaunchAgent retirement: ${path}"
       continue
     fi
 
@@ -979,20 +1059,6 @@ if [[ "$AUTO" == "1" ]]; then
       remove_failed_count=$((remove_failed_count + 1))
     fi
   done
-
-  # `git worktree prune` is global, so run it only when every discovered stale
-  # registration passed retirement. Otherwise it could erase ownership
-  # evidence for a lane whose LaunchAgent state is still ambiguous.
-  if [[ "$prunable_retired_count" -gt 0 && "$prunable_retirement_failed_count" == "0" ]]; then
-    if git worktree prune; then
-      removed_count=$((removed_count + prunable_retired_count))
-    else
-      echo "Error: Git metadata prune failed after retiring ${prunable_retired_count} prunable worktree(s). LaunchAgents remain quarantined." >&2
-      remove_failed_count=$((remove_failed_count + prunable_retired_count))
-    fi
-  elif [[ "$prunable_retirement_failed_count" -gt 0 ]]; then
-    echo "Error: skipped Git metadata prune because ${prunable_retirement_failed_count} prunable worktree LaunchAgent retirement(s) failed." >&2
-  fi
 else
   echo "re-run with --auto to apply."
 fi

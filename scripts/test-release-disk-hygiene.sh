@@ -185,11 +185,45 @@ fi
 EOF
 cat >"$INSPECTION_BIN_DIR/lsof" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
 if [[ -n "${OPENCLAW_TEST_INSPECTION_LOG:-}" ]]; then
   printf 'lsof %s\n' "$*" >>"$OPENCLAW_TEST_INSPECTION_LOG"
 fi
 if [[ "${1:-}" == "-Fn" ]]; then
   exit 0
+fi
+if [[ "${1:-}" == "+D" && "${2:-}" == "${OPENCLAW_TEST_LSOF_MUTATION_TARGET:-}" &&
+  -n "${OPENCLAW_TEST_LSOF_MUTATION_ACTION:-}" &&
+  ! -e "${OPENCLAW_TEST_LSOF_MUTATION_SENTINEL:-/nonexistent}" ]]; then
+  : >"$OPENCLAW_TEST_LSOF_MUTATION_SENTINEL"
+  case "$OPENCLAW_TEST_LSOF_MUTATION_ACTION" in
+    marker)
+      : >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/.openclaw-protected"
+      ;;
+    dirty)
+      printf 'late user state\n' >"$OPENCLAW_TEST_LSOF_MUTATION_WORKTREE/user-state.txt"
+      ;;
+    release-receipt)
+      printf 'late receipt\n' >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/Jarvis.app.notary.env"
+      ;;
+    age)
+      touch "$OPENCLAW_TEST_LSOF_MUTATION_TARGET"
+      ;;
+    identity)
+      mv "$OPENCLAW_TEST_LSOF_MUTATION_TARGET" "$OPENCLAW_TEST_LSOF_MUTATION_TARGET.replaced"
+      mkdir -p "$OPENCLAW_TEST_LSOF_MUTATION_TARGET"
+      printf 'replacement must survive\n' >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/replacement.txt"
+      ;;
+    tree-safety)
+      mkdir -p "$OPENCLAW_TEST_LSOF_MUTATION_TARGET/late-protected"
+      printf 'late protected state\n' >"$OPENCLAW_TEST_LSOF_MUTATION_TARGET/late-protected/state.txt"
+      chmod 000 "$OPENCLAW_TEST_LSOF_MUTATION_TARGET/late-protected"
+      ;;
+    open-file)
+      printf 'fixture 1 test 1r REG 1,1 1 1 %s/open-file\n' "$OPENCLAW_TEST_LSOF_MUTATION_TARGET"
+      exit 0
+      ;;
+  esac
 fi
 exit 1
 EOF
@@ -353,6 +387,42 @@ OPENCLAW_CLEANUP_OLDER_THAN_DAYS=0 \
 assert_file_exists "$RELEASE_WORKTREE/dist/Jarvis.app.notary.env" "apply keeps resumable release receipt"
 assert_file_missing "$ORDINARY_WORKTREE/dist" "apply still removes ordinary generated dist output"
 assert_output_has "release-artifact-or-receipt" "cleanup explains protected release dist"
+
+# Every destructive worktree-artifact policy is re-evaluated after the fresh
+# process/open-file check. The lsof fixture mutates the exact candidate at that
+# boundary to prove late markers, user state, receipts, age, identity, tree
+# safety, and open-file evidence all stop deletion.
+TOCTOU_ROOT="$TMP_DIR/toctou-worktrees"
+mkdir -p "$TOCTOU_ROOT"
+for mutation_action in marker dirty release-receipt age identity tree-safety open-file; do
+  mutation_worktree="$TOCTOU_ROOT/$mutation_action"
+  mutation_target="$mutation_worktree/dist"
+  mutation_sentinel="$TMP_DIR/toctou-$mutation_action.done"
+  mkdir -p "$mutation_target"
+  git -C "$mutation_worktree" init -q -b fixture
+  printf 'fixture\n' >"$mutation_worktree/tracked.txt"
+  printf '/dist/\n' >"$mutation_worktree/.gitignore"
+  git -C "$mutation_worktree" add tracked.txt .gitignore
+  git -C "$mutation_worktree" -c user.name='Fixture' -c user.email='fixture@example.invalid' commit -qm 'fixture'
+  printf 'old generated output\n' >"$mutation_target/payload.txt"
+  touch -t 202001010000 "$mutation_target"
+
+  OPENCLAW_TEST_LSOF_MUTATION_ACTION="$mutation_action" \
+  OPENCLAW_TEST_LSOF_MUTATION_TARGET="$mutation_target" \
+  OPENCLAW_TEST_LSOF_MUTATION_WORKTREE="$mutation_worktree" \
+  OPENCLAW_TEST_LSOF_MUTATION_SENTINEL="$mutation_sentinel" \
+  OPENCLAW_CLEANUP_OLDER_THAN_DAYS=1 \
+    /bin/bash "$ROOT_DIR/scripts/cleanup-build-artifacts.sh" \
+      --worktrees \
+      --worktrees-root "$TOCTOU_ROOT" \
+      --apply >"$OUT" 2>&1
+
+  assert_file_exists "$mutation_target" "late $mutation_action mutation protects exact artifact"
+  assert_record "skip" "$mutation_target" "late $mutation_action mutation is reported"
+  if [[ "$mutation_action" == "tree-safety" ]]; then
+    chmod 700 "$mutation_target/late-protected"
+  fi
+done
 
 # Default discovery must follow Git's registry rather than assuming every
 # checkout is an immediate child of one filesystem root. A narrow Git wrapper

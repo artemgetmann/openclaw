@@ -78,9 +78,9 @@ case "\${1:-}" in
     ;;
   print-disabled)
     if [[ "${mode}" == "disabled" ]]; then
-      printf '"ai.openclaw.worktree-gc" => disabled\\n'
+      printf '"ai.openclaw.worktree-gc" => true\\n'
     else
-      printf 'disabled services = {}\\n'
+      printf '"ai.openclaw.worktree-gc" => false\\n'
     fi
     ;;
   *)
@@ -90,6 +90,78 @@ esac
 `,
   );
   return launchctl;
+}
+
+function makeTransactionalLaunchctlFixture(root: string, failureStep: string) {
+  const launchctl = path.join(root, "launchctl-transaction");
+  const loaded = path.join(root, "launchctl.loaded");
+  const disabled = path.join(root, "launchctl.disabled");
+  const failure = path.join(root, `fail-${failureStep}`);
+  fs.writeFileSync(loaded, "loaded\n");
+  fs.writeFileSync(disabled, "disabled\n");
+  fs.writeFileSync(failure, "fail once\n");
+
+  writeExecutable(
+    launchctl,
+    `#!/usr/bin/env bash
+set -euo pipefail
+operation="\${1:-}"
+if [[ "$operation" == "${failureStep}" && -f "${failure}" ]]; then
+  rm -f "${failure}"
+  exit 70
+fi
+case "$operation" in
+  print)
+    [[ -f "${loaded}" ]] || exit 113
+    printf 'state = waiting\\n'
+    ;;
+  print-disabled)
+    if [[ -f "${disabled}" ]]; then
+      printf '"ai.openclaw.worktree-gc" => true\\n'
+    else
+      printf '"ai.openclaw.worktree-gc" => false\\n'
+    fi
+    ;;
+  enable)
+    rm -f "${disabled}"
+    ;;
+  disable)
+    printf 'disabled\\n' > "${disabled}"
+    ;;
+  bootout)
+    rm -f "${loaded}"
+    ;;
+  bootstrap)
+    printf 'loaded\\n' > "${loaded}"
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+`,
+  );
+  return { disabled, launchctl, loaded };
+}
+
+// Fail the first atomic plist replacement only. The second invocation is the
+// rollback restore and must succeed so the fixture proves the transaction,
+// rather than merely observing the initial failure.
+function makeFailOnceMoveFixture(root: string) {
+  const move = path.join(root, "mv-fail-once");
+  const failure = path.join(root, "mv-fail-once.pending");
+  fs.writeFileSync(failure, "fail once\n");
+  writeExecutable(
+    move,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ -f "${failure}" ]]; then
+  rm -f "${failure}"
+  exit 70
+fi
+exec /bin/mv "$@"
+`,
+  );
+  return move;
 }
 
 afterEach(() => {
@@ -173,6 +245,32 @@ describePosix("disk retention scheduler", () => {
     expect(result.stdout).not.toContain(`${repoRoot}/scripts/gc-worktrees.sh`);
   });
 
+  it("XML-escapes dynamic plist paths and arguments", () => {
+    const root = makeTempRoot();
+    const escapedRepo = path.join(root, "repo&<>'\"");
+    fs.mkdirSync(escapedRepo);
+
+    const result = spawnSync(
+      "/bin/bash",
+      [installerScript, "install", "--dry-run", "--base-branch", "topic&<>'\""],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          HOME: root,
+          OPENCLAW_WORKTREE_GC_PLATFORM_OVERRIDE: "Darwin",
+          OPENCLAW_WORKTREE_GC_REPO_ROOT: escapedRepo,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("repo&amp;&lt;&gt;&apos;&quot;");
+    expect(result.stdout).toContain("topic&amp;&lt;&gt;&apos;&quot;");
+    expect(result.stdout).not.toContain("<string>topic&<>'\"</string>");
+  });
+
   it("fails status when a plist exists but launchd is disabled and unloaded", () => {
     const root = makeTempRoot();
     const launchAgents = path.join(root, "Library/LaunchAgents");
@@ -222,5 +320,92 @@ describePosix("disk retention scheduler", () => {
     expect(result.stdout).toContain("loaded=yes");
     expect(result.stdout).toContain("enabled=yes");
     expect(result.stdout).toContain("last exit code = 0");
+  });
+
+  it("fails Linux status when the scheduler is not installed", () => {
+    const root = makeTempRoot();
+    const crontab = path.join(root, "crontab");
+    writeExecutable(
+      crontab,
+      `#!/usr/bin/env bash
+set -euo pipefail
+[[ "\${1:-}" == "-l" ]] || exit 64
+exit 1
+`,
+    );
+
+    const result = spawnSync("/bin/bash", [installerScript, "status"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: root,
+        PATH: `${root}:${process.env.PATH ?? ""}`,
+        OPENCLAW_WORKTREE_GC_PLATFORM_OVERRIDE: "Linux",
+        OPENCLAW_WORKTREE_GC_REPO_ROOT: repoRoot,
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("installed=no");
+  });
+
+  it.each(["enable", "bootout", "bootstrap", "plist-overwrite"])(
+    "restores prior macOS plist, loaded state, and disabled state after %s failure",
+    (failureStep) => {
+      const root = makeTempRoot();
+      const launchAgents = path.join(root, "Library/LaunchAgents");
+      const plist = path.join(launchAgents, "ai.openclaw.worktree-gc.plist");
+      fs.mkdirSync(launchAgents, { recursive: true });
+      fs.writeFileSync(plist, "prior plist\n");
+      const fixture = makeTransactionalLaunchctlFixture(root, failureStep);
+      const move = failureStep === "plist-overwrite" ? makeFailOnceMoveFixture(root) : undefined;
+
+      const result = spawnSync("/bin/bash", [installerScript, "install"], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          HOME: root,
+          OPENCLAW_WORKTREE_GC_LAUNCHCTL_BIN: fixture.launchctl,
+          OPENCLAW_WORKTREE_GC_PLATFORM_OVERRIDE: "Darwin",
+          OPENCLAW_WORKTREE_GC_REPO_ROOT: repoRoot,
+          ...(move ? { OPENCLAW_WORKTREE_GC_MV_BIN: move } : {}),
+        },
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`install failed at ${failureStep}`);
+      expect(fs.readFileSync(plist, "utf8")).toBe("prior plist\n");
+      expect(fs.existsSync(fixture.loaded)).toBe(true);
+      expect(fs.existsSync(fixture.disabled)).toBe(true);
+    },
+  );
+
+  it("refuses install when prior launchd loaded state is indeterminate", () => {
+    const root = makeTempRoot();
+    const launchAgents = path.join(root, "Library/LaunchAgents");
+    const plist = path.join(launchAgents, "ai.openclaw.worktree-gc.plist");
+    fs.mkdirSync(launchAgents, { recursive: true });
+    fs.writeFileSync(plist, "prior plist\n");
+    const fixture = makeTransactionalLaunchctlFixture(root, "print");
+
+    const result = spawnSync("/bin/bash", [installerScript, "install"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_WORKTREE_GC_LAUNCHCTL_BIN: fixture.launchctl,
+        OPENCLAW_WORKTREE_GC_PLATFORM_OVERRIDE: "Darwin",
+        OPENCLAW_WORKTREE_GC_REPO_ROOT: repoRoot,
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unable to inspect launchd loaded state");
+    expect(fs.readFileSync(plist, "utf8")).toBe("prior plist\n");
+    expect(fs.existsSync(fixture.loaded)).toBe(true);
+    expect(fs.existsSync(fixture.disabled)).toBe(true);
   });
 });

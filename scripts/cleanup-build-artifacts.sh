@@ -111,11 +111,17 @@ human_kib() {
 
 path_mtime_epoch() {
   local target_path="$1"
-  if stat -f %m "$target_path" >/dev/null 2>&1; then
-    stat -f %m "$target_path"
-  else
-    stat -c %Y "$target_path"
+  local mtime=""
+
+  # GNU stat accepts -f but reports filesystem metadata, so command success is
+  # not enough to identify BSD stat. Accept only an epoch-shaped BSD result,
+  # then fall back to GNU's explicit mtime format.
+  mtime="$(stat -f %m "$target_path" 2>/dev/null || true)"
+  if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$mtime"
+    return 0
   fi
+  stat -c %Y "$target_path"
 }
 
 path_age_days() {
@@ -141,6 +147,22 @@ path_size_kib_or_zero() {
   local size_kib
   size_kib="$(path_size_kib "$1" || true)"
   printf '%s\n' "${size_kib:-0}"
+}
+
+path_identity() {
+  local target_path="$1"
+  local identity=""
+
+  # Device, inode, mtime, and ctime together detect replacement plus ordinary
+  # directory-entry changes. Candidate-specific policy is still rechecked
+  # after this because nested state can change without touching the root mtime.
+  # As above, validate BSD output because GNU stat -f can exit successfully.
+  identity="$(stat -f '%d:%i:%m:%c' "$target_path" 2>/dev/null || true)"
+  if [[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]]; then
+    printf '%s\n' "$identity"
+    return 0
+  fi
+  stat -c '%d:%i:%Y:%Z' "$target_path"
 }
 
 tree_removal_protection_reason() {
@@ -277,15 +299,216 @@ path_is_active() {
   path_has_process_ref "$target_path" || path_has_open_files "$target_path"
 }
 
+generated_age_policy_block_reason() {
+  local target_path="$1"
+  local min_age="$2"
+  local age_unit="$3"
+  local current_age=0
+
+  if [[ "$age_unit" == "hours" ]]; then
+    current_age="$(path_age_hours "$target_path" 2>/dev/null)" || {
+      printf 'age-inspection-failed'
+      return 0
+    }
+  else
+    current_age="$(path_age_days "$target_path" 2>/dev/null)" || {
+      printf 'age-inspection-failed'
+      return 0
+    }
+  fi
+  if ((current_age < min_age)); then
+    printf 'candidate-became-too-new'
+    return 0
+  fi
+  return 1
+}
+
+worktree_artifact_policy_block_reason() {
+  local target_path="$1"
+  local worktree="$2"
+  local kind="$3"
+  local min_age_days="$4"
+
+  if [[ ! -d "$worktree" || "$target_path" != "$worktree/$kind" ]]; then
+    printf 'worktree-or-candidate-identity-changed'
+    return 0
+  fi
+  if [[ "$INCLUDE_CURRENT" != "1" && "$(cd "$worktree" 2>/dev/null && pwd -P)" == "$CURRENT_ROOT" ]]; then
+    printf 'current-checkout'
+    return 0
+  fi
+  if worktree_is_protected_control_lane "$worktree"; then
+    printf 'control-or-release-worktree'
+    return 0
+  fi
+  if worktree_is_dirty "$worktree"; then
+    printf 'dirty-or-status-indeterminate'
+    return 0
+  fi
+  if [[ "$kind" == "dist" ]] && dist_has_release_recovery_state "$target_path"; then
+    printf 'release-artifact-or-receipt'
+    return 0
+  fi
+  generated_age_policy_block_reason "$target_path" "$min_age_days" days
+}
+
+newest_release_run_path() {
+  local run_dir
+  local candidate_name
+  local candidate_mtime
+  local newest_path=""
+  local newest_mtime=0
+  local inventory_path=""
+
+  if ! inventory_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-release-runs.XXXXXX")"; then
+    return 2
+  fi
+  if ! find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 > "$inventory_path" 2>/dev/null; then
+    rm -f "$inventory_path" || true
+    return 2
+  fi
+
+  while IFS= read -r -d '' run_dir; do
+    candidate_name="$(basename "$run_dir")"
+    case "$candidate_name" in
+      *-jarvis-release-*|jarvis-release-*|*-sparkle-*|sparkle-*|*-appcast-*|appcast-*)
+        candidate_mtime="$(path_mtime_epoch "$run_dir" 2>/dev/null)" || continue
+        if ((candidate_mtime > newest_mtime)); then
+          newest_mtime="$candidate_mtime"
+          newest_path="$run_dir"
+        fi
+        ;;
+    esac
+  done < "$inventory_path"
+  if ! rm -f "$inventory_path"; then
+    return 2
+  fi
+  printf '%s\n' "$newest_path"
+}
+
+build_run_policy_block_reason() {
+  local target_path="$1"
+  local kind="$2"
+
+  if [[ "$(dirname "$target_path")" != "$BUILD_ARTIFACT_ROOT/runs" ]]; then
+    printf 'build-run-parent-changed'
+    return 0
+  fi
+  if [[ "$kind" == "release-staging" ]]; then
+    local newest_path=""
+    if ! newest_path="$(newest_release_run_path)"; then
+      printf 'release-run-inventory-failed'
+      return 0
+    fi
+    if [[ "$newest_path" == "$target_path" ]]; then
+      printf 'newest-release-staging'
+      return 0
+    fi
+    generated_age_policy_block_reason "$target_path" "$RELEASE_STAGING_OLDER_THAN_DAYS" days
+    return $?
+  fi
+  generated_age_policy_block_reason "$target_path" "$BUILD_RUNS_OLDER_THAN_HOURS" hours
+}
+
+runtime_cache_policy_block_reason() {
+  local target_path="$1"
+
+  if runtime_cache_is_newest_in_group "$target_path"; then
+    printf 'newest-in-group'
+    return 0
+  fi
+  generated_age_policy_block_reason "$target_path" "$RUNTIME_CACHE_OLDER_THAN_DAYS" days
+}
+
+runtime_instance_policy_block_reason() {
+  local target_path="$1"
+  local instance_name="$2"
+
+  if [[ "$(basename "$target_path")" != "$instance_name" ]] ||
+    ! runtime_instance_is_generated "$instance_name" ||
+    runtime_instance_is_protected_name "$instance_name" ||
+    runtime_instance_has_protected_state "$target_path"; then
+    printf 'runtime-instance-became-stateful-or-unowned'
+    return 0
+  fi
+  generated_age_policy_block_reason "$target_path" "$RUNTIME_INSTANCE_OLDER_THAN_DAYS" days
+}
+
+pre_delete_block_reason() {
+  local target_path="$1"
+  local expected_identity="$2"
+  local policy_fn="$3"
+  shift 3
+  local reason=""
+  local current_identity=""
+
+  [[ -e "$target_path" || -L "$target_path" ]] || {
+    printf 'candidate-disappeared'
+    return 0
+  }
+  current_identity="$(path_identity "$target_path" 2>/dev/null)" || {
+    printf 'identity-inspection-failed'
+    return 0
+  }
+  if [[ "$current_identity" != "$expected_identity" ]]; then
+    printf 'candidate-identity-changed'
+    return 0
+  fi
+  if reason="$("$policy_fn" "$target_path" "$@")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  if path_has_retention_marker "$target_path"; then
+    printf 'protected-marker'
+    return 0
+  fi
+  if reason="$(tree_removal_protection_reason "$target_path")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  if path_is_active_fresh "$target_path"; then
+    printf 'became-active-or-inspection-indeterminate'
+    return 0
+  fi
+
+  # Live/process inspection can take long enough for state, receipts, markers,
+  # permissions, or the path itself to change. Re-run every policy immediately
+  # after it and before the exact-path rm.
+  if reason="$("$policy_fn" "$target_path" "$@")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  if path_has_retention_marker "$target_path"; then
+    printf 'protected-marker'
+    return 0
+  fi
+  if reason="$(tree_removal_protection_reason "$target_path")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  current_identity="$(path_identity "$target_path" 2>/dev/null)" || {
+    printf 'identity-inspection-failed'
+    return 0
+  }
+  if [[ "$current_identity" != "$expected_identity" ]]; then
+    printf 'candidate-identity-changed'
+    return 0
+  fi
+  return 1
+}
+
 delete_or_report_candidate() {
   local kind="$1"
   local scope="$2"
   local target_path="$3"
   local age_days="$4"
   local size_kib="$5"
+  local policy_fn="$6"
+  shift 6
 
   local protection_reason=""
   local validated_size_kib=""
+  local expected_identity=""
 
   if path_has_retention_marker "$target_path"; then
     print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "protected-marker" "explicit-retention"
@@ -309,14 +532,27 @@ delete_or_report_candidate() {
     return 0
   fi
   size_kib="$validated_size_kib"
+  if ! expected_identity="$(path_identity "$target_path" 2>/dev/null)"; then
+    print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "identity-inspection-failed" "operator-remediation-required"
+    return 0
+  fi
 
   record_candidate_total "$size_kib"
 
   if [[ "$APPLY" == "1" ]]; then
-    # Close the snapshot-to-delete race with fresh host evidence. Any process
-    # or open-file inspection uncertainty keeps the exact candidate.
-    if path_is_active_fresh "$target_path"; then
-      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "became-active-or-inspection-indeterminate" "rebuildable-generated"
+    if protection_reason="$(pre_delete_block_reason "$target_path" "$expected_identity" "$policy_fn" "$@")"; then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "$protection_reason" "rebuildable-generated"
+      return 0
+    fi
+    # du can itself take long enough for state to change. Require one final
+    # complete traversal, then repeat the entire exact-candidate safety proof.
+    if ! validated_size_kib="$(path_size_kib "$target_path")"; then
+      print_record "skip" "$kind" "unknown" "$age_days" "$scope" "$target_path" "final-size-validation-failed" "operator-remediation-required"
+      return 0
+    fi
+    size_kib="$validated_size_kib"
+    if protection_reason="$(pre_delete_block_reason "$target_path" "$expected_identity" "$policy_fn" "$@")"; then
+      print_record "skip" "$kind" "$size_kib" "$age_days" "$scope" "$target_path" "$protection_reason" "rebuildable-generated"
       return 0
     fi
     # rm can still lose a race with a permission or filesystem change after the
@@ -358,7 +594,8 @@ consider_generated_path() {
     return 0
   fi
 
-  delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "$size_kib"
+  delete_or_report_candidate "$kind" "$scope" "$target_path" "$age_days" "$size_kib" \
+    generated_age_policy_block_reason "$min_age_days" days
 }
 
 worktree_is_dirty() {
@@ -459,7 +696,8 @@ consider_worktree_candidate() {
     return 0
   fi
 
-  delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib"
+  delete_or_report_candidate "$kind" "$worktree" "$target_path" "$age_days" "$size_kib" \
+    worktree_artifact_policy_block_reason "$worktree" "$kind" "$min_age_days"
 }
 
 scan_worktree() {
@@ -603,7 +841,8 @@ scan_build_cache_runs() {
       print_record "skip" "$kind" "$size_kib" "$age_days" "build-cache" "$run_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "$size_kib"
+    delete_or_report_candidate "$kind" "build-cache" "$run_dir" "$age_days" "$size_kib" \
+      build_run_policy_block_reason "$kind"
   done < <(find "$BUILD_ARTIFACT_ROOT/runs" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 }
 
@@ -619,15 +858,29 @@ runtime_cache_is_newest_in_group() {
   local candidate_mtime
   local newest_path=""
   local newest_mtime=0
+  local inventory_path=""
 
   group_dir="$(runtime_cache_group_key "$target_path")"
+  if ! inventory_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-runtime-cache.XXXXXX")"; then
+    return 0
+  fi
+  if ! find "$group_dir" -mindepth 1 -maxdepth 1 -type d -print0 > "$inventory_path" 2>/dev/null; then
+    rm -f "$inventory_path" || true
+    return 0
+  fi
   while IFS= read -r -d '' candidate; do
-    candidate_mtime="$(path_mtime_epoch "$candidate")"
+    if ! candidate_mtime="$(path_mtime_epoch "$candidate")"; then
+      rm -f "$inventory_path" || true
+      return 0
+    fi
     if (( candidate_mtime > newest_mtime )); then
       newest_mtime="$candidate_mtime"
       newest_path="$candidate"
     fi
-  done < <(find "$group_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+  done < "$inventory_path"
+  if ! rm -f "$inventory_path"; then
+    return 0
+  fi
   [[ "$newest_path" == "$target_path" ]]
 }
 
@@ -661,7 +914,8 @@ scan_runtime_cache() {
       print_record "skip" "runtime-cache-entry" "$size_kib" "$age_days" "build-cache" "$cache_dir" "open-files" "rebuildable-generated"
       continue
     fi
-    delete_or_report_candidate "runtime-cache-entry" "build-cache" "$cache_dir" "$age_days" "$size_kib"
+    delete_or_report_candidate "runtime-cache-entry" "build-cache" "$cache_dir" "$age_days" "$size_kib" \
+      runtime_cache_policy_block_reason
   done < <(find "$runtime_cache_root" -mindepth 1 -maxdepth 3 -type d -print0 2>/dev/null)
 }
 
@@ -782,7 +1036,8 @@ scan_runtime_instance() {
     return 0
   fi
 
-  delete_or_report_candidate "runtime-instance" "$instance_name" "$instance_dir" "$age_days" "$size_kib"
+  delete_or_report_candidate "runtime-instance" "$instance_name" "$instance_dir" "$age_days" "$size_kib" \
+    runtime_instance_policy_block_reason "$instance_name"
 }
 
 scan_runtime_instances() {
