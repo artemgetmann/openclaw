@@ -227,7 +227,7 @@ describe("Codex natural-language delegation", () => {
       /Jarvis-owned Codex worker return contract:[\s\S]*Native Codex thread ID: thread-natural/,
     );
     expect(delegatedPrompt).toContain(
-      "Use the jarvis_callback tool for meaningful progress, blocker, decision-needed, or completion messages",
+      "When the jarvis_callback tool is available, use it for meaningful progress, blocker, decision-needed, or completion messages",
     );
     expect(delegatedPrompt).toContain("Never call jarvis_callback merely to acknowledge receipt");
     expect(delegatedPrompt).toContain(
@@ -461,7 +461,7 @@ describe("Codex natural-language delegation", () => {
     });
   });
 
-  it("routes an async Jarvis reply back to the exact source Codex thread", async () => {
+  it("keeps terminal fallback for resumed threads without sending unsupported dynamic tools", async () => {
     appServer.requests.splice(0);
     appServer.handlers = new Set();
     appServer.serverRequestHandlers = new Set();
@@ -528,6 +528,7 @@ describe("Codex natural-language delegation", () => {
         }),
       },
     ]);
+    expect(appServer.requests[0]).not.toHaveProperty("params.dynamicTools");
     const followupPrompt = (
       appServer.requests[1]?.params as {
         input?: Array<{ text?: string }>;
@@ -535,6 +536,9 @@ describe("Codex natural-language delegation", () => {
     )?.input?.[0]?.text;
     expect(followupPrompt).toContain(
       "The launcher also watches this exact turn and relays terminal output when no complete callback was delivered.",
+    );
+    expect(followupPrompt).toContain(
+      "A resumed pre-existing thread may not expose jarvis_callback. If it is unavailable, continue the task and use the terminal handback below",
     );
     const followupBoundary = followupPrompt?.match(
       /-----BEGIN (JARVIS_TASK_PAYLOAD_[^\n]+)-----/,
