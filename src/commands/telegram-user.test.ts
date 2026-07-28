@@ -704,6 +704,43 @@ describe("telegram-user commands", () => {
     expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
   });
 
+  it("rejects a blank topic anchor before reading", async () => {
+    await expect(
+      telegramUserReadCommand({ chat: "-1003783709877", topicAnchor: "" }, runtime),
+    ).rejects.toThrow(/--topic-anchor to be a positive integer/i);
+    expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "rejects a boolean topic anchor before reading: %s",
+    async (topicAnchor) => {
+      await expect(
+        telegramUserReadCommand({ chat: "-1003783709877", topicAnchor }, runtime),
+      ).rejects.toThrow(/--topic-anchor to be a positive integer/i);
+      expect(backendMocks.runTelegramUserRead).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a genuinely absent topic anchor unscoped", async () => {
+    backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      messages: [],
+    });
+
+    await telegramUserReadCommand({ chat: "@jarvis_tester_1_bot" }, runtime);
+
+    expect(backendMocks.runTelegramUserRead).toHaveBeenCalledWith({
+      afterId: undefined,
+      beforeId: undefined,
+      chat: "@jarvis_tester_1_bot",
+      contains: undefined,
+      envFile: undefined,
+      limit: 20,
+      session: undefined,
+      topicAnchor: undefined,
+    });
+  });
+
   it("renders recent messages in compact agent-friendly text", async () => {
     backendMocks.runTelegramUserRead.mockResolvedValueOnce({
       backend_meta: backendMeta,

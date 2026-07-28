@@ -420,6 +420,25 @@ function readPositiveIntegerOpt(
   return value;
 }
 
+function readPresentPositiveIntegerOpt(
+  opts: Record<string, unknown>,
+  key: string,
+  flag: string,
+  context: string,
+): number | undefined {
+  // Presence and validity are separate for security-sensitive scoping. Only
+  // an omitted property may select unscoped history; every present value must
+  // prove that it is a positive integer before any backend call.
+  if (!Object.prototype.hasOwnProperty.call(opts, key)) {
+    return undefined;
+  }
+  const value = readNumberOpt(opts, key);
+  if (value === undefined || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${context} requires ${flag} to be a positive integer.`);
+  }
+  return value;
+}
+
 function logPrecheckText(runtime: RuntimeEnv, precheck: TelegramUserPrecheck) {
   const rich = isRich();
   const ok = rich ? theme.success : (text: string) => text;
@@ -1113,7 +1132,7 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     throw new Error("Telegram user read requires --chat.");
   }
   const format = readTelegramReadFormat(opts);
-  const topicAnchor = readPositiveIntegerOpt(
+  const topicAnchor = readPresentPositiveIntegerOpt(
     opts,
     "topicAnchor",
     "--topic-anchor",
