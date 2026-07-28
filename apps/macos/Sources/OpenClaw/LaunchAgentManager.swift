@@ -31,14 +31,24 @@ enum LaunchAgentManager {
     }
 
     static func set(enabled: Bool, bundlePath: String) async {
-        let kind = self.registrationKind(bundlePath: bundlePath)
+        // Classify kind and target from one disk snapshot. A concurrent plist
+        // replacement must not mix the old job shape with the new target path.
+        let plistData = try? Data(contentsOf: self.plistURL)
+        let kind = plistData.map {
+            self.registrationKind(bundlePath: bundlePath, plistData: $0)
+        } ?? .missing
+        let persistedBundlePath = plistData.flatMap {
+            self.registrationTargetBundlePath(plistData: $0)
+        }
         let migrationPending = FileManager().fileExists(atPath: self.migrationPendingURL.path)
         // Only legacy jobs need an immediate launchd query. A current one-shot job
         // is harmless after `/usr/bin/open` exits. A pending migration is the one
         // exception: disk may be current while launchd still caches the old job.
         let legacyJobLoaded = kind == .legacy || migrationPending ? await self.isJobLoaded() : false
         let plan = self.registrationUpdatePlan(
-            enabled: enabled,
+            requestedEnabled: enabled,
+            runningBundlePath: bundlePath,
+            persistedBundlePath: persistedBundlePath,
             kind: kind,
             legacyJobLoaded: legacyJobLoaded,
             migrationPending: migrationPending)
@@ -78,6 +88,11 @@ enum LaunchAgentManager {
             try? FileManager().removeItem(at: self.migrationPendingURL)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
         }
+    }
+
+    static func shouldPersistLoginItem(requestedEnabled: Bool, bundlePath: String) -> Bool {
+        guard requestedEnabled else { return false }
+        return !self.isMountedVolumePath(bundlePath)
     }
 
     static func launchAgentEnvironment(
@@ -165,6 +180,65 @@ enum LaunchAgentManager {
         return isCurrent ? .current : .legacy
     }
 
+    static func registrationTargetBundlePath(plistData: Data) -> String? {
+        guard let root = try? PropertyListSerialization.propertyList(from: plistData, format: nil),
+              let plist = root as? [String: Any]
+        else { return nil }
+
+        let arguments = plist["ProgramArguments"] as? [String]
+        if arguments?.count == 3,
+           arguments?[0] == "/usr/bin/open",
+           arguments?[1] == "-gja",
+           let bundlePath = arguments?[2]
+        {
+            return self.standardizedAbsolutePath(bundlePath)
+        }
+
+        // Historical GUI jobs execute the app binary directly. Recover the
+        // enclosing `.app` boundary so cleanup policy follows the persisted
+        // target—not whichever DMG or installed copy happens to be running now.
+        let executablePath = arguments?.first ?? (plist["Program"] as? String)
+        guard let executablePath,
+              let standardizedExecutable = self.standardizedAbsolutePath(executablePath)
+        else { return nil }
+        let components = URL(fileURLWithPath: standardizedExecutable).pathComponents
+        guard let appIndex = components.lastIndex(where: { $0.hasSuffix(".app") }) else {
+            return nil
+        }
+        return NSString.path(withComponents: Array(components[...appIndex]))
+    }
+
+    static func registrationUpdatePlan(
+        requestedEnabled: Bool,
+        runningBundlePath: String,
+        persistedBundlePath: String?,
+        kind: RegistrationKind,
+        legacyJobLoaded: Bool,
+        migrationPending: Bool = false) -> RegistrationUpdatePlan
+    {
+        if requestedEnabled, self.isMountedVolumePath(runningBundlePath) {
+            // A mounted copy may not replace its path with another durable job.
+            // Preserve an installed registration and any pending migration state;
+            // only a persisted mounted target is stale evidence this run owns.
+            guard let persistedBundlePath,
+                  self.isMountedVolumePath(persistedBundlePath)
+            else { return .none }
+            return self.registrationUpdatePlan(
+                enabled: false,
+                kind: kind,
+                legacyJobLoaded: legacyJobLoaded,
+                migrationPending: migrationPending)
+        }
+
+        return self.registrationUpdatePlan(
+            enabled: self.shouldPersistLoginItem(
+                requestedEnabled: requestedEnabled,
+                bundlePath: runningBundlePath),
+            kind: kind,
+            legacyJobLoaded: legacyJobLoaded,
+            migrationPending: migrationPending)
+    }
+
     static func registrationUpdatePlan(
         enabled: Bool,
         kind: RegistrationKind,
@@ -195,6 +269,18 @@ enum LaunchAgentManager {
         case .legacy:
             return legacyJobLoaded ? .unloadLegacyJobAndRemove : .removeOnly
         }
+    }
+
+    private static func isMountedVolumePath(_ path: String) -> Bool {
+        guard let standardizedPath = self.standardizedAbsolutePath(path) else { return false }
+        return standardizedPath == "/Volumes" || standardizedPath.hasPrefix("/Volumes/")
+    }
+
+    private static func standardizedAbsolutePath(_ path: String) -> String? {
+        guard path.hasPrefix("/") else { return nil }
+        // Standardize `..` before applying the mounted-volume boundary. Do not
+        // resolve symlinks: persisted arguments should retain their stable path.
+        return URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
     @discardableResult
