@@ -1,4 +1,10 @@
 import type { CodexNotification, CodexRpcClient } from "./app-server-client.js";
+import {
+  type CodexTaskMode,
+  type CodexWorkspaceMode,
+  type PrepareWorkspaceRequest,
+  type PreparedCodexWorkspace,
+} from "./workspace-manager.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -28,6 +34,20 @@ export type CodexThreadStarted = {
   completion: Promise<CodexThreadRunResult>;
 };
 
+export type CodexDelegateRequest = {
+  text: string;
+  taskMode: CodexTaskMode;
+  projectDir?: string;
+  workspaceDir?: string;
+  workspaceMode?: CodexWorkspaceMode;
+  featureName?: string;
+};
+
+export type CodexDelegateResult = CodexThreadRunResult & {
+  mode: "native-codex-delegate";
+  execution: PreparedCodexWorkspace;
+};
+
 export type CodexFleetSnapshot = {
   mode: "native-codex-fleet";
   counts: {
@@ -53,6 +73,10 @@ type ThreadServiceOptions = {
   turnTimeoutMs: number;
   defaultWorkspaceDir: string;
   dynamicTools?: readonly Record<string, unknown>[];
+  workspaceManager?: {
+    prepare(request: PrepareWorkspaceRequest): Promise<PreparedCodexWorkspace>;
+    discard?(prepared: PreparedCodexWorkspace): Promise<void>;
+  };
 };
 
 /**
@@ -87,7 +111,8 @@ export class CodexThreadService {
       accountType: readAccountType(account),
       threadCatalogReachable: Array.isArray(threads.data),
       activeContinuations: this.activeThreadIds.size,
-      executionPolicy: "read-only/no-network/no-approval",
+      executionPolicy:
+        "analysis=read-only; implementation=isolated-worktree/workspace-write; no-network/no-approval",
     };
   }
 
@@ -200,6 +225,39 @@ export class CodexThreadService {
     });
   }
 
+  async delegate(request: CodexDelegateRequest): Promise<CodexDelegateResult> {
+    const { execution, threadId } = await this.createDelegateThread(request);
+    const task =
+      execution.taskMode === "implementation"
+        ? buildImplementationPrompt(request.text, execution)
+        : request.text;
+    const completed = await this.message(threadId, task, execution);
+    return { mode: "native-codex-delegate", ...completed, execution };
+  }
+
+  async createDelegateThread(
+    request: Omit<CodexDelegateRequest, "text">,
+  ): Promise<{ threadId: string; execution: PreparedCodexWorkspace }> {
+    const workspaceManager = this.options.workspaceManager;
+    if (!workspaceManager) {
+      throw new Error("Codex workspace manager is unavailable");
+    }
+    const execution = await workspaceManager.prepare({
+      taskMode: request.taskMode,
+      projectDir: request.projectDir,
+      workspaceDir: request.workspaceDir,
+      workspaceMode: request.workspaceMode,
+      featureName: request.featureName,
+    });
+    try {
+      const created = await this.createForExecution(execution);
+      return { threadId: requireThreadId(created), execution };
+    } catch (error) {
+      await workspaceManager.discard?.(execution).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async create(cwd = this.options.defaultWorkspaceDir): Promise<JsonObject> {
     const client = await this.client();
     const response = await client.request<JsonObject>("thread/start", {
@@ -209,8 +267,7 @@ export class CodexThreadService {
       sandbox: "read-only",
       personality: "none",
       serviceName: "OpenClaw",
-      developerInstructions:
-        "This thread is controlled by the isolated OpenClaw Codex pilot. Work read-only, do not use network access, and return one concise final answer.",
+      developerInstructions: ANALYSIS_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
       ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
     });
@@ -222,9 +279,6 @@ export class CodexThreadService {
     const client = await this.client();
     const response = await client.request<JsonObject>("thread/resume", {
       threadId: requireId(threadId),
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "read-only",
       excludeTurns: true,
       initialTurnsPage: {
         limit: 1,
@@ -243,9 +297,6 @@ export class CodexThreadService {
       await this.client()
     ).request<JsonObject>("thread/fork", {
       threadId: sourceId,
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "read-only",
       threadSource: "appServer",
       excludeTurns: true,
     });
@@ -256,10 +307,10 @@ export class CodexThreadService {
   async message(
     threadId: string,
     text: string,
-    cwd = this.options.defaultWorkspaceDir,
+    execution?: PreparedCodexWorkspace | string,
   ): Promise<CodexThreadRunResult> {
     return await (
-      await this.startMessage(threadId, text, cwd)
+      await this.startMessage(threadId, text, execution)
     ).completion;
   }
 
@@ -274,7 +325,7 @@ export class CodexThreadService {
   async startMessage(
     threadId: string,
     text: string,
-    cwd = this.options.defaultWorkspaceDir,
+    execution?: PreparedCodexWorkspace | string,
   ): Promise<CodexThreadStarted> {
     const normalizedThreadId = requireId(threadId);
     const prompt = text.trim();
@@ -300,12 +351,12 @@ export class CodexThreadService {
       const response = await client.request<JsonObject>("turn/start", {
         threadId: normalizedThreadId,
         input: [{ type: "text", text: prompt, text_elements: [] }],
-        // A delegate can target the current project explicitly. Existing
-        // binding/message callers retain the configured default workspace.
-        cwd,
+        // Continuations intentionally omit cwd/sandbox so App Server preserves
+        // the durable thread policy. A prepared first turn supplies the exact
+        // isolated write boundary.
+        ...buildTurnExecutionOverrides(execution),
         approvalPolicy: "never",
         approvalsReviewer: "user",
-        sandboxPolicy: { type: "readOnly", networkAccess: false },
         personality: "none",
       });
       const turnId = readNestedString(response, ["turn", "id"]);
@@ -373,6 +424,27 @@ export class CodexThreadService {
     };
   }
 
+  private async createForExecution(execution: PreparedCodexWorkspace): Promise<JsonObject> {
+    const implementation = execution.taskMode === "implementation";
+    const response = await (
+      await this.client()
+    ).request<JsonObject>("thread/start", {
+      cwd: execution.workspaceDir,
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: implementation ? "workspace-write" : "read-only",
+      personality: "none",
+      serviceName: "OpenClaw",
+      developerInstructions: implementation
+        ? IMPLEMENTATION_DEVELOPER_INSTRUCTIONS
+        : ANALYSIS_DEVELOPER_INSTRUCTIONS,
+      experimentalRawEvents: true,
+      ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
+    });
+    this.loadedThreadIds.add(requireThreadId(response));
+    return response;
+  }
+
   async archive(threadId: string): Promise<void> {
     const normalizedThreadId = requireId(threadId);
     await this.assertIdle(normalizedThreadId, "archive");
@@ -419,6 +491,63 @@ export class CodexThreadService {
     }
     return client;
   }
+}
+
+const ANALYSIS_DEVELOPER_INSTRUCTIONS = [
+  "You are a native Codex analysis worker for Jarvis.",
+  "Keep the selected project read-only. Inspect and report evidence; do not edit files, create worktrees, install dependencies, or mutate Git state.",
+].join(" ");
+
+const IMPLEMENTATION_DEVELOPER_INSTRUCTIONS = [
+  "You are a native Codex implementation worker for Jarvis.",
+  "You were launched in an isolated worktree with workspace-write access only to that worktree.",
+  "Before editing, read the repository-local policy and adopt its required setup/workflow when safe within your sandbox.",
+  "Never edit the source checkout, shared runtime, or any path outside the assigned worktree.",
+].join(" ");
+
+function buildImplementationPrompt(text: string, execution: PreparedCodexWorkspace): string {
+  return [
+    "Jarvis implementation execution contract:",
+    `- Assigned worktree: ${execution.workspaceDir}`,
+    `- Source project: ${execution.projectDir}`,
+    `- Base commit: ${execution.baseSha ?? "unknown"}`,
+    `- Branch: ${execution.branch ?? "unknown"}`,
+    "- Read repository policy and adopt its setup before implementation.",
+    "- Keep all writes inside the assigned worktree and report any policy/setup blocker.",
+    "",
+    "Task:",
+    text,
+  ].join("\n");
+}
+
+function buildTurnExecutionOverrides(
+  execution: PreparedCodexWorkspace | string | undefined,
+): JsonObject {
+  if (!execution) {
+    return {};
+  }
+  if (typeof execution === "string") {
+    return {
+      cwd: execution,
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
+    };
+  }
+  if (execution.taskMode === "implementation") {
+    return {
+      cwd: execution.workspaceDir,
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [execution.workspaceDir],
+        networkAccess: false,
+        excludeSlashTmp: true,
+        excludeTmpdirEnvVar: true,
+      },
+    };
+  }
+  return {
+    cwd: execution.workspaceDir,
+    sandboxPolicy: { type: "readOnly", networkAccess: false },
+  };
 }
 
 function createTurnCollector(threadId: string) {

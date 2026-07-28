@@ -9,6 +9,16 @@ default runtime.
 - Owner-only status, compact fleet inventory, list, search, read, create,
   message, resume, and fork controls through `/codex` and the `codex_threads`
   agent tool.
+- Natural-language delegation has two execution modes:
+  - analysis stays in the selected project with a read-only sandbox
+  - implementation creates a generic fresh-branch Git worktree, then gives Codex
+    write access only inside that lane
+- Implementation workers read repository policy and use any repo-owned
+  worktree adoption/bootstrap path before editing. The owner does not need to
+  know the repository's worktree mechanics.
+- An explicit direct-workspace override is available for clean, named-branch
+  checkouts. Canonical OpenClaw home clones and configured protected roots are
+  always rejected for direct writes.
 - Explicit conversation binding to one durable native Codex thread with
   `/codex bind [thread-id]`.
 - Fail-closed routing for bound conversations. If the extension, binding, or
@@ -96,6 +106,8 @@ The default transport starts the locally installed Codex App Server over stdio:
           command: "codex",
           args: ["app-server", "--listen", "stdio://"],
           defaultWorkspaceDir: "/absolute/readable/workspace",
+          worktreesRoot: "/absolute/codex/worktrees",
+          protectedWorkspaceDirs: ["/absolute/protected/checkout"],
         },
       },
     },
@@ -103,8 +115,10 @@ The default transport starts the locally installed Codex App Server over stdio:
 }
 ```
 
-Every pilot turn uses a read-only sandbox, disables tool network access, and
-declines App Server approval requests that cannot be safely projected.
+Analysis turns use a read-only sandbox. Implementation turns use
+workspace-write with the prepared worktree as the only writable root. Both
+disable tool network access and decline App Server approval requests that
+cannot be safely projected.
 
 ## Deliberate next slice
 
