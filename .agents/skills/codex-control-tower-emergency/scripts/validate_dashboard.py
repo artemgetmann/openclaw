@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ OPEN_PHASES = {"active", "queued", *PARKED_PHASES}
 WAKE_MODES = {"thread-automation", "finite-goal", "manual-pull"}
 WAKE_DRIVER_STATUSES = {"verified", "active", "unavailable", "failed", "complete"}
 GOAL_STATES = {"absent", "active", "complete", "blocked"}
+ELAPSED_RECEIPT_TOLERANCE_HOURS = 0.01
 
 
 def require_mapping(value: Any, label: str, errors: list[str]) -> dict[str, Any]:
@@ -46,7 +48,24 @@ def require_number(
     return 0.0
 
 
-def validate_dashboard(document: Any) -> list[str]:
+def parse_utc(value: Any, label: str, errors: list[str]) -> dt.datetime | None:
+    """Parse one ISO-8601 timestamp and normalize it to UTC."""
+    if not isinstance(value, str):
+        errors.append(f"{label} must be an ISO-8601 timestamp")
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        errors.append(f"{label} must be an ISO-8601 timestamp")
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def validate_dashboard(
+    document: Any, *, now: dt.datetime | None = None
+) -> list[str]:
     """Return every deterministic dashboard violation in one pass."""
     errors: list[str] = []
     root = require_mapping(document, "dashboard", errors)
@@ -242,14 +261,41 @@ def validate_dashboard(document: Any) -> list[str]:
     for key in integer_thresholds:
         measured = require_int(epoch, key, "epoch", errors)
         threshold = require_int(rotate_at, key, "epoch.rotate_at", errors)
-        if threshold > 0 and measured >= threshold:
+        if threshold <= 0:
+            errors.append(f"epoch.rotate_at.{key} must be positive")
+        elif measured >= threshold:
             computed_reasons.append(key)
 
-    elapsed_hours = require_number(epoch, "elapsed_hours", "epoch", errors)
+    elapsed_receipt_hours = require_number(epoch, "elapsed_hours", "epoch", errors)
     max_elapsed_hours = require_number(
         rotate_at, "elapsed_hours", "epoch.rotate_at", errors
     )
-    if max_elapsed_hours > 0 and elapsed_hours >= max_elapsed_hours:
+    if max_elapsed_hours <= 0:
+        errors.append("epoch.rotate_at.elapsed_hours must be positive")
+
+    # The helper receipt is diagnostic evidence, not authority to extend an
+    # epoch. Derive the fail-closed wall-clock value from started_at so a stale
+    # or copied elapsed_hours field cannot keep an expired Tower healthy.
+    current_time = now or dt.datetime.now(dt.timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=dt.timezone.utc)
+    else:
+        current_time = current_time.astimezone(dt.timezone.utc)
+    started_at = parse_utc(epoch.get("started_at"), "epoch.started_at", errors)
+    actual_elapsed_hours = 0.0
+    if started_at is not None:
+        actual_elapsed_hours = (current_time - started_at).total_seconds() / 3600
+        if actual_elapsed_hours < 0:
+            errors.append("epoch.started_at cannot be in the future")
+            actual_elapsed_hours = 0.0
+        if (
+            elapsed_receipt_hours + ELAPSED_RECEIPT_TOLERANCE_HOURS
+            < actual_elapsed_hours
+        ):
+            errors.append("epoch.elapsed_hours is stale relative to epoch.started_at")
+
+    effective_elapsed_hours = max(elapsed_receipt_hours, actual_elapsed_hours)
+    if max_elapsed_hours > 0 and effective_elapsed_hours >= max_elapsed_hours:
         computed_reasons.append("elapsed_hours")
 
     rotation_due_value = epoch.get("rotation_due")
