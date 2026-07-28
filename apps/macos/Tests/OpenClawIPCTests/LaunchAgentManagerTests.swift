@@ -29,6 +29,32 @@ struct LaunchAgentManagerTests {
         #expect(plan == .writeOnly)
     }
 
+    @Test func `mounted app never persists a login item`() {
+        #expect(!LaunchAgentManager.shouldPersistLoginItem(
+            requestedEnabled: true,
+            bundlePath: "/Volumes/Jarvis/Jarvis.app"))
+        #expect(!LaunchAgentManager.shouldPersistLoginItem(
+            requestedEnabled: true,
+            bundlePath: "/Volumes/Jarvis/../Jarvis/Jarvis.app"))
+        #expect(LaunchAgentManager.shouldPersistLoginItem(
+            requestedEnabled: true,
+            bundlePath: "/Applications/Jarvis.app"))
+        #expect(!LaunchAgentManager.shouldPersistLoginItem(
+            requestedEnabled: false,
+            bundlePath: "/Applications/Jarvis.app"))
+    }
+
+    @Test func `mounted app preference removes loaded legacy GUI job`() {
+        let effectiveEnabled = LaunchAgentManager.shouldPersistLoginItem(
+            requestedEnabled: true,
+            bundlePath: "/Volumes/Jarvis/Jarvis.app")
+
+        #expect(LaunchAgentManager.registrationUpdatePlan(
+            enabled: effectiveEnabled,
+            kind: .legacy,
+            legacyJobLoaded: true) == .unloadLegacyJobAndRemove)
+    }
+
     @Test func `loaded direct executable plist is replaced as legacy`() throws {
         let bundlePath = "/Applications/Jarvis.app"
         let legacy: [String: Any] = [

@@ -31,6 +31,14 @@ enum LaunchAgentManager {
     }
 
     static func set(enabled: Bool, bundlePath: String) async {
+        // A DMG is a temporary source, not an install location. Persisting its
+        // mounted path makes launchd depend on a volume that normally disappears
+        // after install and can recreate the legacy relaunch loop while mounted.
+        // Keep the stored preference intact so a later /Applications launch can
+        // honor it, but treat this run as disabled and clean any stale GUI job.
+        let effectiveEnabled = self.shouldPersistLoginItem(
+            requestedEnabled: enabled,
+            bundlePath: bundlePath)
         let kind = self.registrationKind(bundlePath: bundlePath)
         let migrationPending = FileManager().fileExists(atPath: self.migrationPendingURL.path)
         // Only legacy jobs need an immediate launchd query. A current one-shot job
@@ -38,7 +46,7 @@ enum LaunchAgentManager {
         // exception: disk may be current while launchd still caches the old job.
         let legacyJobLoaded = kind == .legacy || migrationPending ? await self.isJobLoaded() : false
         let plan = self.registrationUpdatePlan(
-            enabled: enabled,
+            enabled: effectiveEnabled,
             kind: kind,
             legacyJobLoaded: legacyJobLoaded,
             migrationPending: migrationPending)
@@ -78,6 +86,16 @@ enum LaunchAgentManager {
             try? FileManager().removeItem(at: self.migrationPendingURL)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
         }
+    }
+
+    static func shouldPersistLoginItem(requestedEnabled: Bool, bundlePath: String) -> Bool {
+        guard requestedEnabled else { return false }
+
+        // Standardize first so paths such as `/Volumes/Jarvis/../Jarvis/...`
+        // cannot bypass the mounted-volume boundary. Do not resolve symlinks:
+        // the persisted argument should remain the user's stable installed path.
+        let standardizedPath = URL(fileURLWithPath: bundlePath).standardizedFileURL.path
+        return standardizedPath != "/Volumes" && !standardizedPath.hasPrefix("/Volumes/")
     }
 
     static func launchAgentEnvironment(
